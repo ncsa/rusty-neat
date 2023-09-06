@@ -1,27 +1,14 @@
-Contributing to NEAT
+Contributing to RustyNeat
 ====================
 
 We welcome contributions to the NEAT project. Before contributing, please review our [Code of Conduct](CODE_OF_CONDUCT.md).
 
-Issues
-------
-
-To submit issues and enhancement requests, please use the [GitHub issues tracker](https://github.com/ncsa/NEAT/issues).
+Note that this is a special branch of NEAT where we are recoding some of the main code in Rust. See the [README](README.md) for more details.
 
 Contributing
 ------------
 
-Currently, the major effort NEAT is focused on bringing the code up to [PEP 8 standards](https://www.python.org/dev/peps/pep-0008/), as well as leveraging Biopython and Pandas to speed up analysis. We have plans to increase NEAT's utility for a wider range of genomic situations, such as plants, bacteria, and complex features like cancer.
-
-In general, we follow the "fork-and-pull" Git workflow.
-
- 1. **Fork** the repo on GitHub
- 2. **Clone** the project to your own machine
- 3. **Commit** changes to your own branch
- 4. **Push** your work back up to your fork
- 5. Submit a **Pull request** so that we can review your changes
- 
-Note: Be sure to merge the latest changes before making the pull request. You can increase your chances of a successfull pull request by indicating clearly what branch you are contributing to and making a detailed commit message. It also helps if you open an issue first to let us know you are working on this project.
+This effort is directed at recoding NEAT using the Rust language and Carge package framework. This effort will take advantage of open source code where possible and will likely be rough, as this is our first major Rust undertaking. As such, we don't yet have a ticketing system or a firm plan in place, but we'll update as it becomes available. If you would like to contribute, you may message Joshua Allen (see links on page) and we can discuss.
 
 License
 -------

@@ -44,9 +44,13 @@ fn generate_new_nucleotide(nuc: &char) -> char {
 fn main() {
     logger::init();
     logger::info!("Begin processing");
-    let sequence = String::from("AACATACATACACATGAGCACGCGACTACATGAGACGTAGCA");
+    let sequence = String::from("ACATCTACACGGAGCACGACGCACCAGACACACTGCAGTGCATGACG");
     logger::info!("Input sequence: {}", sequence);
     let non_n_map = map_non_n_regions(&sequence);
+    if !non_n_map.contains(&true) {
+        logger::info!("Input sequence contained no non-n values. Quitting.");
+        std::process::exit(0)
+    }
     logger::debug!("Non-n-map = {:?}", non_n_map);
     let position = find_random_non_n(&non_n_map).unwrap();
     logger::info!("Found a position! It is {}",position);

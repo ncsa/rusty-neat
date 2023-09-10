@@ -1,8 +1,9 @@
 extern crate log;
 mod logger;
+mod random;
 
 use rand::prelude::IteratorRandom;
-use rand::thread_rng;
+use rand::{Rng, thread_rng};
 
 fn find_random_non_n(positions: &Vec<bool>) -> Option<usize> {
     /*
@@ -30,6 +31,16 @@ fn map_non_n_regions(sequence: &String) -> Vec<bool> {
     check_vec
 }
 
+fn generate_new_nucleotide(nuc: &char) -> char {
+    let mut rng = thread_rng();
+    let nucleotides = ['A', 'C', 'G', 'T'];
+    let mut new = *nuc;
+    while new == *nuc {
+        new = nucleotides[rng.gen_range(0..4)];
+    }
+    new
+}
+
 fn main() {
     logger::init();
     logger::info!("Begin processing");
@@ -42,6 +53,9 @@ fn main() {
     let code = &sequence.as_bytes()[position];
     let nucleotide: char = *code as char;
     logger::info!("Nucleotide to mutate: {:?}", nucleotide);
-    println!("End");
+    let new_nucleotide = generate_new_nucleotide(&nucleotide);
+    let result: String = sequence.chars().enumerate().map(|(i, c)| if i == position { new_nucleotide } else { c }).collect();
+    logger::info!("New sequence = {}", result);
+    logger::info!("End program");
 }
 

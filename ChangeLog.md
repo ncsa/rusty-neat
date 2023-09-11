@@ -10,3 +10,8 @@
 - Need to improve error handling all around, taking advantage of Rusts error handling system.
 - Design decision: After toying with some options to create a standardized RNG to use throughout the program, it seems the best option is to use an on-the-fly rng per function for now. This eliminates reproducibility between runs, but should enable parallelism of processing.
 - Redesign from the ground up. Trying to use KISS as much as possible, and only introduce complexity as it becomes necessary, or as I learn Rust tricks that may help this endeavor.
+
+# rusty_neat v0.2
+
+Goal: To release a version of NEAT in rust capable of reading an arbitrary fasta file, 
+and outputting a version of that file with 1% of the bases mutated as SNPs.

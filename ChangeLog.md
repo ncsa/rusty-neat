@@ -10,3 +10,6 @@
 - Need to improve error handling all around, taking advantage of Rusts error handling system.
 - Design decision: After toying with some options to create a standardized RNG to use throughout the program, it seems the best option is to use an on-the-fly rng per function for now. This eliminates reproducibility between runs, but should enable parallelism of processing.
 - Redesign from the ground up. Trying to use KISS as much as possible, and only introduce complexity as it becomes necessary, or as I learn Rust tricks that may help this endeavor.
+
+9/11/2023
+- Found a sqlite crate for rust. This might be a good way to store the reference information for our genome. We can have one row per chromosome. Name, info, sequence. Read the data in once, store it for long term retrieval. Website: https://docs.rs/sqlite/latest/sqlite/

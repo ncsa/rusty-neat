@@ -1,9 +1,36 @@
+#![allow(dead_code)]
 extern crate log;
 mod logger;
 mod random;
+mod file_reader;
 
 use rand::prelude::IteratorRandom;
 use rand::{Rng, thread_rng};
+use crate::file_reader::File;
+
+#[derive(Debug, PartialEq, PartialOrd)]
+enum Nucleotide {
+    A,
+    C,
+    G,
+    T
+}
+
+#[derive(Debug)]
+struct Base;
+
+trait Reference {
+    fn get_reference(
+        self: &Self,
+        reference: Nucleotide,
+    ) -> Result<usize, String>;
+}
+
+impl Reference for Base {
+    fn get_reference(self: &Self, reference: Nucleotide) -> Result<usize, String> {
+        Ok(0)
+    }
+}
 
 fn find_random_non_n(positions: &Vec<bool>) -> Option<usize> {
     /*
@@ -44,6 +71,19 @@ fn generate_new_nucleotide(nuc: &char) -> char {
 fn main() {
     logger::init();
     logger::info!("Begin processing");
+
+    // File reader simulator
+    let mut f6 = File::new("f6.txt");
+
+    let mut buffer: Vec<u8> = vec![];
+
+    if f6.read(&mut buffer).is_err() {
+        println!("Error checking is working!");
+    };
+
+    println!("{:?}", f6);
+    println!("{}", f6);
+
     let sequence = String::from("ACATCTACACGGAGCACGACGCACCAGACACACTGCAGTGCATGACG");
     logger::info!("Input sequence: {}", sequence);
     let non_n_map = map_non_n_regions(&sequence);

@@ -1,5 +1,7 @@
-pub use log::*;
 pub extern crate simplelog;
+pub extern crate log;
+
+pub use log::*;
 
 pub use simplelog::{SimpleLogger, WriteLogger, LevelFilter, CombinedLogger, TerminalMode, Config, ColorChoice};
 

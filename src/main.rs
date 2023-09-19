@@ -23,11 +23,14 @@ fn find_random_non_n(positions: &Vec<bool>) -> Option<usize> {
 fn map_non_n_regions(sequence: &String) -> Vec<bool> {
     let mut check_vec: Vec<bool> = vec![true; sequence.len()];
     for (index, char) in sequence.chars().enumerate() {
-        if char == 'N' {
-            check_vec[index] = false;
+        match char {
+            'A' => (),
+            'C' => (),
+            'G' => (),
+            'T' => (),
+            _ => { check_vec[index] = false },
         }
     }
-
     check_vec
 }
 
@@ -44,7 +47,7 @@ fn generate_new_nucleotide(nuc: &char) -> char {
 fn main() {
     logger::init();
     logger::info!("Begin processing");
-    let sequence = String::from("ACATCTACACGGAGCACGACGCACCAGACACACTGCAGTGCATGACG");
+    let sequence = String::from("ACATCTACACGGAGCACGACGCACCNNNNNNccccNNNNCACTGCAGTGCATGACG");
     logger::info!("Input sequence: {}", sequence);
     let non_n_map = map_non_n_regions(&sequence);
     if !non_n_map.contains(&true) {

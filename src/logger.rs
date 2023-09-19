@@ -22,7 +22,7 @@ pub fn init() {
             WriteLogger::new(
                 LevelFilter::Debug,
                 Config::default(),
-                File::create("this_log.log").unwrap()
+                File::create("../this_log.log").unwrap()
             ),
         ]
     ).unwrap();

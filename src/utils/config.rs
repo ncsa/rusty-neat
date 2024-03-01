@@ -3,14 +3,15 @@ use std::collections::{HashMap};
 use std::env;
 use std::string::String;
 use crate::utils::cli::Cli;
+use log::debug;
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct Config {
+pub struct RunConfiguration {
     pub reference: String,
-    pub read_len: u32,
-    pub coverage: u32,
+    pub read_len: usize,
+    pub coverage: usize,
     pub mutation_rate: f64,
-    pub ploidy: u32,
+    pub ploidy: usize,
     pub paired_ended: bool,
     pub fragment_mean: f64,
     pub fragment_st_dev: f64,
@@ -22,19 +23,22 @@ pub struct Config {
     pub output_prefix: String,
 }
 
-impl Config {
+impl RunConfiguration {
+    // The purpose of this function is to redirect you to the ConfigBuilder
     pub fn build() -> ConfigBuilder {
-        ConfigBuilder::default()
+        ConfigBuilder::new()
     }
 }
 
+// The config builder allows us to construct a config in multiple different ways, depending
+// on the input.
 #[derive(Default)]
-struct ConfigBuilder {
+pub struct ConfigBuilder {
     reference: String,
-    read_len: u32,
-    coverage: u32,
+    read_len: usize,
+    coverage: usize,
     mutation_rate: f64,
-    ploidy: u32,
+    ploidy: usize,
     paired_ended: bool,
     fragment_mean: f64,
     fragment_st_dev: f64,
@@ -75,12 +79,12 @@ impl ConfigBuilder {
         self
     }
 
-    pub fn set_rl(mut self, read_len: u32) -> ConfigBuilder {
+    pub fn set_rl(mut self, read_len: usize) -> ConfigBuilder {
         self.read_len = read_len;
         self
     }
 
-    pub fn set_cov(mut self, coverage: u32) -> ConfigBuilder {
+    pub fn set_cov(mut self, coverage: usize) -> ConfigBuilder {
         self.coverage = coverage;
         self
     }
@@ -95,8 +99,8 @@ impl ConfigBuilder {
         self
     }
 
-    pub fn build(self) -> Config {
-        Config {
+    pub fn build(self) -> RunConfiguration {
+        RunConfiguration {
             reference: self.reference,
             read_len: self.read_len,
             coverage: self.coverage,
@@ -115,10 +119,10 @@ impl ConfigBuilder {
     }
 }
 
-pub fn read_config_yaml(yaml: String) -> Result<Config, serde_yaml::Error> {
+pub fn read_config_yaml(yaml: String) -> Result<Box<RunConfiguration>, serde_yaml::Error> {
     let f = std::fs::File::open(yaml).expect("Could not open config file.");
     let scrape_config: HashMap<String, String> = serde_yaml::from_reader(f).expect("Could not read values");
-    println!("{:?}", scrape_config);
+    debug!("{:?}", scrape_config);
     let mut config_builder = ConfigBuilder::new();
     for (key, value) in scrape_config {
         match key.as_str() {
@@ -131,14 +135,14 @@ pub fn read_config_yaml(yaml: String) -> Result<Config, serde_yaml::Error> {
             },
             "read_len" => {
                 if value != ".".to_string() {
-                    config_builder = config_builder.set_rl(value.parse::<u32>().unwrap())
+                    config_builder = config_builder.set_rl(value.parse::<usize>().unwrap())
                 } else {
                     continue
                 }
             },
             "coverage" => {
                 if value != ".".to_string() {
-                    config_builder = config_builder.set_cov(value.parse::<u32>().unwrap())
+                    config_builder = config_builder.set_cov(value.parse::<usize>().unwrap())
                 } else {
                     continue
                 }
@@ -160,17 +164,17 @@ pub fn read_config_yaml(yaml: String) -> Result<Config, serde_yaml::Error> {
             _ => continue,
         }
     }
-    Ok(config_builder.build())
+    Ok(Box::new(config_builder.build()))
 }
 
-pub fn build_config_from_args(args: Cli) -> Result<Config, serde_yaml::Error> {
+pub fn build_config_from_args(args: Cli) -> Result<Box<RunConfiguration>, serde_yaml::Error> {
     let mut config_builder = ConfigBuilder::new();
     if args.reference != "" { config_builder = config_builder.set_ref(args.reference) }
     config_builder = config_builder.set_rl(args.read_length);
     config_builder = config_builder.set_cov(args.coverage);
     if args.output_dir != "" { config_builder = config_builder.set_outdir(args.output_dir); };
     if args.output_file_prefix != "" { config_builder = config_builder.set_outpref(args.output_file_prefix) };
-    Ok(config_builder.build())
+    Ok(Box::new(config_builder.build()))
 }
 
 #[test]

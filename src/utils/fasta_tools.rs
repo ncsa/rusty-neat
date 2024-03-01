@@ -1,8 +1,10 @@
+extern crate rand;
+extern crate log;
+
 use rand::prelude::{IteratorRandom, ThreadRng};
 use std::collections::HashMap;
 use crate::utils::file_tools::read_lines;
-use log::info;
-
+use self::log::info;
 
 pub fn read_fasta(fasta_path: &str) -> Box<HashMap<String, Vec<u8>>> {
     info!("Reading fasta: {}", fasta_path);

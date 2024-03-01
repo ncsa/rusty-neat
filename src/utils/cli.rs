@@ -1,4 +1,5 @@
-use std::ffi::CString;
+extern crate clap;
+
 use clap::Parser;
 
 #[derive(Parser, Debug)]

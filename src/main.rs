@@ -1,8 +1,13 @@
+extern crate rand;
+extern crate clap;
+extern crate log;
+extern crate simplelog;
+
 mod utils;
 
 use std::{env, process};
 use std::collections::{HashMap, HashSet};
-use clap::Parser;
+use clap::{Parser};
 use log::*;
 use simplelog::*;
 use rand::thread_rng;

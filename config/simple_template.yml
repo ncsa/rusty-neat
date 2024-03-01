@@ -1,7 +1,7 @@
 reference: REQUIRED
 read_len: .
 coverage: 20
-output_dir: /home/joshfactorial/code/neat_outputs/
+output_dir: /home/joshfactorial/code/rust_neat_outputs/
 output_prefix: neat_test_1
 
 # Below are not yet active

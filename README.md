@@ -5,7 +5,7 @@ We will be taking an iterative approach, partly out of necessity as we learn the
 
 Check this branch for updates or submit a request to contribute code directly. There won't be any solid tasks yet until we're further along in development. 
 
-How to use rusty-neat:
+# How to use rusty-neat
 
 Download the executable in the release (current version 0.1.0).
 
@@ -27,4 +27,29 @@ AAAAAAAAAA
 GGGGGGGGGG
 ```
 
-Use the help menu to see the available options and leave an issue if you find something bad happening. This data is not currently considered usable for anything requiring real rigor, but this is the first iteration toward a final product.
+Use the help menu to see the available options and leave an issue if you find something bad happening. This data is not currently considered usable for anything requiring real rigor, but this is the first iteration toward a final product. 
+
+To compile and run rusty-neat yourself, you will need the Rust environment (https://www.rust-lang.org/tools/install), with cargo. You will also need git installed for your operating system. You will then need to git clone and cd into the repo directory. From your home directory in Linux the process might look something like:
+
+```angular2html
+~/$ git clone git@github.com/ncsa/rusty-neat.git
+~/$ cd rusty-neat
+~/rusty-neat/$
+```
+
+For Windows and Mac users, you can use a GUI or some similar command line method, but you'll figure it out (Post help requests in the Issues tab).
+
+Once in the repo, you can build the program either in debug (default) or release mode. The main difference is how much info it gives you if there is an error.
+
+```angular2html
+~/rusty-neat/$ cargo build --release
+```
+If you prefer to run the package directly without using the binary, you can also use
+```angular2html
+~/rusty-neat/$ cargo run
+```
+Rust will download any required packages. Compiling Rust code is the slowest part of the process. The final binary will be built and the program run immediately after in the second case. To run the program manually, from the repo main dir, run
+
+```angular2html
+~/rusty-neat/$ ./target/debug/rusty-neat
+```

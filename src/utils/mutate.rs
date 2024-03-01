@@ -1,12 +1,14 @@
+extern crate log;
+
 use std::collections::HashMap;
 use rand::distributions::{Distribution, Uniform};
 use rand::prelude::ThreadRng;
-use rand::thread_rng;
-use log::debug;
+use rand::{Rng, thread_rng};
+use self::log::debug;
 
 fn mutate_nucleotide(nucleotide: u8, rng: &mut ThreadRng) -> u8 {
     let mut new_nuc = nucleotide.clone();
-    let nuc_choices = Uniform::new_inclusive(0, 3);
+    let mut nuc_choices = Uniform::new_inclusive(0, 3).unwrap();
     while new_nuc == nucleotide {
         new_nuc = nuc_choices.sample(rng);
     }
@@ -26,7 +28,7 @@ pub fn mutate_fasta(file_struct: &HashMap<String, Vec<u8>>) -> Box<HashMap<Strin
         debug!("Sequence {} is {} bp long", name, sequence_length);
 
         // This builds a uniform distribution across the range, curious how we can adapt this idea
-        let position_range = Uniform::new(0, sequence_length);
+        let position_range = Uniform::new(0, sequence_length).unwrap();
 
         // Calculate how many mutations to add
         let num_positions = (sequence_length as f64 * MUT_RATE).round() as usize;

@@ -1,11 +1,12 @@
-use serde::{Serialize, Deserialize};
+extern crate log;
+
 use std::collections::{HashMap};
 use std::env;
 use std::string::String;
 use crate::utils::cli::Cli;
 use log::debug;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 pub struct RunConfiguration {
     pub reference: String,
     pub read_len: usize,

@@ -1,5 +1,5 @@
 [package]
-name = "rusty_neat"
+name = "rusty-neat"
 version = "0.1.0"
 authors = ["Joshua Allen <jallen17@illinois.edu>"]
 license = "MIT"

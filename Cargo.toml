@@ -2,7 +2,11 @@
 name = "rusty_neat"
 version = "0.1.0"
 authors = ["Joshua Allen <jallen17@illinois.edu>"]
-edition = "2021"
+license = "MIT"
+description = "A tool to develop an artificial Fastq file"
+readme = "README.md"
+homepage = "https://github.com/ncsa/rusty-neat"
+repository = "https://github.com/ncsa/rusty-neat"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

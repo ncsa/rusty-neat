@@ -4,3 +4,7 @@ NEAT (https://github.com/ncsa/neat) is essentially a simple program, since attem
 We will be taking an iterative approach, partly out of necessity as we learn the complexities of Rust. 
 
 Check this branch for updates or submit a request to contribute code directly. There won't be any solid tasks yet until we're further along in development. 
+
+How to use rusty-neat:
+
+Download the executable in the release (current version 0.1.0).

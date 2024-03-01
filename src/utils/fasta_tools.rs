@@ -1,10 +1,11 @@
 use rand::prelude::{IteratorRandom, ThreadRng};
 use std::collections::HashMap;
-use crate::utils::io::read_lines;
+use crate::utils::file_tools::read_lines;
+use log::info;
 
 
-pub fn read_fasta(fasta_path: &str) -> HashMap<String, Vec<u8>> {
-    println!("Reading fasta: {}", fasta_path);
+pub fn read_fasta(fasta_path: &str) -> Box<HashMap<String, Vec<u8>>> {
+    info!("Reading fasta: {}", fasta_path);
 
     let mut fasta_map: HashMap<String, Vec<u8>> = HashMap::new();
     let mut current_key = String::new();
@@ -30,7 +31,7 @@ pub fn read_fasta(fasta_path: &str) -> HashMap<String, Vec<u8>> {
         // Need to pick up the last one
         fasta_map.entry(current_key.clone()).or_insert(temp_seq.clone());
     }
-    fasta_map
+    Box::new(fasta_map)
 }
 
 pub fn char_to_num(char_of_interest: char) -> u8 {

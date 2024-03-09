@@ -4,15 +4,15 @@ use rand::rngs::ThreadRng;
 
 fn cover_dataset(
     span_length: usize,
-    read_length: &usize,
+    read_length: usize,
     strict_read_length: bool,
-    coverage: &usize,
+    coverage: usize,
     rng: &mut ThreadRng,
 ) -> Vec<(usize, usize)> {
     let mut read_set: Vec<(usize, usize)> = vec![];
     let half_read = read_length/2;
     let mut start: usize = 0;
-    'outer: for _ in 0..*coverage {
+    'outer: for _ in 0..coverage {
         while start < span_length {
             let mut length_wildcard: usize = 0;
             if strict_read_length == false {
@@ -32,29 +32,38 @@ fn cover_dataset(
 }
 
 pub fn generate_reads(
-    mutated_sequence: &Vec<u8>,
+    mutated_sequences: &Vec<Vec<u8>>,
     read_length: &usize,
     coverage: &usize,
     rng: &mut ThreadRng,
     strict_read_length: Option<bool>,
 ) -> Box<HashSet<Vec<u8>>> {
+    // Set a default for strict read length
     strict_read_length.unwrap_or(true);
 
-    // Generate a vector of read positions
-    let read_positions: Vec<(usize, usize)> = cover_dataset(
-        mutated_sequence.len(),
-        read_length,
-        strict_read_length.unwrap(),
-        coverage,
-        rng,
-    );
+    // Infer ploidy
+    let ploidy = mutated_sequences.len();
+    // Need X/ploidy reads per ploid, but probably fewer
+    let coverage_per_ploid = coverage / ploidy + 1;
 
     // set up some defaults and storage
     let mut read_set: HashSet<Vec<u8>> = HashSet::new();
 
-    // Generate the reads from the read positions.
-    for (start, end) in read_positions {
-        read_set.insert(mutated_sequence[start..end].into());
+    for i in 0..ploidy {
+        let seq_len = *(&mutated_sequences[i].len());
+        // Generate a vector of read positions
+        let read_positions: Vec<(usize, usize)> = cover_dataset(
+            seq_len,
+            *read_length,
+            strict_read_length.unwrap(),
+            coverage_per_ploid,
+            rng,
+        );
+
+        // Generate the reads from the read positions.
+        for (start, end) in read_positions {
+            read_set.insert(mutated_sequences[i][start..end].into());
+        }
     }
     Box::new(read_set)
 }

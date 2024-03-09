@@ -89,3 +89,7 @@ pub fn find_random_non_n(positions: &Vec<bool>, rng: &mut ThreadRng) -> Option<u
     };
     index
 }
+
+pub fn write_fasta(fasta_output: &Box<HashMap<String, Vec<u8>>>, output_file: &str) {
+    todo!()
+}

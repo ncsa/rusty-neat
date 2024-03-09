@@ -30,6 +30,8 @@ fn main() {
     )
         .unwrap();
 
+    let mut rng = thread_rng();
+
     info!("Begin processing");
 
     let args = cli::Cli::parse();
@@ -51,15 +53,19 @@ fn main() {
 
     info!("Mapping fasta file: {}", &config.reference);
     let fasta_map = read_fasta(&config.reference);
-    let mutated_map = mutate_fasta(&fasta_map);
+    // todo:
+    // need to add this twice, produce two mutated fastas, or at least 2 separate mutation
+    // datasets, each with half the mutation rate. Going to mean twice as much memory needed for
+    // fasta creation, which isn't ideal
+    let mutated_map = mutate_fasta(&fasta_map, config.ploidy, rng);
     let mut rng = thread_rng();
     let strict_read_length: Option<bool> = Option::from(true);
 
     let mut read_sets: HashSet<Vec<u8>> = HashSet::new();
-    for (name, sequence) in mutated_map.iter() {
+    for (name, sequences) in mutated_map.iter() {
         // defined as a set of read sequences that should cover the mutated sequence `coverage` number of times
         let data_set = generate_reads(
-            &sequence,
+            &sequences,
             &config.read_len,
             &config.coverage,
             &mut rng,
@@ -78,5 +84,6 @@ fn main() {
         &output_file,
         *outsets,
     ).unwrap();
+    info!("Processing complete")
 }
 

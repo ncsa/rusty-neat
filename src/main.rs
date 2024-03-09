@@ -57,8 +57,7 @@ fn main() {
     // need to add this twice, produce two mutated fastas, or at least 2 separate mutation
     // datasets, each with half the mutation rate. Going to mean twice as much memory needed for
     // fasta creation, which isn't ideal
-    let mutated_map = mutate_fasta(&fasta_map, config.ploidy, rng);
-    let mut rng = thread_rng();
+    let mutated_map = mutate_fasta(&fasta_map, config.ploidy, &mut rng);
     let strict_read_length: Option<bool> = Option::from(true);
 
     let mut read_sets: HashSet<Vec<u8>> = HashSet::new();

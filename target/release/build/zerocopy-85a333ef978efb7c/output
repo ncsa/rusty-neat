@@ -1,4 +1,0 @@
-cargo:rerun-if-changed=build.rs
-cargo:rustc-cfg=zerocopy_aarch64_simd
-cargo:rustc-cfg=zerocopy_generic_bounds_in_const_fn
-cargo:rustc-cfg=zerocopy_panic_in_const

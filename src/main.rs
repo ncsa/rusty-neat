@@ -53,7 +53,7 @@ fn main() {
     );
 
     info!("Mapping fasta file: {}", &config.reference);
-    let fasta_map = read_fasta(&config.reference);
+    let (fasta_map, fasta_order) = read_fasta(&config.reference);
     // todo:
     // need to add this twice, produce two mutated fastas, or at least 2 separate mutation
     // datasets, each with half the mutation rate. Going to mean twice as much memory needed for
@@ -69,9 +69,10 @@ fn main() {
     if config.produce_fasta == true {
         write_fasta(
             &mutated_map,
+            &fasta_order,
             &output_file,
             config.ploidy
-        )
+        ).expect("Problem writing fasta file");
     }
 
     let mut read_sets: HashSet<Vec<u8>> = HashSet::new();

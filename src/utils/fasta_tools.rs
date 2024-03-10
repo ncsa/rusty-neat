@@ -2,16 +2,18 @@ extern crate rand;
 extern crate log;
 
 use rand::prelude::{IteratorRandom, ThreadRng};
-use std::collections::HashMap;
-use serde_yaml::Value::String;
+use std::collections::{HashMap, HashSet};
 use crate::utils::file_tools::read_lines;
 use self::log::info;
 use std::fs::File;
+use std::io;
+use std::io::Write;
 
-pub fn read_fasta(fasta_path: &str) -> Box<HashMap<String, Vec<u8>>> {
+pub fn read_fasta(fasta_path: &str) -> (Box<HashMap<String, Vec<u8>>>, Vec<String>) {
     info!("Reading fasta: {}", fasta_path);
 
     let mut fasta_map: HashMap<String, Vec<u8>> = HashMap::new();
+    let mut fasta_order: Vec<String> = Vec::new();
     let mut current_key = String::new();
 
     if let Ok(lines) = read_lines(fasta_path) {
@@ -23,6 +25,7 @@ pub fn read_fasta(fasta_path: &str) -> Box<HashMap<String, Vec<u8>>> {
                         fasta_map.entry(current_key.clone()).or_insert(temp_seq.clone());
                     }
                     current_key = String::from(l.strip_prefix('>').unwrap());
+                    fasta_order.push(current_key.clone());
                     temp_seq = vec![];
                 } else {
                     for char in l.chars() {
@@ -35,7 +38,7 @@ pub fn read_fasta(fasta_path: &str) -> Box<HashMap<String, Vec<u8>>> {
         // Need to pick up the last one
         fasta_map.entry(current_key.clone()).or_insert(temp_seq.clone());
     }
-    Box::new(fasta_map)
+    (Box::new(fasta_map), fasta_order)
 }
 
 pub fn char_to_num(char_of_interest: char) -> u8 {
@@ -92,32 +95,41 @@ pub fn find_random_non_n(positions: &Vec<bool>, rng: &mut ThreadRng) -> Option<u
     index
 }
 
-pub fn write_fasta(fasta_output: &Box<HashMap<String, Vec<Vec<u8>>>>, output_file: &str, ploidy: usize) {
+pub fn write_fasta(
+    fasta_output: &Box<HashMap<String, Vec<Vec<u8>>>>,
+    fasta_order: &Vec<String>,
+    output_file: &str,
+    ploidy: usize
+) -> io::Result<()> {
     // setup files to write.
     let mut fasta_files: Vec<String> = Vec::new();
     for ploid in 0..ploidy {
         let this_fasta = format!("{}p{}.fasta", output_file, ploid+1);
-        fasta_files.push(&this_fasta);
-        let mut outfile = File::options().create(true).append(true).open(this_fasta);
-        for (contig, sequences) in &fasta_output {
+        fasta_files.push(this_fasta.clone());
+        info!("Writing file: {}", this_fasta);
+        let mut outfile = File::options().create(true).append(true).open(this_fasta)?;
+        for contig in fasta_order {
+            let mut sequences = &fasta_output[contig];
             // Write contig name
             writeln!(&mut outfile, ">{}", contig)?;
             // write sequences[ploid] to this_fasta
             let mut i = 0;
-            let sequence_to_write = sequences[ploid];
+            let sequence_to_write: &Vec<u8> = &sequences[ploid];
             while i < sequence_to_write.len() {
-                let line = String::new();
-                let mut max: usize = 60;
+                let mut line = String::new();
+                let mut max: usize = 70;
                 let this_length: usize = sequence_to_write[i..].len();
-                if this_length < 60 {
+                // If we don't have 70 characters, write out whatever is left.
+                if this_length < 70 {
                     max = this_length
                 }
                 for j in 0..max {
                     line += num_to_char(sequence_to_write[i + j]);
                 }
-                i += 60;
-                writeln!(&mut outfile, "{}", line)
+                writeln!(&mut outfile, "{}", line)?;
+                i += 70;
             }
         }
-    }
+    };
+    Ok(())
 }

@@ -1,18 +1,47 @@
 extern crate log;
+extern crate itertools;
 
 use std::collections::HashMap;
 use rand::distributions::{Distribution, Uniform};
-use rand::prelude::ThreadRng;
+use rand::prelude::{ThreadRng, IndexedRandom};
+use rand::seq::{IteratorRandom, SliceRandom};
 use rand::{Rng, thread_rng};
 use self::log::{debug, error};
+use self::itertools::izip;
 
-fn mutate_nucleotide(nucleotide: u8, rng: &mut ThreadRng) -> u8 {
-    let mut new_nuc = nucleotide.clone();
-    let mut nuc_choices = Uniform::new_inclusive(0, 3).unwrap();
-    while new_nuc == nucleotide {
-        new_nuc = nuc_choices.sample(rng);
+#[derive(Debug, Ord, PartialOrd, Eq, PartialEq)]
+struct NucModel {
+    base: u8,
+    a: Vec<u8>,
+    c: Vec<u8>,
+    g: Vec<u8>,
+    t: Vec<u8>,
+}
+
+impl NucModel {
+    fn from(base: u8, weights: Vec<usize>) -> Self {
+        Self {
+            base,
+            a: vec![0; weights[0]],
+            c: vec![1; weights[1]],
+            g: vec![2; weights[2]],
+            t: vec![3; weights[3]],
+        }
     }
-    new_nuc
+
+    fn choose_new_nuc(&self, mut rng: &mut ThreadRng) -> u8 {
+        // concatenate the vectors together
+        let mut choices = [&self.a[..], &self.c[..], &self.g[..], &self.t[..]].concat();
+        // shuffle the weighted list, based on whatever statistics we come up with.
+        choices.shuffle(&mut rng);
+        // start with the first choice
+        let mut i = 0;
+        // Look for the first nuc that isn't the old nuc.
+        while choices[i] == self.base {
+            i += 1;
+        }
+        choices[i]
+    }
 }
 
 pub fn mutate_fasta(
@@ -68,10 +97,10 @@ pub fn mutate_fasta(
                     mutated_record, num_positions, sequence_length, &mut rng
                 );
             }
-            strands.push(mutated_record);
+            strands.push(mutated_record.clone());
+        }
         // Add to the new hashmap
         return_struct.entry(name.clone()).or_insert(strands.clone());
-        }
     }
 
     Box::new(return_struct)
@@ -80,22 +109,34 @@ pub fn mutate_fasta(
 fn mutate_sequence(sequence: Vec<u8>, num_positions: usize, length: usize, mut rng: &mut ThreadRng) -> Vec<u8> {
     debug!("Adding {} mutations", num_positions);
     let mut mutated_record = sequence.clone();
-    // This builds a uniform distribution across the range, curious how we can adapt this idea
-    let position_range = Uniform::new(0, length).unwrap();
-    // Grab a set of random positions
-    // todo: check that this is without replacement
-    let mutated_elements: Vec<usize> = position_range.sample_iter(&mut rng).take(num_positions).collect();
-    let mut check = mutated_elements.clone();
-    check.sort();
-    check.dedup();
-    if check.len() != mutated_elements.len() {
-        error!("sampl_iter is pulling doubles on us!");
-        panic!("Fix sample_iter")
+    // Randomly select num_positions from positions, weighted by gc bias and whatever. For now
+    // all he weights are just equal.
+    let weights = vec![1; length];
+    // zip together weights and positions
+    let mut weighted_positions: Vec<(usize, i32)> = Vec::new();
+    // izip!() accepts iterators and/or values with IntoIterator.
+    for (x, y) in izip!(&mut (0..length), &weights) {
+        weighted_positions.push((x, *y))
     }
-    // Debug check
-    for index in mutated_elements {
-        mutated_record[index] = mutate_nucleotide(sequence[index], &mut rng);
-    }
+    // now choose a random selection of num_positions without replacement
+    let mutated_elements: Vec<&(usize, i32)> = weighted_positions
+        .choose_multiple_weighted(&mut rng, num_positions, |x| x.1)
+        .unwrap()
+        .collect::<Vec<_>>();
+    // Build mutation model
+    let mut_a = NucModel::from(0, vec![0, 1, 1, 1]);
+    let mut_c = NucModel::from(1, vec![1, 0, 1, 1]);
+    let mut_g = NucModel::from(2, vec![1, 1, 0, 1]);
+    let mut_t = NucModel::from(3, vec![1, 1, 1, 0]);
 
+    for (index, _) in mutated_elements {
+        mutated_record[*index] = match sequence[*index] {
+            0 => mut_a.choose_new_nuc(&mut rng),
+            1 => mut_c.choose_new_nuc(&mut rng),
+            2 => mut_g.choose_new_nuc(&mut rng),
+            3 => mut_t.choose_new_nuc(&mut rng),
+            _ => 4
+        }
+    }
     mutated_record
 }

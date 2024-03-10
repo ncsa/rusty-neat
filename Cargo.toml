@@ -11,3 +11,4 @@ chrono = "0.4.34"
 simplelog = "0.12.1"
 serde_yaml = "0.9.32"
 clap = { version = "4.5.1", features = ["derive"] }
+itertools = "0.12.1"

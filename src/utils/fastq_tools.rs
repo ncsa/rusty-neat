@@ -11,6 +11,7 @@ pub fn write_fastq(
     dataset: Vec<&Vec<u8>>,
 ) -> io::Result<()> {
     let name_prefix = "neat_generated_".to_string();
+    let fastq_filename = String::from(fastq_filename) + ".fastq";
     let mut outfile = File::options().create(true).append(true).open(fastq_filename)?;
     let mut index = 1;
     for sequence in dataset {

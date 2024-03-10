@@ -67,7 +67,7 @@ impl ConfigBuilder {
             fragment_mean: 300.0,
             fragment_st_dev: 30.0,
             produce_fastq: true,
-            produce_fasta: false,
+            produce_fasta: true,
             produce_vcf: false,
             produce_bam: false,
             output_dir: current_dir,

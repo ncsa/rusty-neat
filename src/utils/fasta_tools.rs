@@ -3,8 +3,10 @@ extern crate log;
 
 use rand::prelude::{IteratorRandom, ThreadRng};
 use std::collections::HashMap;
+use serde_yaml::Value::String;
 use crate::utils::file_tools::read_lines;
 use self::log::info;
+use std::fs::File;
 
 pub fn read_fasta(fasta_path: &str) -> Box<HashMap<String, Vec<u8>>> {
     info!("Reading fasta: {}", fasta_path);
@@ -90,6 +92,32 @@ pub fn find_random_non_n(positions: &Vec<bool>, rng: &mut ThreadRng) -> Option<u
     index
 }
 
-pub fn write_fasta(fasta_output: &Box<HashMap<String, Vec<u8>>>, output_file: &str) {
-    todo!()
+pub fn write_fasta(fasta_output: &Box<HashMap<String, Vec<Vec<u8>>>>, output_file: &str, ploidy: usize) {
+    // setup files to write.
+    let mut fasta_files: Vec<String> = Vec::new();
+    for ploid in 0..ploidy {
+        let this_fasta = format!("{}p{}.fasta", output_file, ploid+1);
+        fasta_files.push(&this_fasta);
+        let mut outfile = File::options().create(true).append(true).open(this_fasta);
+        for (contig, sequences) in &fasta_output {
+            // Write contig name
+            writeln!(&mut outfile, ">{}", contig)?;
+            // write sequences[ploid] to this_fasta
+            let mut i = 0;
+            let sequence_to_write = sequences[ploid];
+            while i < sequence_to_write.len() {
+                let line = String::new();
+                let mut max: usize = 60;
+                let this_length: usize = sequence_to_write[i..].len();
+                if this_length < 60 {
+                    max = this_length
+                }
+                for j in 0..max {
+                    line += num_to_char(sequence_to_write[i + j]);
+                }
+                i += 60;
+                writeln!(&mut outfile, "{}", line)
+            }
+        }
+    }
 }

@@ -3,6 +3,7 @@ use crate::utils;
 use std::io::Write;
 use std::fs::File;
 use std::io;
+use serde_yaml::Value::String;
 
 use utils::fasta_tools::sequence_array_to_string;
 
@@ -11,6 +12,7 @@ pub fn write_fastq(
     dataset: Vec<&Vec<u8>>,
 ) -> io::Result<()> {
     let name_prefix = "neat_generated_".to_string();
+    let fastq_filename = String::new(fastq_filename) + ".fastq";
     let mut outfile = File::options().create(true).append(true).open(fastq_filename)?;
     let mut index = 1;
     for sequence in dataset {

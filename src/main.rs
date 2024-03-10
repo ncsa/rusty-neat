@@ -2,6 +2,7 @@ extern crate rand;
 extern crate clap;
 extern crate log;
 extern crate simplelog;
+extern crate serde_yaml;
 
 mod utils;
 
@@ -14,11 +15,11 @@ use rand::thread_rng;
 use rand::prelude::*;
 
 use utils::cli;
-use utils::fasta_tools::read_fasta;
+use utils::fasta_tools::{read_fasta, write_fasta};
 use utils::config::{read_config_yaml, build_config_from_args, RunConfiguration};
 use utils::mutate::mutate_fasta;
 use utils::make_reads::generate_reads;
-use utils::fastq_writer::write_fastq;
+use utils::fastq_tools::write_fastq;
 
 fn main() {
 
@@ -45,7 +46,7 @@ fn main() {
         build_config_from_args(args)
     }.unwrap();
 
-    let output_file = format!("{}/{}.fastq", config.output_dir, config.output_prefix);
+    let output_file = format!("{}/{}", config.output_dir, config.output_prefix);
     info!(
         "Running neat on {} with {} bp read length and a coverage of {}.\n> Will output file: {}",
         config.reference, config.read_len, config.coverage, output_file
@@ -57,8 +58,21 @@ fn main() {
     // need to add this twice, produce two mutated fastas, or at least 2 separate mutation
     // datasets, each with half the mutation rate. Going to mean twice as much memory needed for
     // fasta creation, which isn't ideal
-    let mutated_map = mutate_fasta(&fasta_map, config.ploidy, &mut rng);
-    let strict_read_length: Option<bool> = Option::from(true);
+    info!("Mutating fasta");
+    let mutated_map: Box<HashMap<String, Vec<Vec<u8>>>> = mutate_fasta(
+        &fasta_map,
+        config.ploidy,
+        &mut rng
+    );
+
+    info!("Outputting fasta files");
+    if config.produce_fasta == true {
+        write_fasta(
+            &mutated_map,
+            &output_file,
+            config.ploidy
+        )
+    }
 
     let mut read_sets: HashSet<Vec<u8>> = HashSet::new();
     for (name, sequences) in mutated_map.iter() {
@@ -67,8 +81,7 @@ fn main() {
             &sequences,
             &config.read_len,
             &config.coverage,
-            &mut rng,
-            strict_read_length,
+            &mut rng
         );
 
         read_sets.extend(*data_set);
@@ -78,7 +91,7 @@ fn main() {
     let mut outsets: Box<Vec<&Vec<u8>>> = Box::new(read_sets.iter().collect());
     outsets.shuffle(&mut rng);
 
-    info!("Writing fastq: {}", output_file);
+    info!("Writing fastq: {}.fastq", output_file);
     write_fastq(
         &output_file,
         *outsets,

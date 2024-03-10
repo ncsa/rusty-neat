@@ -5,26 +5,26 @@ use rand::rngs::ThreadRng;
 fn cover_dataset(
     span_length: usize,
     read_length: usize,
-    strict_read_length: bool,
     coverage: usize,
     rng: &mut ThreadRng,
 ) -> Vec<(usize, usize)> {
+    // This function selects the positions of the reads. It starts at the beginning and goes out
+    // one read length, then picks a random jump between 0 and half the read length to move
+    // And picks those coordinates for a second read. Once the tail of the read is past the end,
+    // we start over again at 0.
     let mut read_set: Vec<(usize, usize)> = vec![];
     let half_read = read_length/2;
     let mut start: usize = 0;
     'outer: for _ in 0..coverage {
         while start < span_length {
-            let mut length_wildcard: usize = 0;
-            if strict_read_length == false {
-                length_wildcard = (rng.next_u32() % ((read_length / 10) as u32)) as usize;
-            }
-            let temp_end = start+read_length+length_wildcard;
+            let temp_end = start+read_length;
             if temp_end > span_length {
                 start = 0;
                 continue 'outer;
             }
             read_set.push((start, temp_end));
-            let wildcard: usize = (rng.next_u32() % (half_read/2) as u32) as usize; // Picks a number between zero and quarter of a read length
+            // Picks a number between zero and half of a read length
+            let wildcard: usize = (rng.next_u32() % (half_read/2) as u32) as usize;
             start += half_read + wildcard; // adds to the start to give it some spice
         }
     }
@@ -36,11 +36,7 @@ pub fn generate_reads(
     read_length: &usize,
     coverage: &usize,
     rng: &mut ThreadRng,
-    strict_read_length: Option<bool>,
 ) -> Box<HashSet<Vec<u8>>> {
-    // Set a default for strict read length
-    strict_read_length.unwrap_or(true);
-
     // Infer ploidy
     let ploidy = mutated_sequences.len();
     // Need X/ploidy reads per ploid, but probably fewer
@@ -55,7 +51,6 @@ pub fn generate_reads(
         let read_positions: Vec<(usize, usize)> = cover_dataset(
             seq_len,
             *read_length,
-            strict_read_length.unwrap(),
             coverage_per_ploid,
             rng,
         );

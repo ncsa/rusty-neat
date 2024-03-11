@@ -2,19 +2,27 @@ extern crate log;
 extern crate itertools;
 
 use std::collections::HashMap;
-use rand::distributions::{Distribution, Uniform};
+use rand::distributions::Distribution;
 use rand::prelude::{ThreadRng, IndexedRandom};
-use rand::seq::{IteratorRandom, SliceRandom};
-use rand::{Rng, thread_rng};
-use self::log::{debug, error};
+use rand::seq::SliceRandom;
+use rand::Rng;
+use self::log::debug;
 use self::itertools::izip;
 
 #[derive(Debug, Ord, PartialOrd, Eq, PartialEq)]
 struct NucModel {
+    // This simple nucleotide model simple tracks the base to mutate from
+    // and the weights of each are turned into a vector. For example, if the weight count for "A"
+    // is 8, then the vector will be [0, 0, 0, 0, 0, 0, 0, 0].
+    // 0: A, 1: C, 2: G, 3: T
     base: u8,
+    // vector of 0s, the length of which is the weight of the A in the vector.
     a: Vec<u8>,
+    // vector of 1s, the length of which is the weight of the C in the vector.
     c: Vec<u8>,
+    // vector of 2s, the length of which is the weight of the G in the vector.
     g: Vec<u8>,
+    // vector of 3s, the length of which is the weight of the T in the vector.
     t: Vec<u8>,
 }
 
@@ -83,7 +91,7 @@ pub fn mutate_fasta(
             let mut mutated_record: Vec<u8> = sequence.clone();
 
             // Calculate how many mutations to add
-            let mut num_positions = (
+            let num_positions = (
                 sequence_length as f64 * ploid_mut_rate[ploid]
             ).round() as usize;
             if num_positions == 0 {
@@ -106,7 +114,15 @@ pub fn mutate_fasta(
     Box::new(return_struct)
 }
 
-fn mutate_sequence(sequence: Vec<u8>, num_positions: usize, length: usize, mut rng: &mut ThreadRng) -> Vec<u8> {
+fn mutate_sequence(
+    sequence: Vec<u8>,
+    num_positions: usize,
+    length: usize,
+    mut rng: &mut ThreadRng
+) -> Vec<u8> {
+    /*
+    Takes a vector of u8's and mutate a few positions at random.
+     */
     debug!("Adding {} mutations", num_positions);
     let mut mutated_record = sequence.clone();
     // Randomly select num_positions from positions, weighted by gc bias and whatever. For now

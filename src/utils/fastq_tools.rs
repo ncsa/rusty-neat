@@ -1,5 +1,3 @@
-use crate::utils;
-
 use std::io::Write;
 use std::fs::File;
 use std::io;
@@ -10,9 +8,17 @@ pub fn write_fastq(
     fastq_filename: &str,
     dataset: Vec<&Vec<u8>>,
 ) -> io::Result<()> {
+    /*
+    Writes fastq files. At the moment, it only writes out single r1 file, but will eventually write
+    out r1 and r2 files.
+     */
+
+    // name_prefix is for the prefix for the read names. Reads are numbered in output order
+    // (Although this feature is currently untested and unknown).
+    // (May need sorting.)
     let name_prefix = "neat_generated_".to_string();
-    let fastq_filename = String::from(fastq_filename) + ".fastq";
-    let mut outfile = File::options().create(true).append(true).open(fastq_filename)?;
+    let fastq_filename = String::from(fastq_filename) + "_r1.fastq";
+    let mut outfile = File::options().create_new(true).append(true).open(fastq_filename)?;
     let mut index = 1;
     for sequence in dataset {
         let sequence_len = sequence.len();

@@ -71,7 +71,8 @@ fn main() {
 
     let mut read_sets: HashSet<Vec<u8>> = HashSet::new();
     for (_name, sequences) in mutated_map.iter() {
-        // defined as a set of read sequences that should cover the mutated sequence `coverage` number of times
+        // defined as a set of read sequences that should cover
+        // the mutated sequence `coverage` number of times
         let data_set = generate_reads(
             &sequences,
             &config.read_len,

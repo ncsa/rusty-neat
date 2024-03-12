@@ -12,8 +12,8 @@ fn cover_dataset(
     // one read length, then picks a random jump between 0 and half the read length to move
     // And picks those coordinates for a second read. Once the tail of the read is past the end,
     // we start over again at 0.
+    // todo currently the reads look a little light so we may need to improve this calculation.
     let mut read_set: Vec<(usize, usize)> = vec![];
-    let half_read = read_length/2;
     let mut start: usize = 0;
     'outer: for _ in 0..coverage {
         while start < span_length {
@@ -24,8 +24,8 @@ fn cover_dataset(
             }
             read_set.push((start, temp_end));
             // Picks a number between zero and half of a read length
-            let wildcard: usize = (rng.next_u32() % (half_read/2) as u32) as usize;
-            start += half_read + wildcard; // adds to the start to give it some spice
+            let wildcard: usize = (rng.next_u32() % (read_length/4) as u32) as usize;
+            start += read_length + wildcard; // adds to the start to give it some spice
         }
     }
     read_set
@@ -60,5 +60,6 @@ pub fn generate_reads(
             read_set.insert(mutated_sequences[i][start..end].into());
         }
     }
+    // puts the reads in the heap.
     Box::new(read_set)
 }

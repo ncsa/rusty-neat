@@ -60,7 +60,7 @@ pub fn read_fasta(
     let mut fasta_order: Vec<String> = Vec::new();
     let mut current_key = String::new();
 
-    if let Ok(lines) = read_lines(fasta_path) {
+    if let lines = read_lines(fasta_path).expect("Error reading fasta") {
         let mut temp_seq: Vec<u8> = vec![];
         lines.for_each(|line| match line {
             Ok(l) => {
@@ -77,7 +77,7 @@ pub fn read_fasta(
                     }
                 }
             },
-            Err(_) => (),
+            Err(error) => panic!("Error reading fasta file: {:?}", error),
         });
         // Need to pick up the last one
         fasta_map.entry(current_key.clone()).or_insert(temp_seq.clone());

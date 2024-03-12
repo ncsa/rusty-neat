@@ -6,7 +6,6 @@ extern crate serde_yaml;
 
 mod utils;
 
-use std::{env, process};
 use std::collections::{HashMap, HashSet};
 use clap::{Parser};
 use log::*;
@@ -16,7 +15,7 @@ use rand::prelude::*;
 
 use utils::cli;
 use utils::fasta_tools::{read_fasta, write_fasta};
-use utils::config::{read_config_yaml, build_config_from_args, RunConfiguration};
+use utils::config::{read_config_yaml, build_config_from_args};
 use utils::mutate::mutate_fasta;
 use utils::make_reads::generate_reads;
 use utils::fastq_tools::write_fastq;
@@ -28,8 +27,7 @@ fn main() {
         Config::default(),
         TerminalMode::Stdout,
         ColorChoice::Auto,
-    )
-        .unwrap();
+    ).unwrap();
 
     let mut rng = thread_rng();
 
@@ -43,14 +41,10 @@ fn main() {
     } else {
         info!("Using command line arguments.");
         debug!("Command line args: {:?}", &args);
-        build_config_from_args(args)
+        Ok(build_config_from_args(args).expect("Problem reading configuration yaml file"))
     }.unwrap();
 
     let output_file = format!("{}/{}", config.output_dir, config.output_prefix);
-    info!(
-        "Running neat on {} with {} bp read length and a coverage of {}.\n> Will output file: {}",
-        config.reference, config.read_len, config.coverage, output_file
-    );
 
     info!("Mapping fasta file: {}", &config.reference);
     let (fasta_map, fasta_order) = read_fasta(&config.reference);
@@ -76,8 +70,9 @@ fn main() {
     }
 
     let mut read_sets: HashSet<Vec<u8>> = HashSet::new();
-    for (name, sequences) in mutated_map.iter() {
-        // defined as a set of read sequences that should cover the mutated sequence `coverage` number of times
+    for (_name, sequences) in mutated_map.iter() {
+        // defined as a set of read sequences that should cover
+        // the mutated sequence `coverage` number of times
         let data_set = generate_reads(
             &sequences,
             &config.read_len,
@@ -92,11 +87,11 @@ fn main() {
     let mut outsets: Box<Vec<&Vec<u8>>> = Box::new(read_sets.iter().collect());
     outsets.shuffle(&mut rng);
 
-    info!("Writing fastq: {}.fastq", output_file);
+    info!("Writing fastq");
     write_fastq(
         &output_file,
         *outsets,
-    ).unwrap();
+    ).expect("Problem writing fastq file");
     info!("Processing complete")
 }
 

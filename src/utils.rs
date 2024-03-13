@@ -5,3 +5,4 @@ pub mod cli;
 pub mod make_reads;
 pub mod mutate;
 pub mod fastq_tools;
+pub mod vcf_tools;

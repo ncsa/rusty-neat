@@ -10,6 +10,12 @@ pub fn write_fastq(
     dataset: Vec<&Vec<u8>>,
 ) -> io::Result<()> {
     /*
+    Takes:
+        fastq_filename: prefix for the output fastq files
+        dataset: List of u8 vectors representing dna sequences.
+    returns:
+        Error if there is a problem or else nothing.
+
     Writes fastq files. At the moment, it only writes out single r1 file, but will eventually write
     out r1 and r2 files.
      */

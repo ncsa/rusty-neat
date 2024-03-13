@@ -123,7 +123,7 @@ fn mutate_sequence(
     sequence: Vec<u8>,
     num_positions: usize,
     mut rng: &mut ThreadRng
-) -> (Vec<u8>, Vec<(usize, u8)>) {
+) -> (Vec<u8>, Vec<(usize, u8, u8)>) {
     /*
     Takes:
         sequence: A u8 vector representing a sequence of DNA
@@ -169,10 +169,11 @@ fn mutate_sequence(
     let mut_t = NucModel::from(3, vec![3, 14, 3, 0]);
 
     // Will hold the variants added to this sequence
-    let mut sequence_variants: Vec<(usize, u8)> = Vec::new();
+    let mut sequence_variants: Vec<(usize, u8, u8)> = Vec::new();
     // for each index, picks a new base
     for (index, _weight) in mutated_elements {
-        mutated_record[*index] = match sequence[*index] {
+        let reference_base = sequence[*index];
+        mutated_record[*index] = match reference_base {
             0 => mut_a.choose_new_nuc(&mut rng),
             1 => mut_c.choose_new_nuc(&mut rng),
             2 => mut_g.choose_new_nuc(&mut rng),
@@ -180,7 +181,7 @@ fn mutate_sequence(
             _ => 4
         };
         // add the location and alt base for the variant
-        sequence_variants.push((*index, mutated_record[*index]))
+        sequence_variants.push((*index, mutated_record[*index],  *reference_base))
     }
     (mutated_record, sequence_variants)
 }

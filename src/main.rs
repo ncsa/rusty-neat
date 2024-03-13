@@ -19,9 +19,9 @@ use utils::config::{read_config_yaml, build_config_from_args};
 use utils::mutate::mutate_fasta;
 use utils::make_reads::generate_reads;
 use utils::fastq_tools::write_fastq;
+use utils::vcf_tools::write_vcf;
 
 fn main() {
-
     TermLogger::init(
         LevelFilter::Trace,
         Config::default(),
@@ -53,18 +53,12 @@ fn main() {
     info!("Mapping reference fasta file: {}", &config.reference);
     let (fasta_map, fasta_order) = read_fasta(&config.reference);
 
-    // Mutating the reference and recoring the variant locations.
+    // Mutating the reference and recording the variant locations.
     info!("Mutating reference.");
     let (mutated_map, variant_locations) = mutate_fasta(
         &fasta_map,
         &mut rng
     );
-
-    if config.produce_vcf {
-        info!("Writing vcf file");
-        todo!();
-        // write_vcf(&variant_locations, &fasta_order, &config.ploidy, &output_file, &mut rng)
-    }
 
     if config.produce_fasta {
         info!("Outputting fasta file");
@@ -72,8 +66,19 @@ fn main() {
             &mutated_map,
             &fasta_order,
             &output_file,
-            config.ploidy
         ).expect("Problem writing fasta file");
+    }
+
+    if config.produce_vcf {
+        info!("Writing vcf file");
+        write_vcf(
+            &fasta_map,
+            &variant_locations,
+            &fasta_order,
+            config.ploidy,
+            &config.reference,
+            &output_file,
+            &mut rng).expect("Error writing vcf file")
     }
 
     let mut read_sets: HashSet<Vec<u8>> = HashSet::new();
@@ -92,16 +97,18 @@ fn main() {
         read_sets.extend(*data_set);
     }
 
-    info!("Shuffling output fastq data");
-    let mut outsets: Box<Vec<&Vec<u8>>> = Box::new(read_sets.iter().collect());
-    outsets.shuffle(&mut rng);
+    if config.produce_fastq {
+        info!("Shuffling output fastq data");
+        let mut outsets: Box<Vec<&Vec<u8>>> = Box::new(read_sets.iter().collect());
+        outsets.shuffle(&mut rng);
 
-    info!("Writing fastq");
-    write_fastq(
-        &output_file,
-        config.paired_ended,
-        *outsets,
-    ).expect("Problem writing fastq file");
-    info!("Processing complete")
+        info!("Writing fastq");
+        write_fastq(
+            &output_file,
+            config.paired_ended,
+            *outsets,
+        ).expect("Problem writing fastq file");
+        info!("Processing complete")
+    }
 }
 

@@ -80,25 +80,25 @@ pub fn mutate_fasta(
 
     for (name, sequence) in file_struct {
         // Mutations for this contig
-        let contig_mutations: Vec<(usize, u8)> = Vec::new();
+        let mut contig_mutations: Vec<(usize, u8)> = Vec::new();
         // The length of this sequence
         let sequence_length = sequence.len();
         debug!("Sequence {} is {} bp long", name, sequence_length);
         // Clone the reference to create mutations
         let mut mutated_record: Vec<u8> = sequence.clone();
         // Calculate how many mutations to add
-        let mut num_positions = sequence_length as f64 * MUT_RATE;
+        let mut rough_num_positions: f64 = sequence_length as f64 * MUT_RATE;
         // Add or subtract a few extra positions.
-        num_positions += {
+        rough_num_positions += {
             // A random amount up to 10% of the reads
-            let factor = rng.gen() * 0.10;
+            let factor: f64 = rng.gen::<f64>() * 0.10;
             // 25% of the time subtract, otherwise we'll add.
-            let sign = if rng.bool(0.25) { -1 } else { 1 };
+            let sign: f64 = if rng.gen_bool(0.25) { -1.0 } else { 1.0 };
             // add or subtract up to 10% of the reads.
-            num_positions * (sign * factor)
+            rough_num_positions * (sign * factor)
         };
         // round the number of positions to the nearest usize.
-        num_positions = num_positions.round() as usize;
+        let num_positions = rough_num_positions.round() as usize;
         // If we somehow ended up with negative or no reads, we may still randomly add one mutation.
         if num_positions <= 0 {
             // we want to add at least 1 mutation to each contig
@@ -123,7 +123,7 @@ fn mutate_sequence(
     sequence: Vec<u8>,
     num_positions: usize,
     mut rng: &mut ThreadRng
-) -> (Vec<u8>, Vec<(usize, u8)>) {
+) -> (Vec<u8>, Vec<(usize, u8, u8)>) {
     /*
     Takes:
         sequence: A u8 vector representing a sequence of DNA
@@ -169,10 +169,11 @@ fn mutate_sequence(
     let mut_t = NucModel::from(3, vec![3, 14, 3, 0]);
 
     // Will hold the variants added to this sequence
-    let mut sequence_variants: Vec<(usize, u8)> = Vec::new();
+    let mut sequence_variants: Vec<(usize, u8, u8)> = Vec::new();
     // for each index, picks a new base
     for (index, _weight) in mutated_elements {
-        mutated_record[*index] = match sequence[*index] {
+        let reference_base = sequence[*index];
+        mutated_record[*index] = match reference_base {
             0 => mut_a.choose_new_nuc(&mut rng),
             1 => mut_c.choose_new_nuc(&mut rng),
             2 => mut_g.choose_new_nuc(&mut rng),
@@ -180,7 +181,7 @@ fn mutate_sequence(
             _ => 4
         };
         // add the location and alt base for the variant
-        sequence_variants.push((*index, mutated_record[index]))
+        sequence_variants.push((*index, mutated_record[*index],  *reference_base))
     }
     (mutated_record, sequence_variants)
 }

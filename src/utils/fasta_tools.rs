@@ -35,6 +35,7 @@ pub fn num_to_char(nuc_num: u8) -> &'static str {
 #[allow(unused)]
 pub enum NucRepr {
     // I just discovered this repr type thing and need to investigate.
+    // todo figure out if we can use this idea to simplify things
     A = 0,
     C = 1,
     G = 2,
@@ -43,6 +44,7 @@ pub enum NucRepr {
 }
 
 pub fn sequence_array_to_string(input_array: &Vec<u8>) -> String {
+    // Converts a sequence vector into a string representing the DNA sequence
     let mut return_string = String::new();
     for num in input_array {
         return_string += num_to_char(*num);
@@ -53,7 +55,7 @@ pub fn sequence_array_to_string(input_array: &Vec<u8>) -> String {
 pub fn read_fasta(
     fasta_path: &str
 ) -> (Box<HashMap<String, Vec<u8>>>, Vec<String>) {
-    // Reads a fasta and turns it into a HashMap and puts it in the heap
+    // Reads a fasta file and turns it into a HashMap and puts it in the heap
     info!("Reading fasta: {}", fasta_path);
 
     let mut fasta_map: HashMap<String, Vec<u8>> = HashMap::new();
@@ -89,36 +91,39 @@ pub fn write_fasta(
     fasta_output: &Box<HashMap<String, Vec<u8>>>,
     fasta_order: &Vec<String>,
     output_file: &str,
-    ploidy: usize
 ) -> io::Result<()> {
+    /*
+    Takes:
+        fasta_output: the hashmap of mutated sequences with contig names
+        fasta_order: A vector with the proper order for the fasta elements
+        output_file: the prefix for the output file name
+        ploidy: the number of copies of each chromosome the simulation is using
+    Returns:
+        Errors if there is a problem writing the file, otherwise it returns nothing.
+     */
     // writing fasta output to files
-    let mut fasta_files: Vec<String> = Vec::new();
-    for ploid in 0..ploidy {
-        let this_fasta = format!("{}_p{}.fasta", output_file, ploid+1);
-        fasta_files.push(this_fasta.clone());
-        info!("Writing file: {}", this_fasta);
-        let mut outfile = File::options().create(true).append(true).open(this_fasta)?;
-        for contig in fasta_order {
-            let sequence = &fasta_output[contig];
-            // Write contig name
-            writeln!(&mut outfile, ">{}", contig)?;
-            // write sequences[ploid] to this_fasta
-            let mut i = 0;
-            let sequence_to_write: &Vec<u8> = &sequence;
-            while i < sequence_to_write.len() {
-                let mut line = String::new();
-                let mut max: usize = 70;
-                let this_length: usize = sequence_to_write[i..].len();
-                // If we don't have 70 characters, write out whatever is left.
-                if this_length < 70 {
-                    max = this_length
-                }
-                for j in 0..max {
-                    line += num_to_char(sequence_to_write[i + j]);
-                }
-                writeln!(&mut outfile, "{}", line)?;
-                i += 70;
+    let output_fasta = format!("{}.fasta", output_file);
+    let mut outfile = File::options().create_new(true).append(true).open(output_fasta)?;
+    for contig in fasta_order {
+        let sequence = &fasta_output[contig];
+        // Write contig name
+        writeln!(&mut outfile, ">{}", contig)?;
+        // write sequences[ploid] to this_fasta
+        let mut i = 0;
+        let sequence_to_write: &Vec<u8> = &sequence;
+        while i < sequence_to_write.len() {
+            let mut line = String::new();
+            let mut max: usize = 70;
+            let this_length: usize = sequence_to_write[i..].len();
+            // If we don't have 70 characters, write out whatever is left.
+            if this_length < 70 {
+                max = this_length
             }
+            for j in 0..max {
+                line += num_to_char(sequence_to_write[i + j]);
+            }
+            writeln!(&mut outfile, "{}", line)?;
+            i += 70;
         }
     };
     Ok(())

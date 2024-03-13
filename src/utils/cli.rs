@@ -19,7 +19,7 @@ pub struct Cli {
     read_length <usize> = the length of the reads in the output fastq file. Default = 150
     coverage <usize> = The average depth per read of the fastq files. Default = 10
      */
-    #[arg(short='y', long="configuration_yaml", default_value_t=String::new())]
+    #[arg(short='C', long="configuration_yaml", default_value_t=String::new())]
     pub config: String,
     #[arg(short='r', long="reference", default_value_t=String::from("data/H1N1.fa"))]
     pub reference: String,

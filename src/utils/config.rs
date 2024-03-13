@@ -209,10 +209,7 @@ impl ConfigBuilder {
             }
         }
         if self.produce_fasta {
-            debug!("Producing fasta files:");
-            for ploid in 0..self.ploidy {
-                debug!("\t> {}_p{}.fasta", file_prefix, ploid+1);
-            }
+            debug!("Producing fasta file: {}.fasta", file_prefix);
         }
         if self.produce_vcf {
             debug!("Producing vcf file: {}.vcf", file_prefix)

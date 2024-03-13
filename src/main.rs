@@ -19,6 +19,7 @@ use utils::config::{read_config_yaml, build_config_from_args};
 use utils::mutate::mutate_fasta;
 use utils::make_reads::generate_reads;
 use utils::fastq_tools::write_fastq;
+use utils::vcf_tools::write_vcf;
 
 fn main() {
 
@@ -53,7 +54,7 @@ fn main() {
     info!("Mapping reference fasta file: {}", &config.reference);
     let (fasta_map, fasta_order) = read_fasta(&config.reference);
 
-    // Mutating the reference and recoring the variant locations.
+    // Mutating the reference and recording the variant locations.
     info!("Mutating reference.");
     let (mutated_map, variant_locations) = mutate_fasta(
         &fasta_map,
@@ -62,8 +63,14 @@ fn main() {
 
     if config.produce_vcf {
         info!("Writing vcf file");
-        todo!();
-        // write_vcf(&variant_locations, &fasta_order, &config.ploidy, &output_file, &mut rng)
+        write_vcf(
+            &fasta_map,
+            &variant_locations,
+            &fasta_order,
+            config.ploidy,
+            &config.reference,
+            &output_file,
+            &mut rng).expect("Error writing vcf file")
     }
 
     if config.produce_fasta {
@@ -72,7 +79,6 @@ fn main() {
             &mutated_map,
             &fasta_order,
             &output_file,
-            config.ploidy
         ).expect("Problem writing fasta file");
     }
 

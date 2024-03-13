@@ -6,6 +6,7 @@ use utils::fasta_tools::sequence_array_to_string;
 
 pub fn write_fastq(
     fastq_filename: &str,
+    paired_ended: bool,
     dataset: Vec<&Vec<u8>>,
 ) -> io::Result<()> {
     /*
@@ -17,8 +18,15 @@ pub fn write_fastq(
     // (Although this feature is currently untested and unknown).
     // (May need sorting.)
     let name_prefix = "neat_generated_".to_string();
-    let fastq_filename = String::from(fastq_filename) + "_r1.fastq";
+    // vector to hold the fastq filenames, since we don't know ahead of time if we need one or two
+    let mut fastq_files: Vec<String> = Vec::new();
+    fastq_files.push(String::from(fastq_filename) + "_r1.fastq");
+    if paired_ended {
+        fastq_files.push(String::from(fastq_filename) + "_r1.fastq");
+    }
+    // open the filename
     let mut outfile = File::options().create_new(true).append(true).open(fastq_filename)?;
+    // write out sequence by sequence using index to track the numbering
     let mut index = 1;
     for sequence in dataset {
         let sequence_len = sequence.len();

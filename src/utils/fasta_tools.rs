@@ -86,7 +86,7 @@ pub fn read_fasta(
 }
 
 pub fn write_fasta(
-    fasta_output: &Box<HashMap<String, Vec<Vec<u8>>>>,
+    fasta_output: &Box<HashMap<String, Vec<u8>>>,
     fasta_order: &Vec<String>,
     output_file: &str,
     ploidy: usize
@@ -99,12 +99,12 @@ pub fn write_fasta(
         info!("Writing file: {}", this_fasta);
         let mut outfile = File::options().create(true).append(true).open(this_fasta)?;
         for contig in fasta_order {
-            let sequences = &fasta_output[contig];
+            let sequence = &fasta_output[contig];
             // Write contig name
             writeln!(&mut outfile, ">{}", contig)?;
             // write sequences[ploid] to this_fasta
             let mut i = 0;
-            let sequence_to_write: &Vec<u8> = &sequences[ploid];
+            let sequence_to_write: &Vec<u8> = &sequence;
             while i < sequence_to_write.len() {
                 let mut line = String::new();
                 let mut max: usize = 70;
@@ -144,11 +144,9 @@ fn test_read_fasta() {
 fn test_write_fasta() -> Result<(), Box<dyn error::Error>> {
 
     let seq1: Vec<u8> = vec![0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1];
-    let seq2: Vec<u8> = vec![0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,2];
-    let sequences = vec![seq1, seq2];
-    let fasta_output: HashMap<String, Vec<Vec<u8>>> = HashMap::from([
-        (String::from("H1N1_HA"), sequences)
-    ]);
+    let fasta_output: HashMap<String, Vec<u8>> = HashMap::from(
+        (String::from("H1N1_HA"), seq1)
+    );
     let fasta_pointer = Box::new(fasta_output);
     let fasta_order = vec![String::from("H1N1_HA")];
     let output_file = "test";

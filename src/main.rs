@@ -32,9 +32,11 @@ fn main() {
     let mut rng = thread_rng();
 
     info!("Begin processing");
-
+    // parse the arguments from the command line
     let args = cli::Cli::parse();
 
+    // set up the config struct based on whether there was an input config. Input config
+    // overrides any other inputs.
     let config = if args.config != "" {
         info!("Using Configuration file input: {}", &args.config);
         read_config_yaml(args.config)
@@ -44,23 +46,28 @@ fn main() {
         Ok(build_config_from_args(args).expect("Problem reading configuration yaml file"))
     }.unwrap();
 
+    // Create the prefix of the files to write
     let output_file = format!("{}/{}", config.output_dir, config.output_prefix);
 
-    info!("Mapping fasta file: {}", &config.reference);
+    // Reading the reference file into memory
+    info!("Mapping reference fasta file: {}", &config.reference);
     let (fasta_map, fasta_order) = read_fasta(&config.reference);
-    // todo:
-    // need to add this twice, produce two mutated fastas, or at least 2 separate mutation
-    // datasets, each with half the mutation rate. Going to mean twice as much memory needed for
-    // fasta creation, which isn't ideal
-    info!("Mutating fasta");
-    let mutated_map: Box<HashMap<String, Vec<Vec<u8>>>> = mutate_fasta(
+
+    // Mutating the reference and recoring the variant locations.
+    info!("Mutating reference.");
+    let (mutated_map, variant_locations) = mutate_fasta(
         &fasta_map,
-        config.ploidy,
         &mut rng
     );
 
-    info!("Outputting fasta files");
-    if config.produce_fasta == true {
+    if config.produce_vcf {
+        info!("Writing vcf file");
+        todo!();
+        // write_vcf(&variant_locations, &fasta_order, &config.ploidy, &output_file, &mut rng)
+    }
+
+    if config.produce_fasta {
+        info!("Outputting fasta file");
         write_fasta(
             &mutated_map,
             &fasta_order,
@@ -70,16 +77,18 @@ fn main() {
     }
 
     let mut read_sets: HashSet<Vec<u8>> = HashSet::new();
-    for (_name, sequences) in mutated_map.iter() {
+    for (_name, sequence) in mutated_map.iter() {
         // defined as a set of read sequences that should cover
         // the mutated sequence `coverage` number of times
         let data_set = generate_reads(
-            &sequences,
+            sequence,
             &config.read_len,
             &config.coverage,
+            config.paired_ended,
             &mut rng
         );
 
+        // todo: we need to keep track of these reads better for paired endedness
         read_sets.extend(*data_set);
     }
 

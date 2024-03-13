@@ -22,7 +22,6 @@ use utils::fastq_tools::write_fastq;
 use utils::vcf_tools::write_vcf;
 
 fn main() {
-
     TermLogger::init(
         LevelFilter::Trace,
         Config::default(),
@@ -61,6 +60,15 @@ fn main() {
         &mut rng
     );
 
+    if config.produce_fasta {
+        info!("Outputting fasta file");
+        write_fasta(
+            &mutated_map,
+            &fasta_order,
+            &output_file,
+        ).expect("Problem writing fasta file");
+    }
+
     if config.produce_vcf {
         info!("Writing vcf file");
         write_vcf(
@@ -71,15 +79,6 @@ fn main() {
             &config.reference,
             &output_file,
             &mut rng).expect("Error writing vcf file")
-    }
-
-    if config.produce_fasta {
-        info!("Outputting fasta file");
-        write_fasta(
-            &mutated_map,
-            &fasta_order,
-            &output_file,
-        ).expect("Problem writing fasta file");
     }
 
     let mut read_sets: HashSet<Vec<u8>> = HashSet::new();
@@ -98,16 +97,18 @@ fn main() {
         read_sets.extend(*data_set);
     }
 
-    info!("Shuffling output fastq data");
-    let mut outsets: Box<Vec<&Vec<u8>>> = Box::new(read_sets.iter().collect());
-    outsets.shuffle(&mut rng);
+    if config.produce_fastq {
+        info!("Shuffling output fastq data");
+        let mut outsets: Box<Vec<&Vec<u8>>> = Box::new(read_sets.iter().collect());
+        outsets.shuffle(&mut rng);
 
-    info!("Writing fastq");
-    write_fastq(
-        &output_file,
-        config.paired_ended,
-        *outsets,
-    ).expect("Problem writing fastq file");
-    info!("Processing complete")
+        info!("Writing fastq");
+        write_fastq(
+            &output_file,
+            config.paired_ended,
+            *outsets,
+        ).expect("Problem writing fastq file");
+        info!("Processing complete")
+    }
 }
 

@@ -105,6 +105,7 @@ fn main() {
     info!("Writing fastq");
     write_fastq(
         &output_file,
+        config.paired_ended,
         *outsets,
     ).expect("Problem writing fastq file");
     info!("Processing complete")

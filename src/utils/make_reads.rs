@@ -98,32 +98,6 @@ fn cover_dataset(
     read_set
 }
 
-fn complement(nucleotide: u8) -> u8 {
-    /*
-    0 = A, 1 = C, 2 = G, 3 = T,
-    matches with the complement of each nucleotide.
-     */
-    return match nucleotide {
-        0 => 3,
-        1 => 2,
-        2 => 1,
-        3 => 0,
-        _ => 4,
-    }
-}
-
-fn reverse_complement(sequence: &Vec<u8>) -> Vec<u8> {
-    /*
-    Returns the reverse complement of a vector of u8's representing a DNA sequence.
-     */
-    let length = sequence.len();
-    let mut rev_comp = Vec::new();
-    for i in (0..length).rev() {
-        rev_comp.push(complement(sequence[i]))
-    }
-    rev_comp
-}
-
 pub fn generate_reads(
     mutated_sequence: &Vec<u8>,
     read_length: &usize,
@@ -147,22 +121,20 @@ pub fn generate_reads(
     complement int the output
      */
 
-    if paired_ended {
-        // generate the reverse complement of the fragment
-        let rev_comp = reverse_complement(mutated_sequence);
-    }
     let mut fragment_pool: Vec<usize> = Vec::new();
-    let num_frags = (mutated_sequence.len() / read_length) * (coverage * 2);
-    let mut fragment_distribution = Normal::new(mean, st_dev).unwrap();
-    // add fragments to the fragment pool
-    for _ in 0..num_frags {
-        let frag = fragment_distribution.sample(&mut rng).round() as usize;
-        fragment_pool.push(frag);
+    if paired_ended {
+        let num_frags = (mutated_sequence.len() / read_length) * (coverage * 2);
+        let mut fragment_distribution = Normal::new(mean, st_dev).unwrap();
+        // add fragments to the fragment pool
+        for _ in 0..num_frags {
+            let frag = fragment_distribution.sample(&mut rng).round() as usize;
+            fragment_pool.push(frag);
+        }
     }
 
     // set up some defaults and storage
     let mut read_set: HashSet<Vec<u8>> = HashSet::new();
-
+    // length of the mutated sequence
     let seq_len = mutated_sequence.len();
     // Generate a vector of read positions
     let read_positions: Vec<(usize, usize)> = cover_dataset(

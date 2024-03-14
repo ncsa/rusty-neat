@@ -48,7 +48,7 @@ pub struct RunConfiguration {
     pub output_prefix: String,
 }
 
-#[warn(dead_code)]
+#[allow(dead_code)]
 impl RunConfiguration {
     // The purpose of this function is to redirect you to the ConfigBuilder
     pub fn build() -> ConfigBuilder {
@@ -99,7 +99,7 @@ impl ConfigBuilder {
             fragment_mean: 300.0,
             fragment_st_dev: 30.0,
             produce_fastq: true,
-            produce_fasta: true,
+            produce_fasta: false,
             produce_vcf: false,
             produce_bam: false,
             output_dir: current_dir,
@@ -241,7 +241,7 @@ impl ConfigBuilder {
     }
 }
 
-pub fn read_config_yaml(yaml: String) -> Result<Box<RunConfiguration>, &'static str> {
+pub fn read_config_yaml(yaml: String) -> Result<Box<RunConfiguration>, ConfigError> {
     /*
     Reads an input configuration file from yaml using the serde package. Then sets the parameters
     based on the inputs. A "." value means to use the default value.
@@ -251,7 +251,7 @@ pub fn read_config_yaml(yaml: String) -> Result<Box<RunConfiguration>, &'static 
     let f = std::fs::File::open(yaml);
     let file = match f {
         Ok(l) => l,
-        Err(_) => { return Err("problem reading configuration file"); },
+        Err(_) => return Err(ConfigError::FileReadError),
     };
     // Uses serde_yaml to read the file into a HashMap
     let scrape_config: HashMap<String, String> = serde_yaml::from_reader(file)

@@ -1,13 +1,10 @@
-extern crate log;
-extern crate itertools;
-
 use std::collections::HashMap;
 use rand::distributions::Distribution;
 use rand::prelude::{ThreadRng, IndexedRandom};
 use rand::seq::SliceRandom;
 use rand::Rng;
-use self::log::debug;
-use self::itertools::izip;
+use log::debug;
+use itertools::izip;
 
 #[derive(Debug, Ord, PartialOrd, Eq, PartialEq)]
 struct NucModel {
@@ -55,7 +52,7 @@ impl NucModel {
 pub fn mutate_fasta(
     file_struct: &HashMap<String, Vec<u8>>,
     mut rng: &mut ThreadRng
-) -> (Box<HashMap<String, Vec<u8>>>, Box<HashMap<String, Vec<(usize, u8)>>>) {
+) -> (Box<HashMap<String, Vec<u8>>>, Box<HashMap<String, Vec<(usize, u8, u8)>>>) {
     /*
     Takes:
         file_struct: a hashmap of contig names (keys) and a vector
@@ -76,11 +73,11 @@ pub fn mutate_fasta(
     let mut return_struct: HashMap<String, Vec<u8>> = HashMap::new(); // the mutated sequences
 
     // hashmap with keys of the contig names with a list of positions and alts under the contig.
-    let mut all_variants: HashMap<String, Vec<(usize, u8)>> = HashMap::new();
+    let mut all_variants: HashMap<String, Vec<(usize, u8, u8)>> = HashMap::new();
 
     for (name, sequence) in file_struct {
         // Mutations for this contig
-        let mut contig_mutations: Vec<(usize, u8)> = Vec::new();
+        let mut contig_mutations: Vec<(usize, u8, u8)> = Vec::new();
         // The length of this sequence
         let sequence_length = sequence.len();
         debug!("Sequence {} is {} bp long", name, sequence_length);
@@ -181,7 +178,7 @@ fn mutate_sequence(
             _ => 4
         };
         // add the location and alt base for the variant
-        sequence_variants.push((*index, mutated_record[*index],  *reference_base))
+        sequence_variants.push((*index, mutated_record[*index], reference_base))
     }
     (mutated_record, sequence_variants)
 }

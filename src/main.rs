@@ -3,6 +3,8 @@ extern crate clap;
 extern crate log;
 extern crate simplelog;
 extern crate serde_yaml;
+extern crate rand_distr;
+extern crate itertools;
 
 mod utils;
 
@@ -72,7 +74,6 @@ fn main() {
     if config.produce_vcf {
         info!("Writing vcf file");
         write_vcf(
-            &fasta_map,
             &variant_locations,
             &fasta_order,
             config.ploidy,
@@ -90,6 +91,8 @@ fn main() {
             &config.read_len,
             &config.coverage,
             config.paired_ended,
+            config.fragment_mean,
+            config.fragment_st_dev,
             &mut rng
         );
 

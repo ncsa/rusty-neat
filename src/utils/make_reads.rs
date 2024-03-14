@@ -1,40 +1,98 @@
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
+
 use rand::RngCore;
 use rand::rngs::ThreadRng;
+use rand::seq::SliceRandom;
+use rand_distr::{Normal, Distribution};
 
 fn cover_dataset(
     span_length: usize,
     read_length: usize,
+    mut fragment_pool: Vec<usize>,
     coverage: usize,
-    rng: &mut ThreadRng,
+    mut rng: &mut ThreadRng,
 ) -> Vec<(usize, usize)> {
     /*
     Takes:
         span_length: Total number of bases in the sequence
         read_length: The length of the reads for this run
+        fragment_pool: a vector of sizes for the fragments. If empty, it will instead be filled
+            by the read_length (single ended reads)
+        paired_ended: true or false if the run is paired ended mode or not.
         coverage: The coverage depth for the reads
     Returns:
-        A vector of tuples (usize, usize), denoting the start and end positions of the reads
+        A vector of tuples (usize, usize), denoting the start and end positions of the fragment of
+        DNA that was sequenced.
 
     This function selects the positions of the reads. It starts at the beginning and goes out
     one read length, then picks a random jump between 0 and half the read length to move
     And picks those coordinates for a second read. Once the tail of the read is past the end,
     we start over again at 0.
      */
-    // todo currently the reads look a little light so we may need to improve this calculation.
+    // Reads that will be start and end of the fragment.
     let mut read_set: Vec<(usize, usize)> = vec![];
+
+    let mut cover_fragment_pool: VecDeque<usize>;
+    if fragment_pool.is_empty() {
+        // set the shuffled fragment pool just equal to an instance of read_length
+        cover_fragment_pool = VecDeque::from([read_length]);
+    } else {
+        // shuffle the fragment pool
+        fragment_pool.shuffle(&mut rng);
+        cover_fragment_pool = VecDeque::from(fragment_pool)
+    }
+
+    // Gap size to keep track of how many uncovered bases we have per layer, to help decide if we
+    // need more layers
+    let mut gap_size: usize = 0;
+    let mut layer_count: usize = 0;
+
+    // start this party off at zero.
     let mut start: usize = 0;
-    'outer: for _ in 0..coverage {
-        while start < span_length {
-            let temp_end = start+read_length;
-            if temp_end > span_length {
-                start = 0;
-                continue 'outer;
+
+    while layer_count <= coverage {
+        let fragment_length = cover_fragment_pool[0];
+        cover_fragment_pool.push_back(fragment_length);
+        let temp_end = start+fragment_length;
+        if temp_end > span_length {
+            // TODO some variation on this modulo idea will work for bacterial reads
+            start = temp_end % span_length;
+            gap_size += start;
+            //
+            if gap_size >= span_length {
+                // if we have accumulated enough gap, then we need to run the same layer again.
+                // We'll reset gap size but not increment layer_count.
+                gap_size = gap_size % span_length;
+                continue;
+            } else {
+                layer_count += 1;
+                continue
             }
-            read_set.push((start, temp_end));
-            // Picks a number between zero and half of a read length
-            let wildcard: usize = (rng.next_u32() % (read_length/4) as u32) as usize;
-            start += read_length + wildcard; // adds to the start to give it some spice
+        }
+        read_set.push((start, temp_end));
+
+        // insert size is the number of bases between reads in the fragment for paired ended reads
+        let insert_size = fragment_length - (read_length * 2);
+        // if these are singled ended reads, then the insert size will always be negative
+        if insert_size > 0 {
+            // if there's uncovered bases in between the reads on paired ended reads, we'll add
+            // that to the gap to ensure adequate coverage.
+            gap_size += insert_size;
+        }
+
+        // Picks a number between zero and a quarter of a read length
+        let wildcard: usize = (rng.next_u32() % (read_length/4) as u32) as usize;
+        // adds to the start to give it some spice
+        start += temp_end + wildcard;
+        // sanity check. If we are already out of bounds, take the modulo
+        if start >= span_length {
+            // get us back in bounds
+            start = start % span_length;
+            // add the gap
+            gap_size += start;
+        } else {
+            // still in bounds, just add the gap
+            gap_size += wildcard;
         }
     }
     read_set
@@ -44,8 +102,6 @@ fn complement(nucleotide: u8) -> u8 {
     /*
     0 = A, 1 = C, 2 = G, 3 = T,
     matches with the complement of each nucleotide.
-
-    Todo: make this part of a struct to standardize across the program.
      */
     return match nucleotide {
         0 => 3,
@@ -73,6 +129,8 @@ pub fn generate_reads(
     read_length: &usize,
     coverage: &usize,
     paired_ended: bool,
+    mean: f64,
+    st_dev: f64,
     mut rng: &mut ThreadRng,
 ) -> Box<HashSet<Vec<u8>>> {
     /*
@@ -90,8 +148,16 @@ pub fn generate_reads(
      */
 
     if paired_ended {
+        // generate the reverse complement of the fragment
         let rev_comp = reverse_complement(mutated_sequence);
-        todo!();
+    }
+    let mut fragment_pool: Vec<usize> = Vec::new();
+    let num_frags = (mutated_sequence.len() / read_length) * (coverage * 2);
+    let mut fragment_distribution = Normal::new(mean, st_dev).unwrap();
+    // add fragments to the fragment pool
+    for _ in 0..num_frags {
+        let frag = fragment_distribution.sample(&mut rng).round() as usize;
+        fragment_pool.push(frag);
     }
 
     // set up some defaults and storage
@@ -102,6 +168,7 @@ pub fn generate_reads(
     let read_positions: Vec<(usize, usize)> = cover_dataset(
         seq_len,
         *read_length,
+        fragment_pool,
         *coverage,
         &mut rng,
     );

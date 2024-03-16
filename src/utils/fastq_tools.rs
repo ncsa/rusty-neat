@@ -1,6 +1,6 @@
 use std::io::Write;
 use std::fs::File;
-use std::io;
+use std::{fs, io};
 
 use utils::fasta_tools::sequence_array_to_string;
 
@@ -51,8 +51,6 @@ pub fn write_fastq(
     // (Although this feature is currently untested and unknown).
     // (May need sorting.)
     let name_prefix = "neat_generated_".to_string();
-    // vector to hold the fastq filenames, since we don't know ahead of time if we need one or two
-    let mut fastq_files: Vec<String> = Vec::new();
     let filename1 = String::from(fastq_filename) + "_r1.fastq";
     // open the file and append lines
     let mut outfile1 = File::options().create_new(true).append(true).open(&filename1)?;
@@ -84,5 +82,8 @@ pub fn write_fastq(
             writeln!(&mut outfile2, "{}", std::iter::repeat("F").take(sequence_len).collect::<String>())?;
         }
     };
+    if !paired_ended {
+        fs::remove_file(filename2)?;
+    }
     Ok(())
 }

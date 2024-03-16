@@ -22,8 +22,7 @@ fn genotype_to_string(genotype: Vec<usize>) -> String {
 }
 
 pub fn write_vcf(
-    reference_sequence: &HashMap<String, Vec<u8>>,
-    variant_locations: &HashMap<String, Vec<(usize, u8)>>,
+    variant_locations: &HashMap<String, Vec<(usize, u8, u8)>>,
     fasta_order: &Vec<String>,
     ploidy: usize,
     reference: &str,
@@ -32,9 +31,8 @@ pub fn write_vcf(
 ) -> io::Result<()> {
     /*
     Takes:
-        reference_sequence: A map of the contig names keyed to a u8 vector representing the sequence
         variant_locations: A map of contig names keyed to lists of variants in that contig
-            consisting of a tuple of (position, alt base).
+            consisting of a tuple of (position, alt base, ref base).
         fasta_order: A vector of contig names in the order of the reference fasta.
         ploidy: The number of copies of each chromosome present in the organism
         output_file_prefix: The path to the directory and the prefix to use for filenames
@@ -90,7 +88,7 @@ pub fn write_vcf(
             let line = format!("{}\t{}\t.\t{}\t{}\t37\tPASS\t.\tGT\t{}",
                     contig,
                     mutation.0 + 1,
-                    num_to_char(reference_sequence[contig][mutation.0]),
+                    num_to_char(mutation.2),
                     num_to_char(mutation.1),
                     genotype_to_string(genotype),
                 );

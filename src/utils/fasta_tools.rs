@@ -2,7 +2,6 @@ extern crate rand;
 extern crate log;
 extern crate assert_fs;
 
-use std::collections::HashMap;
 use crate::utils::file_tools::read_lines;
 use self::log::info;
 use std::fs::File;
@@ -10,6 +9,7 @@ use std::{fs, io};
 use std::io::Write;
 use std::*;
 use std::os::unix::fs::MetadataExt;
+use HashMap;
 
 pub fn char_to_num(char_of_interest: char) -> u8 {
     return match char_of_interest {
@@ -149,27 +149,21 @@ fn test_read_fasta() {
 fn test_write_fasta() -> Result<(), Box<dyn error::Error>> {
 
     let seq1: Vec<u8> = vec![0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1];
-    let fasta_output: HashMap<String, Vec<u8>> = HashMap::from(
+    let fasta_output: HashMap<String, Vec<u8>> = HashMap::from([
         (String::from("H1N1_HA"), seq1)
-    );
+    ]);
     let fasta_pointer = Box::new(fasta_output);
     let fasta_order = vec![String::from("H1N1_HA")];
     let output_file = "test";
-    let ploidy: usize = 2;
     let test_write = write_fasta(
         &fasta_pointer,
         &fasta_order,
-        output_file,
-        ploidy
+        output_file
     );
-    let file_name_p1 = "test_p1.fasta";
-    let file_name_p2 = "test_p2.fasta";
+    let file_name = "test.fasta";
     assert_eq!(test_write.unwrap(), ());
-    let attr = fs::metadata(file_name_p1).unwrap();
+    let attr = fs::metadata(file_name).unwrap();
     assert!(attr.size() > 0);
-    let attr = fs::metadata(file_name_p2).unwrap();
-    assert!(attr.size() > 0);
-    fs::remove_file(file_name_p1)?;
-    fs::remove_file(file_name_p2)?;
+    fs::remove_file(file_name)?;
     Ok(())
 }

@@ -72,14 +72,12 @@ fn cover_dataset(
         read_set.push((start, temp_end));
 
         // insert size is the number of bases between reads in the fragment for paired ended reads
-        let insert_size = fragment_length - (read_length * 2);
-        // if these are singled ended reads, then the insert size will always be negative
-        if insert_size > 0 {
-            // if there's uncovered bases in between the reads on paired ended reads, we'll add
+        // if these are singled ended reads, then the insert size will always be -read_length
+        if fragment_length > (read_length * 2) {
+            // if there's any insert size on paired ended reads, we'll add
             // that to the gap to ensure adequate coverage.
-            gap_size += insert_size;
-        }
-
+            gap_size += fragment_length - (read_length * 2)
+        };
         // Picks a number between zero and a quarter of a read length
         let wildcard: usize = (rng.next_u32() % (read_length/4) as u32) as usize;
         // adds to the start to give it some spice
@@ -124,7 +122,7 @@ pub fn generate_reads(
     let mut fragment_pool: Vec<usize> = Vec::new();
     if paired_ended {
         let num_frags = (mutated_sequence.len() / read_length) * (coverage * 2);
-        let mut fragment_distribution = Normal::new(mean, st_dev).unwrap();
+        let fragment_distribution = Normal::new(mean, st_dev).unwrap();
         // add fragments to the fragment pool
         for _ in 0..num_frags {
             let frag = fragment_distribution.sample(&mut rng).round() as usize;

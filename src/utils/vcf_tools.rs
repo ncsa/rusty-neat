@@ -8,6 +8,7 @@ use rand::Rng;
 use rand::rngs::ThreadRng;
 use rand::seq::IndexedRandom;
 use utils::fasta_tools::num_to_char;
+use utils::file_tools::open_file;
 
 fn genotype_to_string(genotype: Vec<usize>) -> String {
     /*
@@ -26,6 +27,7 @@ pub fn write_vcf(
     fasta_order: &Vec<String>,
     ploidy: usize,
     reference: &str,
+    overwrite_output: bool,
     output_file_prefix: &str,
     mut rng: &mut ThreadRng,
 ) -> io::Result<()> {
@@ -44,7 +46,7 @@ pub fn write_vcf(
     let ploid_numbers: Vec<usize> = (1..ploidy+1).collect();
     // set the filename of the output vcf
     let mut filename = format!("{}.vcf", output_file_prefix);
-    let mut outfile = File::options().create_new(true).append(true).open(&mut filename)?;
+    let mut outfile = open_file(&mut filename, overwrite_output);
     // add the vcf header
     writeln!(&mut outfile, "##fileformat=VCFv4.1")?;
     writeln!(&mut outfile, "##reference={}", reference)?;

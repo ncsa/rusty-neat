@@ -3,6 +3,7 @@ extern crate log;
 use std::collections::{HashMap};
 use std::env;
 use std::string::String;
+use clap::builder::Str;
 use crate::utils::cli::Cli;
 use log::{debug, error};
 use serde_yaml::Error;
@@ -29,6 +30,8 @@ pub struct RunConfiguration {
     produce_vcf: True or false on whether to produce an output VCF file, with genotyped variants.
     produce_bam: True or false on whether to produce an output BAM file, which will be aligned to
         the reference.
+    overwrite_output: if true, will overwrite output. If false will error and exit you attempt to
+        overwrite files with the same name.
     output_dir: The directory, relative or absolute, path to the directory to place output.
     output_prefix: The name to use for the output files.
      */
@@ -44,10 +47,10 @@ pub struct RunConfiguration {
     pub produce_fasta: bool,
     pub produce_vcf:  bool,
     pub produce_bam: bool,
+    pub overwrite_output: bool,
     pub output_dir: String,
     pub output_prefix: String,
 }
-
 #[allow(dead_code)]
 impl RunConfiguration {
     // The purpose of this function is to redirect you to the ConfigBuilder
@@ -72,6 +75,7 @@ pub struct ConfigBuilder {
     produce_fasta: bool,
     produce_vcf:  bool,
     produce_bam: bool,
+    overwrite_output: bool,
     output_dir: String,
     output_prefix: String,
 }
@@ -102,6 +106,7 @@ impl ConfigBuilder {
             produce_fasta: false,
             produce_vcf: false,
             produce_bam: false,
+            overwrite_output: false,
             output_dir: current_dir,
             output_prefix: String::from("neat_out"),
         }
@@ -165,6 +170,11 @@ impl ConfigBuilder {
 
     pub fn set_produce_bam(mut self, produce_bam: bool) -> ConfigBuilder {
         self.produce_bam = produce_bam;
+        self
+    }
+
+    pub fn set_overwrite_output(mut self) -> ConfigBuilder {
+        self.overwrite_output = true;
         self
     }
 
@@ -235,6 +245,7 @@ impl ConfigBuilder {
             produce_fasta: self.produce_fasta,
             produce_vcf: self.produce_vcf,
             produce_bam: self.produce_bam,
+            overwrite_output: self.overwrite_output,
             output_dir: self.output_dir,
             output_prefix: self.output_prefix,
         }
@@ -327,6 +338,13 @@ pub fn read_config_yaml(yaml: String) -> Result<Box<RunConfiguration>, ConfigErr
                     config_builder = config_builder.set_produce_bam(true)
                 }
             },
+            "overwrite_output" => {
+                // overwrite_output is false by default, to prevent data loss, setting this flag
+                // will instead enable rusty-neat to overwrite the output
+                if value.to_lowercase() == "true" {
+                    config_builder = config_builder.set_overwrite_output()
+                }
+            }
             "output_dir" => {
                 if value != ".".to_string() {
                     config_builder = config_builder.set_output_dir(value)
@@ -386,6 +404,8 @@ fn test_command_line_inputs() {
         config: String::new(),
         reference: String::from("data/ecoli.fa"),
         output_dir: String::from("test_dir"),
+        log_level: String::from("Trace"),
+        log_dest: String::new(),
         output_file_prefix: String::from("test"),
         read_length: 150,
         coverage: 10,

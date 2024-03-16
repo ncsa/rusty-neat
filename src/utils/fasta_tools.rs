@@ -10,6 +10,7 @@ use std::io::Write;
 use std::*;
 use std::os::unix::fs::MetadataExt;
 use HashMap;
+use utils::file_tools::open_file;
 
 pub fn char_to_num(char_of_interest: char) -> u8 {
     return match char_of_interest {
@@ -90,6 +91,7 @@ pub fn read_fasta(
 pub fn write_fasta(
     fasta_output: &Box<HashMap<String, Vec<u8>>>,
     fasta_order: &Vec<String>,
+    overwrite_output: bool,
     output_file: &str,
 ) -> io::Result<()> {
     /*
@@ -102,8 +104,8 @@ pub fn write_fasta(
         Errors if there is a problem writing the file, otherwise it returns nothing.
      */
     // writing fasta output to files
-    let output_fasta = format!("{}.fasta", output_file);
-    let mut outfile = File::options().create_new(true).append(true).open(output_fasta)?;
+    let mut output_fasta = format!("{}.fasta", output_file);
+    let mut outfile = open_file(&mut output_fasta, overwrite_output);
     for contig in fasta_order {
         let sequence = &fasta_output[contig];
         // Write contig name

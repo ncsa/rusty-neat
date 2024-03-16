@@ -9,11 +9,13 @@ extern crate itertools;
 mod utils;
 
 use std::collections::{HashMap, HashSet};
+use std::fs::File;
 use clap::{Parser};
 use log::*;
 use simplelog::*;
 use rand::thread_rng;
 use rand::prelude::*;
+use std::path::Path;
 
 use utils::cli;
 use utils::fasta_tools::{read_fasta, write_fasta};
@@ -21,21 +23,49 @@ use utils::config::{read_config_yaml, build_config_from_args};
 use utils::mutate::mutate_fasta;
 use utils::make_reads::generate_reads;
 use utils::fastq_tools::write_fastq;
+use utils::file_tools::check_parent_and_create;
 use utils::vcf_tools::write_vcf;
 
 fn main() {
-    TermLogger::init(
-        LevelFilter::Trace,
-        Config::default(),
-        TerminalMode::Stdout,
-        ColorChoice::Auto,
-    ).unwrap();
-
-    let mut rng = thread_rng();
 
     info!("Begin processing");
     // parse the arguments from the command line
     let args = cli::Cli::parse();
+
+    let level_filter = match args.log_level.to_lowercase().as_str() {
+        "trace" => LevelFilter::Trace,
+        "debug" => LevelFilter::Debug,
+        "info" => LevelFilter::Info,
+        "warn" => LevelFilter::Warn,
+        "error" => LevelFilter::Error,
+        "off" => LevelFilter::Off,
+        _ => panic!(
+            "Unknown log level, please set to one of \
+            Trace, Debug, Info, Warn, Error, or Off (case insensitive)."
+        )
+    };
+
+    // Check that the parent dir exists
+    let log_destination = check_parent_and_create(&args.log_dest).unwrap();
+
+    CombinedLogger::init(vec![
+        #[cfg(feature = "termcolor")]
+        TermLogger::new(
+            level_filter,
+            Config::default(),
+            TerminalMode::Stdout,
+            ColorChoice::Always,
+        ),
+        #[cfg(not(feature = "termcolor"))]
+        SimpleLogger::new(LevelFilter::Trace, Config::default()),
+        WriteLogger::new(
+            level_filter,
+            Config::default(),
+            File::create(log_destination).unwrap(),
+        )
+    ]).unwrap();
+
+    let mut rng = thread_rng();
 
     // set up the config struct based on whether there was an input config. Input config
     // overrides any other inputs.
@@ -67,6 +97,7 @@ fn main() {
         write_fasta(
             &mutated_map,
             &fasta_order,
+            config.overwrite_output,
             &output_file,
         ).expect("Problem writing fasta file");
     }
@@ -78,6 +109,7 @@ fn main() {
             &fasta_order,
             config.ploidy,
             &config.reference,
+            config.overwrite_output,
             &output_file,
             &mut rng).expect("Error writing vcf file")
     }
@@ -108,6 +140,7 @@ fn main() {
         info!("Writing fastq");
         write_fastq(
             &output_file,
+            config.overwrite_output,
             config.paired_ended,
             *outsets,
         ).expect("Problem writing fastq file");

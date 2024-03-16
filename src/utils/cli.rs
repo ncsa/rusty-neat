@@ -1,5 +1,6 @@
 extern crate clap;
 
+use std::fs;
 use clap::Parser;
 
 #[derive(Parser, Debug)]
@@ -31,4 +32,10 @@ pub struct Cli {
     pub read_length: usize,
     #[arg(short='c', long="coverage", default_value_t = 10)]
     pub coverage: usize,
+
+    // These options relate to the logging features
+    #[arg(long="log-level", default_value_t=String::from("Trace"), help="Enter one of Trace, Debug, Info, Warn, Error, Off")]
+    pub log_level: String,
+    #[arg(long="log-dest", default_value_t=String::new(), help="Full path and name to log file")]
+    pub log_dest: String,
 }

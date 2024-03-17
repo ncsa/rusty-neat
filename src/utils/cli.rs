@@ -1,11 +1,14 @@
 /// This is a pretty basic implementation of Clap CLI
 /// The idea of this interface and supporting code is that the user can enter an optional
 /// config file that will take the place of the other command line options, except the logging
-/// features, which are handled separately, outside of the run configuration parsing.
+/// features, which are handled separately. Either way, these options are read into a configuration
+/// struct that holds the variables for the run. Logging, meanwhile, is handled separately,
+/// outside run configuration parsing.
 
 extern crate clap;
 
 use clap::Parser;
+use std::env;
 
 #[derive(Parser, Debug)]
 pub struct Cli {
@@ -52,6 +55,8 @@ pub struct Cli {
     // These options relate to the logging features and are not overridden by a config
     #[arg(long="log-level", default_value_t=String::from("Trace"), help="Enter one of Trace, Debug, Info, Warn, Error, Off")]
     pub log_level: String,
-    #[arg(long="log-dest", default_value_t=String::new(), help="Full path and name to log file")]
+    #[arg(long="log-dest", default_value_t=env::current_dir().unwrap().display().to_string() + "neat_out.log", help="Full path and name to log file")]
     pub log_dest: String,
 }
+
+// Tests are handled in other places.

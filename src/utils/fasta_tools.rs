@@ -163,7 +163,7 @@ fn test_write_fasta() -> Result<(), Box<dyn error::Error>> {
     let file_name = "test.fasta";
     assert_eq!(test_write.unwrap(), ());
     let attr = fs::metadata(file_name).unwrap();
-    assert!(attr.size() > 0);
+    assert!(attr.len() > 0);
     fs::remove_file(file_name)?;
     Ok(())
 }

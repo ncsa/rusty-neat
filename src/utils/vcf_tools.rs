@@ -3,7 +3,6 @@ extern crate log;
 use std::collections::HashMap;
 use std::io;
 use std::io::Write;
-use std::fs::File;
 use rand::Rng;
 use rand::rngs::ThreadRng;
 use rand::seq::IndexedRandom;

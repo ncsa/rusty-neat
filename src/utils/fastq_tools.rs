@@ -1,5 +1,4 @@
 use std::io::Write;
-use std::fs::File;
 use std::{fs, io};
 
 use utils::fasta_tools::sequence_array_to_string;

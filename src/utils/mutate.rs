@@ -1,5 +1,5 @@
+use std::cmp::max;
 use std::collections::HashMap;
-use rand::distributions::Distribution;
 use rand::prelude::{ThreadRng, IndexedRandom};
 use rand::seq::SliceRandom;
 use rand::Rng;
@@ -77,7 +77,7 @@ pub fn mutate_fasta(
 
     for (name, sequence) in file_struct {
         // Mutations for this contig
-        let mut contig_mutations: Vec<(usize, u8, u8)> = Vec::new();
+        let contig_mutations: Vec<(usize, u8, u8)>;
         // The length of this sequence
         let sequence_length = sequence.len();
         debug!("Sequence {} is {} bp long", name, sequence_length);
@@ -94,20 +94,13 @@ pub fn mutate_fasta(
             // add or subtract up to 10% of the reads.
             rough_num_positions * (sign * factor)
         };
-        // round the number of positions to the nearest usize.
-        let num_positions = rough_num_positions.round() as usize;
-        // If we somehow ended up with negative or no reads, we may still randomly add one mutation.
-        if num_positions <= 0 {
-            // we want to add at least 1 mutation to each contig
-            (mutated_record, contig_mutations) = mutate_sequence(
-                mutated_record, 1, &mut rng
-            );
-        } else {
-            // else add num positions number of variants
-            (mutated_record, contig_mutations) = mutate_sequence(
-                mutated_record, num_positions, &mut rng
-            );
-        }
+        // Round the number of positions to the nearest usize.
+        // If negative or no reads, we still want at least 1 mutation per contig.
+        let num_positions = max(1, rough_num_positions.round() as usize);
+
+        (mutated_record, contig_mutations) = mutate_sequence(
+            mutated_record, num_positions, &mut rng
+        );
         // Add to the return struct and variants map.
         return_struct.entry(name.clone()).or_insert(mutated_record.clone());
         all_variants.entry(name.clone()).or_insert(contig_mutations);

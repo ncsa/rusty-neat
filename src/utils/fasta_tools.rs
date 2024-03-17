@@ -4,11 +4,9 @@ extern crate assert_fs;
 
 use crate::utils::file_tools::read_lines;
 use self::log::info;
-use std::fs::File;
-use std::{fs, io};
+use std::io;
 use std::io::Write;
 use std::*;
-use std::os::unix::fs::MetadataExt;
 use HashMap;
 use utils::file_tools::open_file;
 
@@ -63,28 +61,27 @@ pub fn read_fasta(
     let mut fasta_order: Vec<String> = Vec::new();
     let mut current_key = String::new();
 
-    if let lines = read_lines(fasta_path).expect("Error reading fasta") {
-        let mut temp_seq: Vec<u8> = vec![];
-        lines.for_each(|line| match line {
-            Ok(l) => {
-                if l.starts_with('>') {
-                    if !current_key.is_empty() {
-                        fasta_map.entry(current_key.clone()).or_insert(temp_seq.clone());
-                    }
-                    current_key = String::from(l.strip_prefix('>').unwrap());
-                    fasta_order.push(current_key.clone());
-                    temp_seq = vec![];
-                } else {
-                    for char in l.chars() {
-                        temp_seq.push(char_to_num(char));
-                    }
+    let lines = read_lines(fasta_path).unwrap();
+    let mut temp_seq: Vec<u8> = vec![];
+    lines.for_each(|line| match line {
+        Ok(l) => {
+            if l.starts_with('>') {
+                if !current_key.is_empty() {
+                    fasta_map.entry(current_key.clone()).or_insert(temp_seq.clone());
                 }
-            },
-            Err(error) => panic!("Error reading fasta file: {:?}", error),
-        });
-        // Need to pick up the last one
-        fasta_map.entry(current_key.clone()).or_insert(temp_seq.clone());
-    }
+                current_key = String::from(l.strip_prefix('>').unwrap());
+                fasta_order.push(current_key.clone());
+                temp_seq = vec![];
+            } else {
+                for char in l.chars() {
+                    temp_seq.push(char_to_num(char));
+                }
+            }
+        },
+        Err(error) => panic!("Error reading fasta file: {:?}", error),
+    });
+    // Need to pick up the last one
+    fasta_map.entry(current_key.clone()).or_insert(temp_seq.clone());
     (Box::new(fasta_map), fasta_order)
 }
 
@@ -160,6 +157,7 @@ fn test_write_fasta() -> Result<(), Box<dyn error::Error>> {
     let test_write = write_fasta(
         &fasta_pointer,
         &fasta_order,
+        true,
         output_file
     );
     let file_name = "test.fasta";

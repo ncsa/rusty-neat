@@ -15,7 +15,6 @@ use log::*;
 use simplelog::*;
 use rand::thread_rng;
 use rand::prelude::*;
-use std::path::Path;
 
 use utils::cli;
 use utils::fasta_tools::{read_fasta, write_fasta};
@@ -128,7 +127,6 @@ fn main() {
             &mut rng
         );
 
-        // todo: we need to keep track of these reads better for paired endedness
         read_sets.extend(*data_set);
     }
 

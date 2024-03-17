@@ -3,10 +3,8 @@ extern crate log;
 use std::collections::{HashMap};
 use std::env;
 use std::string::String;
-use clap::builder::Str;
 use crate::utils::cli::Cli;
-use log::{debug, error};
-use serde_yaml::Error;
+use log::{debug, warn, error};
 
 #[derive(Debug)]
 pub struct RunConfiguration {
@@ -195,6 +193,9 @@ impl ConfigBuilder {
         debug!("\t> mutation rate: {}", self.mutation_rate);
         debug!("\t> ploidy: {}", self.ploidy);
         debug!("\t> paired_ended: {}", self.paired_ended);
+        if self.overwrite_output {
+            warn!("Overwriting any existing files.")
+        }
         let file_prefix = format!("{}/{}", self.output_dir, self.output_prefix);
         if !(self.produce_fastq | self.produce_fasta | self.produce_vcf | self.produce_bam) {
             error!("All file types set to false, no files would be produced.");

@@ -2,7 +2,6 @@ use std::fs::File;
 use std::io;
 use std::io::BufRead;
 use std::path::Path;
-use log::error;
 
 pub fn read_lines(filename: &str) -> io::Result<io::Lines<io::BufReader<File>>> {
     // This creates a buffer to read lines
@@ -18,13 +17,28 @@ pub fn open_file(mut filename: &mut str, overwrite_file: bool) -> File {
     }
 }
 
-pub fn check_parent_and_create(filename: &str) -> io::Result<&Path> {
-    // checks that the parent dir exists and then if so creates the file object open
+pub fn check_parent(filename: &str) -> io::Result<&Path> {
+    // checks that the parent dir exists and then if so creates the Path object open
     // and ready to write
     let file_path = Path::new(filename);
-    if !file_path.parent().unwrap().exists() {
-        error!("Path to log file not found!");
-        assert!(file_path.parent().unwrap().exists())
-    }
+    assert!(file_path.parent().unwrap().exists());
     Ok(file_path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_check_parent() {
+        let filename = "data/H1N1.fa";
+        check_parent(filename).unwrap();
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_check_parent_fail() {
+        let filename = "fake/test.fa";
+        check_parent(filename).unwrap();
+    }
 }

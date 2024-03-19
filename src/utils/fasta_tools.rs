@@ -128,42 +128,53 @@ pub fn write_fasta(
     Ok(())
 }
 
-#[test]
-fn test_conversions() {
-    let initial_sequence = "AAAANNNNGGGGCCCCTTTTAAAA";
-    let test_map: Vec<u8> = vec![0,0,0,0,4,4,4,4,2,2,2,2,1,1,1,1,3,3,3,3,0,0,0,0];
-    let remap: Vec<u8> = initial_sequence.chars().map(|x| char_to_num(x)).collect();
-    assert_eq!(remap, test_map);
-    assert_eq!(sequence_array_to_string(&test_map), initial_sequence);
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-#[test]
-fn test_read_fasta() {
-    let test_fasta = "data/H1N1.fa";
-    let (_test_map, map_order) = read_fasta(test_fasta);
-    assert_eq!(map_order[0], "H1N1_HA".to_string())
-}
+    #[test]
+    fn test_conversions() {
+        let initial_sequence = "AAAANNNNGGGGCCCCTTTTAAAA";
+        let test_map: Vec<u8> = vec![0, 0, 0, 0, 4, 4, 4, 4, 2, 2, 2, 2, 1, 1, 1, 1, 3, 3, 3, 3, 0, 0, 0, 0];
+        let remap: Vec<u8> = initial_sequence.chars().map(|x| char_to_num(x)).collect();
+        assert_eq!(remap, test_map);
+        assert_eq!(sequence_array_to_string(&test_map), initial_sequence);
+    }
 
-#[test]
-fn test_write_fasta() -> Result<(), Box<dyn error::Error>> {
+    #[test]
+    fn test_read_fasta() {
+        let test_fasta = "data/H1N1.fa";
+        let (_test_map, map_order) = read_fasta(test_fasta);
+        assert_eq!(map_order[0], "H1N1_HA".to_string())
+    }
 
-    let seq1: Vec<u8> = vec![0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1];
-    let fasta_output: HashMap<String, Vec<u8>> = HashMap::from([
-        (String::from("H1N1_HA"), seq1)
-    ]);
-    let fasta_pointer = Box::new(fasta_output);
-    let fasta_order = vec![String::from("H1N1_HA")];
-    let output_file = "test";
-    let test_write = write_fasta(
-        &fasta_pointer,
-        &fasta_order,
-        true,
-        output_file
-    );
-    let file_name = "test.fasta";
-    assert_eq!(test_write.unwrap(), ());
-    let attr = fs::metadata(file_name).unwrap();
-    assert!(attr.len() > 0);
-    fs::remove_file(file_name)?;
-    Ok(())
+    #[test]
+    #[should_panic]
+    fn test_read_bad_fasta() {
+        let test_fasta = "data/fake.fasta";
+        read_fasta(test_fasta);
+    }
+
+    #[test]
+    fn test_write_fasta() -> Result<(), Box<dyn error::Error>> {
+        let seq1: Vec<u8> = vec![0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1];
+        let fasta_output: HashMap<String, Vec<u8>> = HashMap::from([
+            (String::from("H1N1_HA"), seq1)
+        ]);
+        let fasta_pointer = Box::new(fasta_output);
+        let fasta_order = vec![String::from("H1N1_HA")];
+        let output_file = "test";
+        let test_write = write_fasta(
+            &fasta_pointer,
+            &fasta_order,
+            true,
+            output_file
+        );
+        let file_name = "test.fasta";
+        assert_eq!(test_write.unwrap(), ());
+        let attr = fs::metadata(file_name).unwrap();
+        assert!(attr.len() > 0);
+        fs::remove_file(file_name)?;
+        Ok(())
+    }
 }

@@ -88,3 +88,75 @@ pub fn write_fastq(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn test_complement() {
+        let nuc1 = 0;
+        let nuc2 = 1;
+        let nuc3 = 2;
+        let nuc4 = 3;
+        let nuc5 = 4;
+
+        assert_eq!(complement(nuc1), 3);
+        assert_eq!(complement(nuc2), 2);
+        assert_eq!(complement(nuc3), 1);
+        assert_eq!(complement(nuc4), 0);
+        assert_eq!(complement(nuc5), 4);
+    }
+
+    #[test]
+    fn test_reverse_complement() {
+        let read: Vec<u8> = vec![0, 0, 0, 0, 1, 1, 1, 1];
+        let revcomp: Vec<u8> = vec![2, 2, 2, 2, 3, 3, 3, 3];
+        assert_eq!(reverse_complement(&read), revcomp);
+    }
+
+    #[test]
+    fn test_write_fastq_single() {
+        let fastq_filename = "test_single";
+        let overwrite_output = true;
+        let paired_ended = false;
+        let seq1 = vec![0, 0, 0, 0, 1, 1, 1, 1];
+        let seq2 = vec![2, 2, 2, 2, 3, 3, 3, 3,];
+        let dataset = vec![&seq1, &seq2];
+        write_fastq(
+            fastq_filename,
+            overwrite_output,
+            paired_ended,
+            dataset
+        ).unwrap();
+        let outfile1 = Path::new("test_single_r1.fastq");
+        let outfile2 = Path::new("test_single_r2.fastq");
+        assert!(outfile1.exists());
+        assert!(!outfile2.exists());
+        fs::remove_file(outfile1).unwrap();
+    }
+
+    #[test]
+    fn test_write_fastq_paired() {
+        let fastq_filename = "test_paired";
+        // might as well test the o_o function as well
+        let overwrite_output = false;
+        let paired_ended = true;
+        let seq1 = vec![0, 0, 0, 0, 1, 1, 1, 1];
+        let seq2 = vec![2, 2, 2, 2, 3, 3, 3, 3,];
+        let dataset = vec![&seq1, &seq2];
+        write_fastq(
+            fastq_filename,
+            overwrite_output,
+            paired_ended,
+            dataset
+        ).unwrap();
+        let outfile1 = Path::new("test_paired_r1.fastq");
+        let outfile2 = Path::new("test_paired_r2.fastq");
+        assert!(outfile1.exists());
+        assert!(outfile2.exists());
+        fs::remove_file(outfile1).unwrap();
+        fs::remove_file(outfile2).unwrap();
+    }
+}

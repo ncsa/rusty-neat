@@ -22,7 +22,7 @@ use utils::config::{read_config_yaml, build_config_from_args};
 use utils::mutate::mutate_fasta;
 use utils::make_reads::generate_reads;
 use utils::fastq_tools::write_fastq;
-use utils::file_tools::check_parent_and_create;
+use utils::file_tools::check_parent;
 use utils::vcf_tools::write_vcf;
 
 fn main() {
@@ -45,7 +45,7 @@ fn main() {
     };
 
     // Check that the parent dir exists
-    let log_destination = check_parent_and_create(&args.log_dest).unwrap();
+    let log_destination = check_parent(&args.log_dest).unwrap();
 
     CombinedLogger::init(vec![
         #[cfg(feature = "termcolor")]

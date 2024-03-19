@@ -26,7 +26,7 @@ jobs:
       RUSTV: ${{ matrix.rust }}
       SCCACHE_CACHE_SIZE: 2G
       SCCACHE_DIR: ${{ matrix.sccache-path }}
-      # SCCACHE_RECACHE: 1 # Uncomment this line to clear cache, then comment it back out
+      SCCACHE_RECACHE: 1 # Uncomment this line to clear cache, then comment it back out
     steps:
       - uses: actions/checkout@v2
       - name: Install sccache (ubuntu-latest)

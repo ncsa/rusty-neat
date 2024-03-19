@@ -1,11 +1,9 @@
 extern crate log;
 
 use std::collections::{HashMap};
-use std::env;
 use std::string::String;
 use crate::utils::cli::Cli;
-use log::{debug, error};
-use serde_yaml::Error;
+use log::{debug, warn, error};
 
 #[derive(Debug)]
 pub struct RunConfiguration {
@@ -29,6 +27,8 @@ pub struct RunConfiguration {
     produce_vcf: True or false on whether to produce an output VCF file, with genotyped variants.
     produce_bam: True or false on whether to produce an output BAM file, which will be aligned to
         the reference.
+    overwrite_output: if true, will overwrite output. If false will error and exit you attempt to
+        overwrite files with the same name.
     output_dir: The directory, relative or absolute, path to the directory to place output.
     output_prefix: The name to use for the output files.
      */
@@ -44,11 +44,11 @@ pub struct RunConfiguration {
     pub produce_fasta: bool,
     pub produce_vcf:  bool,
     pub produce_bam: bool,
+    pub overwrite_output: bool,
     pub output_dir: String,
     pub output_prefix: String,
 }
-
-#[warn(dead_code)]
+#[allow(dead_code)]
 impl RunConfiguration {
     // The purpose of this function is to redirect you to the ConfigBuilder
     pub fn build() -> ConfigBuilder {
@@ -72,6 +72,7 @@ pub struct ConfigBuilder {
     produce_fasta: bool,
     produce_vcf:  bool,
     produce_bam: bool,
+    overwrite_output: bool,
     output_dir: String,
     output_prefix: String,
 }
@@ -84,10 +85,6 @@ pub enum ConfigError {
 
 impl ConfigBuilder {
     pub fn new() -> ConfigBuilder {
-        let current_dir = env::current_dir()
-            .expect("Could not find current working directory")
-            .display()
-            .to_string();
         ConfigBuilder {
             // Setting default values
             reference: String::from("data/H1N1.fa"),
@@ -99,10 +96,11 @@ impl ConfigBuilder {
             fragment_mean: 300.0,
             fragment_st_dev: 30.0,
             produce_fastq: true,
-            produce_fasta: true,
+            produce_fasta: false,
             produce_vcf: false,
             produce_bam: false,
-            output_dir: current_dir,
+            overwrite_output: false,
+            output_dir: String::from(""),
             output_prefix: String::from("neat_out"),
         }
     }
@@ -168,6 +166,11 @@ impl ConfigBuilder {
         self
     }
 
+    pub fn set_overwrite_output(mut self) -> ConfigBuilder {
+        self.overwrite_output = true;
+        self
+    }
+
     pub fn set_output_dir(mut self, output_dir: String) -> ConfigBuilder {
         self.output_dir = String::from(output_dir);
         self
@@ -180,11 +183,14 @@ impl ConfigBuilder {
 
     pub fn check_and_print_config(&self) -> Result<(), ConfigError> {
         debug!("Running rusty-neat to generate reads on {} with...", self.reference);
-        debug!("\t> read length: {}", self.read_len);
-        debug!("\t> coverage: {}", self.coverage);
-        debug!("\t> mutation rate: {}", self.mutation_rate);
-        debug!("\t> ploidy: {}", self.ploidy);
-        debug!("\t> paired_ended: {}", self.paired_ended);
+        debug!("  >read length: {}", self.read_len);
+        debug!("  >coverage: {}", self.coverage);
+        debug!("  >mutation rate: {}", self.mutation_rate);
+        debug!("  >ploidy: {}", self.ploidy);
+        debug!("  >paired_ended: {}", self.paired_ended);
+        if self.overwrite_output {
+            warn!("Overwriting any existing files.")
+        }
         let file_prefix = format!("{}/{}", self.output_dir, self.output_prefix);
         if !(self.produce_fastq | self.produce_fasta | self.produce_vcf | self.produce_bam) {
             error!("All file types set to false, no files would be produced.");
@@ -209,10 +215,7 @@ impl ConfigBuilder {
             }
         }
         if self.produce_fasta {
-            debug!("Producing fasta files:");
-            for ploid in 0..self.ploidy {
-                debug!("\t> {}_p{}.fasta", file_prefix, ploid+1);
-            }
+            debug!("Producing fasta file: {}.fasta", file_prefix);
         }
         if self.produce_vcf {
             debug!("Producing vcf file: {}.vcf", file_prefix)
@@ -238,13 +241,14 @@ impl ConfigBuilder {
             produce_fasta: self.produce_fasta,
             produce_vcf: self.produce_vcf,
             produce_bam: self.produce_bam,
+            overwrite_output: self.overwrite_output,
             output_dir: self.output_dir,
             output_prefix: self.output_prefix,
         }
     }
 }
 
-pub fn read_config_yaml(yaml: String) -> Result<Box<RunConfiguration>, &'static str> {
+pub fn read_config_yaml(yaml: String) -> Result<Box<RunConfiguration>, ConfigError> {
     /*
     Reads an input configuration file from yaml using the serde package. Then sets the parameters
     based on the inputs. A "." value means to use the default value.
@@ -254,7 +258,7 @@ pub fn read_config_yaml(yaml: String) -> Result<Box<RunConfiguration>, &'static 
     let f = std::fs::File::open(yaml);
     let file = match f {
         Ok(l) => l,
-        Err(_) => { return Err("problem reading configuration file"); },
+        Err(_) => return Err(ConfigError::FileReadError),
     };
     // Uses serde_yaml to read the file into a HashMap
     let scrape_config: HashMap<String, String> = serde_yaml::from_reader(file)
@@ -268,6 +272,9 @@ pub fn read_config_yaml(yaml: String) -> Result<Box<RunConfiguration>, &'static 
             "reference" => {
                 if value != ".".to_string() {
                     config_builder = config_builder.set_reference(value)
+                } else {
+                    error!("Reference is required.");
+                    return Err(ConfigError::ConfigurationError)
                 }
             },
             "read_len" => {
@@ -330,6 +337,13 @@ pub fn read_config_yaml(yaml: String) -> Result<Box<RunConfiguration>, &'static 
                     config_builder = config_builder.set_produce_bam(true)
                 }
             },
+            "overwrite_output" => {
+                // overwrite_output is false by default, to prevent data loss, setting this flag
+                // will instead enable rusty-neat to overwrite the output
+                if value.to_lowercase() == "true" {
+                    config_builder = config_builder.set_overwrite_output()
+                }
+            }
             "output_dir" => {
                 if value != ".".to_string() {
                     config_builder = config_builder.set_output_dir(value)
@@ -355,9 +369,12 @@ pub fn build_config_from_args(args: Cli) -> Result<Box<RunConfiguration>, &'stat
 
     // Create the ConfigBuilder object with default values
     let mut config_builder = ConfigBuilder::new();
-    // The default assigned by CLI will keep it as data/H1N1.fa
+    // Can't do a run without a reference
     if args.reference != "" {
         config_builder = config_builder.set_reference(args.reference)
+    } else {
+        error!("No reference specified");
+        return Err("Reference File Error.");
     }
     // The default value works directly for the config builder
     config_builder = config_builder.set_read_len(args.read_length);
@@ -375,25 +392,109 @@ pub fn build_config_from_args(args: Cli) -> Result<Box<RunConfiguration>, &'stat
     Ok(Box::new(config_builder.build()))
 }
 
-#[test]
-fn test_read_config_yaml() {
-    let yaml = String::from("config/neat_test.yml");
-    let test_config = read_config_yaml(yaml).unwrap();
-    assert_eq!(test_config.reference, "data/ecoli.fa".to_string());
-    assert_eq!(test_config.coverage, 10);
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-#[test]
-fn test_command_line_inputs() {
-    let args: Cli = Cli{
-        config: String::new(),
-        reference: String::from("data/ecoli.fa"),
-        output_dir: String::from("test_dir"),
-        output_file_prefix: String::from("test"),
-        read_length: 150,
-        coverage: 10,
-    };
+    #[test]
+    fn test_run_configuration() {
+        let test_configuration = RunConfiguration {
+            reference: String::from("Hello.world"),
+            read_len: 100,
+            coverage: 22,
+            mutation_rate: 0.09,
+            ploidy: 3,
+            paired_ended: true,
+            fragment_mean: 333.0,
+            fragment_st_dev: 33.0,
+            produce_fastq: false,
+            produce_bam: true,
+            produce_fasta: true,
+            produce_vcf: true,
+            overwrite_output: true,
+            output_dir: String::from("/my/my"),
+            output_prefix: String::from("Hey.hey")
+        };
 
-    let test_config = build_config_from_args(args).unwrap();
-    assert_eq!(test_config.reference, "data/ecoli.fa".to_string())
+        assert_eq!(test_configuration.reference, "Hello.world".to_string());
+        assert_eq!(test_configuration.read_len, 100);
+        assert_eq!(test_configuration.coverage, 22);
+        assert_eq!(test_configuration.mutation_rate, 0.09);
+        assert_eq!(test_configuration.ploidy, 3);
+        assert_eq!(test_configuration.paired_ended, true);
+        assert_eq!(test_configuration.fragment_mean, 333.0);
+        assert_eq!(test_configuration.fragment_st_dev, 33.0);
+        assert_eq!(test_configuration.produce_fastq, false);
+        assert_eq!(test_configuration.produce_vcf, true);
+        assert_eq!(test_configuration.produce_bam, true);
+        assert_eq!(test_configuration.produce_fasta, true);
+        assert_eq!(test_configuration.overwrite_output, true);
+        assert_eq!(test_configuration.output_dir, "/my/my".to_string());
+        assert_eq!(test_configuration.output_prefix, "Hey.hey".to_string());
+    }
+
+    #[test]
+    fn test_build() {
+        use super::*;
+        let x = RunConfiguration::build();
+        assert_eq!(x.reference, "data/H1N1.fa".to_string())
+    }
+
+    #[test]
+    fn test_read_config_yaml() {
+        let yaml = String::from("config/neat_test.yml");
+        let test_config = read_config_yaml(yaml).unwrap();
+        assert_eq!(test_config.reference, "data/ecoli.fa".to_string());
+        assert_eq!(test_config.coverage, 10);
+    }
+
+    #[test]
+    fn test_setters() {
+        let mut config = ConfigBuilder::new();
+        assert_eq!(config.mutation_rate, 0.001);
+        assert_eq!(config.ploidy, 2);
+        assert_eq!(config.paired_ended, false);
+        assert_eq!(config.fragment_mean, 300.0);
+        assert_eq!(config.fragment_st_dev, 30.0);
+        assert_eq!(config.produce_fasta, false);
+        assert_eq!(config.produce_fastq, true);
+        assert_eq!(config.produce_vcf, false);
+        assert_eq!(config.produce_bam, false);
+        config = config.set_mutation_rate(0.111)
+            .set_ploidy(3)
+            .set_paired_ended(true)
+            .set_fragment_mean(111.0)
+            .set_fragment_st_dev(0.011)
+            .set_produce_fastq(false)
+            .set_produce_fasta(true)
+            .set_produce_vcf(true)
+            .set_produce_bam(true)
+            .set_overwrite_output();
+        assert_eq!(config.mutation_rate, 0.111);
+        assert_eq!(config.ploidy, 3);
+        assert_eq!(config.paired_ended, true);
+        assert_eq!(config.fragment_mean, 111.0);
+        assert_eq!(config.fragment_st_dev, 0.011);
+        assert_eq!(config.produce_fasta, true);
+        assert_eq!(config.produce_fastq, false);
+        assert_eq!(config.produce_vcf, true);
+        assert_eq!(config.produce_bam, true);
+    }
+
+    #[test]
+    fn test_command_line_inputs() {
+        let args: Cli = Cli{
+            config: String::new(),
+            reference: String::from("data/ecoli.fa"),
+            output_dir: String::from("test_dir"),
+            log_level: String::from("Trace"),
+            log_dest: String::new(),
+            output_file_prefix: String::from("test"),
+            read_length: 150,
+            coverage: 10,
+        };
+
+        let test_config = build_config_from_args(args).unwrap();
+        assert_eq!(test_config.reference, "data/ecoli.fa".to_string())
+    }
 }

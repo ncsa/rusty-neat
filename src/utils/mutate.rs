@@ -1,13 +1,10 @@
-extern crate log;
-extern crate itertools;
-
+use std::cmp::max;
 use std::collections::HashMap;
-use rand::distributions::Distribution;
 use rand::prelude::{ThreadRng, IndexedRandom};
 use rand::seq::SliceRandom;
 use rand::Rng;
-use self::log::debug;
-use self::itertools::izip;
+use log::debug;
+use itertools::izip;
 
 #[derive(Debug, Ord, PartialOrd, Eq, PartialEq)]
 struct NucModel {
@@ -54,84 +51,91 @@ impl NucModel {
 
 pub fn mutate_fasta(
     file_struct: &HashMap<String, Vec<u8>>,
-    ploidy: usize,
     mut rng: &mut ThreadRng
-) -> Box<HashMap<String, Vec<Vec<u8>>>> {
-    // This takes a hashmap of contig names (keys) and a vector representing the reference sequence.
-    // It performs a basic calculation (length x mutation rate) and chooses that many positions
-    // along the sequence to mutate. It then builds a return string that represents the altered
-    // sequence.
+) -> (Box<HashMap<String, Vec<u8>>>, Box<HashMap<String, Vec<(usize, u8, u8)>>>) {
+    /*
+    Takes:
+        file_struct: a hashmap of contig names (keys) and a vector
+            representing the reference sequence.
+        ploidy: The number of copies of the genome within an organism's cells
+        rng: random number generator for the run
 
-    // Todo: potentially re-write this to simple record the positions. Maybe position and length.
-    // and which ploid. Need to do this once for each ploid.
+    Returns:
+        A tuple with pointers to:
+          A hashmap with keys that are contig names and a vector with the mutated sequence
+          A vector of tuples containing the location and alt of each variant
+
+    This function performs a basic calculation (length x mutation rate +/- a random amount)
+    and chooses that many positions along the sequence to mutate. It then builds a return
+    string that represents the altered sequence and stores all the variants.
+     */
     const MUT_RATE: f64 = 0.01; // will update this with something more elaborate later.
-    // Generate random proportions to give the ploids, to keep things interesting.
-    let mut proportions: Vec<f64> = Vec::with_capacity(ploidy);
-    // For ploidy = N, we generate N random values, then divide them by the sum of the values, this
-    // gives N random numbers whose sum = 1, to randomly assign proportion to the ploids. We may
-    // find there is a better model later.
-    for _ in 0..ploidy {
-        proportions.push((&mut rng).gen::<f64>());
-    }
-    // Normalize my randos (divide by their total)
-    let total: f64 = proportions.iter().sum();
-    proportions = proportions.iter().map(|x| x/total).collect();
-    // This leaves a list of numbers that add up to 1, since these are proportions of 1, will
-    // ensure our mutation rate of each ploid adds up to the total MUT_RATE
-    let ploid_mut_rate: Vec<f64> = proportions.iter().map(|x| x*MUT_RATE).collect();
+    let mut return_struct: HashMap<String, Vec<u8>> = HashMap::new(); // the mutated sequences
 
-    let mut return_struct: HashMap<String, Vec<Vec<u8>>> = HashMap::new(); // the mutated sequences
+    // hashmap with keys of the contig names with a list of positions and alts under the contig.
+    let mut all_variants: HashMap<String, Vec<(usize, u8, u8)>> = HashMap::new();
+
     for (name, sequence) in file_struct {
-        let mut strands: Vec<Vec<u8>> = Vec::new();
-        for ploid in 0..ploidy {
-            let sequence_length = sequence.len();
-            debug!("Sequence {} is {} bp long", name, sequence_length);
+        // Mutations for this contig
+        let contig_mutations: Vec<(usize, u8, u8)>;
+        // The length of this sequence
+        let sequence_length = sequence.len();
+        debug!("Sequence {} is {} bp long", name, sequence_length);
+        // Clone the reference to create mutations
+        let mut mutated_record: Vec<u8> = sequence.clone();
+        // Calculate how many mutations to add
+        let mut rough_num_positions: f64 = sequence_length as f64 * MUT_RATE;
+        // Add or subtract a few extra positions.
+        rough_num_positions += {
+            // A random amount up to 10% of the reads
+            let factor: f64 = rng.gen::<f64>() * 0.10;
+            // 25% of the time subtract, otherwise we'll add.
+            let sign: f64 = if rng.gen_bool(0.25) { -1.0 } else { 1.0 };
+            // add or subtract up to 10% of the reads.
+            rough_num_positions * (sign * factor)
+        };
+        // Round the number of positions to the nearest usize.
+        // If negative or no reads, we still want at least 1 mutation per contig.
+        let num_positions = max(1, rough_num_positions.round() as usize);
 
-            // Clone the reference
-            let mut mutated_record: Vec<u8> = sequence.clone();
-
-            // Calculate how many mutations to add
-            let num_positions = (
-                sequence_length as f64 * ploid_mut_rate[ploid]
-            ).round() as usize;
-            if num_positions == 0 {
-                if rng.gen_bool(1.0/(ploidy as f64)) == true {
-                    mutated_record = mutate_sequence(
-                        mutated_record, 1, sequence_length, &mut rng
-                    );
-                }
-            } else {
-                mutated_record = mutate_sequence(
-                    mutated_record, num_positions, sequence_length, &mut rng
-                );
-            }
-            strands.push(mutated_record.clone());
-        }
-        // Add to the new hashmap
-        return_struct.entry(name.clone()).or_insert(strands.clone());
+        (mutated_record, contig_mutations) = mutate_sequence(
+            mutated_record, num_positions, &mut rng
+        );
+        // Add to the return struct and variants map.
+        return_struct.entry(name.clone()).or_insert(mutated_record.clone());
+        all_variants.entry(name.clone()).or_insert(contig_mutations);
     }
 
-    Box::new(return_struct)
+    (Box::new(return_struct), Box::new(all_variants))
 }
 
 fn mutate_sequence(
     sequence: Vec<u8>,
     num_positions: usize,
-    length: usize,
     mut rng: &mut ThreadRng
-) -> Vec<u8> {
+) -> (Vec<u8>, Vec<(usize, u8, u8)>) {
     /*
-    Takes a vector of u8's and mutate a few positions at random.
+    Takes:
+        sequence: A u8 vector representing a sequence of DNA
+        num_positions: The number of mutations to add to this sequence
+        rng: random number generator for the run
+
+    returns a tuple with:
+        Vec<u8> = the sequence itself
+        Vec(usize, u8) = the position of the snp and the alt allele for that snp.
+
+    Takes a vector of u8's and mutate a few positions at random. Returns the mutated sequence and
+    a list of tuples with the position and the alts of the SNPs.
      */
     debug!("Adding {} mutations", num_positions);
     let mut mutated_record = sequence.clone();
     // Randomly select num_positions from positions, weighted by gc bias and whatever. For now
     // all he weights are just equal.
-    let weights = vec![1; length];
+    let weights = vec![1; mutated_record.len()];
     // zip together weights and positions
     let mut weighted_positions: Vec<(usize, i32)> = Vec::new();
     // izip!() accepts iterators and/or values with IntoIterator.
-    for (x, y) in izip!(&mut (0..length), &weights) {
+    for (x, y) in izip!(&mut (0..mutated_record.len()), &weights) {
         weighted_positions.push((x, *y))
     }
     // now choose a random selection of num_positions without replacement
@@ -140,19 +144,34 @@ fn mutate_sequence(
         .unwrap()
         .collect::<Vec<_>>();
     // Build mutation model
-    let mut_a = NucModel::from(0, vec![0, 1, 1, 1]);
-    let mut_c = NucModel::from(1, vec![1, 0, 1, 1]);
-    let mut_g = NucModel::from(2, vec![1, 1, 0, 1]);
-    let mut_t = NucModel::from(3, vec![1, 1, 1, 0]);
+    /*
+    Using NEAT's original mutation model of
+    [[0.0, 0.15, 0.7, 0.15],
+     [0.15, 0.0, 0.15, 0.7],
+     [0.7, 0.15, 0.0, 0.15],
+     [0.15, 0.7, 0.15, 0.0]]
 
-    for (index, _) in mutated_elements {
-        mutated_record[*index] = match sequence[*index] {
+     multiply each value by 20, which produces integer values
+     */
+    let mut_a = NucModel::from(0, vec![0, 3, 14, 3]);
+    let mut_c = NucModel::from(1, vec![3, 0, 3, 14]);
+    let mut_g = NucModel::from(2, vec![14, 3, 0, 3]);
+    let mut_t = NucModel::from(3, vec![3, 14, 3, 0]);
+
+    // Will hold the variants added to this sequence
+    let mut sequence_variants: Vec<(usize, u8, u8)> = Vec::new();
+    // for each index, picks a new base
+    for (index, _weight) in mutated_elements {
+        let reference_base = sequence[*index];
+        mutated_record[*index] = match reference_base {
             0 => mut_a.choose_new_nuc(&mut rng),
             1 => mut_c.choose_new_nuc(&mut rng),
             2 => mut_g.choose_new_nuc(&mut rng),
             3 => mut_t.choose_new_nuc(&mut rng),
             _ => 4
-        }
+        };
+        // add the location and alt base for the variant
+        sequence_variants.push((*index, mutated_record[*index], reference_base))
     }
-    mutated_record
+    (mutated_record, sequence_variants)
 }

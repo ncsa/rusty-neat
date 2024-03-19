@@ -134,7 +134,7 @@ fn main() {
         info!("Shuffling output fastq data");
         let mut outsets: Box<Vec<&Vec<u8>>> = Box::new(read_sets.iter().collect());
         outsets.shuffle(&mut rng);
-
+        
         info!("Writing fastq");
         write_fastq(
             &output_file,
@@ -144,5 +144,6 @@ fn main() {
         ).expect("Problem writing fastq file");
         info!("Processing complete")
     }
+
 }
 

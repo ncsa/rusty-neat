@@ -2,9 +2,10 @@
 name: CI
 
 on:
+  push:
   pull_request:
   workflow_dispatch:
-    
+
 jobs:
   tests:
     name: ${{ matrix.make.name }} (${{ matrix.os }})

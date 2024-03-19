@@ -144,5 +144,6 @@ fn main() {
         ).expect("Problem writing fastq file");
         info!("Processing complete")
     }
+
 }
 

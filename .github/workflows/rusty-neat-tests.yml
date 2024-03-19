@@ -3,7 +3,7 @@ name: rusty-neat-tests
 on:
   workflow_dispatch:
   push:
-    branches: [ "main", "feature/trying_ci" ]
+    branches: [ "main", "feature/develop_tests" ]
   pull_request:
     branches: [ "main" ]
 

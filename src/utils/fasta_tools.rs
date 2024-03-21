@@ -11,7 +11,7 @@ use utils::nucleotides::{u8_to_base, base_to_u8};
 /// This library contains tools needed to process fasta files as input and output.
 
 #[derive(Debug)]
-enum FastaError {
+pub enum FastaError {
     FastaReadError,
     FastaWriteError,
 }

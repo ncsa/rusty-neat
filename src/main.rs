@@ -15,7 +15,7 @@ use std::fs::File;
 use clap::{Parser};
 use log::*;
 use simplelog::*;
-use rand::{Rng, SeedableRng};
+use rand::SeedableRng;
 use rand::thread_rng;
 use rand_core::RngCore;
 use utils::cli;

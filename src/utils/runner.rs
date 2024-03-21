@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::fmt::{Display, Formatter, write};
+use std::fmt::{Display, Formatter};
 use log::info;
 use rand::prelude::SliceRandom;
 use utils::config::RunConfiguration;
@@ -33,7 +33,6 @@ pub fn run_neat(config: Box<RunConfiguration>, mut rng: &mut NeatRng) -> Result<
     // Reading the reference file into memory
     info!("Mapping reference fasta file: {}", &config.reference);
     let (fasta_map, fasta_order) = read_fasta(&config.reference)
-        .or(Err(NeatErrors::FastaReadError))
         .unwrap();
 
     // Mutating the reference and recording the variant locations.
@@ -50,9 +49,7 @@ pub fn run_neat(config: Box<RunConfiguration>, mut rng: &mut NeatRng) -> Result<
             &fasta_order,
             config.overwrite_output,
             &output_file,
-        )
-            .or(Err(NeatErrors::FileError))
-            .unwrap();
+        ).unwrap();
     }
 
     if config.produce_vcf {
@@ -65,9 +62,7 @@ pub fn run_neat(config: Box<RunConfiguration>, mut rng: &mut NeatRng) -> Result<
             config.overwrite_output,
             &output_file,
             &mut rng
-        )
-            .or(Err(NeatErrors::FileError))
-            .unwrap();
+        ).unwrap();
     }
 
     let mut read_sets: HashSet<Vec<u8>> = HashSet::new();
@@ -82,7 +77,7 @@ pub fn run_neat(config: Box<RunConfiguration>, mut rng: &mut NeatRng) -> Result<
             config.fragment_mean,
             config.fragment_st_dev,
             &mut rng
-        );
+        ).unwrap();
 
         read_sets.extend(*data_set);
     }
@@ -98,9 +93,7 @@ pub fn run_neat(config: Box<RunConfiguration>, mut rng: &mut NeatRng) -> Result<
             config.overwrite_output,
             config.paired_ended,
             *outsets,
-        )
-            .or(Err(NeatErrors::FileError))
-            .unwrap();
+        ).unwrap();
         info!("Processing complete")
     }
     Ok(())

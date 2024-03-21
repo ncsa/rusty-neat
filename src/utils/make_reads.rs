@@ -1,5 +1,5 @@
 use std::collections::{HashSet, VecDeque};
-use std::fmt::{Display, Formatter, write};
+use std::fmt::{Display, Formatter};
 
 use rand::RngCore;
 use rand::seq::SliceRandom;
@@ -15,7 +15,7 @@ use utils::neat_rng::NeatRng;
 /// fragments.
 
 #[derive(Debug)]
-enum GenerateReadsError {
+pub enum GenerateReadsError {
     CoverDatasetError,
     GenerateReadsError,
 }
@@ -176,7 +176,11 @@ pub fn generate_reads(
         read_set.insert(mutated_sequence[start..end].into());
     }
     // puts the reads in the heap.
-    Box::new(read_set)
+    if read_set.is_empty() {
+        Err(GenerateReadsError::GenerateReadsError)
+    } else {
+        Ok(Box::new(read_set))
+    }
 }
 
 #[cfg(test)]
@@ -200,7 +204,7 @@ mod tests {
             coverage,
             &mut rng,
         );
-        assert_eq!(cover[0], (0,10))
+        assert_eq!(cover.unwrap()[0], (0,10))
     }
 
     #[test]
@@ -218,7 +222,7 @@ mod tests {
             coverage,
             &mut rng,
         );
-        assert_eq!(cover[0], (0, 300))
+        assert_eq!(cover.unwrap()[0], (0, 300))
     }
 
     #[test]
@@ -238,7 +242,7 @@ mod tests {
             mean,
             st_dev,
             &mut rng,
-        );
+        ).unwrap();
         println!("{:?}", reads);
         assert!(reads.contains(&(vec![0, 0, 1, 0, 3, 3, 3, 3, 0, 0])));
     }
@@ -262,6 +266,6 @@ mod tests {
             &mut rng,
         );
         println!("{:?}", reads);
-        assert!(!reads.is_empty())
+        assert!(!reads.unwrap().is_empty())
     }
 }

@@ -6,6 +6,12 @@ use log::debug;
 use itertools::izip;
 use utils::nucleotides::NucModel;
 
+/// This is a basic mutation with SNPs using a basic mutation model.
+/// mutate_fasta takes a fasta Hashmap and returns a mutated version and the locations of the
+/// mutations introduced
+///
+/// mutate_sequence adds actual mutations to the fasta sequence
+
 pub fn mutate_fasta(
     file_struct: &HashMap<String, Vec<u8>>,
     mut rng: &mut ThreadRng

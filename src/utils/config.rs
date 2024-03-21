@@ -5,6 +5,7 @@ use std::string::String;
 use crate::utils::cli::Cli;
 use log::{debug, warn, error};
 use std::env;
+use std::fmt::{Display, Formatter};
 
 /// This is the run configuration for this particular run, which holds the parameters needed by the
 /// various side functions. It is build with a ConfigurationBuilder, which can take either a
@@ -78,7 +79,7 @@ pub struct ConfigBuilder {
     produce_fasta: bool,
     produce_vcf:  bool,
     produce_bam: bool,
-    pub rng_seed: Option<u64>,
+    rng_seed: Option<u64>,
     overwrite_output: bool,
     output_dir: String,
     output_prefix: String,
@@ -88,6 +89,15 @@ pub struct ConfigBuilder {
 pub enum ConfigError {
     FileReadError,
     ConfigurationError,
+}
+
+impl Display for ConfigError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match *self {
+            ConfigError::FileReadError => { write!(f, "Problem reading the configuration file.") },
+            ConfigError::ConfigurationError => { write!(f, "Problem creating the configuration for this run.")},
+        }
+    }
 }
 
 impl ConfigBuilder {
@@ -521,7 +531,7 @@ mod tests {
         assert_eq!(config.produce_fastq, false);
         assert_eq!(config.produce_vcf, true);
         assert_eq!(config.produce_bam, true);
-        assert_eq!(config.rng_seed, 11393);
+        assert_eq!(config.rng_seed, Some(11393));
     }
 
     #[test]

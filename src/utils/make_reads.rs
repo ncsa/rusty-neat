@@ -1,9 +1,11 @@
 use std::collections::{HashSet, VecDeque};
+use std::fmt::{Display, Formatter, write};
 
 use rand::RngCore;
-use rand::rngs::ThreadRng;
 use rand::seq::SliceRandom;
 use rand_distr::{Normal, Distribution};
+
+use utils::neat_rng::NeatRng;
 
 /// This is the core functionality of NEAT. Generate reads turns a mutated fasta array into short reads.
 /// The idea of cover_dataset is we generate a set of coordinates
@@ -12,13 +14,28 @@ use rand_distr::{Normal, Distribution};
 /// the mutated fasta file. These will either be read-length fragments or fragment model length
 /// fragments.
 
+#[derive(Debug)]
+enum GenerateReadsError {
+    CoverDatasetError,
+    GenerateReadsError,
+}
+
+impl Display for GenerateReadsError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match *self {
+            GenerateReadsError::CoverDatasetError => { write!(f, "Error generating coordinates of fragments") }
+            GenerateReadsError::GenerateReadsError => { write!(f, "Error generating reads from coordinates") }
+        }
+    }
+}
+
 fn cover_dataset(
     span_length: usize,
     read_length: usize,
     mut fragment_pool: Vec<usize>,
     coverage: usize,
-    mut rng: &mut ThreadRng,
-) -> Vec<(usize, usize)> {
+    mut rng: &mut NeatRng,
+) -> Result<Vec<(usize, usize)>, GenerateReadsError> {
     /*
     Takes:
         span_length: Total number of bases in the sequence
@@ -100,7 +117,11 @@ fn cover_dataset(
             gap_size += wildcard;
         }
     }
-    read_set
+    if read_set.is_empty() {
+        Err(GenerateReadsError::CoverDatasetError)
+    } else {
+        Ok(read_set)
+    }
 }
 
 pub fn generate_reads(
@@ -110,8 +131,8 @@ pub fn generate_reads(
     paired_ended: bool,
     mean: Option<f64>,
     st_dev: Option<f64>,
-    mut rng: &mut ThreadRng,
-) -> Box<HashSet<Vec<u8>>> {
+    mut rng: &mut NeatRng,
+) -> Result<Box<HashSet<Vec<u8>>>, GenerateReadsError>{
     /*
     Takes:
         mutated_sequence: a vector of u8's representing the mutated sequence.
@@ -148,7 +169,7 @@ pub fn generate_reads(
         fragment_pool,
         *coverage,
         &mut rng,
-    );
+    ).unwrap();
 
     // Generate the reads from the read positions.
     for (start, end) in read_positions {
@@ -161,7 +182,8 @@ pub fn generate_reads(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::thread_rng;
+    use rand::SeedableRng;
+    use utils::neat_rng::NeatRng;
 
     #[test]
     fn test_cover_dataset() {
@@ -169,7 +191,7 @@ mod tests {
         let read_length = 10;
         let fragment_pool = vec![10];
         let coverage = 1;
-        let mut rng = thread_rng();
+        let mut rng = NeatRng::seed_from_u64(0);
 
         let cover = cover_dataset(
             span_length,
@@ -187,7 +209,7 @@ mod tests {
         let read_length = 100;
         let fragment_pool = vec![300];
         let coverage = 1;
-        let mut rng = thread_rng();
+        let mut rng = NeatRng::seed_from_u64(0);
 
         let cover = cover_dataset(
             span_length,
@@ -207,7 +229,7 @@ mod tests {
         let paired_ended = false;
         let mean = None;
         let st_dev = None;
-        let mut rng = thread_rng();
+        let mut rng = NeatRng::seed_from_u64(0);
         let reads = generate_reads(
             &mutated_sequence,
             &read_length,
@@ -229,7 +251,7 @@ mod tests {
         let paired_ended = true;
         let mean = Some(200.0);
         let st_dev = Some(1.0);
-        let mut rng = thread_rng();
+        let mut rng = NeatRng::seed_from_u64(0);
         let reads = generate_reads(
             &mutated_sequence,
             &read_length,

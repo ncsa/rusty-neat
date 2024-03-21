@@ -1,35 +1,40 @@
 use std::collections::HashSet;
-use std::fmt::{Display, Formatter};
+use std::fmt::{Display, Formatter, write};
 use log::info;
 use rand::prelude::SliceRandom;
-use rand::rngs::ThreadRng;
 use utils::config::RunConfiguration;
+use rand::SeedableRng;
 use utils::fasta_tools::{read_fasta, write_fasta};
 use utils::fastq_tools::write_fastq;
 use utils::make_reads::generate_reads;
 use utils::mutate::mutate_fasta;
+use utils::neat_rng::NeatRng;
 use utils::vcf_tools::write_vcf;
 
 #[derive(Debug)]
 pub enum NeatErrors {
-    FastaError,
-    FastqError,
-    VcfError,
+    FileError,
+    FastaReadError,
 }
 
 impl Display for NeatErrors {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        todo!()
+        match *self {
+            NeatErrors::FileError => { write!(f, "Neat encountered an error with a file.")}
+            NeatErrors::FastaReadError => { write!(f, "Error creating fasta data") }
+        }
     }
 }
 
-pub fn run_neat(config: Box<RunConfiguration>, mut rng: &mut ThreadRng) -> Result<(), NeatErrors>{
+pub fn run_neat(config: Box<RunConfiguration>, mut rng: &mut NeatRng) -> Result<(), NeatErrors>{
     // Create the prefix of the files to write
     let output_file = format!("{}/{}", config.output_dir, config.output_prefix);
 
     // Reading the reference file into memory
     info!("Mapping reference fasta file: {}", &config.reference);
-    let (fasta_map, fasta_order) = read_fasta(&config.reference);
+    let (fasta_map, fasta_order) = read_fasta(&config.reference)
+        .or(Err(NeatErrors::FastaReadError))
+        .unwrap();
 
     // Mutating the reference and recording the variant locations.
     info!("Mutating reference.");
@@ -46,8 +51,8 @@ pub fn run_neat(config: Box<RunConfiguration>, mut rng: &mut ThreadRng) -> Resul
             config.overwrite_output,
             &output_file,
         )
-            .or(Err(NeatErrors::FastaError))
-            .expect("Error writing fasta file");
+            .or(Err(NeatErrors::FileError))
+            .unwrap();
     }
 
     if config.produce_vcf {
@@ -61,8 +66,8 @@ pub fn run_neat(config: Box<RunConfiguration>, mut rng: &mut ThreadRng) -> Resul
             &output_file,
             &mut rng
         )
-            .or(Err(NeatErrors::VcfError))
-            .expect("Error writing VCF file");
+            .or(Err(NeatErrors::FileError))
+            .unwrap();
     }
 
     let mut read_sets: HashSet<Vec<u8>> = HashSet::new();
@@ -94,8 +99,8 @@ pub fn run_neat(config: Box<RunConfiguration>, mut rng: &mut ThreadRng) -> Resul
             config.paired_ended,
             *outsets,
         )
-            .or(Err(NeatErrors::FastqError))
-            .expect("Problem writing fastq file");
+            .or(Err(NeatErrors::FileError))
+            .unwrap();
         info!("Processing complete")
     }
     Ok(())
@@ -104,7 +109,6 @@ pub fn run_neat(config: Box<RunConfiguration>, mut rng: &mut ThreadRng) -> Resul
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use rand::thread_rng;
     use std::path::Path;
     use super::*;
 
@@ -113,7 +117,7 @@ mod tests {
         let config = RunConfiguration::build().build();
         run_neat(
             Box::new(config),
-            &mut thread_rng(),
+            &mut NeatRng::seed_from_u64(0),
         ).unwrap();
         let fastq_file = Path::new("neat_out_r1.fastq").canonicalize().unwrap();
         fs::remove_file(fastq_file).unwrap();

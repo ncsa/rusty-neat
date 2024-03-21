@@ -3,11 +3,27 @@ use std::io;
 use std::io::Write;
 use std::*;
 use HashMap;
+use std::fmt::{Display, Formatter};
 use utils::file_tools::read_lines;
 use utils::file_tools::open_file;
 use utils::nucleotides::{u8_to_base, base_to_u8};
 
 /// This library contains tools needed to process fasta files as input and output.
+
+#[derive(Debug)]
+enum FastaError {
+    FastaReadError,
+    FastaWriteError,
+}
+
+impl Display for FastaError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match *self {
+            FastaError::FastaReadError => { write!(f, "Error reading the fasta file") },
+            FastaError::FastaWriteError => { write!(f, "Error writing a fasta file") },
+        }
+    }
+}
 
 pub fn sequence_array_to_string(input_array: &Vec<u8>) -> String {
     // Converts a sequence vector into a string representing the DNA sequence
@@ -20,7 +36,7 @@ pub fn sequence_array_to_string(input_array: &Vec<u8>) -> String {
 
 pub fn read_fasta(
     fasta_path: &str
-) -> (Box<HashMap<String, Vec<u8>>>, Vec<String>) {
+) -> Result<(Box<HashMap<String, Vec<u8>>>, Vec<String>), FastaError> {
     // Reads a fasta file and turns it into a HashMap and puts it in the heap
     info!("Reading fasta: {}", fasta_path);
 
@@ -49,7 +65,7 @@ pub fn read_fasta(
     });
     // Need to pick up the last one
     fasta_map.entry(current_key.clone()).or_insert(temp_seq.clone());
-    (Box::new(fasta_map), fasta_order)
+    Ok((Box::new(fasta_map), fasta_order))
 }
 
 pub fn write_fasta(
@@ -112,7 +128,7 @@ mod tests {
     #[test]
     fn test_read_fasta() {
         let test_fasta = "data/H1N1.fa";
-        let (_test_map, map_order) = read_fasta(test_fasta);
+        let (_test_map, map_order) = read_fasta(test_fasta).unwrap();
         assert_eq!(map_order[0], "H1N1_HA".to_string())
     }
 
@@ -120,7 +136,7 @@ mod tests {
     #[should_panic]
     fn test_read_bad_fasta() {
         let test_fasta = "data/fake.fasta";
-        read_fasta(test_fasta);
+        read_fasta(test_fasta).unwrap();
     }
 
     #[test]

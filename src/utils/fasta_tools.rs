@@ -7,6 +7,8 @@ use utils::file_tools::read_lines;
 use utils::file_tools::open_file;
 use utils::nucleotides::{u8_to_base, base_to_u8};
 
+/// This library contains tools needed to process fasta files as input and output.
+
 pub fn sequence_array_to_string(input_array: &Vec<u8>) -> String {
     // Converts a sequence vector into a string representing the DNA sequence
     let mut return_string = String::new();

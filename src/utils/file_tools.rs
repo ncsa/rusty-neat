@@ -3,6 +3,8 @@ use std::io;
 use std::io::{BufRead, Error};
 use std::path::Path;
 
+/// Various file tools needed throughout the code.
+
 pub fn read_lines(filename: &str) -> io::Result<io::Lines<io::BufReader<File>>> {
     // This creates a buffer to read lines
     let file = File::open(filename)?;

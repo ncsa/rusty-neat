@@ -6,6 +6,11 @@ use crate::utils::cli::Cli;
 use log::{debug, warn, error};
 use std::env;
 
+/// This is the run configuration for this particular run, which holds the parameters needed by the
+/// various side functions. It is build with a ConfigurationBuilder, which can take either a
+/// config yaml file or command line arguments and turn them into the configuration.
+
+
 #[derive(Debug)]
 pub struct RunConfiguration {
     /*

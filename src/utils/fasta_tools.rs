@@ -1,52 +1,17 @@
-extern crate rand;
-extern crate log;
-extern crate assert_fs;
-
-use crate::utils::file_tools::read_lines;
-use self::log::info;
+use log::info;
 use std::io;
 use std::io::Write;
 use std::*;
 use HashMap;
+use utils::file_tools::read_lines;
 use utils::file_tools::open_file;
-
-pub fn char_to_num(char_of_interest: char) -> u8 {
-    return match char_of_interest {
-        'A' | 'a' => 0,
-        'C' | 'c' => 1,
-        'G' | 'g' => 2,
-        'T' | 't' => 3,
-        _ => 4
-    }
-}
-
-pub fn num_to_char(nuc_num: u8) -> &'static str {
-    return match nuc_num {
-        0 => "A",
-        1 => "C",
-        2 => "G",
-        3 => "T",
-        _ => "N",
-    }
-}
-
-#[repr(u8)]
-#[allow(unused)]
-pub enum NucRepr {
-    // I just discovered this repr type thing and need to investigate.
-    // todo figure out if we can use this idea to simplify things
-    A = 0,
-    C = 1,
-    G = 2,
-    T = 3,
-    N = 4,
-}
+use utils::nucleotides::{u8_to_base, base_to_u8};
 
 pub fn sequence_array_to_string(input_array: &Vec<u8>) -> String {
     // Converts a sequence vector into a string representing the DNA sequence
     let mut return_string = String::new();
     for num in input_array {
-        return_string += num_to_char(*num);
+        return_string += &(u8_to_base(*num).to_string());
     }
     return_string
 }
@@ -74,7 +39,7 @@ pub fn read_fasta(
                 temp_seq = vec![];
             } else {
                 for char in l.chars() {
-                    temp_seq.push(char_to_num(char));
+                    temp_seq.push(base_to_u8(char));
                 }
             }
         },
@@ -102,7 +67,8 @@ pub fn write_fasta(
      */
     // writing fasta output to files
     let mut output_fasta = format!("{}.fasta", output_file);
-    let mut outfile = open_file(&mut output_fasta, overwrite_output);
+    let mut outfile = open_file(&mut output_fasta, overwrite_output)
+        .expect(&format!("Error opening {}", output_fasta));
     for contig in fasta_order {
         let sequence = &fasta_output[contig];
         // Write contig name
@@ -119,7 +85,7 @@ pub fn write_fasta(
                 max = this_length
             }
             for j in 0..max {
-                line += num_to_char(sequence_to_write[i + j]);
+                line += &(u8_to_base(sequence_to_write[i + j]).to_string());
             }
             writeln!(&mut outfile, "{}", line)?;
             i += 70;
@@ -136,7 +102,7 @@ mod tests {
     fn test_conversions() {
         let initial_sequence = "AAAANNNNGGGGCCCCTTTTAAAA";
         let test_map: Vec<u8> = vec![0, 0, 0, 0, 4, 4, 4, 4, 2, 2, 2, 2, 1, 1, 1, 1, 3, 3, 3, 3, 0, 0, 0, 0];
-        let remap: Vec<u8> = initial_sequence.chars().map(|x| char_to_num(x)).collect();
+        let remap: Vec<u8> = initial_sequence.chars().map(|x| base_to_u8(x)).collect();
         assert_eq!(remap, test_map);
         assert_eq!(sequence_array_to_string(&test_map), initial_sequence);
     }

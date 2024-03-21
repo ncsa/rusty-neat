@@ -8,24 +8,19 @@ extern crate itertools;
 
 mod utils;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs::File;
 use clap::{Parser};
 use log::*;
 use simplelog::*;
 use rand::thread_rng;
-use rand::prelude::*;
 
 use utils::cli;
-use utils::fasta_tools::{read_fasta, write_fasta};
 use utils::config::{read_config_yaml, build_config_from_args};
-use utils::mutate::mutate_fasta;
-use utils::make_reads::generate_reads;
-use utils::fastq_tools::write_fastq;
 use utils::file_tools::check_parent;
-use utils::vcf_tools::write_vcf;
+use utils::runner::run_neat;
 
-fn main() {
+fn main() -> Result<(), std::fmt::Error> {
 
     info!("Begin processing");
     // parse the arguments from the command line
@@ -77,73 +72,7 @@ fn main() {
         Ok(build_config_from_args(args).expect("Problem reading configuration yaml file"))
     }.unwrap();
 
-    // Create the prefix of the files to write
-    let output_file = format!("{}/{}", config.output_dir, config.output_prefix);
-
-    // Reading the reference file into memory
-    info!("Mapping reference fasta file: {}", &config.reference);
-    let (fasta_map, fasta_order) = read_fasta(&config.reference);
-
-    // Mutating the reference and recording the variant locations.
-    info!("Mutating reference.");
-    let (mutated_map, variant_locations) = mutate_fasta(
-        &fasta_map,
-        &mut rng
-    );
-
-    if config.produce_fasta {
-        info!("Outputting fasta file");
-        write_fasta(
-            &mutated_map,
-            &fasta_order,
-            config.overwrite_output,
-            &output_file,
-        ).expect("Problem writing fasta file");
-    }
-
-    if config.produce_vcf {
-        info!("Writing vcf file");
-        write_vcf(
-            &variant_locations,
-            &fasta_order,
-            config.ploidy,
-            &config.reference,
-            config.overwrite_output,
-            &output_file,
-            &mut rng).expect("Error writing vcf file")
-    }
-
-    let mut read_sets: HashSet<Vec<u8>> = HashSet::new();
-    for (_name, sequence) in mutated_map.iter() {
-        // defined as a set of read sequences that should cover
-        // the mutated sequence `coverage` number of times
-        let data_set = generate_reads(
-            sequence,
-            &config.read_len,
-            &config.coverage,
-            config.paired_ended,
-            config.fragment_mean,
-            config.fragment_st_dev,
-            &mut rng
-        );
-
-        read_sets.extend(*data_set);
-    }
-
-    if config.produce_fastq {
-        info!("Shuffling output fastq data");
-        let mut outsets: Box<Vec<&Vec<u8>>> = Box::new(read_sets.iter().collect());
-        outsets.shuffle(&mut rng);
-        
-        info!("Writing fastq");
-        write_fastq(
-            &output_file,
-            config.overwrite_output,
-            config.paired_ended,
-            *outsets,
-        ).expect("Problem writing fastq file");
-        info!("Processing complete")
-    }
-
+    run_neat(config, &mut rng).unwrap();
+    Ok(())
 }
 

@@ -54,11 +54,13 @@ pub fn write_fastq(
     let name_prefix = "neat_generated_".to_string();
     let mut filename1 = String::from(fastq_filename) + "_r1.fastq";
     // open the file and append lines
-    let mut outfile1 = open_file(&mut filename1, overwrite_output);
+    let mut outfile1 = open_file(&mut filename1, overwrite_output)
+        .expect(&format!("Error opening output {}", filename1));
     // setting up pairend ended reads For single ended reads, this will go unused.
     let mut filename2 = String::from(fastq_filename) + "_r2.fastq";
     // open the second file and append lines
-    let mut outfile2 = open_file(&mut filename2, overwrite_output);
+    let mut outfile2 = open_file(&mut filename2, overwrite_output)
+        .expect(&format!("Error opening output {}", filename2));
     // write out sequence by sequence using index to track the numbering
     let mut index = 1;
     for sequence in dataset {

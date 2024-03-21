@@ -13,5 +13,5 @@ produce_fasta: true
 produce_fastq: false
 
 overwrite_output: true
-output_dir: /home/joshfactorial/code/neat_output
+output_dir: .
 output_prefix: testing

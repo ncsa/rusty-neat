@@ -4,6 +4,7 @@ use std::collections::{HashMap};
 use std::string::String;
 use crate::utils::cli::Cli;
 use log::{debug, warn, error};
+use std::env;
 
 #[derive(Debug)]
 pub struct RunConfiguration {
@@ -99,7 +100,7 @@ impl ConfigBuilder {
             produce_vcf: false,
             produce_bam: false,
             overwrite_output: false,
-            output_dir: String::from(""),
+            output_dir: String::from(env::current_dir().unwrap().to_str().unwrap()),
             output_prefix: String::from("neat_out"),
         }
     }

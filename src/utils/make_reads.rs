@@ -175,7 +175,64 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_reads() {
-        todo!()
+    fn test_gap_function() {
+        let span_length = 100_000;
+        let read_length = 100;
+        let fragment_pool = vec![300];
+        let coverage = 1;
+        let mut rng = thread_rng();
+
+        let cover = cover_dataset(
+            span_length,
+            read_length,
+            fragment_pool,
+            coverage,
+            &mut rng,
+        );
+        assert_eq!(cover[0], (0, 300))
+    }
+
+    #[test]
+    fn test_generate_reads_single() {
+        let mutated_sequence = vec![0, 0, 1, 0, 3, 3, 3, 3, 0, 0, 0, 0, 0, 2, 2, 2, 4, 4, 4, 4];
+        let read_length = 10;
+        let coverage = 1;
+        let paired_ended = false;
+        let mean = None;
+        let st_dev = None;
+        let mut rng = thread_rng();
+        let reads = generate_reads(
+            &mutated_sequence,
+            &read_length,
+            &coverage,
+            paired_ended,
+            mean,
+            st_dev,
+            &mut rng,
+        );
+        println!("{:?}", reads);
+        assert!(reads.contains(&(vec![0, 0, 1, 0, 3, 3, 3, 3, 0, 0])));
+    }
+
+    #[test]
+    fn test_generate_reads_paired() {
+        let mutated_sequence: Vec<u8> = std::iter::repeat(1).take(100_000).collect();
+        let read_length = 100;
+        let coverage = 1;
+        let paired_ended = true;
+        let mean = Some(200.0);
+        let st_dev = Some(1.0);
+        let mut rng = thread_rng();
+        let reads = generate_reads(
+            &mutated_sequence,
+            &read_length,
+            &coverage,
+            paired_ended,
+            mean,
+            st_dev,
+            &mut rng,
+        );
+        println!("{:?}", reads);
+        assert!(!reads.is_empty())
     }
 }

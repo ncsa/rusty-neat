@@ -1,6 +1,6 @@
 use std::fs::File;
 use std::io;
-use std::io::BufRead;
+use std::io::{BufRead, Error};
 use std::path::Path;
 
 pub fn read_lines(filename: &str) -> io::Result<io::Lines<io::BufReader<File>>> {
@@ -9,11 +9,11 @@ pub fn read_lines(filename: &str) -> io::Result<io::Lines<io::BufReader<File>>> 
     Ok(io::BufReader::new(file).lines())
 }
 
-pub fn open_file(mut filename: &mut str, overwrite_file: bool) -> File {
+pub fn open_file(mut filename: &mut str, overwrite_file: bool) -> Result<File, Error> {
     if overwrite_file {
-        File::options().create(true).write(true).open(&mut filename).unwrap()
+        File::options().create(true).write(true).open(&mut filename)
     } else {
-        File::options().create_new(true).append(true).open(&mut filename).unwrap()
+        File::options().create_new(true).append(true).open(&mut filename)
     }
 }
 

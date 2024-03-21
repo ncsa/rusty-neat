@@ -1,53 +1,10 @@
 use std::cmp::max;
 use std::collections::HashMap;
 use rand::prelude::{ThreadRng, IndexedRandom};
-use rand::seq::SliceRandom;
 use rand::Rng;
 use log::debug;
 use itertools::izip;
-
-#[derive(Debug, Ord, PartialOrd, Eq, PartialEq)]
-struct NucModel {
-    // This simple nucleotide model simple tracks the base to mutate from
-    // and the weights of each are turned into a vector. For example, if the weight count for "A"
-    // is 8, then the vector will be [0, 0, 0, 0, 0, 0, 0, 0].
-    // 0: A, 1: C, 2: G, 3: T
-    base: u8,
-    // vector of 0s, the length of which is the weight of the A in the vector.
-    a: Vec<u8>,
-    // vector of 1s, the length of which is the weight of the C in the vector.
-    c: Vec<u8>,
-    // vector of 2s, the length of which is the weight of the G in the vector.
-    g: Vec<u8>,
-    // vector of 3s, the length of which is the weight of the T in the vector.
-    t: Vec<u8>,
-}
-
-impl NucModel {
-    fn from(base: u8, weights: Vec<usize>) -> Self {
-        Self {
-            base,
-            a: vec![0; weights[0]],
-            c: vec![1; weights[1]],
-            g: vec![2; weights[2]],
-            t: vec![3; weights[3]],
-        }
-    }
-
-    fn choose_new_nuc(&self, mut rng: &mut ThreadRng) -> u8 {
-        // concatenate the vectors together
-        let mut choices = [&self.a[..], &self.c[..], &self.g[..], &self.t[..]].concat();
-        // shuffle the weighted list, based on whatever statistics we come up with.
-        choices.shuffle(&mut rng);
-        // start with the first choice
-        let mut i = 0;
-        // Look for the first nuc that isn't the old nuc.
-        while choices[i] == self.base {
-            i += 1;
-        }
-        choices[i]
-    }
-}
+use utils::nucleotides::NucModel;
 
 pub fn mutate_fasta(
     file_struct: &HashMap<String, Vec<u8>>,
@@ -99,7 +56,7 @@ pub fn mutate_fasta(
         let num_positions = max(1, rough_num_positions.round() as usize);
 
         (mutated_record, contig_mutations) = mutate_sequence(
-            mutated_record, num_positions, &mut rng
+            &mutated_record, num_positions, &mut rng
         );
         // Add to the return struct and variants map.
         return_struct.entry(name.clone()).or_insert(mutated_record.clone());
@@ -110,7 +67,7 @@ pub fn mutate_fasta(
 }
 
 fn mutate_sequence(
-    sequence: Vec<u8>,
+    sequence: &Vec<u8>,
     num_positions: usize,
     mut rng: &mut ThreadRng
 ) -> (Vec<u8>, Vec<(usize, u8, u8)>) {
@@ -134,44 +91,83 @@ fn mutate_sequence(
     let weights = vec![1; mutated_record.len()];
     // zip together weights and positions
     let mut weighted_positions: Vec<(usize, i32)> = Vec::new();
+    // find all non n positions.
+    let non_n_positions: Vec<usize> = mutated_record
+        .iter()
+        .enumerate()
+        .filter(|&(_, y)| *y != 4u8)
+        .map(|(x, _)| x)
+        .collect();
     // izip!() accepts iterators and/or values with IntoIterator.
-    for (x, y) in izip!(&mut (0..mutated_record.len()), &weights) {
-        weighted_positions.push((x, *y))
+    for (x, y) in izip!(&non_n_positions, &weights) {
+        weighted_positions.push((*x, *y))
     }
     // now choose a random selection of num_positions without replacement
     let mutated_elements: Vec<&(usize, i32)> = weighted_positions
         .choose_multiple_weighted(&mut rng, num_positions, |x| x.1)
         .unwrap()
         .collect::<Vec<_>>();
-    // Build mutation model
-    /*
-    Using NEAT's original mutation model of
-    [[0.0, 0.15, 0.7, 0.15],
-     [0.15, 0.0, 0.15, 0.7],
-     [0.7, 0.15, 0.0, 0.15],
-     [0.15, 0.7, 0.15, 0.0]]
-
-     multiply each value by 20, which produces integer values
-     */
-    let mut_a = NucModel::from(0, vec![0, 3, 14, 3]);
-    let mut_c = NucModel::from(1, vec![3, 0, 3, 14]);
-    let mut_g = NucModel::from(2, vec![14, 3, 0, 3]);
-    let mut_t = NucModel::from(3, vec![3, 14, 3, 0]);
+    // Build the default mutation model
+    // todo incorporate custom models
+    let nucleotide_mutation_model = NucModel::new();
 
     // Will hold the variants added to this sequence
     let mut sequence_variants: Vec<(usize, u8, u8)> = Vec::new();
     // for each index, picks a new base
     for (index, _weight) in mutated_elements {
+        // Skip the N's
+        if sequence[*index] == 4 {
+            continue
+        }
+        // remeber the reference for later.
         let reference_base = sequence[*index];
-        mutated_record[*index] = match reference_base {
-            0 => mut_a.choose_new_nuc(&mut rng),
-            1 => mut_c.choose_new_nuc(&mut rng),
-            2 => mut_g.choose_new_nuc(&mut rng),
-            3 => mut_t.choose_new_nuc(&mut rng),
-            _ => 4
-        };
+        // pick a new base and assign the position to it.
+        mutated_record[*index] = nucleotide_mutation_model.choose_new_nuc(reference_base, &mut rng);
+        // This check simply ensures that our model actually mutated the base.
+        if mutated_record[*index] == reference_base {
+            panic!("BUG: Mutation model failed to mutate the base. This should not happen.")
+        }
         // add the location and alt base for the variant
         sequence_variants.push((*index, mutated_record[*index], reference_base))
     }
     (mutated_record, sequence_variants)
+}
+
+#[cfg(test)]
+mod tests {
+    use rand::thread_rng;
+    use super::*;
+
+    #[test]
+    fn test_mutate_sequence() {
+        let seq1: Vec<u8> = vec![4, 4, 0, 0, 0, 1, 1, 2, 0, 3, 1, 1, 1];
+        let num_positions = 2;
+        let mut rng = thread_rng();
+        let mutant = mutate_sequence(&seq1, num_positions, &mut rng);
+        assert_eq!(mutant.0.len(), seq1.len());
+        assert!(!mutant.1.is_empty());
+        // N's stay N's
+        assert_eq!(mutant.0[0], 4);
+        assert_eq!(mutant.0[1], 4);
+    }
+
+    #[test]
+    fn test_mutate_fasta() {
+        let seq = vec![4, 4, 0, 0, 0, 1, 1, 2, 0, 3, 1, 1, 1];
+        let file_struct: HashMap<String, Vec<u8>> = HashMap::from([
+                ("chr1".to_string(), seq.clone())
+            ]);
+        let mut rng = thread_rng();
+        let mutations = mutate_fasta(
+            &file_struct,
+            &mut rng,
+        );
+        assert!(mutations.0.contains_key("chr1"));
+        assert!(mutations.1.contains_key("chr1"));
+        let mutation_location = mutations.1["chr1"][0].0;
+        let mutation_alt = mutations.1["chr1"][0].1;
+        let mutation_ref = mutations.1["chr1"][0].2;
+        assert_eq!(mutation_ref, seq[mutation_location]);
+        assert_ne!(mutation_alt, mutation_ref)
+    }
 }

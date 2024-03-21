@@ -4,6 +4,7 @@ use std::collections::{HashMap};
 use std::string::String;
 use crate::utils::cli::Cli;
 use log::{debug, warn, error};
+use std::env;
 
 #[derive(Debug)]
 pub struct RunConfiguration {
@@ -38,8 +39,8 @@ pub struct RunConfiguration {
     pub mutation_rate: f64,
     pub ploidy: usize,
     pub paired_ended: bool,
-    pub fragment_mean: f64,
-    pub fragment_st_dev: f64,
+    pub fragment_mean: Option<f64>,
+    pub fragment_st_dev: Option<f64>,
     pub produce_fastq: bool,
     pub produce_fasta: bool,
     pub produce_vcf:  bool,
@@ -58,7 +59,6 @@ impl RunConfiguration {
 
 // The config builder allows us to construct a config in multiple different ways, depending
 // on the input.
-#[derive(Default)]
 pub struct ConfigBuilder {
     reference: String,
     read_len: usize,
@@ -66,8 +66,8 @@ pub struct ConfigBuilder {
     mutation_rate: f64,
     ploidy: usize,
     paired_ended: bool,
-    fragment_mean: f64,
-    fragment_st_dev: f64,
+    fragment_mean: Option<f64>,
+    fragment_st_dev: Option<f64>,
     produce_fastq: bool,
     produce_fasta: bool,
     produce_vcf:  bool,
@@ -93,14 +93,14 @@ impl ConfigBuilder {
             mutation_rate: 0.001,
             ploidy: 2,
             paired_ended: false,
-            fragment_mean: 300.0,
-            fragment_st_dev: 30.0,
+            fragment_mean: None,
+            fragment_st_dev: None,
             produce_fastq: true,
             produce_fasta: false,
             produce_vcf: false,
             produce_bam: false,
             overwrite_output: false,
-            output_dir: String::from(""),
+            output_dir: String::from(env::current_dir().unwrap().to_str().unwrap()),
             output_prefix: String::from("neat_out"),
         }
     }
@@ -137,12 +137,12 @@ impl ConfigBuilder {
     }
 
     pub fn set_fragment_mean(mut self, fragment_mean: f64) -> ConfigBuilder {
-        self.fragment_mean = fragment_mean;
+        self.fragment_mean = Option::from(fragment_mean);
         self
     }
 
     pub fn set_fragment_st_dev(mut self, fragment_st_dev: f64) -> ConfigBuilder {
-        self.fragment_st_dev = fragment_st_dev;
+        self.fragment_st_dev = Option::from(fragment_st_dev);
         self
     }
 
@@ -197,7 +197,7 @@ impl ConfigBuilder {
             return Err(ConfigError::ConfigurationError);
         }
         if self.paired_ended {
-            if self.fragment_mean.is_nan() | self.fragment_st_dev.is_nan() {
+            if self.fragment_mean.is_none() | self.fragment_st_dev.is_none() {
                 error!(
                     "Paired ended is set to true, but fragment mean \
                     and standard deviation were not set."
@@ -205,8 +205,8 @@ impl ConfigBuilder {
                 return Err(ConfigError::ConfigurationError);
             }
             if self.produce_fastq {
-                debug!("\t> fragment mean: {}", self.fragment_mean);
-                debug!("\t> fragment standard deviation: {}", self.fragment_st_dev);
+                debug!("\t> fragment mean: {}", self.fragment_mean.unwrap());
+                debug!("\t> fragment standard deviation: {}", self.fragment_st_dev.unwrap());
                 debug!("Producing fastq files:\n\t> {}_r1.fastq\n\t {}_r2.fastq",
                     file_prefix, file_prefix
                 )
@@ -270,7 +270,7 @@ pub fn read_config_yaml(yaml: String) -> Result<Box<RunConfiguration>, ConfigErr
     for (key, value) in scrape_config {
         match key.as_str() {
             "reference" => {
-                if value != ".".to_string() {
+                if !(value == ".".to_string() || (value == "REQUIRED".to_string())) {
                     config_builder = config_builder.set_reference(value)
                 } else {
                     error!("Reference is required.");
@@ -405,8 +405,8 @@ mod tests {
             mutation_rate: 0.09,
             ploidy: 3,
             paired_ended: true,
-            fragment_mean: 333.0,
-            fragment_st_dev: 33.0,
+            fragment_mean: Option::from(333.0),
+            fragment_st_dev: Option::from(33.0),
             produce_fastq: false,
             produce_bam: true,
             produce_fasta: true,
@@ -416,14 +416,16 @@ mod tests {
             output_prefix: String::from("Hey.hey")
         };
 
+        println!("{:?}", test_configuration);
+
         assert_eq!(test_configuration.reference, "Hello.world".to_string());
         assert_eq!(test_configuration.read_len, 100);
         assert_eq!(test_configuration.coverage, 22);
         assert_eq!(test_configuration.mutation_rate, 0.09);
         assert_eq!(test_configuration.ploidy, 3);
         assert_eq!(test_configuration.paired_ended, true);
-        assert_eq!(test_configuration.fragment_mean, 333.0);
-        assert_eq!(test_configuration.fragment_st_dev, 33.0);
+        assert_eq!(test_configuration.fragment_mean.unwrap(), 333.0);
+        assert_eq!(test_configuration.fragment_st_dev.unwrap(), 33.0);
         assert_eq!(test_configuration.produce_fastq, false);
         assert_eq!(test_configuration.produce_vcf, true);
         assert_eq!(test_configuration.produce_bam, true);
@@ -445,7 +447,21 @@ mod tests {
         let yaml = String::from("config/neat_test.yml");
         let test_config = read_config_yaml(yaml).unwrap();
         assert_eq!(test_config.reference, "data/ecoli.fa".to_string());
-        assert_eq!(test_config.coverage, 10);
+        assert_eq!(test_config.coverage, 3);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_bad_yaml() {
+        let yaml = String::from("fake_file.yml");
+        read_config_yaml(yaml).unwrap();
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_missing_ref() {
+        let yaml = String::from("config/simple_template.yml");
+        let _test_config = read_config_yaml(yaml).unwrap();
     }
 
     #[test]
@@ -454,8 +470,8 @@ mod tests {
         assert_eq!(config.mutation_rate, 0.001);
         assert_eq!(config.ploidy, 2);
         assert_eq!(config.paired_ended, false);
-        assert_eq!(config.fragment_mean, 300.0);
-        assert_eq!(config.fragment_st_dev, 30.0);
+        assert_eq!(config.fragment_mean, None);
+        assert_eq!(config.fragment_st_dev, None);
         assert_eq!(config.produce_fasta, false);
         assert_eq!(config.produce_fastq, true);
         assert_eq!(config.produce_vcf, false);
@@ -473,8 +489,8 @@ mod tests {
         assert_eq!(config.mutation_rate, 0.111);
         assert_eq!(config.ploidy, 3);
         assert_eq!(config.paired_ended, true);
-        assert_eq!(config.fragment_mean, 111.0);
-        assert_eq!(config.fragment_st_dev, 0.011);
+        assert_eq!(config.fragment_mean, Some(111.0));
+        assert_eq!(config.fragment_st_dev, Some(0.011));
         assert_eq!(config.produce_fasta, true);
         assert_eq!(config.produce_fastq, false);
         assert_eq!(config.produce_vcf, true);
@@ -497,4 +513,91 @@ mod tests {
         let test_config = build_config_from_args(args).unwrap();
         assert_eq!(test_config.reference, "data/ecoli.fa".to_string())
     }
+
+    #[test]
+    #[should_panic]
+    fn test_cl_missing_ref() {
+        let args: Cli = Cli{
+            config: String::new(),
+            reference: String::from(""),
+            output_dir: String::from("test_dir"),
+            log_level: String::from("Trace"),
+            log_dest: String::new(),
+            output_file_prefix: String::from("test"),
+            read_length: 150,
+            coverage: 10,
+        };
+
+        build_config_from_args(args).unwrap();
+    }
+
+    #[test]
+    fn test_overwrite_warn() {
+        let mut config = ConfigBuilder::new();
+        config = config.set_overwrite_output();
+        config.check_and_print_config().unwrap();
+    }
+
+    #[test]
+    fn test_produce_fastq_messages() {
+        let mut config = ConfigBuilder::new();
+        config = config.set_paired_ended(true);
+        config = config.set_fragment_mean(100.0);
+        config = config.set_fragment_st_dev(10.0);
+        // tests first branch of if statement for paired_ended & produce_fastq = true
+        config.check_and_print_config().unwrap();
+        // Checks the alternative pe = true, produce_fastq = false
+        config = config.set_produce_fastq(false);
+        // need to produce at least one file or check will panic
+        config = config.set_produce_fasta(true);
+        config.check_and_print_config().unwrap();
+    }
+
+    #[test]
+    fn test_produce_fasta_messages() {
+        let mut config = ConfigBuilder::new();
+        config = config.set_produce_fasta(true);
+        config.check_and_print_config().unwrap();
+        config = config.set_produce_vcf(true);
+        config.check_and_print_config().unwrap();
+        config = config.set_produce_bam(true);
+        config.check_and_print_config().unwrap();
+        // If the unwraps all work we're good.
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_no_files() {
+        let mut config = ConfigBuilder::new();
+        config = config.set_produce_fastq(false);
+        config.check_and_print_config().unwrap();
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_no_frag_mean_or_stdev() {
+        let mut config = ConfigBuilder::new();
+        // paired end set to true, by default, fragment mean and st dev are None
+        config = config.set_paired_ended(true);
+        config.check_and_print_config().unwrap();
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_no_frag_mean() {
+        let mut config = ConfigBuilder::new();
+        config = config.set_paired_ended(true);
+        config = config.set_fragment_st_dev(10.0);
+        config.check_and_print_config().unwrap();
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_no_stdev() {
+        let mut config = ConfigBuilder::new();
+        config = config.set_paired_ended(true);
+        config = config.set_fragment_mean(100.0);
+        config.check_and_print_config().unwrap();
+    }
+
 }

@@ -1,4 +1,4 @@
-reference: REQUIRED
+reference: .
 read_len: .
 coverage: 20
 mutation_rate: .

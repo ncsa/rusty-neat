@@ -101,8 +101,8 @@ pub fn generate_reads(
     read_length: &usize,
     coverage: &usize,
     paired_ended: bool,
-    mean: f64,
-    st_dev: f64,
+    mean: Option<f64>,
+    st_dev: Option<f64>,
     mut rng: &mut ThreadRng,
 ) -> Box<HashSet<Vec<u8>>> {
     /*
@@ -122,7 +122,7 @@ pub fn generate_reads(
     let mut fragment_pool: Vec<usize> = Vec::new();
     if paired_ended {
         let num_frags = (mutated_sequence.len() / read_length) * (coverage * 2);
-        let fragment_distribution = Normal::new(mean, st_dev).unwrap();
+        let fragment_distribution = Normal::new(mean.unwrap(), st_dev.unwrap()).unwrap();
         // add fragments to the fragment pool
         for _ in 0..num_frags {
             let frag = fragment_distribution.sample(&mut rng).round() as usize;
@@ -149,4 +149,90 @@ pub fn generate_reads(
     }
     // puts the reads in the heap.
     Box::new(read_set)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rand::thread_rng;
+
+    #[test]
+    fn test_cover_dataset() {
+        let span_length = 100;
+        let read_length = 10;
+        let fragment_pool = vec![10];
+        let coverage = 1;
+        let mut rng = thread_rng();
+
+        let cover = cover_dataset(
+            span_length,
+            read_length,
+            fragment_pool,
+            coverage,
+            &mut rng,
+        );
+        assert_eq!(cover[0], (0,10))
+    }
+
+    #[test]
+    fn test_gap_function() {
+        let span_length = 100_000;
+        let read_length = 100;
+        let fragment_pool = vec![300];
+        let coverage = 1;
+        let mut rng = thread_rng();
+
+        let cover = cover_dataset(
+            span_length,
+            read_length,
+            fragment_pool,
+            coverage,
+            &mut rng,
+        );
+        assert_eq!(cover[0], (0, 300))
+    }
+
+    #[test]
+    fn test_generate_reads_single() {
+        let mutated_sequence = vec![0, 0, 1, 0, 3, 3, 3, 3, 0, 0, 0, 0, 0, 2, 2, 2, 4, 4, 4, 4];
+        let read_length = 10;
+        let coverage = 1;
+        let paired_ended = false;
+        let mean = None;
+        let st_dev = None;
+        let mut rng = thread_rng();
+        let reads = generate_reads(
+            &mutated_sequence,
+            &read_length,
+            &coverage,
+            paired_ended,
+            mean,
+            st_dev,
+            &mut rng,
+        );
+        println!("{:?}", reads);
+        assert!(reads.contains(&(vec![0, 0, 1, 0, 3, 3, 3, 3, 0, 0])));
+    }
+
+    #[test]
+    fn test_generate_reads_paired() {
+        let mutated_sequence: Vec<u8> = std::iter::repeat(1).take(100_000).collect();
+        let read_length = 100;
+        let coverage = 1;
+        let paired_ended = true;
+        let mean = Some(200.0);
+        let st_dev = Some(1.0);
+        let mut rng = thread_rng();
+        let reads = generate_reads(
+            &mutated_sequence,
+            &read_length,
+            &coverage,
+            paired_ended,
+            mean,
+            st_dev,
+            &mut rng,
+        );
+        println!("{:?}", reads);
+        assert!(!reads.is_empty())
+    }
 }

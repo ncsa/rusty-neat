@@ -5,6 +5,7 @@ extern crate simplelog;
 extern crate serde_yaml;
 extern crate rand_distr;
 extern crate itertools;
+extern crate xorshift;
 
 mod utils;
 
@@ -13,7 +14,8 @@ use std::fs::File;
 use clap::{Parser};
 use log::*;
 use simplelog::*;
-use rand::thread_rng;
+use rand::SeedableRng;
+use xorshift::thread_rng;
 
 use utils::cli;
 use utils::config::{read_config_yaml, build_config_from_args};
@@ -59,8 +61,6 @@ fn main() -> Result<(), std::fmt::Error> {
         )
     ]).unwrap();
 
-    let mut rng = thread_rng();
-
     // set up the config struct based on whether there was an input config. Input config
     // overrides any other inputs.
     let config = if args.config != "" {
@@ -71,6 +71,20 @@ fn main() -> Result<(), std::fmt::Error> {
         debug!("Command line args: {:?}", &args);
         Ok(build_config_from_args(args).expect("Problem reading configuration yaml file"))
     }.unwrap();
+
+
+    let mut seed: u64;
+    if config.rng_seed.exists() {
+        seed = config.rng_seed.unwrap();
+    } else {
+        // We pick a very large random u64.
+        // This is based on a stack overflow article about ensuring actual randomness (but, it's
+        // probably overkill for this application).
+        let mut seed_rng = thread_rng();
+        seed = seed_rng.gen::<u64>(2**52, 2**53);
+    }
+    info!("Generating random numbers using the seed: {}", seed);
+    let mut rng = SeedableRng::seed_from_u64(seed);
 
     run_neat(config, &mut rng).unwrap();
     Ok(())

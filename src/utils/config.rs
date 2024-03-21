@@ -50,6 +50,7 @@ pub struct RunConfiguration {
     pub produce_fasta: bool,
     pub produce_vcf:  bool,
     pub produce_bam: bool,
+    pub rng_seed: Option<u64>,
     pub overwrite_output: bool,
     pub output_dir: String,
     pub output_prefix: String,
@@ -77,6 +78,7 @@ pub struct ConfigBuilder {
     produce_fasta: bool,
     produce_vcf:  bool,
     produce_bam: bool,
+    pub rng_seed: Option<u64>,
     overwrite_output: bool,
     output_dir: String,
     output_prefix: String,
@@ -104,6 +106,7 @@ impl ConfigBuilder {
             produce_fasta: false,
             produce_vcf: false,
             produce_bam: false,
+            rng_seed: None,
             overwrite_output: false,
             output_dir: String::from(env::current_dir().unwrap().to_str().unwrap()),
             output_prefix: String::from("neat_out"),
@@ -171,6 +174,11 @@ impl ConfigBuilder {
         self
     }
 
+    pub fn set_rng_seed(mut self, rng_seed: u64) -> ConfigBuilder {
+        self.rng_seed = Option::from(rng_seed);
+        self
+    }
+
     pub fn set_overwrite_output(mut self) -> ConfigBuilder {
         self.overwrite_output = true;
         self
@@ -228,6 +236,9 @@ impl ConfigBuilder {
         if self.produce_bam {
             debug!("Produce bam file: {}.bam", file_prefix)
         }
+        if self.rng_seed.is_some() {
+            debug!("Using rng seed: {}", self.rng_seed.unwrap())
+        }
         Ok(())
     }
 
@@ -246,6 +257,7 @@ impl ConfigBuilder {
             produce_fasta: self.produce_fasta,
             produce_vcf: self.produce_vcf,
             produce_bam: self.produce_bam,
+            rng_seed: self.rng_seed,
             overwrite_output: self.overwrite_output,
             output_dir: self.output_dir,
             output_prefix: self.output_prefix,
@@ -342,6 +354,12 @@ pub fn read_config_yaml(yaml: String) -> Result<Box<RunConfiguration>, ConfigErr
                     config_builder = config_builder.set_produce_bam(true)
                 }
             },
+            "rng_seed" => {
+                // Optional rng seed to replicate results
+                if value != ".".to_string() {
+                    config_builder = config_builder.set_rng_seed(value.parse::<u64>().unwrap())
+                }
+            },
             "overwrite_output" => {
                 // overwrite_output is false by default, to prevent data loss, setting this flag
                 // will instead enable rusty-neat to overwrite the output
@@ -416,13 +434,13 @@ mod tests {
             produce_bam: true,
             produce_fasta: true,
             produce_vcf: true,
+            rng_seed: None,
             overwrite_output: true,
             output_dir: String::from("/my/my"),
             output_prefix: String::from("Hey.hey")
         };
 
         println!("{:?}", test_configuration);
-
         assert_eq!(test_configuration.reference, "Hello.world".to_string());
         assert_eq!(test_configuration.read_len, 100);
         assert_eq!(test_configuration.coverage, 22);
@@ -435,6 +453,7 @@ mod tests {
         assert_eq!(test_configuration.produce_vcf, true);
         assert_eq!(test_configuration.produce_bam, true);
         assert_eq!(test_configuration.produce_fasta, true);
+        assert_eq!(test_configuration.rng_seed, None);
         assert_eq!(test_configuration.overwrite_output, true);
         assert_eq!(test_configuration.output_dir, "/my/my".to_string());
         assert_eq!(test_configuration.output_prefix, "Hey.hey".to_string());
@@ -481,6 +500,7 @@ mod tests {
         assert_eq!(config.produce_fastq, true);
         assert_eq!(config.produce_vcf, false);
         assert_eq!(config.produce_bam, false);
+        assert_eq!(config.rng_seed, None);
         config = config.set_mutation_rate(0.111)
             .set_ploidy(3)
             .set_paired_ended(true)
@@ -490,6 +510,7 @@ mod tests {
             .set_produce_fasta(true)
             .set_produce_vcf(true)
             .set_produce_bam(true)
+            .set_rng_seed(11393)
             .set_overwrite_output();
         assert_eq!(config.mutation_rate, 0.111);
         assert_eq!(config.ploidy, 3);
@@ -500,6 +521,7 @@ mod tests {
         assert_eq!(config.produce_fastq, false);
         assert_eq!(config.produce_vcf, true);
         assert_eq!(config.produce_bam, true);
+        assert_eq!(config.rng_seed, 11393);
     }
 
     #[test]

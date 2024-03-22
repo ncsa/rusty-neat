@@ -1,10 +1,10 @@
+// This library writes either single ended or paired-ended fastq files.
+
 use std::io::Write;
 use std::{fs, io};
 
 use utils::fasta_tools::sequence_array_to_string;
 use utils::file_tools::open_file;
-
-/// This library writes either single ended or paired-ended fastq files.
 
 fn complement(nucleotide: u8) -> u8 {
     /*

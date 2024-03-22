@@ -1,16 +1,13 @@
-extern crate log;
+// This is the run configuration for this particular run, which holds the parameters needed by the
+// various side functions. It is build with a ConfigurationBuilder, which can take either a
+// config yaml file or command line arguments and turn them into the configuration.
 
 use std::collections::{HashMap};
 use std::string::String;
-use crate::utils::cli::Cli;
+use utils::cli::Cli;
 use log::{debug, warn};
 use std::env;
 use std::path::Path;
-
-/// This is the run configuration for this particular run, which holds the parameters needed by the
-/// various side functions. It is build with a ConfigurationBuilder, which can take either a
-/// config yaml file or command line arguments and turn them into the configuration.
-
 
 #[derive(Debug)]
 pub struct RunConfiguration {
@@ -489,6 +486,7 @@ mod tests {
     #[test]
     fn test_setters() {
         let mut config = ConfigBuilder::new();
+        assert_eq!(config.reference, None);
         assert_eq!(config.mutation_rate, 0.001);
         assert_eq!(config.ploidy, 2);
         assert_eq!(config.paired_ended, false);
@@ -499,7 +497,8 @@ mod tests {
         assert_eq!(config.produce_vcf, false);
         assert_eq!(config.produce_bam, false);
         assert_eq!(config.rng_seed, None);
-        config = config.set_mutation_rate(0.111)
+        config = config.set_reference("data/H1N1.fa".to_string())
+            .set_mutation_rate(0.111)
             .set_ploidy(3)
             .set_paired_ended(true)
             .set_fragment_mean(111.0)
@@ -510,6 +509,7 @@ mod tests {
             .set_produce_bam(true)
             .set_rng_seed(11393)
             .set_overwrite_output();
+        assert_eq!(config.reference, Some("data/H1N1.fa".to_string()));
         assert_eq!(config.mutation_rate, 0.111);
         assert_eq!(config.ploidy, 3);
         assert_eq!(config.paired_ended, true);
@@ -520,6 +520,7 @@ mod tests {
         assert_eq!(config.produce_vcf, true);
         assert_eq!(config.produce_bam, true);
         assert_eq!(config.rng_seed, Some(11393));
+        config.check_and_print_config()
     }
 
     #[test]
@@ -590,7 +591,7 @@ mod tests {
         config.check_and_print_config();
         config = config.set_produce_bam(true);
         config.check_and_print_config();
-        // If the unwraps all work we're good.
+        // If it passes all the checks, we're good.
     }
 
     #[test]

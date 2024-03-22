@@ -1,16 +1,16 @@
+// Throughout this program, we are standardizing the use of a u8 representation of the nucleotides
+//     A = 0
+//     C = 1
+//     G = 2
+//     T = 3
+//     N = 4
+// This is intended to make it easier to store them. We thought about using the u8 representation
+// of the character as built into Rust, but we'd then have to figure out the translations and keep
+// track of extra numbers. So this is intended to simplify everything
+
 use itertools::izip;
 use rand::seq::IndexedRandom;
 use utils::neat_rng::NeatRng;
-
-/// Throughout this program, we are standardizing the use of a u8 representation of the nucleotides
-///     A = 0
-///     C = 1
-///     G = 2
-///     T = 3
-///     N = 4
-/// This is intended to make it easier to store them. We thought about using the u8 representation
-/// of the character as built into Rust, but we'd then have to figure out the translations and keep
-/// track of extra numbers. So this is intended to simplify everything
 
 pub fn base_to_u8(char_of_interest: char) -> u8 {
     // This defines the relationship between the 4 possible nucleotides in DNA and

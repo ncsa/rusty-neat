@@ -1,3 +1,10 @@
+// This is the core functionality of NEAT. Generate reads turns a mutated fasta array into short reads.
+// The idea of cover_dataset is we generate a set of coordinates
+// That define reads and covers the dataset coverage number times, to give the contig the proper
+// read coverage. Generate reads uses this to create a list of coordinates to take slices from
+// the mutated fasta file. These will either be read-length fragments or fragment model length
+// fragments.
+
 use std::collections::{HashSet, VecDeque};
 
 use rand::RngCore;
@@ -5,13 +12,6 @@ use rand::seq::SliceRandom;
 use rand_distr::{Normal, Distribution};
 
 use utils::neat_rng::NeatRng;
-
-/// This is the core functionality of NEAT. Generate reads turns a mutated fasta array into short reads.
-/// The idea of cover_dataset is we generate a set of coordinates
-/// That define reads and covers the dataset coverage number times, to give the contig the proper
-/// read coverage. Generate reads uses this to create a list of coordinates to take slices from
-/// the mutated fasta file. These will either be read-length fragments or fragment model length
-/// fragments.
 
 fn cover_dataset(
     span_length: usize,

@@ -1,9 +1,9 @@
-/// This is a pretty basic implementation of Clap CLI
-/// The idea of this interface and supporting code is that the user can enter an optional
-/// config file that will take the place of the other command line options, except the logging
-/// features, which are handled separately. Either way, these options are read into a configuration
-/// struct that holds the variables for the run. Logging, meanwhile, is handled separately,
-/// outside run configuration parsing.
+// This is a pretty basic implementation of Clap CLI
+// The idea of this interface and supporting code is that the user can enter an optional
+// config file that will take the place of the other command line options, except the logging
+// features, which are handled separately. Either way, these options are read into a configuration
+// struct that holds the variables for the run. Logging, meanwhile, is handled separately,
+// outside run configuration parsing.
 
 extern crate clap;
 

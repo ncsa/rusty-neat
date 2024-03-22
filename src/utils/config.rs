@@ -1,15 +1,13 @@
-extern crate log;
+// This is the run configuration for this particular run, which holds the parameters needed by the
+// various side functions. It is build with a ConfigurationBuilder, which can take either a
+// config yaml file or command line arguments and turn them into the configuration.
 
 use std::collections::{HashMap};
 use std::string::String;
-use crate::utils::cli::Cli;
-use log::{debug, warn, error};
+use utils::cli::Cli;
+use log::{debug, warn};
 use std::env;
-
-/// This is the run configuration for this particular run, which holds the parameters needed by the
-/// various side functions. It is build with a ConfigurationBuilder, which can take either a
-/// config yaml file or command line arguments and turn them into the configuration.
-
+use std::path::Path;
 
 #[derive(Debug)]
 pub struct RunConfiguration {
@@ -50,6 +48,7 @@ pub struct RunConfiguration {
     pub produce_fasta: bool,
     pub produce_vcf:  bool,
     pub produce_bam: bool,
+    pub rng_seed: Option<u64>,
     pub overwrite_output: bool,
     pub output_dir: String,
     pub output_prefix: String,
@@ -65,7 +64,7 @@ impl RunConfiguration {
 // The config builder allows us to construct a config in multiple different ways, depending
 // on the input.
 pub struct ConfigBuilder {
-    reference: String,
+    reference: Option<String>,
     read_len: usize,
     coverage: usize,
     mutation_rate: f64,
@@ -77,22 +76,17 @@ pub struct ConfigBuilder {
     produce_fasta: bool,
     produce_vcf:  bool,
     produce_bam: bool,
+    rng_seed: Option<u64>,
     overwrite_output: bool,
     output_dir: String,
     output_prefix: String,
-}
-
-#[derive(Debug)]
-pub enum ConfigError {
-    FileReadError,
-    ConfigurationError,
 }
 
 impl ConfigBuilder {
     pub fn new() -> ConfigBuilder {
         ConfigBuilder {
             // Setting default values
-            reference: String::from("data/H1N1.fa"),
+            reference: None,
             read_len: 150,
             coverage: 10,
             mutation_rate: 0.001,
@@ -104,6 +98,7 @@ impl ConfigBuilder {
             produce_fasta: false,
             produce_vcf: false,
             produce_bam: false,
+            rng_seed: None,
             overwrite_output: false,
             output_dir: String::from(env::current_dir().unwrap().to_str().unwrap()),
             output_prefix: String::from("neat_out"),
@@ -112,7 +107,7 @@ impl ConfigBuilder {
 
     // Basically a bunch of setters
     pub fn set_reference(mut self, reference: String) -> ConfigBuilder {
-        self.reference = reference;
+        self.reference = Option::from(reference);
         self
     }
 
@@ -171,6 +166,11 @@ impl ConfigBuilder {
         self
     }
 
+    pub fn set_rng_seed(mut self, rng_seed: u64) -> ConfigBuilder {
+        self.rng_seed = Option::from(rng_seed);
+        self
+    }
+
     pub fn set_overwrite_output(mut self) -> ConfigBuilder {
         self.overwrite_output = true;
         self
@@ -186,8 +186,11 @@ impl ConfigBuilder {
         self
     }
 
-    pub fn check_and_print_config(&self) -> Result<(), ConfigError> {
-        debug!("Running rusty-neat to generate reads on {} with...", self.reference);
+    pub fn check_and_print_config(&self) {
+        if self.reference.is_none() {
+            panic!("No reference was specified.")
+        }
+        debug!("Running rusty-neat to generate reads on {} with...", self.reference.clone().unwrap());
         debug!("  >read length: {}", self.read_len);
         debug!("  >coverage: {}", self.coverage);
         debug!("  >mutation rate: {}", self.mutation_rate);
@@ -198,16 +201,14 @@ impl ConfigBuilder {
         }
         let file_prefix = format!("{}/{}", self.output_dir, self.output_prefix);
         if !(self.produce_fastq | self.produce_fasta | self.produce_vcf | self.produce_bam) {
-            error!("All file types set to false, no files would be produced.");
-            return Err(ConfigError::ConfigurationError);
+            panic!("All file types set to false, no files would be produced.");
         }
         if self.paired_ended {
             if self.fragment_mean.is_none() | self.fragment_st_dev.is_none() {
-                error!(
+                panic!(
                     "Paired ended is set to true, but fragment mean \
                     and standard deviation were not set."
                 );
-                return Err(ConfigError::ConfigurationError);
             }
             if self.produce_fastq {
                 debug!("\t> fragment mean: {}", self.fragment_mean.unwrap());
@@ -228,13 +229,15 @@ impl ConfigBuilder {
         if self.produce_bam {
             debug!("Produce bam file: {}.bam", file_prefix)
         }
-        Ok(())
+        if self.rng_seed.is_some() {
+            debug!("Using rng seed: {}", self.rng_seed.unwrap())
+        }
     }
 
     // Function to build the actual configuration.
     pub fn build(self) -> RunConfiguration {
         RunConfiguration {
-            reference: self.reference,
+            reference: self.reference.unwrap(),
             read_len: self.read_len,
             coverage: self.coverage,
             mutation_rate: self.mutation_rate,
@@ -246,6 +249,7 @@ impl ConfigBuilder {
             produce_fasta: self.produce_fasta,
             produce_vcf: self.produce_vcf,
             produce_bam: self.produce_bam,
+            rng_seed: self.rng_seed,
             overwrite_output: self.overwrite_output,
             output_dir: self.output_dir,
             output_prefix: self.output_prefix,
@@ -253,7 +257,7 @@ impl ConfigBuilder {
     }
 }
 
-pub fn read_config_yaml(yaml: String) -> Result<Box<RunConfiguration>, ConfigError> {
+pub fn read_config_yaml(yaml: String) -> Box<RunConfiguration> {
     /*
     Reads an input configuration file from yaml using the serde package. Then sets the parameters
     based on the inputs. A "." value means to use the default value.
@@ -263,7 +267,7 @@ pub fn read_config_yaml(yaml: String) -> Result<Box<RunConfiguration>, ConfigErr
     let f = std::fs::File::open(yaml);
     let file = match f {
         Ok(l) => l,
-        Err(_) => return Err(ConfigError::FileReadError),
+        Err(error) => panic!("Problem reading the cofig file: {}", error),
     };
     // Uses serde_yaml to read the file into a HashMap
     let scrape_config: HashMap<String, String> = serde_yaml::from_reader(file)
@@ -275,11 +279,15 @@ pub fn read_config_yaml(yaml: String) -> Result<Box<RunConfiguration>, ConfigErr
     for (key, value) in scrape_config {
         match key.as_str() {
             "reference" => {
-                if !(value == ".".to_string() || (value == "REQUIRED".to_string())) {
-                    config_builder = config_builder.set_reference(value)
+                if value != ".".to_string() && value != "".to_string() {
+                    let reference_path = Path::new(&value);
+                    if !reference_path.exists() {
+                        panic!("Reference file not found: {}", value)
+                    } else {
+                        config_builder = config_builder.set_reference(value);
+                    }
                 } else {
-                    error!("Reference is required.");
-                    return Err(ConfigError::ConfigurationError)
+                    panic!("Reference was not specified in config.");
                 }
             },
             "read_len" => {
@@ -342,6 +350,12 @@ pub fn read_config_yaml(yaml: String) -> Result<Box<RunConfiguration>, ConfigErr
                     config_builder = config_builder.set_produce_bam(true)
                 }
             },
+            "rng_seed" => {
+                // Optional rng seed to replicate results
+                if value != ".".to_string() {
+                    config_builder = config_builder.set_rng_seed(value.parse::<u64>().unwrap())
+                }
+            },
             "overwrite_output" => {
                 // overwrite_output is false by default, to prevent data loss, setting this flag
                 // will instead enable rusty-neat to overwrite the output
@@ -362,8 +376,8 @@ pub fn read_config_yaml(yaml: String) -> Result<Box<RunConfiguration>, ConfigErr
             _ => continue,
         }
     }
-    let _ = &config_builder.check_and_print_config().unwrap();
-    Ok(Box::new(config_builder.build()))
+    let _ = &config_builder.check_and_print_config();
+    Box::new(config_builder.build())
 }
 
 pub fn build_config_from_args(args: Cli) -> Result<Box<RunConfiguration>, &'static str> {
@@ -378,8 +392,7 @@ pub fn build_config_from_args(args: Cli) -> Result<Box<RunConfiguration>, &'stat
     if args.reference != "" {
         config_builder = config_builder.set_reference(args.reference)
     } else {
-        error!("No reference specified");
-        return Err("Reference File Error.");
+        panic!("No reference specified");
     }
     // The default value works directly for the config builder
     config_builder = config_builder.set_read_len(args.read_length);
@@ -393,7 +406,7 @@ pub fn build_config_from_args(args: Cli) -> Result<Box<RunConfiguration>, &'stat
         config_builder = config_builder.set_output_prefix(args.output_file_prefix)
     };
     // Wraps things in a Box to move this object to the heap
-    let _ = &config_builder.check_and_print_config().unwrap();
+    let _ = &config_builder.check_and_print_config();
     Ok(Box::new(config_builder.build()))
 }
 
@@ -416,13 +429,13 @@ mod tests {
             produce_bam: true,
             produce_fasta: true,
             produce_vcf: true,
+            rng_seed: None,
             overwrite_output: true,
             output_dir: String::from("/my/my"),
             output_prefix: String::from("Hey.hey")
         };
 
         println!("{:?}", test_configuration);
-
         assert_eq!(test_configuration.reference, "Hello.world".to_string());
         assert_eq!(test_configuration.read_len, 100);
         assert_eq!(test_configuration.coverage, 22);
@@ -435,6 +448,7 @@ mod tests {
         assert_eq!(test_configuration.produce_vcf, true);
         assert_eq!(test_configuration.produce_bam, true);
         assert_eq!(test_configuration.produce_fasta, true);
+        assert_eq!(test_configuration.rng_seed, None);
         assert_eq!(test_configuration.overwrite_output, true);
         assert_eq!(test_configuration.output_dir, "/my/my".to_string());
         assert_eq!(test_configuration.output_prefix, "Hey.hey".to_string());
@@ -444,13 +458,13 @@ mod tests {
     fn test_build() {
         use super::*;
         let x = RunConfiguration::build();
-        assert_eq!(x.reference, "data/H1N1.fa".to_string())
+        assert!(x.reference.is_none())
     }
 
     #[test]
     fn test_read_config_yaml() {
         let yaml = String::from("config/neat_test.yml");
-        let test_config = read_config_yaml(yaml).unwrap();
+        let test_config = read_config_yaml(yaml);
         assert_eq!(test_config.reference, "data/ecoli.fa".to_string());
         assert_eq!(test_config.coverage, 3);
     }
@@ -459,19 +473,20 @@ mod tests {
     #[should_panic]
     fn test_bad_yaml() {
         let yaml = String::from("fake_file.yml");
-        read_config_yaml(yaml).unwrap();
+        read_config_yaml(yaml);
     }
 
     #[test]
     #[should_panic]
     fn test_missing_ref() {
         let yaml = String::from("config/simple_template.yml");
-        let _test_config = read_config_yaml(yaml).unwrap();
+        read_config_yaml(yaml);
     }
 
     #[test]
     fn test_setters() {
         let mut config = ConfigBuilder::new();
+        assert_eq!(config.reference, None);
         assert_eq!(config.mutation_rate, 0.001);
         assert_eq!(config.ploidy, 2);
         assert_eq!(config.paired_ended, false);
@@ -481,7 +496,9 @@ mod tests {
         assert_eq!(config.produce_fastq, true);
         assert_eq!(config.produce_vcf, false);
         assert_eq!(config.produce_bam, false);
-        config = config.set_mutation_rate(0.111)
+        assert_eq!(config.rng_seed, None);
+        config = config.set_reference("data/H1N1.fa".to_string())
+            .set_mutation_rate(0.111)
             .set_ploidy(3)
             .set_paired_ended(true)
             .set_fragment_mean(111.0)
@@ -490,7 +507,9 @@ mod tests {
             .set_produce_fasta(true)
             .set_produce_vcf(true)
             .set_produce_bam(true)
+            .set_rng_seed(11393)
             .set_overwrite_output();
+        assert_eq!(config.reference, Some("data/H1N1.fa".to_string()));
         assert_eq!(config.mutation_rate, 0.111);
         assert_eq!(config.ploidy, 3);
         assert_eq!(config.paired_ended, true);
@@ -500,6 +519,8 @@ mod tests {
         assert_eq!(config.produce_fastq, false);
         assert_eq!(config.produce_vcf, true);
         assert_eq!(config.produce_bam, true);
+        assert_eq!(config.rng_seed, Some(11393));
+        config.check_and_print_config()
     }
 
     #[test]
@@ -539,35 +560,38 @@ mod tests {
     #[test]
     fn test_overwrite_warn() {
         let mut config = ConfigBuilder::new();
+        config = config.set_reference("data/H1N1.fa".to_string());
         config = config.set_overwrite_output();
-        config.check_and_print_config().unwrap();
+        config.check_and_print_config();
     }
 
     #[test]
     fn test_produce_fastq_messages() {
         let mut config = ConfigBuilder::new();
+        config = config.set_reference("data/H1N1.fa".to_string());
         config = config.set_paired_ended(true);
         config = config.set_fragment_mean(100.0);
         config = config.set_fragment_st_dev(10.0);
         // tests first branch of if statement for paired_ended & produce_fastq = true
-        config.check_and_print_config().unwrap();
+        config.check_and_print_config();
         // Checks the alternative pe = true, produce_fastq = false
         config = config.set_produce_fastq(false);
         // need to produce at least one file or check will panic
         config = config.set_produce_fasta(true);
-        config.check_and_print_config().unwrap();
+        config.check_and_print_config();
     }
 
     #[test]
     fn test_produce_fasta_messages() {
         let mut config = ConfigBuilder::new();
+        config = config.set_reference("data/H1N1.fa".to_string());
         config = config.set_produce_fasta(true);
-        config.check_and_print_config().unwrap();
+        config.check_and_print_config();
         config = config.set_produce_vcf(true);
-        config.check_and_print_config().unwrap();
+        config.check_and_print_config();
         config = config.set_produce_bam(true);
-        config.check_and_print_config().unwrap();
-        // If the unwraps all work we're good.
+        config.check_and_print_config();
+        // If it passes all the checks, we're good.
     }
 
     #[test]
@@ -575,7 +599,7 @@ mod tests {
     fn test_no_files() {
         let mut config = ConfigBuilder::new();
         config = config.set_produce_fastq(false);
-        config.check_and_print_config().unwrap();
+        config.check_and_print_config();
     }
 
     #[test]
@@ -584,7 +608,7 @@ mod tests {
         let mut config = ConfigBuilder::new();
         // paired end set to true, by default, fragment mean and st dev are None
         config = config.set_paired_ended(true);
-        config.check_and_print_config().unwrap();
+        config.check_and_print_config();
     }
 
     #[test]
@@ -593,7 +617,7 @@ mod tests {
         let mut config = ConfigBuilder::new();
         config = config.set_paired_ended(true);
         config = config.set_fragment_st_dev(10.0);
-        config.check_and_print_config().unwrap();
+        config.check_and_print_config();
     }
 
     #[test]
@@ -602,7 +626,7 @@ mod tests {
         let mut config = ConfigBuilder::new();
         config = config.set_paired_ended(true);
         config = config.set_fragment_mean(100.0);
-        config.check_and_print_config().unwrap();
+        config.check_and_print_config();
     }
 
 }

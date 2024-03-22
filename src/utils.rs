@@ -7,5 +7,5 @@ pub mod mutate;
 pub mod fastq_tools;
 pub mod vcf_tools;
 pub mod nucleotides;
-
+pub mod neat_rng;
 pub mod runner;

@@ -4,10 +4,10 @@ use std::collections::HashMap;
 use std::io;
 use std::io::Write;
 use rand::Rng;
-use rand::rngs::ThreadRng;
 use rand::seq::IndexedRandom;
 use utils::nucleotides::u8_to_base;
 use utils::file_tools::open_file;
+use utils::neat_rng::NeatRng;
 
 fn genotype_to_string(genotype: Vec<usize>) -> String {
     /*
@@ -28,7 +28,7 @@ pub fn write_vcf(
     reference_path: &str,
     overwrite_output: bool,
     output_file_prefix: &str,
-    mut rng: &mut ThreadRng,
+    mut rng: &mut NeatRng,
 ) -> io::Result<()> {
     /*
     Takes:
@@ -105,9 +105,10 @@ pub fn write_vcf(
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use rand::thread_rng;
+    use rand::SeedableRng;
     use super::*;
     use std::path::Path;
+    use utils::neat_rng::NeatRng;
 
     #[test]
     fn test_genotype_to_string() {
@@ -125,7 +126,7 @@ mod tests {
         let reference_path = "/fake/path/to/H1N1.fa";
         let overwrite_output = false;
         let output_file_prefix = "test";
-        let mut rng = thread_rng();
+        let mut rng = NeatRng::seed_from_u64(0);
         write_vcf(
             &variant_locations,
             &fasta_order,

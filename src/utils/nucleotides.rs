@@ -1,16 +1,16 @@
-use rand::prelude::ThreadRng;
+// Throughout this program, we are standardizing the use of a u8 representation of the nucleotides
+//     A = 0
+//     C = 1
+//     G = 2
+//     T = 3
+//     N = 4
+// This is intended to make it easier to store them. We thought about using the u8 representation
+// of the character as built into Rust, but we'd then have to figure out the translations and keep
+// track of extra numbers. So this is intended to simplify everything
+
 use itertools::izip;
 use rand::seq::IndexedRandom;
-
-/// Throughout this program, we are standardizing the use of a u8 representation of the nucleotides
-///     A = 0
-///     C = 1
-///     G = 2
-///     T = 3
-///     N = 4
-/// This is intended to make it easier to store them. We thought about using the u8 representation
-/// of the character as built into Rust, but we'd then have to figure out the translations and keep
-/// track of extra numbers. So this is intended to simplify everything
+use utils::neat_rng::NeatRng;
 
 pub fn base_to_u8(char_of_interest: char) -> u8 {
     // This defines the relationship between the 4 possible nucleotides in DNA and
@@ -86,7 +86,7 @@ impl NucModel {
         }
     }
 
-    pub fn choose_new_nuc(&self, base: u8, mut rng: &mut ThreadRng) -> u8 {
+    pub fn choose_new_nuc(&self, base: u8, mut rng: &mut NeatRng) -> u8 {
         // We'll handle the trivial case first:
         if base >= 4 {
             return 4;
@@ -121,7 +121,7 @@ impl NucModel {
 
 #[cfg(test)]
 mod tests {
-    use rand::thread_rng;
+    use rand_core::SeedableRng;
     use super::*;
 
     #[test]
@@ -150,7 +150,7 @@ mod tests {
         let c_weights = vec![20, 0, 1, 1];
         let g_weights = vec![1, 1, 0, 20];
         let t_weights = vec![20, 1, 20, 0];
-        let mut rng = thread_rng();
+        let mut rng = NeatRng::seed_from_u64(0);
         let test_model = NucModel::from(vec![a_weights, c_weights, g_weights, t_weights]);
         // It actually mutates the base
         assert_ne!(test_model.choose_new_nuc(0, &mut rng), 0);

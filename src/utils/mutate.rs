@@ -1,20 +1,21 @@
+// This is a basic mutation with SNPs using a basic mutation model.
+// mutate_fasta takes a fasta Hashmap and returns a mutated version and the locations of the
+// mutations introduced
+//
+// mutate_sequence adds actual mutations to the fasta sequence
+
 use std::cmp::max;
 use std::collections::HashMap;
-use rand::prelude::{ThreadRng, IndexedRandom};
+use rand::prelude::IndexedRandom;
 use rand::Rng;
 use log::debug;
 use itertools::izip;
 use utils::nucleotides::NucModel;
-
-/// This is a basic mutation with SNPs using a basic mutation model.
-/// mutate_fasta takes a fasta Hashmap and returns a mutated version and the locations of the
-/// mutations introduced
-///
-/// mutate_sequence adds actual mutations to the fasta sequence
+use utils::neat_rng::NeatRng;
 
 pub fn mutate_fasta(
     file_struct: &HashMap<String, Vec<u8>>,
-    mut rng: &mut ThreadRng
+    mut rng: &mut NeatRng
 ) -> (Box<HashMap<String, Vec<u8>>>, Box<HashMap<String, Vec<(usize, u8, u8)>>>) {
     /*
     Takes:
@@ -75,7 +76,7 @@ pub fn mutate_fasta(
 fn mutate_sequence(
     sequence: &Vec<u8>,
     num_positions: usize,
-    mut rng: &mut ThreadRng
+    mut rng: &mut NeatRng
 ) -> (Vec<u8>, Vec<(usize, u8, u8)>) {
     /*
     Takes:
@@ -141,14 +142,15 @@ fn mutate_sequence(
 
 #[cfg(test)]
 mod tests {
-    use rand::thread_rng;
+    use rand::SeedableRng;
+    use utils::neat_rng::NeatRng;
     use super::*;
 
     #[test]
     fn test_mutate_sequence() {
         let seq1: Vec<u8> = vec![4, 4, 0, 0, 0, 1, 1, 2, 0, 3, 1, 1, 1];
         let num_positions = 2;
-        let mut rng = thread_rng();
+        let mut rng = NeatRng::seed_from_u64(0);
         let mutant = mutate_sequence(&seq1, num_positions, &mut rng);
         assert_eq!(mutant.0.len(), seq1.len());
         assert!(!mutant.1.is_empty());
@@ -163,7 +165,7 @@ mod tests {
         let file_struct: HashMap<String, Vec<u8>> = HashMap::from([
                 ("chr1".to_string(), seq.clone())
             ]);
-        let mut rng = thread_rng();
+        let mut rng = NeatRng::seed_from_u64(0);
         let mutations = mutate_fasta(
             &file_struct,
             &mut rng,

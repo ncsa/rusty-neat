@@ -24,7 +24,7 @@ use utils::file_tools::check_parent;
 use utils::runner::run_neat;
 use utils::neat_rng::NeatRng;
 
-fn main() -> Result<(), std::fmt::Error> {
+fn main() {
 
     info!("Begin processing");
     // parse the arguments from the command line
@@ -71,10 +71,13 @@ fn main() -> Result<(), std::fmt::Error> {
     } else {
         info!("Using command line arguments.");
         debug!("Command line args: {:?}", &args);
-        Ok(build_config_from_args(args).expect("Problem reading configuration yaml file"))
-    }.unwrap();
+        build_config_from_args(args).unwrap_or_else(|error| {
+            panic!("Problem reading configuration yaml file {:?}", error)
+        })
+    };
 
-
+    // Generate the RNG used for this run. If one was given in the config file, use that, or else
+    // use thread_rng to generate a random seed, then seed using a SeedableRng based on StdRng
     let seed: u64;
     if !config.rng_seed.is_none() {
         seed = config.rng_seed.unwrap();
@@ -86,7 +89,8 @@ fn main() -> Result<(), std::fmt::Error> {
     info!("Generating random numbers using the seed: {}", seed);
     let mut rng: NeatRng = SeedableRng::seed_from_u64(seed);
 
-    run_neat(config, &mut rng).unwrap();
-    Ok(())
+    run_neat(config, &mut rng).unwrap_or_else(|error| {
+        panic!("Neat encountered a problem: {:?}", error)
+    })
 }
 

@@ -1,5 +1,4 @@
 use std::collections::{HashSet, VecDeque};
-use std::fmt::{Display, Formatter};
 
 use rand::RngCore;
 use rand::seq::SliceRandom;
@@ -14,28 +13,13 @@ use utils::neat_rng::NeatRng;
 /// the mutated fasta file. These will either be read-length fragments or fragment model length
 /// fragments.
 
-#[derive(Debug)]
-pub enum GenerateReadsError {
-    CoverDatasetError,
-    GenerateReadsError,
-}
-
-impl Display for GenerateReadsError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match *self {
-            GenerateReadsError::CoverDatasetError => { write!(f, "Error generating coordinates of fragments") }
-            GenerateReadsError::GenerateReadsError => { write!(f, "Error generating reads from coordinates") }
-        }
-    }
-}
-
 fn cover_dataset(
     span_length: usize,
     read_length: usize,
     mut fragment_pool: Vec<usize>,
     coverage: usize,
     mut rng: &mut NeatRng,
-) -> Result<Vec<(usize, usize)>, GenerateReadsError> {
+) -> Vec<(usize, usize)> {
     /*
     Takes:
         span_length: Total number of bases in the sequence
@@ -117,11 +101,7 @@ fn cover_dataset(
             gap_size += wildcard;
         }
     }
-    if read_set.is_empty() {
-        Err(GenerateReadsError::CoverDatasetError)
-    } else {
-        Ok(read_set)
-    }
+    read_set
 }
 
 pub fn generate_reads(
@@ -132,7 +112,7 @@ pub fn generate_reads(
     mean: Option<f64>,
     st_dev: Option<f64>,
     mut rng: &mut NeatRng,
-) -> Result<Box<HashSet<Vec<u8>>>, GenerateReadsError>{
+) -> Result<Box<HashSet<Vec<u8>>>, &'static str>{
     /*
     Takes:
         mutated_sequence: a vector of u8's representing the mutated sequence.
@@ -169,7 +149,7 @@ pub fn generate_reads(
         fragment_pool,
         *coverage,
         &mut rng,
-    ).unwrap();
+    );
 
     // Generate the reads from the read positions.
     for (start, end) in read_positions {
@@ -177,7 +157,7 @@ pub fn generate_reads(
     }
     // puts the reads in the heap.
     if read_set.is_empty() {
-        Err(GenerateReadsError::GenerateReadsError)
+        Err("No reads generated")
     } else {
         Ok(Box::new(read_set))
     }
@@ -204,7 +184,7 @@ mod tests {
             coverage,
             &mut rng,
         );
-        assert_eq!(cover.unwrap()[0], (0,10))
+        assert_eq!(cover[0], (0,10))
     }
 
     #[test]
@@ -222,7 +202,7 @@ mod tests {
             coverage,
             &mut rng,
         );
-        assert_eq!(cover.unwrap()[0], (0, 300))
+        assert_eq!(cover[0], (0, 300))
     }
 
     #[test]

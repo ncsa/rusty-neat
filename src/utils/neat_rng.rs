@@ -10,6 +10,7 @@
 // flexibility to change the rng behind the scenes, and was having trouble implementing RNGCore
 // myself. I could have just stolen the techniques, but decided to give credit.
 // I have borrowed this code for Rust because I am not 100% how to borrow it the "right" way.
+// And we may improve on this at some point, so this gives us more flexibility.
 
 //! The standard RNG
 

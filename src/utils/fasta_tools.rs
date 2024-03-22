@@ -3,27 +3,11 @@ use std::io;
 use std::io::Write;
 use std::*;
 use HashMap;
-use std::fmt::{Display, Formatter};
 use utils::file_tools::read_lines;
 use utils::file_tools::open_file;
 use utils::nucleotides::{u8_to_base, base_to_u8};
 
 /// This library contains tools needed to process fasta files as input and output.
-
-#[derive(Debug)]
-pub enum FastaError {
-    FastaReadError,
-    FastaWriteError,
-}
-
-impl Display for FastaError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match *self {
-            FastaError::FastaReadError => { write!(f, "Error reading the fasta file") },
-            FastaError::FastaWriteError => { write!(f, "Error writing a fasta file") },
-        }
-    }
-}
 
 pub fn sequence_array_to_string(input_array: &Vec<u8>) -> String {
     // Converts a sequence vector into a string representing the DNA sequence
@@ -36,7 +20,7 @@ pub fn sequence_array_to_string(input_array: &Vec<u8>) -> String {
 
 pub fn read_fasta(
     fasta_path: &str
-) -> Result<(Box<HashMap<String, Vec<u8>>>, Vec<String>), FastaError> {
+) -> Result<(Box<HashMap<String, Vec<u8>>>, Vec<String>), io::Error> {
     // Reads a fasta file and turns it into a HashMap and puts it in the heap
     info!("Reading fasta: {}", fasta_path);
 
@@ -61,7 +45,7 @@ pub fn read_fasta(
                 }
             }
         },
-        Err(error) => panic!("Error reading fasta file: {:?}", error),
+        Err(error) => panic!("Problem reading fasta file: {}", error)
     });
     // Need to pick up the last one
     fasta_map.entry(current_key.clone()).or_insert(temp_seq.clone());
@@ -153,9 +137,9 @@ mod tests {
             &fasta_order,
             true,
             output_file
-        );
+        ).unwrap();
         let file_name = "test.fasta";
-        assert_eq!(test_write.unwrap(), ());
+        assert_eq!(test_write, ());
         let attr = fs::metadata(file_name).unwrap();
         assert!(attr.len() > 0);
         fs::remove_file(file_name)?;

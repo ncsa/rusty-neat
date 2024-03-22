@@ -1,5 +1,4 @@
 use std::collections::HashSet;
-use std::fmt::{Display, Formatter};
 use log::info;
 use rand::prelude::SliceRandom;
 use utils::config::RunConfiguration;
@@ -11,22 +10,7 @@ use utils::mutate::mutate_fasta;
 use utils::neat_rng::NeatRng;
 use utils::vcf_tools::write_vcf;
 
-#[derive(Debug)]
-pub enum NeatErrors {
-    FileError,
-    FastaReadError,
-}
-
-impl Display for NeatErrors {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match *self {
-            NeatErrors::FileError => { write!(f, "Neat encountered an error with a file.")}
-            NeatErrors::FastaReadError => { write!(f, "Error creating fasta data") }
-        }
-    }
-}
-
-pub fn run_neat(config: Box<RunConfiguration>, mut rng: &mut NeatRng) -> Result<(), NeatErrors>{
+pub fn run_neat(config: Box<RunConfiguration>, mut rng: &mut NeatRng) -> Result<(), &'static str>{
     // Create the prefix of the files to write
     let output_file = format!("{}/{}", config.output_dir, config.output_prefix);
 
@@ -106,14 +90,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_runner() -> Result<(), NeatErrors>{
-        let config = RunConfiguration::build().build();
+    fn test_runner() {
+        let mut config = RunConfiguration::build();
+        config = config.set_reference("data/H1N1.fa".to_string());
+        let config = config.build();
         run_neat(
             Box::new(config),
             &mut NeatRng::seed_from_u64(0),
         ).unwrap();
         let fastq_file = Path::new("neat_out_r1.fastq").canonicalize().unwrap();
         fs::remove_file(fastq_file).unwrap();
-        Ok(())
     }
 }

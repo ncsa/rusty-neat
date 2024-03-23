@@ -20,23 +20,22 @@ fn cover_dataset(
     coverage: usize,
     mut rng: &mut NeatRng,
 ) -> Vec<(usize, usize)> {
-    /*
-    Takes:
-        span_length: Total number of bases in the sequence
-        read_length: The length of the reads for this run
-        fragment_pool: a vector of sizes for the fragments. If empty, it will instead be filled
-            by the read_length (single ended reads)
-        paired_ended: true or false if the run is paired ended mode or not.
-        coverage: The coverage depth for the reads
-    Returns:
-        A vector of tuples (usize, usize), denoting the start and end positions of the fragment of
-        DNA that was sequenced.
+    // Takes:
+    // span_length: Total number of bases in the sequence
+    // read_length: The length of the reads for this run
+    // fragment_pool: a vector of sizes for the fragments. If empty, it will instead be filled
+    // by the read_length (single ended reads)
+    // paired_ended: true or false if the run is paired ended mode or not.
+    // coverage: The coverage depth for the reads
+    // Returns:
+    // A vector of tuples (usize, usize), denoting the start and end positions of the fragment of
+    // DNA that was sequenced.
+    //
+    // This function selects the positions of the reads. It starts at the beginning and goes out
+    // one read length, then picks a random jump between 0 and half the read length to move
+    // And picks those coordinates for a second read. Once the tail of the read is past the end,
+    // we start over again at 0.
 
-    This function selects the positions of the reads. It starts at the beginning and goes out
-    one read length, then picks a random jump between 0 and half the read length to move
-    And picks those coordinates for a second read. Once the tail of the read is past the end,
-    we start over again at 0.
-     */
     // Reads that will be start and end of the fragment.
     let mut read_set: Vec<(usize, usize)> = vec![];
 
@@ -113,19 +112,17 @@ pub fn generate_reads(
     st_dev: Option<f64>,
     mut rng: &mut NeatRng,
 ) -> Result<Box<HashSet<Vec<u8>>>, &'static str>{
-    /*
-    Takes:
-        mutated_sequence: a vector of u8's representing the mutated sequence.
-        read_length: the length ef the reads for this run
-        coverage: the average depth of coverage for this run
-        rng: the random number generator for the run
-    Returns:
-        HashSet of vectors representing the read sequences, stored on the heap in box.
-
-    This takes a mutated sequence and produces a set of reads based on the mutated sequence. For
-    paired ended reads, this will generate a set of reads from each end, by taking the reverse
-    complement int the output
-     */
+    // Takes:
+    // mutated_sequence: a vector of u8's representing the mutated sequence.
+    // read_length: the length ef the reads for this run
+    // coverage: the average depth of coverage for this run
+    // rng: the random number generator for the run
+    // Returns:
+    // HashSet of vectors representing the read sequences, stored on the heap in box.
+    //
+    // This takes a mutated sequence and produces a set of reads based on the mutated sequence. For
+    // paired ended reads, this will generate a set of reads from each end, by taking the reverse
+    // complement int the output
 
     let mut fragment_pool: Vec<usize> = Vec::new();
     if paired_ended {
@@ -225,6 +222,38 @@ mod tests {
         ).unwrap();
         println!("{:?}", reads);
         assert!(reads.contains(&(vec![0, 0, 1, 0, 3, 3, 3, 3, 0, 0])));
+    }
+
+    #[test]
+    fn test_seed_rng() {
+        let mutated_sequence = vec![0, 0, 1, 0, 3, 3, 3, 3, 0, 0, 0, 0, 0, 2, 2, 2, 4, 4, 4, 4];
+        let read_length = 10;
+        let coverage = 1;
+        let paired_ended = false;
+        let mean = None;
+        let st_dev = None;
+        let mut rng = NeatRng::seed_from_u64(0);
+        let run1 = generate_reads(
+            &mutated_sequence,
+            &read_length,
+            &coverage,
+            paired_ended,
+            mean,
+            st_dev,
+            &mut rng,
+        ).unwrap();
+
+        let run2 = generate_reads(
+            &mutated_sequence,
+            &read_length,
+            &coverage,
+            paired_ended,
+            mean,
+            st_dev,
+            &mut rng,
+        ).unwrap();
+
+        assert_eq!(run1, run2)
     }
 
     #[test]

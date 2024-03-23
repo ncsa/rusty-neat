@@ -12,7 +12,7 @@ use utils::vcf_tools::write_vcf;
 
 pub fn run_neat(config: Box<RunConfiguration>, mut rng: &mut NeatRng) -> Result<(), &'static str>{
     // Create the prefix of the files to write
-    let output_file = format!("{}/{}", config.output_dir, config.output_prefix);
+    let output_file = format!("{}/{}", config.output_dir.display(), config.output_prefix);
 
     // Reading the reference file into memory
     info!("Mapping reference fasta file: {}", &config.reference);
@@ -86,19 +86,39 @@ pub fn run_neat(config: Box<RunConfiguration>, mut rng: &mut NeatRng) -> Result<
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::path::Path;
+    use std::path::PathBuf;
+    use utils::config::ConfigBuilder;
     use super::*;
 
     #[test]
     fn test_runner() {
         let mut config = RunConfiguration::build();
         config.reference = Some("data/H1N1.fa".to_string());
+        // Because we are building this the wrong way, we need to manually create the output dir
+        config.output_dir = PathBuf::from("test");
+        fs::create_dir("test").unwrap();
         let config = config.build();
-        run_neat(
+        let _ = run_neat(
             Box::new(config),
             &mut NeatRng::seed_from_u64(0),
         ).unwrap();
-        let fastq_file = Path::new("neat_out_r1.fastq").canonicalize().unwrap();
-        fs::remove_file(fastq_file).unwrap();
+        fs::remove_dir_all("test").unwrap();
+    }
+
+    #[test]
+    fn test_runner_files_messagse() {
+        let mut config = ConfigBuilder::new();
+        config.reference = Some("data/H1N1.fa".to_string());
+        config.produce_fasta = true;
+        config.produce_vcf = true;
+        // Because we are building this the wrong way, we need to manually create the output dir
+        config.output_dir = PathBuf::from("output");
+        fs::create_dir("output").unwrap();
+        let config = config.build();
+        let _ = run_neat(
+            Box::new(config),
+            &mut NeatRng::seed_from_u64(0),
+        ).unwrap();
+        fs::remove_dir_all("output").unwrap();
     }
 }

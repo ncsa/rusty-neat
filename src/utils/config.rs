@@ -7,8 +7,9 @@ use std::string::String;
 use utils::cli::Cli;
 use log::{warn, info};
 use std::{env, fs};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use serde_yaml::Value;
+use utils::file_tools::check_create_dir;
 
 #[derive(Debug)]
 pub struct RunConfiguration {
@@ -49,7 +50,7 @@ pub struct RunConfiguration {
     pub produce_bam: bool,
     pub rng_seed: Option<u64>,
     pub overwrite_output: bool,
-    pub output_dir: String,
+    pub output_dir: PathBuf,
     pub output_prefix: String,
 }
 #[allow(dead_code)]
@@ -72,12 +73,12 @@ pub struct ConfigBuilder {
     fragment_mean: Option<f64>,
     fragment_st_dev: Option<f64>,
     produce_fastq: bool,
-    produce_fasta: bool,
-    produce_vcf:  bool,
+    pub(crate) produce_fasta: bool,
+    pub(crate) produce_vcf:  bool,
     produce_bam: bool,
     rng_seed: Option<u64>,
     overwrite_output: bool,
-    output_dir: String,
+    pub(crate) output_dir: PathBuf,
     output_prefix: String,
 }
 
@@ -99,7 +100,7 @@ impl ConfigBuilder {
             produce_bam: false,
             rng_seed: None,
             overwrite_output: false,
-            output_dir: String::from(env::current_dir().unwrap().to_str().unwrap()),
+            output_dir: env::current_dir().unwrap(),
             output_prefix: String::from("neat_out"),
         }
     }
@@ -122,12 +123,13 @@ impl ConfigBuilder {
         if self.overwrite_output {
             warn!("Overwriting any existing files.")
         }
-        let output_path = Path::new(&self.output_dir);
+        let output_path = &self.output_dir;
         // This check may be overkill, but here it is. Let's make sure we ended up with something
-        if !output_path.is_dir() {
-            panic!("Output directory is not a directory: {:?}", self.output_dir)
+        if !output_path.as_path().is_dir() {
+            warn!("Output directory is not a directory: {:?}", self.output_dir.display());
+            check_create_dir(output_path);
         }
-        let file_prefix = format!("{}/{}", self.output_dir, self.output_prefix);
+        let file_prefix = format!("{}/{}", self.output_dir.display(), self.output_prefix);
 
         // No point in running if we aren't producing files
         if !(self.produce_fastq | self.produce_fasta | self.produce_vcf | self.produce_bam) {
@@ -192,7 +194,7 @@ fn generate_error(key: &str, key_type: &str, value: &Value) -> String {
     format!("Input {} could not be converted to {}: {:?}", key, key_type, value)
 }
 
-pub fn read_config_yaml(yaml: String) -> Box<RunConfiguration> {
+pub fn read_config_yaml<'d>(yaml: String) -> Box<RunConfiguration> {
     // Reads an input configuration file from yaml using the serde package. Then sets the parameters
     // based on the inputs. A "." value means to use the default value.
 
@@ -314,11 +316,8 @@ pub fn read_config_yaml(yaml: String) -> Box<RunConfiguration> {
                                 ))
                         },
                         "output_dir" => {
-                            let output_path = Path::new(value.as_str().unwrap());
-                            if !output_path.is_dir() {
-                                panic!("Output dir not found: {:?}", value)
-                            }
-                            config_builder.output_dir = value.as_str().unwrap().to_string().into();
+                            let output_path = value.as_str().unwrap().to_string();
+                            config_builder.output_dir = PathBuf::from(output_path);
                         },
                         "output_prefix" => {
                             config_builder.output_prefix = value.as_str().unwrap().to_string()
@@ -348,18 +347,18 @@ pub fn build_config_from_args(args: Cli) -> Box<RunConfiguration> {
     // The default value works directly for the config builder and CLI handles the type checking
     config_builder.read_len = args.read_length;
     config_builder.coverage = args.coverage;
-
     // default is empty string, in which case the config builder controls the default
     if args.output_dir == "" {
         config_builder.output_dir = env::current_dir().expect(
             "Error finding current directory. Please specify --output-dir (-o) option."
-        ).to_str().unwrap().to_string()
+        )
     } else {
-        config_builder.output_dir = args.output_dir
+        let output_path = Path::new(&args.output_dir);
+        check_create_dir(output_path);
+        config_builder.output_dir = PathBuf::from(output_path);
     };
     // If this is unset, sets the default value of "neat_out" by CLI
     config_builder.output_prefix = args.output_file_prefix;
-
     // Wraps things in a Box to move this object to the heap
     let _ = &config_builder.check_and_print_config();
     Box::new(config_builder.build())
@@ -386,7 +385,7 @@ mod tests {
             produce_vcf: true,
             rng_seed: None,
             overwrite_output: true,
-            output_dir: String::from("/my/my"),
+            output_dir: PathBuf::from("/my/my"),
             output_prefix: String::from("Hey.hey")
         };
 
@@ -405,7 +404,7 @@ mod tests {
         assert_eq!(test_configuration.produce_fasta, true);
         assert_eq!(test_configuration.rng_seed, None);
         assert_eq!(test_configuration.overwrite_output, true);
-        assert_eq!(test_configuration.output_dir, "/my/my".to_string());
+        assert_eq!(test_configuration.output_dir, PathBuf::from("/my/my"));
         assert_eq!(test_configuration.output_prefix, "Hey.hey".to_string());
     }
 
@@ -439,11 +438,19 @@ mod tests {
     }
 
     #[test]
+    fn test_creates_out_dir() {
+        let yaml = String::from("config/neat_test_bad.yml");
+        read_config_yaml(yaml);
+        assert!(Path::new("fake").is_dir());
+        fs::remove_dir("fake").unwrap()
+    }
+
+    #[test]
     fn test_command_line_inputs() {
         let args: Cli = Cli{
             config: String::new(),
             reference: String::from("data/ecoli.fa"),
-            output_dir: String::from(""),
+            output_dir: String::from("data"),
             log_level: String::from("Trace"),
             log_dest: String::new(),
             output_file_prefix: String::from("test"),
@@ -463,12 +470,12 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
-    fn test_bad_config_builder_fake_out() {
+    fn test_creat_nonexisting_out() {
         let mut config = ConfigBuilder::new();
         config.reference = Some("data/H1N1.fa".to_string());
-        config.output_dir = "contig/".to_string();
+        config.output_dir = PathBuf::from("contig/");
         config.check_and_print_config();
+        fs::remove_dir("contig").unwrap()
     }
 
     #[test]
@@ -529,6 +536,7 @@ mod tests {
     #[should_panic]
     fn test_no_files() {
         let mut config = ConfigBuilder::new();
+        config.reference = Some("data/H1N1.fa".to_string());
         config.produce_fastq = false;
         config.check_and_print_config();
     }
@@ -537,6 +545,7 @@ mod tests {
     #[should_panic]
     fn test_no_frag_mean_or_stdev() {
         let mut config = ConfigBuilder::new();
+        config.reference = Some("data/H1N1.fa".to_string());
         // paired end set to true, by default, fragment mean and st dev are None
         config.paired_ended = true;
         config.check_and_print_config();
@@ -546,6 +555,7 @@ mod tests {
     #[should_panic]
     fn test_no_frag_mean() {
         let mut config = ConfigBuilder::new();
+        config.reference = Some("data/H1N1.fa".to_string());
         config.paired_ended = true;
         config.fragment_st_dev = Some(10.0);
         config.check_and_print_config();
@@ -555,9 +565,26 @@ mod tests {
     #[should_panic]
     fn test_no_stdev() {
         let mut config = ConfigBuilder::new();
+        config.reference = Some("data/H1N1.fa".to_string());
         config.paired_ended = true;
         config.fragment_mean = Some(100.0);
         config.check_and_print_config();
     }
 
+    #[test]
+    fn no_output_dir_given() {
+        let args: Cli = Cli{
+            config: String::new(),
+            reference: String::from("data/H1N1.fa"),
+            output_dir: String::new(),
+            log_level: String::from("Trace"),
+            log_dest: String::new(),
+            output_file_prefix: String::from("test"),
+            read_length: 150,
+            coverage: 10,
+        };
+
+        let config = build_config_from_args(args);
+        assert_eq!(env::current_dir().unwrap().as_path(), config.output_dir);
+    }
 }

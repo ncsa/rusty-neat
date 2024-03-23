@@ -1,6 +1,6 @@
 reference: .
 read_len: .
-coverage: 20
+coverage: .
 mutation_rate: .
 
 ploidy: .
@@ -16,23 +16,3 @@ produce_fastq: .
 overwrite_output: .
 output_dir: .
 output_prefix: .
-
-# Below are not yet active
-error_model: .
-mutation_model: .
-fragment_model: .
-gc_model: .
-
-partition_mode: .
-threads: .
-avg_seq_error: .
-rescale_qualities: .
-quality_offset: .
-include_vcf: .
-target_bed: .
-off_target_scalar: .
-discard_bed: .
-mutation_bed: .
-no_coverage_bias: .
-rng_seed: .
-min_mutations: .

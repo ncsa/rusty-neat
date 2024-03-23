@@ -92,7 +92,7 @@ mod tests {
     #[test]
     fn test_runner() {
         let mut config = RunConfiguration::build();
-        config = config.set_reference("data/H1N1.fa".to_string());
+        config.reference = Some("data/H1N1.fa".to_string());
         let config = config.build();
         run_neat(
             Box::new(config),

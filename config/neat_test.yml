@@ -1,4 +1,4 @@
-reference: "data/ecoli.fa"
+reference: data/ecoli.fa
 read_len: 10
 coverage: 3
 ploidy: 9

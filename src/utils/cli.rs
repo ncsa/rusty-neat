@@ -41,11 +41,11 @@ pub struct Cli {
     pub config: String,
 
     // All of these arguments are overridden by the config file
-    #[arg(short='r', long="reference", default_value_t=String::from("data/H1N1.fa"))]
+    #[arg(short='r', long="reference", default_value_t=String::from(""))]
     pub reference: String,
     #[arg(short='o', long="output_dir", default_value_t=String::new())]
     pub output_dir: String,
-    #[arg(short='f', long="output_file_prefix", default_value_t=String::new())]
+    #[arg(short='f', long="output_file_prefix", default_value_t=String::from("neat_out"))]
     pub output_file_prefix: String,
     #[arg(short='l', long="read_len", default_value_t = 150)]
     pub read_length: usize,

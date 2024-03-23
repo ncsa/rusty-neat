@@ -193,10 +193,8 @@ fn generate_error(key: &str, key_type: &str, value: &Value) -> String {
 }
 
 pub fn read_config_yaml(yaml: String) -> Box<RunConfiguration> {
-    /*
-    Reads an input configuration file from yaml using the serde package. Then sets the parameters
-    based on the inputs. A "." value means to use the default value.
-     */
+    // Reads an input configuration file from yaml using the serde package. Then sets the parameters
+    // based on the inputs. A "." value means to use the default value.
 
     // Opens file for reading
     let f = fs::File::open(yaml);
@@ -226,25 +224,6 @@ pub fn read_config_yaml(yaml: String) -> Box<RunConfiguration> {
                         .to_string()
                         .into();
                 }
-            },
-            "output_dir" => {
-                let output_dir: String;
-                if value == ".".to_string() {
-                    output_dir = env::current_dir().expect(
-                        "Problem locating the current directory. \
-                        Please specify the output directory in the configuration file"
-                    ).to_str().unwrap().to_string();
-
-                } else {
-                    let output_path = Path::new(value.as_str().unwrap());
-                    if !output_path.is_dir() {
-                        panic!("Output dir not found: {:?}", value)
-                    } else {
-                        output_dir = value.as_str().unwrap().to_string();
-                    }
-                }
-
-                config_builder.output_dir = output_dir.into();
             },
             _ => {
                 match &value.as_str() {
@@ -334,6 +313,13 @@ pub fn read_config_yaml(yaml: String) -> Box<RunConfiguration> {
                                     &key, "boolean", &value
                                 ))
                         },
+                        "output_dir" => {
+                            let output_path = Path::new(value.as_str().unwrap());
+                            if !output_path.is_dir() {
+                                panic!("Output dir not found: {:?}", value)
+                            }
+                            config_builder.output_dir = value.as_str().unwrap().to_string().into();
+                        },
                         "output_prefix" => {
                             config_builder.output_prefix = value.as_str().unwrap().to_string()
                         },
@@ -348,10 +334,8 @@ pub fn read_config_yaml(yaml: String) -> Box<RunConfiguration> {
 }
 
 pub fn build_config_from_args(args: Cli) -> Box<RunConfiguration> {
-    /*
-    Takes in a bunch of args from a clap CLI and builds a config based on that. More CLI options
-    will need additional items entered here. To add them to the config, so they can be implemented.
-     */
+    // Takes in a bunch of args from a clap CLI and builds a config based on that. More CLI options
+    // will need additional items entered here. To add them to the config, so they can be implemented.
 
     // Create the ConfigBuilder object with default values
     let mut config_builder = ConfigBuilder::new();
@@ -469,6 +453,22 @@ mod tests {
 
         let test_config = build_config_from_args(args);
         assert_eq!(test_config.reference, "data/ecoli.fa".to_string())
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_bad_config_builder() {
+        let config = ConfigBuilder::new();
+        config.check_and_print_config();
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_bad_config_builder_fake_out() {
+        let mut config = ConfigBuilder::new();
+        config.reference = Some("data/H1N1.fa".to_string());
+        config.output_dir = "contig/".to_string();
+        config.check_and_print_config();
     }
 
     #[test]

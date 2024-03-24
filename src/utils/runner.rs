@@ -78,6 +78,7 @@ pub fn run_neat(config: Box<RunConfiguration>, mut rng: &mut NeatRng) -> Result<
             config.overwrite_output,
             config.paired_ended,
             *outsets,
+            rng,
         ).unwrap();
         info!("Processing complete")
     }

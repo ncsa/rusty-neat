@@ -29,7 +29,7 @@ pub fn mutate_fasta(
     // A tuple with pointers to:
     // A hashmap with keys that are contig names and a vector with the mutated sequence
     // A vector of tuples containing the location and alt of each variant
-
+    //
     // This function performs a basic calculation (length x mutation rate +/- a random amount)
     // and chooses that many positions along the sequence to mutate. It then builds a return
     // string that represents the altered sequence and stores all the variants.
@@ -125,7 +125,6 @@ fn mutate_sequence(
     // Build the default mutation model
     // todo incorporate custom models
     let nucleotide_mutation_model = NucModel::new();
-
     // Will hold the variants added to this sequence
     let mut sequence_variants: Vec<(usize, u8, u8)> = Vec::new();
     // for each index, picks a new base

@@ -4,7 +4,6 @@
 //
 // mutate_sequence adds actual mutations to the fasta sequence
 
-use std::cmp::max;
 use std::collections::HashMap;
 use rand::prelude::*;
 use rand::Rng;
@@ -15,11 +14,14 @@ use utils::neat_rng::NeatRng;
 
 pub fn mutate_fasta(
     file_struct: &HashMap<String, Vec<u8>>,
+    minimum_mutations: Option<usize>,
     mut rng: &mut NeatRng
 ) -> (Box<HashMap<String, Vec<u8>>>, Box<HashMap<String, Vec<(usize, u8, u8)>>>) {
     // Takes:
     // file_struct: a hashmap of contig names (keys) and a vector
     // representing the reference sequence.
+    // minimum_mutations is a usize or None that indicates if there is a requested minimum.
+    //      The default is for rusty-neat to allow 0 mutations.
     // ploidy: The number of copies of the genome within an organism's cells
     // rng: random number generator for the run
     //
@@ -52,9 +54,23 @@ pub fn mutate_fasta(
             // add or subtract up to 10% of the reads.
             rough_num_positions * (sign * factor)
         };
+        let rounded_num_positions = rough_num_positions.round() as usize;
         // Round the number of positions to the nearest usize.
-        // this allows for 0 mutations, but we can fine tune this later as needed.
-        let num_positions = max(0, rough_num_positions.round() as usize);
+        // If mininum_mutations have been entered, we'll use that, else we'll set that to 0.
+        let mut num_positions = 0;
+        if !minimum_mutations.is_none() {
+            // if a minimum mutations value was entered, then that is the minimum per contig.
+            if Some(rounded_num_positions) < minimum_mutations {
+                num_positions = minimum_mutations.unwrap();
+            } else {
+                num_positions = rounded_num_positions;
+            }
+        } else {
+            // Else 0 is our minimum
+            if rough_num_positions.round() as usize > 0 {
+                num_positions = rough_num_positions.round() as usize;
+            }
+        }
         // Mutates the sequence, using the original
         let (mutated_record, contig_mutations) = mutate_sequence(
             &sequence, num_positions, &mut rng
@@ -157,6 +173,7 @@ mod tests {
         let mut rng = NeatRng::seed_from_u64(0);
         let mutations = mutate_fasta(
             &file_struct,
+            Some(1),
             &mut rng,
         );
         assert!(mutations.0.contains_key("chr1"));
@@ -166,5 +183,23 @@ mod tests {
         let mutation_ref = mutations.1["chr1"][0].2;
         assert_eq!(mutation_ref, seq[mutation_location]);
         assert_ne!(mutation_alt, mutation_ref)
+    }
+
+    #[test]
+    fn test_mutate_fasta_no_mutations() {
+        let seq = vec![4, 4, 0, 0, 0, 1, 1, 2, 0, 3, 1, 1, 1];
+        let file_struct: HashMap<String, Vec<u8>> = HashMap::from([
+            ("chr1".to_string(), seq.clone())
+        ]);
+        // if a random mutation suddenly pops up in a build, it's probably the seed for this.
+        let mut rng = NeatRng::seed_from_u64(0);
+        let mutations = mutate_fasta(
+            &file_struct,
+            None,
+            &mut rng,
+        );
+        assert!(mutations.0.contains_key("chr1"));
+        assert!(mutations.1.contains_key("chr1"));
+        assert!(mutations.1["chr1"].is_empty());
     }
 }

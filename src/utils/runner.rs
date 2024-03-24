@@ -23,6 +23,7 @@ pub fn run_neat(config: Box<RunConfiguration>, mut rng: &mut NeatRng) -> Result<
     info!("Mutating reference.");
     let (mutated_map, variant_locations) = mutate_fasta(
         &fasta_map,
+        config.minimum_mutations, // todo implement the minimum mutations
         &mut rng
     );
 

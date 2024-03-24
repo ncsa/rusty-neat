@@ -49,7 +49,7 @@ pub struct QualityScoreModel {
     // starting at score with read position 1 (first index: 0), these are the weights, by previous
     // score, for the next score. For example if position 0 (seed) was 7, `score_1_weights[1][7]`
     // gives the weights of possible scores to sample for position 1 (score_1_weights[0] will be
-    // empty by convention, to make indexing less confusing.
+    // empty by convention, to make indexing less confusing)
     pub(crate) score_weights: Vec<Vec<Vec<usize>>>,
 }
 
@@ -74,6 +74,7 @@ impl QualityScoreModel {
         // We'll construct a base model that just favors higher scores for now. We'll work on
         // parsing out this from real data then we can fill this out better.
         let default_quality_scores = vec![2, 11, 25, 37];
+        let default_seed_weight: Vec<usize> = vec![1, 3, 5, 1];
         let default_base_weights: Vec<usize> = vec![1, 1, 2, 3];
         let default_read_length = 150;
         let mut default_score_weights = Vec::with_capacity(default_read_length);
@@ -97,7 +98,7 @@ impl QualityScoreModel {
             quality_score_options: default_quality_scores,
             binned_scores: true,
             assumed_read_length: default_read_length,
-            seed_weights: default_base_weights,
+            seed_weights: default_seed_weight,
             score_weights: default_score_weights,
         }
     }
@@ -153,8 +154,8 @@ impl QualityScoreModel {
         // of mismatches between model read length and run read length
         // We can skip the first one, since we already generated it above. On loop 1, we will look
         // at that seed score to get our first set of weights.
-        let mut current_index = 1_usize;
-        for i in &indexes[1..] {
+        let mut current_index: usize = 1;
+        for i in indexes {
             // The weight at this index is the score weights for position i, given a
             // previous score of score_list[i-1]
 
@@ -165,7 +166,10 @@ impl QualityScoreModel {
             ).unwrap();
             // Now we have an index (in the default case 0..<4) of a vector for the position, based
             // on the previous score.
-            let weights = &self.score_weights[*i][score_position];
+            let weights: &Vec<usize> = self.score_weights.get(i)
+                .expect("Error with quality score remap index.")
+                .get(score_position)
+                .expect("Error finding weights vector");
             // Now we build the dist and sample as above.
             let dist = WeightedIndex::new(weights).unwrap();
             let score = self.quality_score_options[dist.sample(&mut rng)];
@@ -195,11 +199,18 @@ impl QualityScoreModel {
         // Disadvantages: Tends to lose info from the back of the read when downsizing. Might need
         //                to check that.
         if run_read_length == self.assumed_read_length {
-            (0..run_read_length).collect()
+            (1..run_read_length).collect()
         } else {
             let mut indexes: Vec<usize> = Vec::new();
-            for i in 0..run_read_length {
-                indexes.push((self.assumed_read_length * i) / run_read_length);
+            for i in 1..run_read_length {
+                let index = (self.assumed_read_length * i) / run_read_length;
+                // This first value(s) will always be zero when run_read_length is longer than
+                // assumed read length.
+                if index < 1 {
+                    indexes.push(1);
+                } else {
+                    indexes.push(index);
+                }
             }
             indexes
         }
@@ -305,13 +316,46 @@ mod tests {
     }
 
     #[test]
-    fn test_quality_scores() {
+    fn test_quality_scores_short() {
         let run_read_length = 100;
         let mut rng = NeatRng::seed_from_u64(0);
         let model = QualityScoreModel::new();
         let scores = model.generate_quality_scores(run_read_length, &mut rng);
         assert!(!scores.is_empty());
         assert_eq!(scores.len(), 100);
+        scores.iter().map(|x| assert!(model.quality_score_options.contains(x))).collect()
+    }
+
+    #[test]
+    fn test_quality_scores_same() {
+        let run_read_length = 150;
+        let mut rng = NeatRng::seed_from_u64(0);
+        let model = QualityScoreModel::new();
+        let scores = model.generate_quality_scores(run_read_length, &mut rng);
+        assert!(!scores.is_empty());
+        assert_eq!(scores.len(), 150);
+        scores.iter().map(|x| assert!(model.quality_score_options.contains(x))).collect()
+    }
+
+    #[test]
+    fn test_quality_scores_long() {
+        let run_read_length = 200;
+        let mut rng = NeatRng::seed_from_u64(0);
+        let model = QualityScoreModel::new();
+        let scores = model.generate_quality_scores(run_read_length, &mut rng);
+        assert!(!scores.is_empty());
+        assert_eq!(scores.len(), 200);
+        scores.iter().map(|x| assert!(model.quality_score_options.contains(x))).collect()
+    }
+
+    #[test]
+    fn test_quality_scores_vast_difference() {
+        let run_read_length = 2000;
+        let mut rng = NeatRng::seed_from_u64(0);
+        let model = QualityScoreModel::new();
+        let scores = model.generate_quality_scores(run_read_length, &mut rng);
+        assert!(!scores.is_empty());
+        assert_eq!(scores.len(), 2000);
         scores.iter().map(|x| assert!(model.quality_score_options.contains(x))).collect()
     }
 }

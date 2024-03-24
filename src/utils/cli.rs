@@ -51,6 +51,8 @@ pub struct Cli {
     pub read_length: usize,
     #[arg(short='c', long="coverage", default_value_t = 10)]
     pub coverage: usize,
+    #[arg(short='m', long="minimum-mutations")]
+    pub minimum_mutations: Option<u64>,
 
     // These options relate to the logging features and are not overridden by a config
     #[arg(long="log-level", default_value_t=String::from("Trace"), help="Enter one of Trace, Debug, Info, Warn, Error, Off")]

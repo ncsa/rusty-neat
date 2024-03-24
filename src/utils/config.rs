@@ -8,6 +8,7 @@ use utils::cli::Cli;
 use log::{warn, info};
 use std::{env, fs};
 use std::path::{Path, PathBuf};
+use rand_distr::num_traits::ToPrimitive;
 use serde_yaml::Value;
 use utils::file_tools::check_create_dir;
 
@@ -50,6 +51,7 @@ pub struct RunConfiguration {
     pub produce_bam: bool,
     pub rng_seed: Option<u64>,
     pub overwrite_output: bool,
+    pub minimum_mutations: Option<usize>,
     pub output_dir: PathBuf,
     pub output_prefix: String,
 }
@@ -78,6 +80,7 @@ pub struct ConfigBuilder {
     produce_bam: bool,
     rng_seed: Option<u64>,
     overwrite_output: bool,
+    pub(crate) minimum_mutations: Option<usize>,
     pub(crate) output_dir: PathBuf,
     output_prefix: String,
 }
@@ -100,6 +103,7 @@ impl ConfigBuilder {
             produce_bam: false,
             rng_seed: None,
             overwrite_output: false,
+            minimum_mutations: None,
             output_dir: env::current_dir().unwrap(),
             output_prefix: String::from("neat_out"),
         }
@@ -119,9 +123,12 @@ impl ConfigBuilder {
         info!("  >coverage: {}", self.coverage);
         info!("  >mutation rate: {}", self.mutation_rate);
         info!("  >ploidy: {}", self.ploidy);
-        info!("  >paired_ended: {}", self.paired_ended);
+        info!("  >paired ended: {}", self.paired_ended);
         if self.overwrite_output {
             warn!("Overwriting any existing files.")
+        }
+        if self.minimum_mutations.is_some() {
+            info!("  >minimum mutations per contig: {}", self.minimum_mutations.unwrap())
         }
         let output_path = &self.output_dir;
         // This check may be overkill, but here it is. Let's make sure we ended up with something
@@ -184,6 +191,7 @@ impl ConfigBuilder {
             produce_bam: self.produce_bam,
             rng_seed: self.rng_seed,
             overwrite_output: self.overwrite_output,
+            minimum_mutations: self.minimum_mutations,
             output_dir: self.output_dir,
             output_prefix: self.output_prefix,
         }
@@ -212,7 +220,7 @@ pub fn read_config_yaml<'d>(yaml: String) -> Box<RunConfiguration> {
     let mut config_builder = ConfigBuilder::new();
     for (key, value) in scrape_config {
         match key.as_str() {
-            // Too extra checks needed are for reference and output dir. Everything else can be
+            // Too extra checks needed are for reference. Everything else can be
             // easily skipped with a value of "."
             "reference" => {
                 let reference_path = Path::new(value.as_str().unwrap());
@@ -315,6 +323,14 @@ pub fn read_config_yaml<'d>(yaml: String) -> Box<RunConfiguration> {
                                     &key, "boolean", &value
                                 ))
                         },
+                        "minimum_mutations" => {
+                            config_builder.minimum_mutations = Some(value.as_u64()
+                                .expect(&generate_error(
+                                    &key, "Valid integer", &value
+                                ))
+                                .to_usize()
+                                .unwrap())
+                        },
                         "output_dir" => {
                             let output_path = value.as_str().unwrap().to_string();
                             config_builder.output_dir = PathBuf::from(output_path);
@@ -359,6 +375,11 @@ pub fn build_config_from_args(args: Cli) -> Box<RunConfiguration> {
     };
     // If this is unset, sets the default value of "neat_out" by CLI
     config_builder.output_prefix = args.output_file_prefix;
+    // To set a minimum mutation rate, such as for debugging, or for small datasets, use this
+    if !args.minimum_mutations.is_none() {
+        let input_min_muts = args.minimum_mutations.unwrap().to_usize().unwrap();
+        config_builder.minimum_mutations = Some(input_min_muts);
+    }
     // Wraps things in a Box to move this object to the heap
     let _ = &config_builder.check_and_print_config();
     Box::new(config_builder.build())
@@ -385,6 +406,7 @@ mod tests {
             produce_vcf: true,
             rng_seed: None,
             overwrite_output: true,
+            minimum_mutations: None,
             output_dir: PathBuf::from("/my/my"),
             output_prefix: String::from("Hey.hey")
         };
@@ -454,6 +476,7 @@ mod tests {
             log_level: String::from("Trace"),
             log_dest: String::new(),
             output_file_prefix: String::from("test"),
+            minimum_mutations: None,
             read_length: 150,
             coverage: 10,
         };
@@ -488,6 +511,7 @@ mod tests {
             log_level: String::from("Trace"),
             log_dest: String::new(),
             output_file_prefix: String::from("test"),
+            minimum_mutations: None,
             read_length: 150,
             coverage: 10,
         };
@@ -580,6 +604,7 @@ mod tests {
             log_level: String::from("Trace"),
             log_dest: String::new(),
             output_file_prefix: String::from("test"),
+            minimum_mutations: None,
             read_length: 150,
             coverage: 10,
         };

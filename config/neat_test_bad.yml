@@ -13,5 +13,5 @@ produce_fasta: true
 produce_fastq: false
 
 overwrite_output: true
-output_dir: data
+output_dir: fake
 output_prefix: testing

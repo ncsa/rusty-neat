@@ -4,49 +4,45 @@
 //
 // mutate_sequence adds actual mutations to the fasta sequence
 
-use std::cmp::max;
 use std::collections::HashMap;
-use rand::prelude::IndexedRandom;
+use rand::prelude::*;
 use rand::Rng;
-use log::debug;
+use log::{debug, error};
 use itertools::izip;
 use utils::nucleotides::NucModel;
 use utils::neat_rng::NeatRng;
 
 pub fn mutate_fasta(
     file_struct: &HashMap<String, Vec<u8>>,
+    minimum_mutations: Option<usize>,
     mut rng: &mut NeatRng
 ) -> (Box<HashMap<String, Vec<u8>>>, Box<HashMap<String, Vec<(usize, u8, u8)>>>) {
-    /*
-    Takes:
-        file_struct: a hashmap of contig names (keys) and a vector
-            representing the reference sequence.
-        ploidy: The number of copies of the genome within an organism's cells
-        rng: random number generator for the run
+    // Takes:
+    // file_struct: a hashmap of contig names (keys) and a vector
+    // representing the reference sequence.
+    // minimum_mutations is a usize or None that indicates if there is a requested minimum.
+    //      The default is for rusty-neat to allow 0 mutations.
+    // ploidy: The number of copies of the genome within an organism's cells
+    // rng: random number generator for the run
+    //
+    // Returns:
+    // A tuple with pointers to:
+    // A hashmap with keys that are contig names and a vector with the mutated sequence
+    // A vector of tuples containing the location and alt of each variant
 
-    Returns:
-        A tuple with pointers to:
-          A hashmap with keys that are contig names and a vector with the mutated sequence
-          A vector of tuples containing the location and alt of each variant
-
-    This function performs a basic calculation (length x mutation rate +/- a random amount)
-    and chooses that many positions along the sequence to mutate. It then builds a return
-    string that represents the altered sequence and stores all the variants.
-     */
+    // This function performs a basic calculation (length x mutation rate +/- a random amount)
+    // and chooses that many positions along the sequence to mutate. It then builds a return
+    // string that represents the altered sequence and stores all the variants.
     const MUT_RATE: f64 = 0.01; // will update this with something more elaborate later.
     let mut return_struct: HashMap<String, Vec<u8>> = HashMap::new(); // the mutated sequences
-
     // hashmap with keys of the contig names with a list of positions and alts under the contig.
     let mut all_variants: HashMap<String, Vec<(usize, u8, u8)>> = HashMap::new();
-
+    // For each sequence, figure out how many variants it should get and add them
     for (name, sequence) in file_struct {
-        // Mutations for this contig
-        let contig_mutations: Vec<(usize, u8, u8)>;
         // The length of this sequence
         let sequence_length = sequence.len();
         debug!("Sequence {} is {} bp long", name, sequence_length);
         // Clone the reference to create mutations
-        let mut mutated_record: Vec<u8> = sequence.clone();
         // Calculate how many mutations to add
         let mut rough_num_positions: f64 = sequence_length as f64 * MUT_RATE;
         // Add or subtract a few extra positions.
@@ -58,12 +54,26 @@ pub fn mutate_fasta(
             // add or subtract up to 10% of the reads.
             rough_num_positions * (sign * factor)
         };
+        let rounded_num_positions = rough_num_positions.round() as usize;
         // Round the number of positions to the nearest usize.
-        // If negative or no reads, we still want at least 1 mutation per contig.
-        let num_positions = max(1, rough_num_positions.round() as usize);
-
-        (mutated_record, contig_mutations) = mutate_sequence(
-            &mutated_record, num_positions, &mut rng
+        // If mininum_mutations have been entered, we'll use that, else we'll set that to 0.
+        let mut num_positions = 0;
+        if !minimum_mutations.is_none() {
+            // if a minimum mutations value was entered, then that is the minimum per contig.
+            if Some(rounded_num_positions) < minimum_mutations {
+                num_positions = minimum_mutations.unwrap();
+            } else {
+                num_positions = rounded_num_positions;
+            }
+        } else {
+            // Else 0 is our minimum
+            if rough_num_positions.round() as usize > 0 {
+                num_positions = rough_num_positions.round() as usize;
+            }
+        }
+        // Mutates the sequence, using the original
+        let (mutated_record, contig_mutations) = mutate_sequence(
+            &sequence, num_positions, &mut rng
         );
         // Add to the return struct and variants map.
         return_struct.entry(name.clone()).or_insert(mutated_record.clone());
@@ -78,19 +88,17 @@ fn mutate_sequence(
     num_positions: usize,
     mut rng: &mut NeatRng
 ) -> (Vec<u8>, Vec<(usize, u8, u8)>) {
-    /*
-    Takes:
-        sequence: A u8 vector representing a sequence of DNA
-        num_positions: The number of mutations to add to this sequence
-        rng: random number generator for the run
-
-    returns a tuple with:
-        Vec<u8> = the sequence itself
-        Vec(usize, u8) = the position of the snp and the alt allele for that snp.
-
-    Takes a vector of u8's and mutate a few positions at random. Returns the mutated sequence and
-    a list of tuples with the position and the alts of the SNPs.
-     */
+    // Takes:
+    // sequence: A u8 vector representing a sequence of DNA
+    // num_positions: The number of mutations to add to this sequence
+    // rng: random number generator for the run
+    //
+    // returns a tuple with:
+    // Vec<u8> = the sequence itself
+    // Vec(usize, u8) = the position of the snp and the alt allele for that snp.
+    //
+    // Takes a vector of u8's and mutate a few positions at random. Returns the mutated sequence and
+    // a list of tuples with the position and the alts of the SNPs.
     debug!("Adding {} mutations", num_positions);
     let mut mutated_record = sequence.clone();
     // Randomly select num_positions from positions, weighted by gc bias and whatever. For now
@@ -122,16 +130,13 @@ fn mutate_sequence(
     let mut sequence_variants: Vec<(usize, u8, u8)> = Vec::new();
     // for each index, picks a new base
     for (index, _weight) in mutated_elements {
-        // Skip the N's
-        if sequence[*index] == 4 {
-            continue
-        }
         // remeber the reference for later.
         let reference_base = sequence[*index];
         // pick a new base and assign the position to it.
         mutated_record[*index] = nucleotide_mutation_model.choose_new_nuc(reference_base, &mut rng);
         // This check simply ensures that our model actually mutated the base.
         if mutated_record[*index] == reference_base {
+            error!("Need to check the code choosing nucleotides");
             panic!("BUG: Mutation model failed to mutate the base. This should not happen.")
         }
         // add the location and alt base for the variant
@@ -168,6 +173,7 @@ mod tests {
         let mut rng = NeatRng::seed_from_u64(0);
         let mutations = mutate_fasta(
             &file_struct,
+            Some(1),
             &mut rng,
         );
         assert!(mutations.0.contains_key("chr1"));
@@ -177,5 +183,23 @@ mod tests {
         let mutation_ref = mutations.1["chr1"][0].2;
         assert_eq!(mutation_ref, seq[mutation_location]);
         assert_ne!(mutation_alt, mutation_ref)
+    }
+
+    #[test]
+    fn test_mutate_fasta_no_mutations() {
+        let seq = vec![4, 4, 0, 0, 0, 1, 1, 2, 0, 3, 1, 1, 1];
+        let file_struct: HashMap<String, Vec<u8>> = HashMap::from([
+            ("chr1".to_string(), seq.clone())
+        ]);
+        // if a random mutation suddenly pops up in a build, it's probably the seed for this.
+        let mut rng = NeatRng::seed_from_u64(0);
+        let mutations = mutate_fasta(
+            &file_struct,
+            None,
+            &mut rng,
+        );
+        assert!(mutations.0.contains_key("chr1"));
+        assert!(mutations.1.contains_key("chr1"));
+        assert!(mutations.1["chr1"].is_empty());
     }
 }

@@ -71,9 +71,7 @@ fn main() {
     } else {
         info!("Using command line arguments.");
         debug!("Command line args: {:?}", &args);
-        build_config_from_args(args).unwrap_or_else(|error| {
-            panic!("Problem reading configuration yaml file {:?}", error)
-        })
+        build_config_from_args(args)
     };
 
     // Generate the RNG used for this run. If one was given in the config file, use that, or else

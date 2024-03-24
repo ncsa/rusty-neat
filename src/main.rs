@@ -7,6 +7,8 @@ extern crate rand_distr;
 extern crate itertools;
 extern crate rand_core;
 extern crate rand_chacha;
+extern crate serde_json;
+extern crate serde;
 
 mod utils;
 

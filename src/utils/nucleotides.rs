@@ -57,10 +57,10 @@ impl NucModel {
     pub fn new() -> Self {
         // Default mutation model based on the original from NEAT 2.0
         Self {
-            a: vec![0, 3, 14, 3],
-            c: vec![3, 0, 3, 14],
-            g: vec![14, 3, 0, 3],
-            t: vec![3, 14, 3, 0],
+            a: vec![0, 17, 69, 14],
+            c: vec![16, 0, 17, 67],
+            g: vec![67, 17, 0, 16],
+            t: vec![14, 69, 16, 0],
         }
     }
     pub fn from(weights: Vec<Vec<usize>>) -> Self {

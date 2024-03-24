@@ -105,7 +105,7 @@ pub fn write_fastq(
 fn quality_scores_to_str(array: Vec<usize>) -> String {
     let mut score_text = String::new();
     for score in array {
-        score_text += &((score + 33) as u8).to_string();
+        score_text += &(((score + 33) as u8) as char).to_string();
     }
     score_text
 }

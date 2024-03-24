@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use rand::prelude::*;
 use rand::Rng;
 use log::{debug, error};
-use itertools::izip;
+use rand::distributions::WeightedIndex;
 use utils::nucleotides::NucModel;
 use utils::neat_rng::NeatRng;
 
@@ -94,8 +94,8 @@ fn mutate_sequence(
     // rng: random number generator for the run
     //
     // returns a tuple with:
-    // Vec<u8> = the sequence itself
-    // Vec(usize, u8) = the position of the snp and the alt allele for that snp.
+    // Vec<u8> is the sequence itself
+    // Vec(usize, u8, u8) is the position of the snp and the alt and ref alleles for that snp.
     //
     // Takes a vector of u8's and mutate a few positions at random. Returns the mutated sequence and
     // a list of tuples with the position and the alts of the SNPs.
@@ -104,42 +104,39 @@ fn mutate_sequence(
     // Randomly select num_positions from positions, weighted by gc bias and whatever. For now
     // all he weights are just equal.
     let weights = vec![1; mutated_record.len()];
-    // zip together weights and positions
-    let mut weighted_positions: Vec<(usize, i32)> = Vec::new();
     // find all non n positions.
     let non_n_positions: Vec<usize> = mutated_record
         .iter()
         .enumerate()
-        .filter(|&(_, y)| *y != 4u8)
+        .filter(|&(_, y)| *y != 4) // Filter out the N's
         .map(|(x, _)| x)
         .collect();
-    // izip!() accepts iterators and/or values with IntoIterator.
-    for (x, y) in izip!(&non_n_positions, &weights) {
-        weighted_positions.push((*x, *y))
-    }
+    // create the distribution
+    let dist = WeightedIndex::new(weights).unwrap();
     // now choose a random selection of num_positions without replacement
-    let mutated_elements: Vec<&(usize, i32)> = weighted_positions
-        .choose_multiple_weighted(&mut rng, num_positions, |x| x.1)
-        .unwrap()
-        .collect::<Vec<_>>();
+    let mut indexes_to_mutate: Vec<usize> = Vec::new();
+    for _ in 0..num_positions {
+        let pos = non_n_positions[dist.sample(&mut rng)];
+        indexes_to_mutate.push(pos);
+    }
     // Build the default mutation model
     // todo incorporate custom models
     let nucleotide_mutation_model = NucModel::new();
     // Will hold the variants added to this sequence
     let mut sequence_variants: Vec<(usize, u8, u8)> = Vec::new();
     // for each index, picks a new base
-    for (index, _weight) in mutated_elements {
-        // remeber the reference for later.
-        let reference_base = sequence[*index];
+    for index in indexes_to_mutate {
+        // remember the reference for later.
+        let reference_base = sequence[index];
         // pick a new base and assign the position to it.
-        mutated_record[*index] = nucleotide_mutation_model.choose_new_nuc(reference_base, &mut rng);
+        mutated_record[index] = nucleotide_mutation_model.choose_new_nuc(reference_base, &mut rng);
         // This check simply ensures that our model actually mutated the base.
-        if mutated_record[*index] == reference_base {
+        if mutated_record[index] == reference_base {
             error!("Need to check the code choosing nucleotides");
             panic!("BUG: Mutation model failed to mutate the base. This should not happen.")
         }
         // add the location and alt base for the variant
-        sequence_variants.push((*index, mutated_record[*index], reference_base))
+        sequence_variants.push((index, mutated_record[index], reference_base))
     }
     (mutated_record, sequence_variants)
 }
@@ -158,7 +155,6 @@ mod tests {
         let mutant = mutate_sequence(&seq1, num_positions, &mut rng);
         assert_eq!(mutant.0.len(), seq1.len());
         assert!(!mutant.1.is_empty());
-        // N's stay N's
         assert_eq!(mutant.0[0], 4);
         assert_eq!(mutant.0[1], 4);
     }

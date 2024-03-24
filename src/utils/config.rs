@@ -612,4 +612,24 @@ mod tests {
         let config = build_config_from_args(args);
         assert_eq!(env::current_dir().unwrap().as_path(), config.output_dir);
     }
+
+    #[test]
+    fn test_minimum_mutations_and_others() {
+        let args: Cli = Cli{
+            config: String::new(),
+            reference: String::from("data/H1N1.fa"),
+            output_dir: String::new(),
+            log_level: String::from("Trace"),
+            log_dest: String::new(),
+            output_file_prefix: String::from("test"),
+            minimum_mutations: Some(10),
+            read_length: 120,
+            coverage: 13,
+        };
+
+        let config = build_config_from_args(args);
+        assert_eq!(Some(10), config.minimum_mutations);
+        assert_eq!(120, config.read_len);
+        assert_eq!(13, config.coverage);
+    }
 }

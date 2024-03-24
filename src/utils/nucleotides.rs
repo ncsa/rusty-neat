@@ -8,8 +8,8 @@
 // of the character as built into Rust, but we'd then have to figure out the translations and keep
 // track of extra numbers. So this is intended to simplify everything
 
-use itertools::izip;
-use rand::seq::IndexedRandom;
+use rand::distributions::WeightedIndex;
+use rand::prelude::Distribution;
 use utils::neat_rng::NeatRng;
 
 pub fn base_to_u8(char_of_interest: char) -> u8 {
@@ -87,10 +87,6 @@ impl NucModel {
     }
 
     pub fn choose_new_nuc(&self, base: u8, mut rng: &mut NeatRng) -> u8 {
-        // We'll handle the trivial case first:
-        if base >= 4 {
-            return 4;
-        }
 
         // the canonical choices for DNA, as defined above
         let choices: [u8; 4] = [0, 1, 2, 3];
@@ -100,22 +96,12 @@ impl NucModel {
             1 => self.c.clone(),
             2 => self.g.clone(),
             3 => self.t.clone(),
-            // we filtered out everything 4 and over above
-            _ => { panic!("This line should be unreachable") },
+            // anything else we return the N value of 4
+            _ => { return 4; },
         };
-
-        let mut weighted_bases: Vec<(u8, usize)> = Vec::new();
-        // This for loop pairs the base with its weight.
-        for (x, y) in izip!(choices, weights) {
-            weighted_bases.push((x, y))
-        }
-
-        // return a new base, based on the selection. Note that the weight for the input base
-        // will be always be zero (by design), so there is no chance of returning the original.
-        weighted_bases
-            .choose_weighted(&mut rng, |x| x.1)
-            .unwrap()
-            .0
+        // Now we create a distribution from the weights and sample our choices.
+        let dist = WeightedIndex::new(weights).unwrap();
+        choices[dist.sample(&mut rng)]
     }
 }
 

@@ -4,15 +4,11 @@
 // read coverage. Generate reads uses this to create a list of coordinates to take slices from
 // the mutated fasta file. These will either be read-length fragments or fragment model length
 // fragments.
-
 use std::collections::{HashSet, VecDeque};
-
 use rand::RngCore;
 use rand::seq::SliceRandom;
 use rand_distr::{Normal, Distribution};
-
 use utils::neat_rng::NeatRng;
-
 fn cover_dataset(
     span_length: usize,
     read_length: usize,
@@ -35,7 +31,7 @@ fn cover_dataset(
     // one read length, then picks a random jump between 0 and half the read length to move
     // And picks those coordinates for a second read. Once the tail of the read is past the end,
     // we start over again at 0.
-
+    //
     // Reads that will be start and end of the fragment.
     let mut read_set: Vec<(usize, usize)> = vec![];
 
@@ -48,15 +44,13 @@ fn cover_dataset(
         fragment_pool.shuffle(&mut rng);
         cover_fragment_pool = VecDeque::from(fragment_pool)
     }
-
     // Gap size to keep track of how many uncovered bases we have per layer, to help decide if we
     // need more layers
     let mut gap_size: usize = 0;
     let mut layer_count: usize = 0;
-
     // start this party off at zero.
     let mut start: usize = 0;
-
+    // create coverage number of layers
     while layer_count <= coverage {
         let fragment_length = cover_fragment_pool[0];
         cover_fragment_pool.push_back(fragment_length);
@@ -77,7 +71,6 @@ fn cover_dataset(
             }
         }
         read_set.push((start, temp_end));
-
         // insert size is the number of bases between reads in the fragment for paired ended reads
         // if these are singled ended reads, then the insert size will always be -read_length
         if fragment_length > (read_length * 2) {
@@ -123,7 +116,6 @@ pub fn generate_reads(
     // This takes a mutated sequence and produces a set of reads based on the mutated sequence. For
     // paired ended reads, this will generate a set of reads from each end, by taking the reverse
     // complement int the output
-
     let mut fragment_pool: Vec<usize> = Vec::new();
     if paired_ended {
         let num_frags = (mutated_sequence.len() / read_length) * (coverage * 2);
@@ -134,7 +126,6 @@ pub fn generate_reads(
             fragment_pool.push(frag);
         }
     }
-
     // set up some defaults and storage
     let mut read_set: HashSet<Vec<u8>> = HashSet::new();
     // length of the mutated sequence
@@ -147,7 +138,6 @@ pub fn generate_reads(
         *coverage,
         &mut rng,
     );
-
     // Generate the reads from the read positions.
     for (start, end) in read_positions {
         read_set.insert(mutated_sequence[start..end].into());

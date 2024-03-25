@@ -2,13 +2,13 @@ use std::collections::HashSet;
 use log::info;
 use rand::prelude::SliceRandom;
 use utils::config::RunConfiguration;
-use rand::SeedableRng;
 use utils::fasta_tools::{read_fasta, write_fasta};
 use utils::fastq_tools::write_fastq;
 use utils::make_reads::generate_reads;
 use utils::mutate::mutate_fasta;
 use utils::neat_rng::NeatRng;
 use utils::vcf_tools::write_vcf;
+use utils::read_models::read_quality_score_model_json;
 
 pub fn run_neat(config: Box<RunConfiguration>, mut rng: &mut NeatRng) -> Result<(), &'static str>{
     // Create the prefix of the files to write
@@ -19,11 +19,18 @@ pub fn run_neat(config: Box<RunConfiguration>, mut rng: &mut NeatRng) -> Result<
     let (fasta_map, fasta_order) = read_fasta(&config.reference)
         .unwrap();
 
+    // Load models that will be used for the runs.
+    // For now we will use the one supplied, pulled directly from NEAT2.0's original model.
+    let default_quality_score_model_file = "models/neat_quality_score_model.json";
+    let quality_score_model = read_quality_score_model_json(
+        default_quality_score_model_file
+    );
+
     // Mutating the reference and recording the variant locations.
     info!("Mutating reference.");
     let (mutated_map, variant_locations) = mutate_fasta(
         &fasta_map,
-        config.minimum_mutations, // todo implement the minimum mutations
+        config.minimum_mutations,
         &mut rng
     );
 
@@ -78,6 +85,8 @@ pub fn run_neat(config: Box<RunConfiguration>, mut rng: &mut NeatRng) -> Result<
             config.overwrite_output,
             config.paired_ended,
             *outsets,
+            quality_score_model,
+            rng,
         ).unwrap();
         info!("Processing complete")
     }
@@ -88,6 +97,7 @@ pub fn run_neat(config: Box<RunConfiguration>, mut rng: &mut NeatRng) -> Result<
 mod tests {
     use std::fs;
     use std::path::PathBuf;
+    use rand_core::SeedableRng;
     use utils::config::ConfigBuilder;
     use super::*;
 

@@ -10,3 +10,5 @@ pub mod nucleotides;
 pub mod neat_rng;
 pub mod runner;
 pub mod quality_scores;
+pub mod read_old_data;
+pub mod read_models;

@@ -4,9 +4,6 @@
 // features, which are handled separately. Either way, these options are read into a configuration
 // struct that holds the variables for the run. Logging, meanwhile, is handled separately,
 // outside run configuration parsing.
-
-extern crate clap;
-
 use clap::Parser;
 use std::env;
 

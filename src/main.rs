@@ -7,6 +7,8 @@ extern crate rand_distr;
 extern crate itertools;
 extern crate rand_core;
 extern crate rand_chacha;
+extern crate serde_json;
+extern crate serde;
 
 mod utils;
 
@@ -29,7 +31,7 @@ fn main() {
     info!("Begin processing");
     // parse the arguments from the command line
     let args = cli::Cli::parse();
-
+    // log filter
     let level_filter = match args.log_level.to_lowercase().as_str() {
         "trace" => LevelFilter::Trace,
         "debug" => LevelFilter::Debug,
@@ -42,10 +44,9 @@ fn main() {
             Trace, Debug, Info, Warn, Error, or Off (case insensitive)."
         )
     };
-
     // Check that the parent dir exists
     let log_destination = check_parent(&args.log_dest).unwrap();
-
+    // Set up the logger for the run
     CombinedLogger::init(vec![
         #[cfg(feature = "termcolor")]
         TermLogger::new(
@@ -62,7 +63,6 @@ fn main() {
             File::create(log_destination).unwrap(),
         )
     ]).unwrap();
-
     // set up the config struct based on whether there was an input config. Input config
     // overrides any other inputs.
     let config = if args.config != "" {
@@ -73,7 +73,6 @@ fn main() {
         debug!("Command line args: {:?}", &args);
         build_config_from_args(args)
     };
-
     // Generate the RNG used for this run. If one was given in the config file, use that, or else
     // use thread_rng to generate a random seed, then seed using a SeedableRng based on StdRng
     let seed: u64;
@@ -86,7 +85,7 @@ fn main() {
     }
     info!("Generating random numbers using the seed: {}", seed);
     let mut rng: NeatRng = SeedableRng::seed_from_u64(seed);
-
+    // run the generate reads main script
     run_neat(config, &mut rng).unwrap_or_else(|error| {
         panic!("Neat encountered a problem: {:?}", error)
     })

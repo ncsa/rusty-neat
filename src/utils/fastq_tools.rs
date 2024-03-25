@@ -5,12 +5,12 @@ use std::{fs, io};
 
 use utils::fasta_tools::sequence_array_to_string;
 use utils::file_tools::open_file;
+use utils::neat_rng::NeatRng;
+use utils::quality_scores::QualityScoreModel;
 
 fn complement(nucleotide: u8) -> u8 {
-    /*
-    0 = A, 1 = C, 2 = G, 3 = T,
-    matches with the complement of each nucleotide.
-     */
+    // 0 = A, 1 = C, 2 = G, 3 = T,
+    // matches with the complement of each nucleotide.
     return match nucleotide {
         0 => 3,
         1 => 2,
@@ -21,9 +21,7 @@ fn complement(nucleotide: u8) -> u8 {
 }
 
 fn reverse_complement(sequence: &Vec<u8>) -> Vec<u8> {
-    /*
-    Returns the reverse complement of a vector of u8's representing a DNA sequence.
-     */
+    // Returns the reverse complement of a vector of u8's representing a DNA sequence.
     let length = sequence.len();
     let mut rev_comp = Vec::new();
     for i in (0..length).rev() {
@@ -37,18 +35,18 @@ pub fn write_fastq(
     overwrite_output: bool,
     paired_ended: bool,
     dataset: Vec<&Vec<u8>>,
+    quality_score_model: QualityScoreModel,
+    mut rng: &mut NeatRng,
 ) -> io::Result<()> {
-    /*
-    Takes:
-        fastq_filename: prefix for the output fastq files.
-        paired_ended: boolean to set paired ended mode on or off.
-        dataset: List of u8 vectors representing dna sequences.
-    returns:
-        Error if there is a problem or else nothing.
-
-    Writes fastq files. At the moment, it only writes out single r1 file, but will eventually write
-    out r1 and r2 files.
-     */
+    // Takes:
+    // fastq_filename: prefix for the output fastq files.
+    // paired_ended: boolean to set paired ended mode on or off.
+    // dataset: List of u8 vectors representing dna sequences.
+    // returns:
+    // Error if there is a problem or else nothing.
+    //
+    // Writes fastq files. At the moment, it only writes out single r1 file, but will eventually write
+    // out r1 and r2 files.
 
     // name_prefix is for the prefix for the read names. Reads are numbered in output order
     // (Although this feature is currently untested and unknown).
@@ -65,8 +63,14 @@ pub fn write_fastq(
         .expect(&format!("Error opening output {}", filename2));
     // write out sequence by sequence using index to track the numbering
     let mut index = 1;
+    // write sequences
     for sequence in dataset {
-        let sequence_len = sequence.len();
+        // This assumes that the sequence length is the correct length at this point.
+        let read_length = sequence.len();
+        // Need to convert the raw scores to a string
+        let quality_scores = quality_score_model.generate_quality_scores(
+            read_length, &mut rng
+        );
         // sequence name
         writeln!(&mut outfile1, "@{}/1", name_prefix.clone() + &index.to_string())?;
         // Array as a string
@@ -74,9 +78,13 @@ pub fn write_fastq(
         // The stupid plus sign
         writeln!(&mut outfile1, "+")?;
         // Qual score of all F's for the whole thing.
-        writeln!(&mut outfile1, "{}", std::iter::repeat("F").take(sequence_len).collect::<String>())?;
+        writeln!(&mut outfile1, "{}", quality_scores_to_str(quality_scores))?;
         index += 1;
         if paired_ended {
+            // Need a quality score for this read as well
+            let quality_scores = quality_score_model.generate_quality_scores(
+                read_length, &mut rng
+            );
             // sequence name
             writeln!(&mut outfile2, "@{}/2", name_prefix.clone() + &index.to_string())?;
             // Array as a string
@@ -84,7 +92,7 @@ pub fn write_fastq(
             // The stupid plus sign
             writeln!(&mut outfile2, "+")?;
             // Qual score of all F's for the whole thing.
-            writeln!(&mut outfile2, "{}", std::iter::repeat("F").take(sequence_len).collect::<String>())?;
+            writeln!(&mut outfile2, "{}", quality_scores_to_str(quality_scores))?;
         }
     };
     if !paired_ended {
@@ -93,10 +101,19 @@ pub fn write_fastq(
     Ok(())
 }
 
+fn quality_scores_to_str(array: Vec<usize>) -> String {
+    let mut score_text = String::new();
+    for score in array {
+        score_text += &(((score + 33) as u8) as char).to_string();
+    }
+    score_text
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::Path;
+    use rand_core::SeedableRng;
 
     #[test]
     fn test_complement() {
@@ -127,12 +144,16 @@ mod tests {
         let paired_ended = false;
         let seq1 = vec![0, 0, 0, 0, 1, 1, 1, 1];
         let seq2 = vec![2, 2, 2, 2, 3, 3, 3, 3,];
+        let mut rng = NeatRng::seed_from_u64(0);
         let dataset = vec![&seq1, &seq2];
+        let quality_score_model = QualityScoreModel::new();
         write_fastq(
             fastq_filename,
             overwrite_output,
             paired_ended,
-            dataset
+            dataset,
+            quality_score_model,
+            &mut rng,
         ).unwrap();
         let outfile1 = Path::new("test_single_r1.fastq");
         let outfile2 = Path::new("test_single_r2.fastq");
@@ -149,12 +170,16 @@ mod tests {
         let paired_ended = true;
         let seq1 = vec![0, 0, 0, 0, 1, 1, 1, 1];
         let seq2 = vec![2, 2, 2, 2, 3, 3, 3, 3,];
+        let mut rng = NeatRng::seed_from_u64(0);
         let dataset = vec![&seq1, &seq2];
+        let quality_score_model = QualityScoreModel::new();
         write_fastq(
             fastq_filename,
             overwrite_output,
             paired_ended,
-            dataset
+            dataset,
+            quality_score_model,
+            &mut rng,
         ).unwrap();
         let outfile1 = Path::new("test_paired_r1.fastq");
         let outfile2 = Path::new("test_paired_r2.fastq");

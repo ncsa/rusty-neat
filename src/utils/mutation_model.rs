@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 use rand::distributions::{Distribution, WeightedIndex};
 use utils::neat_rng::NeatRng;
+use utils::nucleotides::Nuc;
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub enum Variant {
     Indel,
     SNP,
 }
-#[derive(Debug)]
 pub struct MutationModel {
     // This is the model for mutations, the same construct used by the python version, basically.
     //
@@ -18,9 +18,9 @@ pub struct MutationModel {
     // was inherited from both parents (in the case of humans). The definition of "homozygous"
     // is ambiguous in polyploid organisms. We'll take it to mean "on all ploids"
     homozygous_frequency: f64,
-    // The probability given that a variant has occurred at a location that it is one of the types
-    // of possible variants occurring.
-    variant_probs: HashMap<Variant, f64>,
+    // If a variant occurs, this is the probability that it will be a SNP, the most common type
+    // of variant. There are only 2 types at the moment, but this will get expanded out in time.
+    variant_probs: HashMap<Variant, usize>,
     // The 4 x 4 matrix that shows the probability of one nucleotide transitioning to another.
     transition_matrix: TransitionMatrix,
     // the model governing the single nucleotide polymorphisms for this run.
@@ -29,27 +29,61 @@ pub struct MutationModel {
     indel_model: IndelModel,
 }
 impl MutationModel {
-    pub fn mutate(&self, base: u8, mut rng: &mut NeatRng) -> u8 {
+    pub fn new() -> Self {
+        // Creating the default model based on the default for the original NEAT.
+        let mutation_rate = 0.001;
+        let homozygous_frequency = 0.01;
+        // Originally this was expressed as indel_fraction 0.05. To make it easier to sample, we
+        // will use weights. This would have been 0.95 and 0.05, so we divided both by 0.05 to get
+        // 19 and 1 as our weights.
+        let variant_probs = HashMap::from([
+            (Variant::SNP, 19),
+            (Variant::Indel, 1),
+        ]);
+        // use the default transition matrix, snp model and indel model
+        let transition_matrix = TransitionMatrix::new();
+        let snp_model = SnpModel::new();
+        let indel_model = IndelModel::new();
+
+        MutationModel {
+            mutation_rate,
+            homozygous_frequency,
+            variant_probs,
+            transition_matrix,
+            snp_model,
+            indel_model,
+        }
+    }
+    // We may need several ways to create the mutation model. Here is one for testing.
+    pub fn from_transition_matrix(transition_matrix: TransitionMatrix) -> Self {
+        let mut model = MutationModel::new();
+        model.transition_matrix = transition_matrix;
+        model
+    }
+    pub fn mutate(&self, base: Nuc, mut rng: &mut NeatRng) -> Nuc {
         // This is a basic mutation function for starting us off
-        //
-        // the canonical choices for DNA, as defined in the Nucleotides module
-        let choices: [u8; 4] = [0, 1, 2, 3];
         // Pick the weights list for the base that was input
         let weights: &Vec<usize> = match base {
-            0 => &self.transition_matrix.a_weights,
-            1 => &self.transition_matrix.c_weights,
-            2 => &self.transition_matrix.g_weights,
-            3 => &self.transition_matrix.t_weights,
-            // anything else we skip the hard part and return the N value of 4
-            _ => { return 4; },
+            Nuc::A => &self.transition_matrix.a_weights,
+            Nuc::C => &self.transition_matrix.c_weights,
+            Nuc::G => &self.transition_matrix.g_weights,
+            Nuc::T => &self.transition_matrix.t_weights,
+            // return the N value for N with no further computation.
+            Nuc::N => { return Nuc::N; },
         };
         // Now we create a distribution from the weights and sample our choices.
         let dist = WeightedIndex::new(weights).unwrap();
-        choices[dist.sample(&mut rng)]
+        match dist.sample(&mut rng) {
+            0 => Nuc::A,
+            1 => Nuc::C,
+            2 => Nuc::G,
+            3 => Nuc::T,
+            _ => Nuc::N
+        }
     }
 }
 #[derive(Debug)]
-struct TransitionMatrix {
+pub struct TransitionMatrix {
     // Nucleotide transition matrix. Rows represent the base we are mutating and the weights are
     // in the standard nucleotide order (in the same a, c, g, t order)
     //
@@ -98,6 +132,10 @@ impl TransitionMatrix {
 }
 #[derive(Debug)]
 struct SnpModel {
+    // These are the 16 possible patterns for trinucleotides, each representing 4 trinucleotides for
+    // a total of 64 trinucleotide combinations. The usize is the weight of that particular group
+    // and the transition matrix is the chance of mutating the middle base from A, C, T, or G to a
+    // different base (4x4 matrix with 0s on the diagonal).
     a_a: (usize, TransitionMatrix),
     a_c: (usize, TransitionMatrix),
     a_g: (usize, TransitionMatrix),
@@ -119,15 +157,8 @@ struct SnpModel {
 impl SnpModel {
     pub fn new() -> Self {
         // Creating the default trinuc bias model for snps. In this model, all trinucleotides
-        // mutate with equal probability and mutate with the same probability (the default
-        // tranisition matrix).
-        let mut trinuc_transition_matrices = Vec::new();
-        let mut trinuc_mutation_weights = Vec::new();
-        for _ in 0..16 {
-            trinuc_transition_matrices.push(TransitionMatrix::new());
-            trinuc_mutation_weights.push(1);
-        }
-
+        // mutate with equal probability and middle base mutates with the same probability no matter
+        // the context (the default transition matrix).
         SnpModel {
             a_a: (1, TransitionMatrix::new()),
             a_c: (1, TransitionMatrix::new()),
@@ -180,8 +211,9 @@ impl IndelModel {
 #[cfg(test)]
 mod tests {
     use rand_core::SeedableRng;
-    use utils::mutation_model::TransitionMatrix;
+    use utils::mutation_model::{MutationModel, TransitionMatrix};
     use utils::neat_rng::NeatRng;
+    use utils::nucleotides::Nuc::*;
     #[test]
     fn test_transition_matrix_build() {
         let a_weights = vec![0, 20, 1, 20];
@@ -196,9 +228,6 @@ mod tests {
             t_weights: t_weights.clone(),
         };
 
-        let str = format!("{:?}", model);
-        let str_repr = String::from("NucModel { a: [0, 20, 1, 20], c: [20, 0, 1, 1], g: [1, 1, 0, 20], t: [20, 1, 20, 0] }");
-        assert_eq!(str, str_repr);
         assert_eq!(model.a_weights, a_weights);
     }
 
@@ -209,16 +238,17 @@ mod tests {
         let g_weights = vec![1, 1, 0, 20];
         let t_weights = vec![20, 1, 20, 0];
         let mut rng = NeatRng::seed_from_u64(0);
-        let test_model = TransitionMatrix::from(
+        let matrix = TransitionMatrix::from(
             vec![a_weights, c_weights, g_weights, t_weights]
         );
+        let test_model = MutationModel::from_transition_matrix(matrix);
         // It actually mutates the base
-        assert_ne!(test_model.choose_new_nuc(0, &mut rng), 0);
-        assert_ne!(test_model.choose_new_nuc(1, &mut rng), 1);
-        assert_ne!(test_model.choose_new_nuc(2, &mut rng), 2);
-        assert_ne!(test_model.choose_new_nuc(3, &mut rng), 3);
+        assert_ne!(test_model.mutate(A, &mut rng), A);
+        assert_ne!(test_model.mutate(C, &mut rng), C);
+        assert_ne!(test_model.mutate(G, &mut rng), G);
+        assert_ne!(test_model.mutate(T, &mut rng), T);
         // It gives back N when you give it N
-        assert_eq!(test_model.choose_new_nuc(4, &mut rng), 4);
+        assert_eq!(test_model.mutate(N, &mut rng), N);
     }
     #[test]
     #[should_panic]

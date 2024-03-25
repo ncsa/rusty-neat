@@ -100,10 +100,11 @@ fn mutate_sequence(
     // Takes a vector of u8's and mutate a few positions at random. Returns the mutated sequence and
     // a list of tuples with the position and the alts of the SNPs.
     debug!("Adding {} mutations", num_positions);
+    // todo: this line right here is going to be a problem with long chromosomes.
+    //     Thoughts on this: if we have the reference and a complete list of changes, we should be
+    //     to completely reproduce the mutated sequence. What I'm thinking is that we don't have
+    //     to actually change the sequence at all, only note where it differs.
     let mut mutated_record = sequence.clone();
-    // Randomly select num_positions from positions, weighted by gc bias and whatever. For now
-    // all he weights are just equal.
-    let weights = vec![1; mutated_record.len()];
     // find all non n positions.
     let non_n_positions: Vec<usize> = mutated_record
         .iter()
@@ -111,6 +112,12 @@ fn mutate_sequence(
         .filter(|&(_, y)| *y != 4) // Filter out the N's
         .map(|(x, _)| x)
         .collect();
+    if non_n_positions.is_empty() {
+        panic!("No non-N bases to mutate!")
+    }
+    // Randomly select num_positions from positions, weighted by gc bias and whatever. For now
+    // all he weights are just equal.
+    let weights = vec![1; non_n_positions.len()];
     // create the distribution
     let dist = WeightedIndex::new(weights).unwrap();
     // now choose a random selection of num_positions without replacement

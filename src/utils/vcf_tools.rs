@@ -5,7 +5,7 @@ use std::io;
 use std::io::Write;
 use rand::Rng;
 use rand::seq::IndexedRandom;
-use utils::nucleotides::u8_to_base;
+use utils::nucleotides::Nuc;
 use utils::file_tools::open_file;
 use utils::neat_rng::NeatRng;
 
@@ -22,7 +22,7 @@ fn genotype_to_string(genotype: Vec<usize>) -> String {
 }
 
 pub fn write_vcf(
-    variant_locations: &HashMap<String, Vec<(usize, u8, u8)>>,
+    variant_locations: &HashMap<String, Vec<(usize, Nuc, Nuc)>>,
     fasta_order: &Vec<String>,
     ploidy: usize,
     reference_path: &str,
@@ -30,18 +30,17 @@ pub fn write_vcf(
     output_file_prefix: &str,
     mut rng: &mut NeatRng,
 ) -> io::Result<()> {
-    /*
-    Takes:
-        variant_locations: A map of contig names keyed to lists of variants in that contig
-            consisting of a tuple of (position, alt base, ref base).
-        fasta_order: A vector of contig names in the order of the reference fasta.
-        ploidy: The number of copies of each chromosome present in the organism
-        reference_path: The location of the reference file this vcf is showing variants from.
-        output_file_prefix: The path to the directory and the prefix to use for filenames
-        rng: A random number generator for this run
-    Result:
-        Throws and error if there's a problem, or else returns nothing.
-     */
+    // Takes:
+    // variant_locations: A map of contig names keyed to lists of variants in that contig
+    // consisting of a tuple of (position, alt base, ref base).
+    // fasta_order: A vector of contig names in the order of the reference fasta.
+    // ploidy: The number of copies of each chromosome present in the organism
+    // reference_path: The location of the reference file this vcf is showing variants from.
+    // output_file_prefix: The path to the directory and the prefix to use for filenames
+    // rng: A random number generator for this run
+    // Result:
+    // Throws and error if there's a problem, or else returns nothing.
+    //
     // ploid numbers are used to pick a number of ploids to mutate
     let ploid_numbers: Vec<usize> = (1..ploidy+1).collect();
     // set the filename of the output vcf
@@ -91,8 +90,8 @@ pub fn write_vcf(
             let line = format!("{}\t{}\t.\t{}\t{}\t37\tPASS\t.\tGT\t{}",
                                contig,
                                mutation.0 + 1,
-                               u8_to_base(mutation.2),
-                               u8_to_base(mutation.1),
+                               mutation.2.nuc_to_char(),
+                               mutation.1.nuc_to_char(),
                                genotype_to_string(genotype),
                 );
 
@@ -109,6 +108,7 @@ mod tests {
     use super::*;
     use std::path::Path;
     use utils::neat_rng::NeatRng;
+    use utils::nucleotides::Nuc::*;
 
     #[test]
     fn test_genotype_to_string() {
@@ -119,7 +119,7 @@ mod tests {
     #[test]
     fn test_write_vcf() {
         let variant_locations = HashMap::from([
-            ("chr1".to_string(), vec![(3, 0, 1), (7, 1, 2)])
+            ("chr1".to_string(), vec![(3, A, C), (7, C, G)])
         ]);
         let fasta_order = vec!["chr1".to_string()];
         let ploidy = 2;

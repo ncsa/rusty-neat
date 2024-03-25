@@ -24,16 +24,17 @@ pub fn check_parent(filename: &str) -> io::Result<&Path> {
     // checks that the parent dir exists and then if so creates the Path object open
     // and ready to write
     let file_path = Path::new(filename);
-    if !file_path.parent().unwrap().exists() {
-        check_create_dir(file_path);
+    let parent = file_path.parent().unwrap();
+    if !parent.exists() {
+        check_create_dir(parent);
     };
     Ok(file_path)
 }
 
-pub fn check_create_dir(path_to_check: &Path) {
-    if !path_to_check.is_dir() {
-        warn!("Directory not found, creating: {:?}", path_to_check);
-        fs::create_dir(path_to_check).expect(
+pub fn check_create_dir(dir_to_check: &Path) {
+    if !dir_to_check.is_dir() {
+        warn!("Directory not found, creating: {:?}", dir_to_check);
+        fs::create_dir(dir_to_check).expect(
             "Error creating the directory"
         );
     }

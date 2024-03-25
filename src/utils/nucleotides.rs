@@ -7,7 +7,6 @@
 // This is intended to make it easier to store them. We thought about using the u8 representation
 // of the character as built into Rust, but we'd then have to figure out the translations and keep
 // track of extra numbers. So this is intended to simplify everything
-
 use rand::distributions::WeightedIndex;
 use rand::prelude::Distribution;
 use utils::neat_rng::NeatRng;
@@ -53,7 +52,6 @@ pub struct NucModel {
 }
 
 impl NucModel {
-
     pub fn new() -> Self {
         // Default mutation model based on the original from NEAT 2.0
         Self {
@@ -63,6 +61,9 @@ impl NucModel {
             t: vec![14, 69, 16, 0],
         }
     }
+
+    #[allow(dead_code)]
+    // todo, once we have numbers we can implement this.
     pub fn from(weights: Vec<Vec<usize>>) -> Self {
         // Supply a vector of 4 vectors that define the mutation chance
         // from the given base to the other 4 bases.
@@ -77,7 +78,6 @@ impl NucModel {
                 panic!("Weights supplied to NucModel is wrong size");
             }
         }
-
         Self {
             a: weights[0].clone(),
             c: weights[1].clone(),

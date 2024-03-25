@@ -2,7 +2,7 @@
 //   * For position 1, there is a vector of weights for each score, extracted from data.
 //   * For each position in the read length after that
 //         * For each possible quality score, a distribution is constructed with weights and
-//            scores, as determined by the vector of vector of weights
+//            scores, as determined by a matrix of weights
 //   * For read length N and # possible quality scores Q, this creates a vector with length N
 //         * first element is a 1-D vector of weights with length Q
 //         * each subsequent element is a vector of length Q,
@@ -20,19 +20,15 @@
 //     translate to Rust. May need a custom data structure. Like seed + subsequent.
 //   * Assumes a fixed read length, meaning you have to extrapolate for longer read lengths.
 //   * In Python, at least, this was slow, although in retrospect it didn't eat up much memory.
-
 use std::fmt::{Display, Formatter};
-use rand_core::SeedableRng;
 use utils::neat_rng::NeatRng;
 use rand::distributions::WeightedIndex;
 use rand::prelude::Distribution;
-
-pub trait RunReadLength {
-
-}
+use serde::{Deserialize, Serialize};
+use utils::file_tools::open_file;
 
 #[allow(dead_code)]
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct QualityScoreModel {
     // This is the vector of the quality scores possible in this dataset. This could be a list
     // of numbers from 1-42, for example, or bins of scores, [2, 13, 27, 33] or whatever the
@@ -43,14 +39,14 @@ pub struct QualityScoreModel {
     // The assumed read length of this dataset. The model will assume this read length and adjust
     // on a per-run basis in a deterministic way (doubling positional weight arrays)
     pub(crate) assumed_read_length: usize,
-    // Seed weights are where we will start the simulation. The first quality score will use this
-    // weighting to select the score.
+    // Weights for the first position in the read length.
     pub(crate) seed_weights: Vec<usize>,
-    // starting at score with read position 1 (first index: 0), these are the weights, by previous
-    // score, for the next score. For example if position 0 (seed) was 7, `score_1_weights[1][7]`
-    // gives the weights of possible scores to sample for position 1 (score_1_weights[0] will be
-    // empty by convention, to make indexing less confusing)
-    pub(crate) score_weights: Vec<Vec<Vec<usize>>>,
+    // A matrix for each subsequent position along the read length after the first. Each row is a
+    // weight vector based on the previous score. For example, for possible scores 0-41, inclusive,
+    // there would be 42 vectors (one for each possible previous score), each giving the weights for
+    // the current position (one weight for each of 42 scores), for a 42 x 42 vector at each
+    // position along the read length.
+    pub(crate) weights_from_one: Vec<Vec<Vec<usize>>>,
 }
 
 impl Display for QualityScoreModel {
@@ -69,13 +65,13 @@ impl Display for QualityScoreModel {
 }
 
 impl QualityScoreModel {
-
+    // methods for QualityScoreModel objects
     pub fn new() -> Self {
-        // We'll construct a base model that just favors higher scores for now. We'll work on
+        // We'll construct a base toy model that just favors higher scores for now. We'll work on
         // parsing out this from real data then we can fill this out better.
         let default_quality_scores = vec![2, 11, 25, 37];
         let default_seed_weight: Vec<usize> = vec![1, 3, 5, 1];
-        let default_base_weights: Vec<usize> = vec![1, 1, 2, 3];
+        let default_base_weights: Vec<usize> = vec![1, 1, 2, 5];
         let default_read_length = 150;
         let mut default_score_weights = Vec::with_capacity(default_read_length);
         let mut single_position = Vec::new();
@@ -99,7 +95,7 @@ impl QualityScoreModel {
             binned_scores: true,
             assumed_read_length: default_read_length,
             seed_weights: default_seed_weight,
-            score_weights: default_score_weights,
+            weights_from_one: default_score_weights,
         }
     }
     pub fn display(&self) -> String {
@@ -113,10 +109,9 @@ impl QualityScoreModel {
             self.quality_score_options,
             self.binned_scores,
             self.seed_weights,
-            self.score_weights[1][0],
+            self.weights_from_one[1][0],
         )
     }
-
     pub fn display_it_all(&self) -> String {
         format!(
             "QualityScoreModel: (rl: {})\n\
@@ -128,7 +123,7 @@ impl QualityScoreModel {
             self.quality_score_options,
             self.binned_scores,
             self.seed_weights,
-            self.score_weights,
+            self.weights_from_one,
         )
     }
     pub fn generate_quality_scores(&self, run_read_length: usize, mut rng: &mut NeatRng) -> Vec<usize> {
@@ -166,7 +161,7 @@ impl QualityScoreModel {
             ).unwrap();
             // Now we have an index (in the default case 0..<4) of a vector for the position, based
             // on the previous score.
-            let weights: &Vec<usize> = self.score_weights.get(i)
+            let weights: &Vec<usize> = self.weights_from_one.get(i)
                 .expect("Error with quality score remap index.")
                 .get(score_position)
                 .expect("Error finding weights vector");
@@ -178,7 +173,6 @@ impl QualityScoreModel {
         }
         score_list
     }
-
     fn quality_index_remap(&self, run_read_length: usize) -> Vec<usize> {
         // Basically, this function does integer division (truncation) to fill positions
         // in a vector the length of the desired read length.
@@ -215,10 +209,18 @@ impl QualityScoreModel {
             indexes
         }
     }
+    pub fn write_out_quality_model(&self, filename: &mut str) -> serde_json::Result<()> {
+        // Uses the serde_json crate to write out the json form of the model. This will help us
+        // create base datasets from old neat data, and give us a way to write out models that are
+        // generated from user data.
+        let fileout = open_file(filename, false).unwrap();
+        serde_json::to_writer(fileout, self)
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use rand_core::SeedableRng;
     use super::*;
 
     #[test]
@@ -228,7 +230,7 @@ mod tests {
             binned_scores: true,
             assumed_read_length: 10,
             seed_weights: vec![1, 3, 1],
-            score_weights:
+            weights_from_one:
             vec![
                 // We'll always just set the first vector to 0. For now, hardcoded in
                 vec![

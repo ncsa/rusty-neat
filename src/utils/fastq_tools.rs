@@ -35,6 +35,7 @@ pub fn write_fastq(
     overwrite_output: bool,
     paired_ended: bool,
     dataset: Vec<&Vec<u8>>,
+    quality_score_model: QualityScoreModel,
     mut rng: &mut NeatRng,
 ) -> io::Result<()> {
     // Takes:
@@ -62,8 +63,6 @@ pub fn write_fastq(
         .expect(&format!("Error opening output {}", filename2));
     // write out sequence by sequence using index to track the numbering
     let mut index = 1;
-    // set up the quality score creator
-    let quality_score_model = QualityScoreModel::new();
     // write sequences
     for sequence in dataset {
         // This assumes that the sequence length is the correct length at this point.
@@ -147,11 +146,13 @@ mod tests {
         let seq2 = vec![2, 2, 2, 2, 3, 3, 3, 3,];
         let mut rng = NeatRng::seed_from_u64(0);
         let dataset = vec![&seq1, &seq2];
+        let quality_score_model = QualityScoreModel::new();
         write_fastq(
             fastq_filename,
             overwrite_output,
             paired_ended,
             dataset,
+            quality_score_model,
             &mut rng,
         ).unwrap();
         let outfile1 = Path::new("test_single_r1.fastq");
@@ -171,11 +172,13 @@ mod tests {
         let seq2 = vec![2, 2, 2, 2, 3, 3, 3, 3,];
         let mut rng = NeatRng::seed_from_u64(0);
         let dataset = vec![&seq1, &seq2];
+        let quality_score_model = QualityScoreModel::new();
         write_fastq(
             fastq_filename,
             overwrite_output,
             paired_ended,
             dataset,
+            quality_score_model,
             &mut rng,
         ).unwrap();
         let outfile1 = Path::new("test_paired_r1.fastq");

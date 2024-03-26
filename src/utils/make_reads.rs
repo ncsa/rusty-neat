@@ -5,6 +5,7 @@
 // the mutated fasta file. These will either be read-length fragments or fragment model length
 // fragments.
 use std::collections::{HashSet, VecDeque};
+use log::{debug, info};
 use rand::RngCore;
 use rand::seq::SliceRandom;
 use rand_distr::{Normal, Distribution};
@@ -52,19 +53,18 @@ fn cover_dataset(
     let mut start: usize = 0;
     // create coverage number of layers
     while layer_count <= coverage {
-        let fragment_length = cover_fragment_pool[0];
-        cover_fragment_pool.push_back(fragment_length);
+        let fragment_length = *cover_fragment_pool.front().unwrap();
         let temp_end = start+fragment_length;
+        cover_fragment_pool.push_back(*fragment_length.clone());
         if temp_end > span_length {
             // TODO some variation on this modulo idea will work for bacterial reads
             start = temp_end % span_length;
             gap_size += start;
-            //
             if gap_size >= span_length {
                 // if we have accumulated enough gap, then we need to run the same layer again.
                 // We'll reset gap size but not increment layer_count.
                 gap_size = gap_size % span_length;
-                continue;
+                continue
             } else {
                 layer_count += 1;
                 continue
@@ -79,7 +79,7 @@ fn cover_dataset(
             gap_size += fragment_length - (read_length * 2)
         };
         // Picks a number between zero and a quarter of a read length
-        let wildcard: usize = (rng.next_u32() % (read_length/4) as u32) as usize;
+        let wildcard: usize = (rng.next_u32() % 10) as usize;
         // adds to the start to give it some spice
         start += temp_end + wildcard;
         // sanity check. If we are already out of bounds, take the modulo
@@ -131,6 +131,7 @@ pub fn generate_reads(
     // length of the mutated sequence
     let seq_len = mutated_sequence.len();
     // Generate a vector of read positions
+    info!("Generating read coordinates.");
     let read_positions: Vec<(usize, usize)> = cover_dataset(
         seq_len,
         *read_length,
@@ -142,6 +143,7 @@ pub fn generate_reads(
     for (start, end) in read_positions {
         read_set.insert(mutated_sequence[start..end].into());
     }
+    info!("Outputting read set");
     // puts the reads in the heap.
     if read_set.is_empty() {
         Err("No reads generated")

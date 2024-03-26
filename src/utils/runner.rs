@@ -59,6 +59,7 @@ pub fn run_neat(config: Box<RunConfiguration>, mut rng: &mut NeatRng) -> Result<
     }
 
     let mut read_sets: HashSet<Vec<Nuc>> = HashSet::new();
+    info!("Generating reads");
     for (_name, sequence) in mutated_map.iter() {
         // defined as a set of read sequences that should cover
         // the mutated sequence `coverage` number of times

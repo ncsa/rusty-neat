@@ -79,8 +79,8 @@ pub fn mutate_fasta(
         // Add to the return struct and variants map.
         return_struct.entry(name.clone()).or_insert(mutated_record.clone());
         all_variants.entry(name.clone()).or_insert(contig_mutations);
+        debug!("Finished mutating {}", name);
     }
-
     (Box::new(return_struct), Box::new(all_variants))
 }
 
@@ -101,6 +101,10 @@ fn mutate_sequence(
     // Takes a vector of u8's and mutate a few positions at random. Returns the mutated sequence and
     // a list of tuples with the position and the alts of the SNPs.
     debug!("Adding {} mutations", num_positions);
+    // todo: this line right here is going to be a problem with long chromosomes.
+    //     Thoughts on this: if we have the reference and a complete list of changes, we should be
+    //     to completely reproduce the mutated sequence. What I'm thinking is that we don't have
+    //     to actually change the sequence at all, only note where it differs.
     let mut mutated_record = sequence.clone();
     // find all non n positions.
     let non_n_positions: Vec<usize> = mutated_record
@@ -109,6 +113,9 @@ fn mutate_sequence(
         .filter(|&(_, y)| *y != Nuc::N) // Filter out the N's
         .map(|(x, _)| x)
         .collect();
+    if non_n_positions.is_empty() {
+        panic!("No non-N bases to mutate!")
+    }
     // Randomly select num_positions from the non-N positions, weighted by gc and trinuc bias
     // (eventually). For now all he weights are just equal.
     let weights = vec![1; non_n_positions.len()];

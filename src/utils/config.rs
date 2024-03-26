@@ -152,12 +152,13 @@ impl ConfigBuilder {
             if self.produce_fastq {
                 info!("\t> fragment mean: {}", self.fragment_mean.unwrap());
                 info!("\t> fragment standard deviation: {}", self.fragment_st_dev.unwrap());
-                info!("Producing fastq files:\n\t> {}_r1.fastq\n\t {}_r2.fastq",
-                    file_prefix, file_prefix
-                )
-            } else {
-                info!("Producing fastq file:\n\t> {}_r1.fastq", file_prefix)
+                info!("Producing fastq files:");
+                info!("\t> {}_r1.fastq", file_prefix);
+                info!("\t> {}_r2.fastq", file_prefix);
             }
+        } else {
+            info!("Producing fastq file:");
+            info!("\t> {}_r1.fastq", file_prefix);
         }
         if self.produce_fasta {
             info!("Producing fasta file: {}.fasta", file_prefix);

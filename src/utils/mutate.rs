@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use rand::prelude::*;
 use rand::Rng;
-use log::{debug, error};
+use log::debug;
 use rand::distributions::WeightedIndex;
 use utils::nucleotides::NucModel;
 use utils::neat_rng::NeatRng;
@@ -78,8 +78,8 @@ pub fn mutate_fasta(
         // Add to the return struct and variants map.
         return_struct.entry(name.clone()).or_insert(mutated_record.clone());
         all_variants.entry(name.clone()).or_insert(contig_mutations);
+        debug!("Finished mutating {}", name);
     }
-
     (Box::new(return_struct), Box::new(all_variants))
 }
 
@@ -138,10 +138,7 @@ fn mutate_sequence(
         // pick a new base and assign the position to it.
         mutated_record[index] = nucleotide_mutation_model.choose_new_nuc(reference_base, &mut rng);
         // This check simply ensures that our model actually mutated the base.
-        if mutated_record[index] == reference_base {
-            error!("Need to check the code choosing nucleotides");
-            panic!("BUG: Mutation model failed to mutate the base. This should not happen.")
-        }
+        debug_assert_ne!(mutated_record[index], reference_base);
         // add the location and alt base for the variant
         sequence_variants.push((index, mutated_record[index], reference_base))
     }

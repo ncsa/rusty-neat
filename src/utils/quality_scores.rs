@@ -27,7 +27,6 @@ use rand::prelude::Distribution;
 use serde::{Deserialize, Serialize};
 use utils::file_tools::open_file;
 
-#[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct QualityScoreModel {
     // This is the vector of the quality scores possible in this dataset. This could be a list
@@ -66,6 +65,7 @@ impl Display for QualityScoreModel {
 
 impl QualityScoreModel {
     // methods for QualityScoreModel objects
+    #[allow(dead_code)]
     pub fn new() -> Self {
         // We'll construct a base toy model that just favors higher scores for now. We'll work on
         // parsing out this from real data then we can fill this out better.
@@ -98,6 +98,7 @@ impl QualityScoreModel {
             weights_from_one: default_score_weights,
         }
     }
+    #[allow(dead_code)]
     pub fn display(&self) -> String {
         format!(
             "QualityScoreModel: (rl: {})\n\
@@ -112,6 +113,7 @@ impl QualityScoreModel {
             self.weights_from_one[1][0],
         )
     }
+    #[allow(dead_code)]
     pub fn display_it_all(&self) -> String {
         format!(
             "QualityScoreModel: (rl: {})\n\
@@ -209,6 +211,7 @@ impl QualityScoreModel {
             indexes
         }
     }
+    #[allow(dead_code)]
     pub fn write_out_quality_model(&self, filename: &mut str) -> serde_json::Result<()> {
         // Uses the serde_json crate to write out the json form of the model. This will help us
         // create base datasets from old neat data, and give us a way to write out models that are

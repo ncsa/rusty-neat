@@ -7,29 +7,29 @@ use std::*;
 use HashMap;
 use utils::file_tools::read_lines;
 use utils::file_tools::open_file;
-use utils::nucleotides::{u8_to_base, base_to_u8};
+use utils::nucleotides::Nuc;
 
-pub fn sequence_array_to_string(input_array: &Vec<u8>) -> String {
+pub fn sequence_array_to_string(input_array: &Vec<Nuc>) -> String {
     // Converts a sequence vector into a string representing the DNA sequence
     let mut return_string = String::new();
-    for num in input_array {
-        return_string += &(u8_to_base(*num).to_string());
+    for nuc in input_array {
+        return_string += &nuc.nuc_to_char().to_string();
     }
     return_string
 }
 
 pub fn read_fasta(
     fasta_path: &str
-) -> Result<(Box<HashMap<String, Vec<u8>>>, Vec<String>), io::Error> {
+) -> Result<(Box<HashMap<String, Vec<Nuc>>>, Vec<String>), io::Error> {
     // Reads a fasta file and turns it into a HashMap and puts it in the heap
     info!("Reading fasta: {}", fasta_path);
 
-    let mut fasta_map: HashMap<String, Vec<u8>> = HashMap::new();
+    let mut fasta_map: HashMap<String, Vec<Nuc>> = HashMap::new();
     let mut fasta_order: Vec<String> = Vec::new();
     let mut current_key = String::new();
 
     let lines = read_lines(fasta_path).unwrap();
-    let mut temp_seq: Vec<u8> = vec![];
+    let mut temp_seq: Vec<Nuc> = vec![];
     lines.for_each(|line| match line {
         Ok(l) => {
             if l.starts_with('>') {
@@ -41,7 +41,7 @@ pub fn read_fasta(
                 temp_seq = vec![];
             } else {
                 for char in l.chars() {
-                    temp_seq.push(base_to_u8(char));
+                    temp_seq.push(Nuc::base_to_nuc(char));
                 }
             }
         },
@@ -53,7 +53,7 @@ pub fn read_fasta(
 }
 
 pub fn write_fasta(
-    fasta_output: &Box<HashMap<String, Vec<u8>>>,
+    fasta_output: &Box<HashMap<String, Vec<Nuc>>>,
     fasta_order: &Vec<String>,
     overwrite_output: bool,
     output_file: &str,
@@ -77,7 +77,7 @@ pub fn write_fasta(
         writeln!(&mut outfile, ">{}", contig)?;
         // write sequences[ploid] to this_fasta
         let mut i = 0;
-        let sequence_to_write: &Vec<u8> = &sequence;
+        let sequence_to_write: &Vec<Nuc> = &sequence;
         while i < sequence_to_write.len() {
             let mut line = String::new();
             let mut max: usize = 70;
@@ -87,7 +87,7 @@ pub fn write_fasta(
                 max = this_length
             }
             for j in 0..max {
-                line += &(u8_to_base(sequence_to_write[i + j]).to_string());
+                line += &(sequence_to_write[i + j].nuc_to_char().to_string());
             }
             writeln!(&mut outfile, "{}", line)?;
             i += 70;
@@ -99,12 +99,15 @@ pub fn write_fasta(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use utils::nucleotides::Nuc::*;
 
     #[test]
     fn test_conversions() {
         let initial_sequence = "AAAANNNNGGGGCCCCTTTTAAAA";
-        let test_map: Vec<u8> = vec![0, 0, 0, 0, 4, 4, 4, 4, 2, 2, 2, 2, 1, 1, 1, 1, 3, 3, 3, 3, 0, 0, 0, 0];
-        let remap: Vec<u8> = initial_sequence.chars().map(|x| base_to_u8(x)).collect();
+        let test_map: Vec<Nuc> = vec![
+            A, A, A, A, N, N, N, N, G, G, G, G, C, C, C, C, T, T, T, T, A, A, A, A
+        ];
+        let remap: Vec<Nuc> = initial_sequence.chars().map(|x| Nuc::base_to_nuc(x)).collect();
         assert_eq!(remap, test_map);
         assert_eq!(sequence_array_to_string(&test_map), initial_sequence);
     }
@@ -125,8 +128,8 @@ mod tests {
 
     #[test]
     fn test_write_fasta() -> Result<(), Box<dyn error::Error>> {
-        let seq1: Vec<u8> = vec![0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1];
-        let fasta_output: HashMap<String, Vec<u8>> = HashMap::from([
+        let seq1: Vec<Nuc> = vec![A, A, A, A, A, A, A, A, C, C, C, C, C, C, C, C];
+        let fasta_output: HashMap<String, Vec<Nuc>> = HashMap::from([
             (String::from("H1N1_HA"), seq1)
         ]);
         let fasta_pointer = Box::new(fasta_output);

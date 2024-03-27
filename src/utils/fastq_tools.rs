@@ -7,25 +7,14 @@ use utils::fasta_tools::sequence_array_to_string;
 use utils::file_tools::open_file;
 use utils::neat_rng::NeatRng;
 use utils::quality_scores::QualityScoreModel;
+use utils::nucleotides::Nuc;
 
-fn complement(nucleotide: u8) -> u8 {
-    // 0 = A, 1 = C, 2 = G, 3 = T,
-    // matches with the complement of each nucleotide.
-    return match nucleotide {
-        0 => 3,
-        1 => 2,
-        2 => 1,
-        3 => 0,
-        _ => 4,
-    }
-}
-
-fn reverse_complement(sequence: &Vec<u8>) -> Vec<u8> {
+fn reverse_complement(sequence: &Vec<Nuc>) -> Vec<Nuc> {
     // Returns the reverse complement of a vector of u8's representing a DNA sequence.
     let length = sequence.len();
     let mut rev_comp = Vec::new();
     for i in (0..length).rev() {
-        rev_comp.push(complement(sequence[i]))
+        rev_comp.push(sequence[i].complement())
     }
     rev_comp
 }
@@ -34,7 +23,7 @@ pub fn write_fastq(
     fastq_filename: &str,
     overwrite_output: bool,
     paired_ended: bool,
-    dataset: Vec<&Vec<u8>>,
+    dataset: Vec<&Vec<Nuc>>,
     quality_score_model: QualityScoreModel,
     mut rng: &mut NeatRng,
 ) -> io::Result<()> {
@@ -114,26 +103,12 @@ mod tests {
     use super::*;
     use std::path::Path;
     use rand_core::SeedableRng;
-
-    #[test]
-    fn test_complement() {
-        let nuc1 = 0;
-        let nuc2 = 1;
-        let nuc3 = 2;
-        let nuc4 = 3;
-        let nuc5 = 4;
-
-        assert_eq!(complement(nuc1), 3);
-        assert_eq!(complement(nuc2), 2);
-        assert_eq!(complement(nuc3), 1);
-        assert_eq!(complement(nuc4), 0);
-        assert_eq!(complement(nuc5), 4);
-    }
+    use utils::nucleotides::Nuc::*;
 
     #[test]
     fn test_reverse_complement() {
-        let read: Vec<u8> = vec![0, 0, 0, 0, 1, 1, 1, 1];
-        let revcomp: Vec<u8> = vec![2, 2, 2, 2, 3, 3, 3, 3];
+        let read: Vec<Nuc> = vec![A, A, A, A, C, C, C, C];
+        let revcomp: Vec<Nuc> = vec![G, G, G, G, T, T, T, T];
         assert_eq!(reverse_complement(&read), revcomp);
     }
 
@@ -142,8 +117,8 @@ mod tests {
         let fastq_filename = "test_single";
         let overwrite_output = true;
         let paired_ended = false;
-        let seq1 = vec![0, 0, 0, 0, 1, 1, 1, 1];
-        let seq2 = vec![2, 2, 2, 2, 3, 3, 3, 3,];
+        let seq1 = vec![A, A, A, A, C, C, C, C];
+        let seq2 = vec![G, G, G, G, T, T, T, T];
         let mut rng = NeatRng::seed_from_u64(0);
         let dataset = vec![&seq1, &seq2];
         let quality_score_model = QualityScoreModel::new();
@@ -168,8 +143,8 @@ mod tests {
         // might as well test the o_o function as well
         let overwrite_output = false;
         let paired_ended = true;
-        let seq1 = vec![0, 0, 0, 0, 1, 1, 1, 1];
-        let seq2 = vec![2, 2, 2, 2, 3, 3, 3, 3,];
+        let seq1: Vec<Nuc> = vec![A, A, A, A, C, C, C, C];
+        let seq2 = vec![G, G, G, G, T, T, T, T];
         let mut rng = NeatRng::seed_from_u64(0);
         let dataset = vec![&seq1, &seq2];
         let quality_score_model = QualityScoreModel::new();

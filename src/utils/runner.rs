@@ -9,6 +9,7 @@ use utils::mutate::mutate_fasta;
 use utils::neat_rng::NeatRng;
 use utils::vcf_tools::write_vcf;
 use utils::read_models::read_quality_score_model_json;
+use utils::nucleotides::Nuc;
 
 pub fn run_neat(config: Box<RunConfiguration>, mut rng: &mut NeatRng) -> Result<(), &'static str>{
     // Create the prefix of the files to write
@@ -57,7 +58,7 @@ pub fn run_neat(config: Box<RunConfiguration>, mut rng: &mut NeatRng) -> Result<
         ).unwrap();
     }
 
-    let mut read_sets: HashSet<Vec<u8>> = HashSet::new();
+    let mut read_sets: HashSet<Vec<Nuc>> = HashSet::new();
     info!("Generating reads");
     for (_name, sequence) in mutated_map.iter() {
         // defined as a set of read sequences that should cover
@@ -77,7 +78,7 @@ pub fn run_neat(config: Box<RunConfiguration>, mut rng: &mut NeatRng) -> Result<
 
     if config.produce_fastq {
         info!("Shuffling output fastq data");
-        let mut outsets: Box<Vec<&Vec<u8>>> = Box::new(read_sets.iter().collect());
+        let mut outsets: Box<Vec<&Vec<Nuc>>> = Box::new(read_sets.iter().collect());
         outsets.shuffle(&mut rng);
 
         info!("Writing fastq");

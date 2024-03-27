@@ -1,13 +1,10 @@
 use std::collections::HashMap;
+use log::debug;
 use rand::distributions::{Distribution, WeightedIndex};
 use utils::neat_rng::NeatRng;
 use utils::nucleotides::Nuc;
+use utils::variants::VariantType;
 
-#[derive(Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
-pub enum Variant {
-    Indel,
-    SNP,
-}
 pub struct MutationModel {
     // This is the model for mutations, the same construct used by the python version, basically.
     //
@@ -20,13 +17,9 @@ pub struct MutationModel {
     homozygous_frequency: f64,
     // If a variant occurs, this is the probability that it will be a SNP, the most common type
     // of variant. There are only 2 types at the moment, but this will get expanded out in time.
-    variant_probs: HashMap<Variant, usize>,
-    // The 4 x 4 matrix that shows the probability of one nucleotide transitioning to another.
-    transition_matrix: TransitionMatrix,
-    // the model governing the single nucleotide polymorphisms for this run.
-    snp_model: SnpModel,
-    // The model governing indels for this run.
-    indel_model: IndelModel,
+    variant_probs: HashMap<VariantType, usize>,
+    // These hold all the statistical model data we need to apply the mutations with this model
+    statistical_models: StatisticalModels,
 }
 impl MutationModel {
     pub fn new() -> Self {
@@ -37,51 +30,108 @@ impl MutationModel {
         // will use weights. This would have been 0.95 and 0.05, so we divided both by 0.05 to get
         // 19 and 1 as our weights.
         let variant_probs = HashMap::from([
-            (Variant::SNP, 19),
-            (Variant::Indel, 1),
+            (VariantType::SNP, 19),
+            (VariantType::Indel, 1),
         ]);
-        // use the default transition matrix, snp model and indel model
-        let transition_matrix = TransitionMatrix::new();
-        let snp_model = SnpModel::new();
-        let indel_model = IndelModel::new();
+
+        let statistical_models = StatisticalModels::new();
 
         MutationModel {
             mutation_rate,
             homozygous_frequency,
             variant_probs,
-            transition_matrix,
-            snp_model,
-            indel_model,
+            statistical_models,
         }
     }
     // We may need several ways to create the mutation model. Here is one for testing.
     pub fn from_transition_matrix(transition_matrix: TransitionMatrix) -> Self {
         let mut model = MutationModel::new();
-        model.transition_matrix = transition_matrix;
+        model.statistical_models.transition_matrix = transition_matrix;
         model
     }
-    pub fn mutate(&self, base: Nuc, mut rng: &mut NeatRng) -> Nuc {
-        // This is a basic mutation function for starting us off
-        // Pick the weights list for the base that was input
-        let weights: &Vec<usize> = match base {
-            Nuc::A => &self.transition_matrix.a_weights,
-            Nuc::C => &self.transition_matrix.c_weights,
-            Nuc::G => &self.transition_matrix.g_weights,
-            Nuc::T => &self.transition_matrix.t_weights,
-            // return the N value for N with no further computation.
-            Nuc::N => { return Nuc::N; },
-        };
-        // Now we create a distribution from the weights and sample our choices.
-        let dist = WeightedIndex::new(weights).unwrap();
-        match dist.sample(&mut rng) {
-            0 => Nuc::A,
-            1 => Nuc::C,
-            2 => Nuc::G,
-            3 => Nuc::T,
-            _ => Nuc::N
+
+    pub fn generate_mutation(
+        &self, variant_type: VariantType, input_sequence: &Vec<Nuc>, rng: &mut NeatRng
+    ) -> Vec<Nuc> {
+        self.statistical_models.get_variant(
+            variant_type: VariantType, input_sequence: &Vec<Nuc>, rng: &mut NeatRng
+        )
+    }
+}
+
+// Statistical models are based on the models used in the original NEAT. NEAT made no attempt to
+// distinguish between insertions or deletions, nor of different types of either, in terms of
+// statistics. NOTE: any new statistical models would need to be created in the structs below and
+// added to this list in order to be fully implemented.
+pub struct StatisticalModels {
+    // The 4 x 4 matrix that shows the probability of one nucleotide transitioning to another.
+    transition_matrix: TransitionMatrix,
+    // the model governing the single nucleotide polymorphisms for this run.
+    snp_model: SnpModel,
+    // The model governing indels for this run.
+    indel_model: IndelModel,
+}
+
+impl StatisticalModels {
+    pub fn new() -> Self {
+        // use the default transition matrix, snp model and indel model
+        let transition_matrix = TransitionMatrix::new();
+        let snp_model = SnpModel::new();
+        let indel_model = IndelModel::new();
+
+        StatisticalModels {
+            transition_matrix,
+            snp_model,
+            indel_model
+        }
+    }
+
+    pub fn from(
+        transition_matrix: TransitionMatrix,
+        snp_model: SnpModel,
+        indel_model: IndelModel
+    ) -> Self {
+        StatisticalModels {
+            transition_matrix,
+            snp_model,
+            indel_model
+        }
+    }
+
+    pub fn get_variant(
+        &self, variant_type: VariantType, input_sequence: &Vec<Nuc>, rng: &mut NeatRng
+    ) -> Vec<Nuc> {
+        match variant_type {
+            VariantType::SNP => {
+                self.snp_model.generate_variant(
+                    input_sequence, &self.transition_matrix, rng
+                )
+            },
+            VariantType::Indel => {
+                self.indel_model.generate_variant(
+                    input_sequence, &self.transition_matrix, rng
+                )
+            },
         }
     }
 }
+
+// The following section are the models for each type of variant. In order to create the variant,
+// we need to model its statistical property. NEAT included two types of variants: SNPs and Indels.
+// Note that indels are actually two types, insertions and deletions, but they are usually classed
+// together in the literature and are usually short. Insertions are often slips that cause sections
+// to be duplicated, but NEAT made no attempt to distinguish between the types of insertions or
+// deletions, since they are treated similarly by variant calling software.
+pub trait Mutate {
+    fn generate_variant(
+        &self,
+        input_sequence: &Vec<Nuc>,
+        transition_matrix: &TransitionMatrix,
+        rng: &mut NeatRng
+    ) -> Vec<Nuc>;
+
+}
+
 #[derive(Debug)]
 pub struct TransitionMatrix {
     // Nucleotide transition matrix. Rows represent the base we are mutating and the weights are
@@ -130,6 +180,39 @@ impl TransitionMatrix {
         }
     }
 }
+
+impl Mutate for TransitionMatrix {
+    fn generate_variant(
+        &self, input_sequence: &Vec<Nuc>, transition_matrix: TransitionMatrix, rng: &mut NeatRng
+    ) -> Vec<Nuc> {
+        // This is a basic mutation function for starting us off
+        // Pick the weights list for the base that was input
+        // We will use this simple model for sequence errors ultimately.
+        debug!("Generating basic SNP variant");
+        if input_sequence.len() > 1 {
+            panic!("Basic variants can only be one base long.")
+        }
+        let base = input_sequence[0];
+        let weights: &Vec<usize> = match base {
+            Nuc::A => &transition_matrix.a_weights,
+            Nuc::C => &transition_matrix.c_weights,
+            Nuc::G => &transition_matrix.g_weights,
+            Nuc::T => &transition_matrix.t_weights,
+            // return the N value for N with no further computation.
+            Nuc::N => { return vec![Nuc::N]; },
+        };
+        // Now we create a distribution from the weights and sample our choices.
+        let dist = WeightedIndex::new(weights).unwrap();
+        match dist.sample(rng) {
+            0 => vec![Nuc::A],
+            1 => vec![Nuc::C],
+            2 => vec![Nuc::G],
+            3 => vec![Nuc::T],
+            _ => vec![Nuc::N],
+        }
+    }
+}
+
 #[derive(Debug)]
 struct SnpModel {
     // These are the 16 possible patterns for trinucleotides, each representing 4 trinucleotides for
@@ -178,7 +261,25 @@ impl SnpModel {
             t_t: (1, TransitionMatrix::new()),
         }
     }
+    fn generate_bias(&self, input_sequence: &Vec<Nuc>) -> Vec<usize> {
+        todo!()
+        // We need some way to use this model to bias positions of SNPs, but it's not clear yet how.
+    }
 }
+
+impl Mutate for SnpModel {
+    fn generate_variant(
+        &self,
+        input_sequence: &Vec<Nuc>,
+        transition_matrix: &TransitionMatrix,
+        rng: &mut NeatRng
+    ) -> Vec<Nuc> {
+        todo!()
+        // The sequence for this model must contain the nucelotide before and after for context.
+    }
+
+}
+
 #[derive(Debug)]
 struct IndelModel {
     // Based what was in the original NEAT
@@ -187,6 +288,17 @@ struct IndelModel {
     ins_weights: Vec<usize>,
     del_lengths: Vec<usize>,
     del_weights: Vec<usize>,
+}
+
+impl Mutate for IndelModel {
+    fn generate_variant(
+        &self,
+        input_sequence: &Vec<Nuc>,
+        transition_matrix: &TransitionMatrix,
+        rng: &mut NeatRng
+    ) -> Vec<Nuc> {
+        todo!()
+    }
 }
 
 impl IndelModel {

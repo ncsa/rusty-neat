@@ -13,3 +13,7 @@ pub mod read_old_data;
 pub mod read_models;
 pub mod mutation_model;
 pub mod variants;
+pub mod sequencing_errors;
+pub mod sequencing_error_model;
+
+pub mod transition_matrix;

@@ -1,9 +1,9 @@
 use std::collections::HashMap;
-use log::debug;
-use rand::distributions::{Distribution, WeightedIndex};
+use rand::distributions::Distribution;
 use utils::neat_rng::NeatRng;
 use utils::nucleotides::Nuc;
 use utils::variants::VariantType;
+use utils::transition_matrix::TransitionMatrix;
 
 pub struct MutationModel {
     // This is the model for mutations, the same construct used by the python version, basically.
@@ -51,11 +51,13 @@ impl MutationModel {
     }
 
     pub fn generate_mutation(
-        &self, variant_type: VariantType, input_sequence: &Vec<Nuc>, rng: &mut NeatRng
+        &self,
+        variant_type: VariantType,
+        variant_location: usize,
+        input_sequence: &Vec<Nuc>,
+        rng: &mut NeatRng
     ) -> Vec<Nuc> {
-        self.statistical_models.get_variant(
-            variant_type: VariantType, input_sequence: &Vec<Nuc>, rng: &mut NeatRng
-        )
+        self.statistical_models.get_variant(variant_type, variant_location, input_sequence, rng)
     }
 }
 
@@ -99,19 +101,19 @@ impl StatisticalModels {
     }
 
     pub fn get_variant(
-        &self, variant_type: VariantType, input_sequence: &Vec<Nuc>, rng: &mut NeatRng
+        &self,
+        variant_type: VariantType,
+        variant_location: usize,
+        input_sequence: &Vec<Nuc>,
+        rng: &mut NeatRng
     ) -> Vec<Nuc> {
         match variant_type {
-            VariantType::SNP => {
-                self.snp_model.generate_variant(
-                    input_sequence, &self.transition_matrix, rng
-                )
-            },
-            VariantType::Indel => {
-                self.indel_model.generate_variant(
-                    input_sequence, &self.transition_matrix, rng
-                )
-            },
+            VariantType::SNP => { self.snp_model.generate_variant(
+                input_sequence, variant_location, &self.transition_matrix, rng
+            ) },
+            VariantType::Indel => { self.indel_model.generate_variant(
+                input_sequence, variant_location, &self.transition_matrix, rng
+            ) },
         }
     }
 }
@@ -122,95 +124,17 @@ impl StatisticalModels {
 // together in the literature and are usually short. Insertions are often slips that cause sections
 // to be duplicated, but NEAT made no attempt to distinguish between the types of insertions or
 // deletions, since they are treated similarly by variant calling software.
+
+// All new variants must use the Mutate implementation to work.
 pub trait Mutate {
     fn generate_variant(
         &self,
         input_sequence: &Vec<Nuc>,
+        variant_location: usize,
         transition_matrix: &TransitionMatrix,
         rng: &mut NeatRng
     ) -> Vec<Nuc>;
 
-}
-
-#[derive(Debug)]
-pub struct TransitionMatrix {
-    // Nucleotide transition matrix. Rows represent the base we are mutating and the weights are
-    // in the standard nucleotide order (in the same a, c, g, t order)
-    //
-    // The model is a 4x4 matrix with zeros along the diagonal because, e.g., A can't "mutate" to A.
-    // The model is usually symmetric, but technically, the probability for A -> G could be
-    // different from the probability for G -> A, but in practice, this seems to not be the case.
-    a_weights: Vec<usize>,
-    c_weights: Vec<usize>,
-    g_weights: Vec<usize>,
-    t_weights: Vec<usize>,
-}
-
-impl TransitionMatrix {
-    pub fn new() -> Self {
-        // Default transition matrix for mutations from the original NEAT 2.0
-        Self {
-            a_weights: vec![0, 15, 70, 15],
-            c_weights: vec![15, 0, 15, 70],
-            g_weights: vec![70, 15, 0, 15],
-            t_weights: vec![15, 70, 15, 0],
-        }
-    }
-    #[allow(dead_code)]
-    // todo, once we have numbers we can implement this.
-    pub fn from(weights: Vec<Vec<usize>>) -> Self {
-        // Supply a vector of 4 vectors that define the mutation chance
-        // from the given base to the other 4 bases.
-
-        // First some safety checks. This should be a 4x4 matrix defining mutation from
-        // ACGT (top -> down) to ACGT (left -> right)
-        if weights.len() != 4 {
-            panic!("Weights supplied to TransitionMatrix is wrong size");
-        }
-        for weight_vec in &weights {
-            if weight_vec.len() != 4 {
-                panic!("Weights supplied to TransitionMatrix is wrong size");
-            }
-        }
-        Self {
-            a_weights: weights[0].clone(),
-            c_weights: weights[1].clone(),
-            g_weights: weights[2].clone(),
-            t_weights: weights[3].clone(),
-        }
-    }
-}
-
-impl Mutate for TransitionMatrix {
-    fn generate_variant(
-        &self, input_sequence: &Vec<Nuc>, transition_matrix: TransitionMatrix, rng: &mut NeatRng
-    ) -> Vec<Nuc> {
-        // This is a basic mutation function for starting us off
-        // Pick the weights list for the base that was input
-        // We will use this simple model for sequence errors ultimately.
-        debug!("Generating basic SNP variant");
-        if input_sequence.len() > 1 {
-            panic!("Basic variants can only be one base long.")
-        }
-        let base = input_sequence[0];
-        let weights: &Vec<usize> = match base {
-            Nuc::A => &transition_matrix.a_weights,
-            Nuc::C => &transition_matrix.c_weights,
-            Nuc::G => &transition_matrix.g_weights,
-            Nuc::T => &transition_matrix.t_weights,
-            // return the N value for N with no further computation.
-            Nuc::N => { return vec![Nuc::N]; },
-        };
-        // Now we create a distribution from the weights and sample our choices.
-        let dist = WeightedIndex::new(weights).unwrap();
-        match dist.sample(rng) {
-            0 => vec![Nuc::A],
-            1 => vec![Nuc::C],
-            2 => vec![Nuc::G],
-            3 => vec![Nuc::T],
-            _ => vec![Nuc::N],
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -271,11 +195,13 @@ impl Mutate for SnpModel {
     fn generate_variant(
         &self,
         input_sequence: &Vec<Nuc>,
+        variant_location: usize,
         transition_matrix: &TransitionMatrix,
         rng: &mut NeatRng
     ) -> Vec<Nuc> {
         todo!()
         // The sequence for this model must contain the nucelotide before and after for context.
+
     }
 
 }
@@ -294,6 +220,7 @@ impl Mutate for IndelModel {
     fn generate_variant(
         &self,
         input_sequence: &Vec<Nuc>,
+        variant_location: usize,
         transition_matrix: &TransitionMatrix,
         rng: &mut NeatRng
     ) -> Vec<Nuc> {
@@ -326,22 +253,7 @@ mod tests {
     use utils::mutation_model::{MutationModel, TransitionMatrix};
     use utils::neat_rng::NeatRng;
     use utils::nucleotides::Nuc::*;
-    #[test]
-    fn test_transition_matrix_build() {
-        let a_weights = vec![0, 20, 1, 20];
-        let c_weights = vec![20, 0, 1, 1];
-        let g_weights = vec![1, 1, 0, 20];
-        let t_weights = vec![20, 1, 20, 0];
-
-        let model = TransitionMatrix {
-            a_weights: a_weights.clone(),
-            c_weights: c_weights.clone(),
-            g_weights: g_weights.clone(),
-            t_weights: t_weights.clone(),
-        };
-
-        assert_eq!(model.a_weights, a_weights);
-    }
+    use utils::variants::VariantType;
 
     #[test]
     fn test_transition_matrix_from_weights() {
@@ -355,31 +267,36 @@ mod tests {
         );
         let test_model = MutationModel::from_transition_matrix(matrix);
         // It actually mutates the base
-        assert_ne!(test_model.mutate(A, &mut rng), A);
-        assert_ne!(test_model.mutate(C, &mut rng), C);
-        assert_ne!(test_model.mutate(G, &mut rng), G);
-        assert_ne!(test_model.mutate(T, &mut rng), T);
+        assert_ne!(test_model.generate_mutation(
+            VariantType::ErrorSNP, 0, &vec![A], &mut rng), vec![A]
+        );
+        assert_ne!(test_model.generate_mutation(
+            VariantType::ErrorSNP, 0, &vec![C], &mut rng), vec![C]
+        );
+        assert_ne!(test_model.generate_mutation(
+            VariantType::ErrorSNP, 0, &vec![G], &mut rng), vec![G]
+        );
+        assert_ne!(test_model.generate_mutation(
+            VariantType::ErrorSNP, 0, &vec![T], &mut rng), vec![T]
+        );
         // It gives back N when you give it N
-        assert_eq!(test_model.mutate(N, &mut rng), N);
-    }
-    #[test]
-    #[should_panic]
-    fn test_transition_matrix_too_many_vecs() {
-        let a_weights = vec![0, 20, 1, 20];
-        let c_weights = vec![20, 0, 1, 1];
-        let g_weights = vec![1, 1, 0, 20];
-        let t_weights = vec![20, 1, 20, 0];
-        let u_weights = vec![20, 1, 20, 0];
-        TransitionMatrix::from(vec![a_weights, c_weights, g_weights, t_weights, u_weights]);
-    }
+        assert_eq!(test_model.mutate(
+            VariantType::ErrorSNP, 0, &vec![N], &mut rng), vec![N]
+        );
+        // test alternate mutation methods
+        let mutation = test_model.generate_mutation(
+            VariantType::SNP, 1, &vec![A, C, G], &mut rng
+        );
+        assert_eq!(mutation[0], A);
+        assert_eq!(mutation[2], G);
+        assert_ne!(mutation[3], C);
+        let mutation = test_model.generate_mutation(
+            VariantType::Indel,
+            0,
+            &vec![A, C, C, G, T, T, A, C, G],
+            &mut rng
+        );
+        assert_eq!()
 
-    #[test]
-    #[should_panic]
-    fn test_transition_matrix_too_many_bases() {
-        let a_weights = vec![0, 20, 1, 20, 1];
-        let c_weights = vec![20, 0, 1, 1];
-        let g_weights = vec![1, 1, 0, 20];
-        let t_weights = vec![20, 1, 20, 0];
-        TransitionMatrix::from(vec![a_weights, c_weights, g_weights, t_weights]);
     }
 }

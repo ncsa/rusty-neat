@@ -1,11 +1,15 @@
+use log::debug;
+use rand::distributions::WeightedIndex;
+use utils::neat_rng::NeatRng;
 use utils::nucleotides::Nuc;
+
 #[derive(Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
-pub enum VariantType {
-    SNP,
-    Indel,
+pub enum SequencingErrorType {
+    SNPError,
+    IndelError,
 }
 
-pub struct Variant {
+pub struct SequencingError {
     // This is a basic holder for a variant. There are several aspects of the variant that we
     // don't need to store, such as which ploid the variant appears on and the context sequence,
     // which we only need for the output files, we can generate at the time we need it.
@@ -18,24 +22,9 @@ pub struct Variant {
     // alternate: the vector of nucleotides that take the place of reference.
     chromosome: String,
     position: usize,
-    variant_type: VariantType,
+    error_type: SequencingErrorType,
     reference: Vec<Nuc>,
     alternate: Vec<Nuc>,
-}
-
-// I don't even know if this code is valid, not entirely sure if it does what I think it does.
-impl Variant {
-    fn get_length(&self) -> usize {
-        if self.reference.len() == self.alternate.len() {
-            return 1;
-        }
-        // Minus one because the first base of an indel is unchanged
-        if self.reference.len() > self.alternate.len() {
-            self.reference.len() - 1
-        } else {
-            self.alternate.len() - 1
-        }
-    }
 }
 
 #[cfg(test)]
@@ -45,10 +34,10 @@ mod tests {
 
     #[test]
     fn test_get_len() {
-        let my_variant = Variant {
+        let my_variant = SequencingError {
             chromosome: "chr1".to_string(),
             position: 10,
-            variant_type: VariantType::Indel,
+            error_type: SequencingErrorType::IndelError,
             reference: vec![A, A, A, G, G, T],
             alternate: vec![A],
         };

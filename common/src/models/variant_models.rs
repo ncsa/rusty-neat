@@ -1,7 +1,11 @@
-use lib::neat_rng::NeatRng;
-use lib::nucleotides::Nuc;
-use lib::transition_matrix::TransitionMatrix;
-use lib::variants::{Variant, VariantType};
+use crate::utils;
+use crate::models;
+use crate::variant_classes;
+
+use utils::neat_rng::NeatRng;
+use models::nucleotides::Nuc;
+use models::transition_matrix::TransitionMatrix;
+use variant_classes::variants::{Variant, VariantType};
 
 // Statistical models are based on the models used in the original NEAT. NEAT made no attempt to
 // distinguish between insertions or deletions, nor of different types of either, in terms of

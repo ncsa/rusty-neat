@@ -1,9 +1,9 @@
-use utils::nucleotides::Nuc;
-use utils::neat_rng::NeatRng;
+use lib::nucleotides::Nuc;
+use lib::neat_rng::NeatRng;
 use log::debug;
 use rand::distributions::WeightedIndex;
 use rand::prelude::Distribution;
-use utils::transition_matrix::TransitionMatrix;
+use lib::transition_matrix::TransitionMatrix;
 
 pub struct SequencingErrorModel {
     transition_matrix: TransitionMatrix,

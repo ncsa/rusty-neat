@@ -8,7 +8,8 @@ extern crate serde;
 extern crate simple_rng;
 extern crate statrs;
 
-mod utils;
+use common;
+use utils;
 
 use chrono::Utc;
 use std::fs::File;

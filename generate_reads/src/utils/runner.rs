@@ -21,7 +21,7 @@ pub fn run_neat(config: Box<RunConfiguration>, mut rng: &mut NeatRng) -> Result<
 
     // Load models that will be used for the runs.
     // For now we will use the one supplied, pulled directly from NEAT2.0's original model.
-    let default_quality_score_model_file = "models/neat_quality_score_model.json";
+    let default_quality_score_model_file = "model_data/neat_quality_score_model.json";
     let quality_score_model = read_quality_score_model_json(
         default_quality_score_model_file
     );

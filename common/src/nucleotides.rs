@@ -1,12 +1,11 @@
-// Throughout this program, we will build off the Nuc enum.
+// Throughout this program, we will build off the Nuc enum. Enums have implied numbering, so that:
 //     A = 0
 //     C = 1
 //     G = 2
 //     T = 3
 //     N = 4
-// This is intended to make it easier to store them. We thought about using the u8 representation
-// of the character as built into Rust, but we'd then have to figure out the translations and keep
-// track of extra numbers. So this is intended to simplify everything
+// This is intended to make it easier to store them. I think this will be an easier way to read
+// the code, and I'm hoping it does not incur any extra computational burden
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub enum Nuc {
     A,

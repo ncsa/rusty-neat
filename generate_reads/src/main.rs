@@ -10,7 +10,8 @@ extern crate rand_chacha;
 extern crate serde_json;
 extern crate serde;
 
-mod utils;
+use common;
+use utils;
 
 use std::collections::HashMap;
 use std::fs::File;

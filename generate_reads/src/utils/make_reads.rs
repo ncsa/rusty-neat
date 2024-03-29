@@ -56,7 +56,7 @@ fn cover_dataset(
     while layer_count <= coverage {
         let fragment_length = *cover_fragment_pool.front().unwrap();
         let temp_end = start+fragment_length;
-        cover_fragment_pool.push_back(*fragment_length.clone());
+        cover_fragment_pool.push_back(fragment_length.clone());
         if temp_end > span_length {
             // TODO some variation on this modulo idea will work for bacterial reads
             start = temp_end % span_length;

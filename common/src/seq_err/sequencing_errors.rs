@@ -1,7 +1,7 @@
 use log::debug;
 use rand::distributions::WeightedIndex;
-use utils::neat_rng::NeatRng;
-use utils::nucleotides::Nuc;
+use lib::neat_rng::NeatRng;
+use lib::nucleotides::Nuc;
 
 #[derive(Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub enum SequencingErrorType {
@@ -30,7 +30,7 @@ pub struct SequencingError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use utils::nucleotides::Nuc::*;
+    use lib::nucleotides::Nuc::*;
 
     #[test]
     fn test_get_len() {

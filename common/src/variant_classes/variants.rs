@@ -1,4 +1,6 @@
-use lib::nucleotides::Nuc;
+use crate::models;
+
+use models::nucleotides::Nuc;
 use std::cmp::Ordering;
 use std::borrow::Cow;
 

@@ -1,10 +1,15 @@
+use crate::utils;
+use crate::models;
+use crate::variant_classes;
+
 use std::collections::HashMap;
 use rand::distributions::Distribution;
-use crate::neat_rng::NeatRng;
-use crate::nucleotides::Nuc;
-use crate::vars::variants::VariantType;
-use crate::transition_matrix::TransitionMatrix;
-use crate::vars::variants::*;
+
+use utils::neat_rng::NeatRng;
+use models::nucleotides::Nuc;
+use models::transition_matrix::TransitionMatrix;
+use variant_classes::variants::*;
+use variant_classes::variants::VariantType;
 
 pub struct MutationModel {
     // This is the model for mutations, the same construct used by the python version, basically.

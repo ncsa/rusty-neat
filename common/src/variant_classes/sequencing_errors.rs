@@ -1,7 +1,10 @@
+use crate::utils;
+use crate::models;
+
 use log::debug;
 use rand::distributions::WeightedIndex;
-use lib::neat_rng::NeatRng;
-use lib::nucleotides::Nuc;
+use utils::neat_rng::NeatRng;
+use models::nucleotides::Nuc;
 
 #[derive(Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub enum SequencingErrorType {

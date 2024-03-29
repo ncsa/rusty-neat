@@ -20,12 +20,15 @@
 //     translate to Rust. May need a custom data structure. Like seed + subsequent.
 //   * Assumes a fixed read length, meaning you have to extrapolate for longer read lengths.
 //   * In Python, at least, this was slow, although in retrospect it didn't eat up much memory.
+use crate::utils;
+
 use std::fmt::{Display, Formatter};
-use lib::neat_rng::NeatRng;
-use lib::file_tools::open_file;
 use rand::distributions::WeightedIndex;
 use rand::prelude::Distribution;
 use serde::{Deserialize, Serialize};
+
+use utils::neat_rng::NeatRng;
+use utils::file_tools::open_file;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct QualityScoreModel {

@@ -20,35 +20,34 @@
 //     translate to Rust. May need a custom data structure. Like seed + subsequent.
 //   * Assumes a fixed read length, meaning you have to extrapolate for longer read lengths.
 //   * In Python, at least, this was slow, although in retrospect it didn't eat up much memory.
-use crate::utils;
-
-use std::fmt::{Display, Formatter};
 use rand::distributions::WeightedIndex;
 use rand::prelude::Distribution;
 use serde::{Deserialize, Serialize};
+use serde_json;
+use std::fmt::{Display, Formatter};
 
-use utils::neat_rng::NeatRng;
-use utils::file_tools::open_file;
+use file_tools::open_file;
+use neat_rng::NeatRng;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct QualityScoreModel {
     // This is the vector of the quality scores possible in this dataset. This could be a list
     // of numbers from 1-42, for example, or bins of scores, [2, 13, 27, 33] or whatever the
     // dataset uses. This list is expected to be sorted.
-    pub(crate) quality_score_options: Vec<usize>,
+    pub quality_score_options: Vec<usize>,
     // True for binned scores, false for continuous
-    pub(crate) binned_scores: bool,
+    pub binned_scores: bool,
     // The assumed read length of this dataset. The model will assume this read length and adjust
     // on a per-run basis in a deterministic way (doubling positional weight arrays)
-    pub(crate) assumed_read_length: usize,
+    pub assumed_read_length: usize,
     // Weights for the first position in the read length.
-    pub(crate) seed_weights: Vec<usize>,
+    pub seed_weights: Vec<usize>,
     // A matrix for each subsequent position along the read length after the first. Each row is a
     // weight vector based on the previous score. For example, for possible scores 0-41, inclusive,
     // there would be 42 vectors (one for each possible previous score), each giving the weights for
     // the current position (one weight for each of 42 scores), for a 42 x 42 vector at each
     // position along the read length.
-    pub(crate) weights_from_one: Vec<Vec<Vec<usize>>>,
+    pub weights_from_one: Vec<Vec<Vec<usize>>>,
 }
 
 impl Display for QualityScoreModel {
@@ -59,16 +58,13 @@ impl Display for QualityScoreModel {
             "QualityScoreModel: (rl: {})\n\
             \tscores: {:?}\n\
             \tbinned? {:?}\n",
-            self.assumed_read_length,
-            self.quality_score_options,
-            self.binned_scores,
+            self.assumed_read_length, self.quality_score_options, self.binned_scores,
         )
     }
 }
 
 impl QualityScoreModel {
     // methods for QualityScoreModel objects
-    #[allow(dead_code)]
     pub fn new() -> Self {
         // We'll construct a base toy model that just favors higher scores for now. We'll work on
         // parsing out this from real data then we can fill this out better.
@@ -101,6 +97,22 @@ impl QualityScoreModel {
             weights_from_one: default_score_weights,
         }
     }
+
+    pub fn from(
+        quality_score_options: Vec<usize>,
+        binned_scores: bool,
+        assumed_read_length: usize,
+        seed_weights: Vec<usize>,
+        weights_from_one: Vec<Vec<Vec<usize>>>,
+    ) -> Self {
+        QualityScoreModel {
+            quality_score_options,
+            binned_scores,
+            assumed_read_length,
+            seed_weights,
+            weights_from_one,
+        }
+    }
     #[allow(dead_code)]
     pub fn display(&self) -> String {
         format!(
@@ -131,7 +143,11 @@ impl QualityScoreModel {
             self.weights_from_one,
         )
     }
-    pub fn generate_quality_scores(&self, run_read_length: usize, mut rng: &mut NeatRng) -> Vec<usize> {
+    pub fn generate_quality_scores(
+        &self,
+        run_read_length: usize,
+        mut rng: &mut NeatRng,
+    ) -> Vec<usize> {
         // Generates a list of quality scores of length run_read_length using the model. If the
         // input read length differs, we do some index magic to extrapolate the model
         // run_read_length: The desired read length for the model to generate.
@@ -161,12 +177,16 @@ impl QualityScoreModel {
 
             // First get the index of the previous score from the original scores list.
             // This will match the index in the score weights table that corresponds to that score.
-            let score_position = self.quality_score_options.iter().position(
-                |&x| x == score_list[current_index-1]
-            ).unwrap();
+            let score_position = self
+                .quality_score_options
+                .iter()
+                .position(|&x| x == score_list[current_index - 1])
+                .unwrap();
             // Now we have an index (in the default case 0..<4) of a vector for the position, based
             // on the previous score.
-            let weights: &Vec<usize> = self.weights_from_one.get(i)
+            let weights: &Vec<usize> = self
+                .weights_from_one
+                .get(i)
                 .expect("Error with quality score remap index.")
                 .get(score_position)
                 .expect("Error finding weights vector");
@@ -226,8 +246,8 @@ impl QualityScoreModel {
 
 #[cfg(test)]
 mod tests {
-    use rand_core::SeedableRng;
     use super::*;
+    use rand_core::SeedableRng;
 
     #[test]
     fn test_display_qual_scores() {
@@ -236,66 +256,25 @@ mod tests {
             binned_scores: true,
             assumed_read_length: 10,
             seed_weights: vec![1, 3, 1],
-            weights_from_one:
-            vec![
+            weights_from_one: vec![
                 // We'll always just set the first vector to 0. For now, hardcoded in
-                vec![
-                    vec![0, 0, 0],
-                    vec![0, 0, 0],
-                    vec![0, 0, 0]
-                ],
-                vec![
-                    vec![1, 3, 2],
-                    vec![1, 2, 3],
-                    vec![1, 1, 3]
-                ],
-                vec![
-                    vec![1, 1, 3],
-                    vec![1, 1, 3],
-                    vec![1, 1, 5]
-                ],
-                vec![
-                    vec![1, 1, 5],
-                    vec![1, 1, 5],
-                    vec![1, 1, 5]
-                ],
-                vec![
-                    vec![1, 1, 5],
-                    vec![1, 1, 5],
-                    vec![1, 1, 5]
-                ],
-                vec![
-                    vec![1, 1, 5],
-                    vec![1, 1, 5],
-                    vec![1, 1, 5]
-                ],
-                vec![
-                    vec![1, 1, 5],
-                    vec![1, 1, 5],
-                    vec![1, 1, 5]
-                ],
-                vec![
-                    vec![3, 1, 1],
-                    vec![2, 3, 1],
-                    vec![3, 5, 1]
-                ],
-                vec![
-                    vec![3, 1, 1],
-                    vec![3, 2, 1],
-                    vec![3, 1, 1]
-                ],
-                vec![
-                    vec![5, 1, 1],
-                    vec![5, 3, 1],
-                    vec![3, 5, 1]
-                ],
-            ]
+                vec![vec![0, 0, 0], vec![0, 0, 0], vec![0, 0, 0]],
+                vec![vec![1, 3, 2], vec![1, 2, 3], vec![1, 1, 3]],
+                vec![vec![1, 1, 3], vec![1, 1, 3], vec![1, 1, 5]],
+                vec![vec![1, 1, 5], vec![1, 1, 5], vec![1, 1, 5]],
+                vec![vec![1, 1, 5], vec![1, 1, 5], vec![1, 1, 5]],
+                vec![vec![1, 1, 5], vec![1, 1, 5], vec![1, 1, 5]],
+                vec![vec![1, 1, 5], vec![1, 1, 5], vec![1, 1, 5]],
+                vec![vec![3, 1, 1], vec![2, 3, 1], vec![3, 5, 1]],
+                vec![vec![3, 1, 1], vec![3, 2, 1], vec![3, 1, 1]],
+                vec![vec![5, 1, 1], vec![5, 3, 1], vec![3, 5, 1]],
+            ],
         };
 
         let message = String::from(
-          "QualityScoreModel: (rl: 10)\n\
+            "QualityScoreModel: (rl: 10)\n\
           \tscores: [0, 10, 20]\n\
-          \tbinned? true\n"
+          \tbinned? true\n",
         );
         assert_eq!(format!("{}", score_model), message);
 
@@ -304,7 +283,7 @@ mod tests {
           \tscores: [0, 10, 20]\n\
           \tbinned? true\n\
           \tseed weights: [1, 3, 1]\n\
-          \tfirst weight array: [1, 3, 2]"
+          \tfirst weight array: [1, 3, 2]",
         );
         assert_eq!(format!("{}", score_model.display()), message);
 
@@ -318,7 +297,7 @@ mod tests {
         assert_eq!(format!("{}", score_model.display_it_all()), message);
 
         let message = String::from(
-            "QualityScoreModel { quality_score_options: [0, 10, 20], binned_scores: true"
+            "QualityScoreModel { quality_score_options: [0, 10, 20], binned_scores: true",
         );
         assert!(format!("{:?}", score_model).starts_with(&message))
     }
@@ -331,7 +310,10 @@ mod tests {
         let scores = model.generate_quality_scores(run_read_length, &mut rng);
         assert!(!scores.is_empty());
         assert_eq!(scores.len(), 100);
-        scores.iter().map(|x| assert!(model.quality_score_options.contains(x))).collect()
+        scores
+            .iter()
+            .map(|x| assert!(model.quality_score_options.contains(x)))
+            .collect()
     }
 
     #[test]
@@ -342,7 +324,10 @@ mod tests {
         let scores = model.generate_quality_scores(run_read_length, &mut rng);
         assert!(!scores.is_empty());
         assert_eq!(scores.len(), 150);
-        scores.iter().map(|x| assert!(model.quality_score_options.contains(x))).collect()
+        scores
+            .iter()
+            .map(|x| assert!(model.quality_score_options.contains(x)))
+            .collect()
     }
 
     #[test]
@@ -353,7 +338,10 @@ mod tests {
         let scores = model.generate_quality_scores(run_read_length, &mut rng);
         assert!(!scores.is_empty());
         assert_eq!(scores.len(), 200);
-        scores.iter().map(|x| assert!(model.quality_score_options.contains(x))).collect()
+        scores
+            .iter()
+            .map(|x| assert!(model.quality_score_options.contains(x)))
+            .collect()
     }
 
     #[test]
@@ -364,6 +352,9 @@ mod tests {
         let scores = model.generate_quality_scores(run_read_length, &mut rng);
         assert!(!scores.is_empty());
         assert_eq!(scores.len(), 2000);
-        scores.iter().map(|x| assert!(model.quality_score_options.contains(x))).collect()
+        scores
+            .iter()
+            .map(|x| assert!(model.quality_score_options.contains(x)))
+            .collect()
     }
 }

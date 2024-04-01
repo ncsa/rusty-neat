@@ -4,13 +4,18 @@
 // read coverage. Generate reads uses this to create a list of coordinates to take slices from
 // the mutated fasta file. These will either be read-length fragments or fragment model length
 // fragments.
-use std::collections::{HashSet, VecDeque};
+use crate::utils;
+use common;
+
 use log::{debug, info};
-use rand::RngCore;
 use rand::seq::SliceRandom;
-use rand_distr::{Normal, Distribution};
-use utils::neat_rng::NeatRng;
-use utils::nucleotides::Nuc;
+use rand::RngCore;
+use rand_distr::{Distribution, Normal};
+use std::collections::{HashMap, HashSet, VecDeque};
+use common::neat_rng::NeatRng;
+use common::structs::nucleotides::Nuc;
+use common::structs::variants::Variant;
+
 fn cover_dataset(
     span_length: usize,
     read_length: usize,
@@ -54,8 +59,8 @@ fn cover_dataset(
     let mut start: usize = 0;
     // create coverage number of layers
     while layer_count <= coverage {
-        let fragment_length = *cover_fragment_pool.front().unwrap();
-        let temp_end = start+fragment_length;
+        let fragment_length = cover_fragment_pool.pop_front().unwrap();
+        let temp_end = start + fragment_length;
         cover_fragment_pool.push_back(fragment_length.clone());
         if temp_end > span_length {
             // TODO some variation on this modulo idea will work for bacterial reads
@@ -65,10 +70,10 @@ fn cover_dataset(
                 // if we have accumulated enough gap, then we need to run the same layer again.
                 // We'll reset gap size but not increment layer_count.
                 gap_size = gap_size % span_length;
-                continue
+                continue;
             } else {
                 layer_count += 1;
-                continue
+                continue;
             }
         }
         read_set.push((start, temp_end));
@@ -98,16 +103,17 @@ fn cover_dataset(
 }
 
 pub fn generate_reads(
-    mutated_sequence: &Vec<Nuc>,
-    read_length: &usize,
-    coverage: &usize,
+    sequence_length: usize,
+    contig_variants: &HashMap<usize, Variant>,
+    read_length: usize,
+    coverage: usize,
     paired_ended: bool,
     mean: Option<f64>,
     st_dev: Option<f64>,
     mut rng: &mut NeatRng,
-) -> Result<Box<HashSet<Vec<Nuc>>>, &'static str>{
+) -> Result<Vec<(usize, usize)>, &'static str> {
     // Takes:
-    // mutated_sequence: a vector of u8's representing the mutated sequence.
+    // sequence_length: The length of the sequence to generate reads for.
     // read_length: the length ef the reads for this run
     // coverage: the average depth of coverage for this run
     // rng: the random number generator for the run
@@ -118,8 +124,9 @@ pub fn generate_reads(
     // paired ended reads, this will generate a set of reads from each end, by taking the reverse
     // complement int the output
     let mut fragment_pool: Vec<usize> = Vec::new();
+    // todo adjust endpoints for indels.
     if paired_ended {
-        let num_frags = (mutated_sequence.len() / read_length) * (coverage * 2);
+        let num_frags = (sequence_length / read_length) * (coverage * 2);
         let fragment_distribution = Normal::new(mean.unwrap(), st_dev.unwrap()).unwrap();
         // add fragments to the fragment pool
         for _ in 0..num_frags {
@@ -127,29 +134,21 @@ pub fn generate_reads(
             fragment_pool.push(frag);
         }
     }
-    // set up some defaults and storage
-    let mut read_set: HashSet<Vec<Nuc>> = HashSet::new();
-    // length of the mutated sequence
-    let seq_len = mutated_sequence.len();
     // Generate a vector of read positions
     info!("Generating read coordinates.");
     let read_positions: Vec<(usize, usize)> = cover_dataset(
-        seq_len,
+        sequence_length,
         *read_length,
         fragment_pool,
         *coverage,
-        &mut rng,
+        &mut rng
     );
-    // Generate the reads from the read positions.
-    for (start, end) in read_positions {
-        read_set.insert(mutated_sequence[start..end].into());
-    }
+
     info!("Outputting read set");
-    // puts the reads in the heap.
-    if read_set.is_empty() {
+    if read_positions.is_empty() {
         Err("No reads generated")
     } else {
-        Ok(Box::new(read_set))
+        Ok(read_positions)
     }
 }
 
@@ -157,8 +156,8 @@ pub fn generate_reads(
 mod tests {
     use super::*;
     use rand::SeedableRng;
-    use utils::neat_rng::NeatRng;
-    use utils::nucleotides::Nuc::*;
+    use common::neat_rng::NeatRng;
+    use common::structs::nucleotides::Nuc::*;
 
     #[test]
     fn test_cover_dataset() {
@@ -168,14 +167,8 @@ mod tests {
         let coverage = 1;
         let mut rng = NeatRng::seed_from_u64(0);
 
-        let cover = cover_dataset(
-            span_length,
-            read_length,
-            fragment_pool,
-            coverage,
-            &mut rng,
-        );
-        assert_eq!(cover[0], (0,10))
+        let cover = cover_dataset(span_length, read_length, fragment_pool, coverage, &mut rng);
+        assert_eq!(cover[0], (0, 10))
     }
 
     #[test]
@@ -186,21 +179,13 @@ mod tests {
         let coverage = 1;
         let mut rng = NeatRng::seed_from_u64(0);
 
-        let cover = cover_dataset(
-            span_length,
-            read_length,
-            fragment_pool,
-            coverage,
-            &mut rng,
-        );
+        let cover = cover_dataset(span_length, read_length, fragment_pool, coverage, &mut rng);
         assert_eq!(cover[0], (0, 300))
     }
 
     #[test]
     fn test_generate_reads_single() {
-        let mutated_sequence = vec![
-            A, A, C, A, T, T, T, T, A, A, A, A, A, G, G, G, N, N, N, N
-        ];
+        let mutated_sequence = vec![A, A, C, A, T, T, T, T, A, A, A, A, A, G, G, G, N, N, N, N];
         let read_length = 10;
         let coverage = 1;
         let paired_ended = false;
@@ -208,23 +193,22 @@ mod tests {
         let st_dev = None;
         let mut rng = NeatRng::seed_from_u64(0);
         let reads = generate_reads(
-            &mutated_sequence,
+            &mutated_sequence.len(),
             &read_length,
             &coverage,
             paired_ended,
             mean,
             st_dev,
             &mut rng,
-        ).unwrap();
+        )
+        .unwrap();
         println!("{:?}", reads);
-        assert!(reads.contains(&(vec![A, A, C, A, T, T, T, T, A, A])));
+        assert!(reads.contains(&(0, 9)));
     }
 
     #[test]
     fn test_seed_rng() {
-        let mutated_sequence = vec![
-            A, A, C, A, T, T, T, T, A, A, A, A, A, G, G, G, N, N, N, N
-        ];
+        let mutated_sequence = vec![A, A, C, A, T, T, T, T, A, A, A, A, A, G, G, G, N, N, N, N];
         let read_length = 10;
         let coverage = 1;
         let paired_ended = false;
@@ -239,7 +223,8 @@ mod tests {
             mean,
             st_dev,
             &mut rng,
-        ).unwrap();
+        )
+        .unwrap();
 
         let run2 = generate_reads(
             &mutated_sequence,
@@ -249,7 +234,8 @@ mod tests {
             mean,
             st_dev,
             &mut rng,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert_eq!(run1, run2)
     }

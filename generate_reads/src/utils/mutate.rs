@@ -3,21 +3,26 @@
 // mutations introduced
 //
 // mutate_sequence adds actual mutations to the fasta sequence
+use crate::utils;
+use common;
 
-use std::collections::HashMap;
-use rand::prelude::*;
-use rand::Rng;
 use log::{debug, error};
 use rand::distributions::WeightedIndex;
-use utils::mutation_model::MutationModel;
-use utils::neat_rng::NeatRng;
-use utils::nucleotides::Nuc;
+use rand::prelude::*;
+use rand::Rng;
+use std::collections::HashMap;
+use common::models::mutation_model::MutationModel;
+use common::neat_rng::NeatRng;
+use common::structs::nucleotides::Nuc;
 
 pub fn mutate_fasta(
     file_struct: &HashMap<String, Vec<Nuc>>,
     minimum_mutations: Option<usize>,
-    mut rng: &mut NeatRng
-) -> (Box<HashMap<String, Vec<Nuc>>>, Box<HashMap<String, Vec<(usize, Nuc, Nuc)>>>) {
+    mut rng: &mut NeatRng,
+) -> (
+    Box<HashMap<String, Vec<Nuc>>>,
+    Box<HashMap<String, Vec<(usize, Nuc, Nuc)>>>,
+) {
     // Takes:
     // file_struct: a hashmap of contig names (keys) and a vector
     // representing the reference sequence.
@@ -36,7 +41,7 @@ pub fn mutate_fasta(
     // string that represents the altered sequence and stores all the variants.
     const MUT_RATE: f64 = 0.01; // will update this with something more elaborate later.
     let mut return_struct: HashMap<String, Vec<Nuc>> = HashMap::new(); // the mutated sequences
-    // hashmap with keys of the contig names with a list of positions and alts under the contig.
+                                                                       // hashmap with keys of the contig names with a list of positions and alts under the contig.
     let mut all_variants: HashMap<String, Vec<(usize, Nuc, Nuc)>> = HashMap::new();
     // For each sequence, figure out how many variants it should get and add them
     for (name, sequence) in file_struct {
@@ -73,11 +78,12 @@ pub fn mutate_fasta(
             }
         }
         // Mutates the sequence, using the original
-        let (mutated_record, contig_mutations) = mutate_sequence(
-            &sequence, num_positions, &mut rng
-        );
+        let (mutated_record, contig_mutations) =
+            mutate_sequence(&sequence, num_positions, &mut rng);
         // Add to the return struct and variants map.
-        return_struct.entry(name.clone()).or_insert(mutated_record.clone());
+        return_struct
+            .entry(name.clone())
+            .or_insert(mutated_record.clone());
         all_variants.entry(name.clone()).or_insert(contig_mutations);
         debug!("Finished mutating {}", name);
     }
@@ -87,7 +93,7 @@ pub fn mutate_fasta(
 fn mutate_sequence(
     sequence: &Vec<Nuc>,
     num_positions: usize,
-    mut rng: &mut NeatRng
+    mut rng: &mut NeatRng,
 ) -> (Vec<Nuc>, Vec<(usize, Nuc, Nuc)>) {
     // Takes:
     // sequence: A u8 vector representing a sequence of DNA
@@ -133,25 +139,25 @@ fn mutate_sequence(
     // Will hold the variants added to this sequence
     let mut sequence_variants: Vec<(usize, Nuc, Nuc)> = Vec::new();
     // for each index, picks a new base
-    for index in indexes_to_mutate {
-        // remember the reference for later.
-        let reference_base = sequence[index];
-        // pick a new base and assign the position to it.
-        mutated_record[index] = mutation_model.mutate(reference_base, &mut rng);
-        // This check simply ensures that our model actually mutated the base.
-        debug_assert_ne!(mutated_record[index], reference_base);
-        // add the location and alt base for the variant
-        sequence_variants.push((index, mutated_record[index], reference_base))
-    }
+    // for index in indexes_to_mutate {
+    //     // remember the reference for later.
+    //     let reference_base = sequence[index];
+    //     // pick a new base and assign the position to it.
+    //     mutated_record[index] = mutation_model.mutate(reference_base, &mut rng);
+    //     // This check simply ensures that our model actually mutated the base.
+    //     debug_assert_ne!(mutated_record[index], reference_base);
+    //     // add the location and alt base for the variant
+    //     sequence_variants.push((index, mutated_record[index], reference_base))
+    // }
     (mutated_record, sequence_variants)
 }
 
 #[cfg(test)]
 mod tests {
-    use rand::SeedableRng;
-    use utils::neat_rng::NeatRng;
     use super::*;
-    use utils::nucleotides::Nuc::*;
+    use rand::SeedableRng;
+    use common::neat_rng::NeatRng;
+    use common::structs::nucleotides::Nuc::*;
 
     #[test]
     fn test_mutate_sequence() {
@@ -168,15 +174,10 @@ mod tests {
     #[test]
     fn test_mutate_fasta() {
         let seq: Vec<Nuc> = vec![N, N, A, A, A, C, C, G, A, T, C, C, C];
-        let file_struct: HashMap<String, Vec<Nuc>> = HashMap::from([
-                ("chr1".to_string(), seq.clone())
-            ]);
+        let file_struct: HashMap<String, Vec<Nuc>> =
+            HashMap::from([("chr1".to_string(), seq.clone())]);
         let mut rng = NeatRng::seed_from_u64(0);
-        let mutations = mutate_fasta(
-            &file_struct,
-            Some(1),
-            &mut rng,
-        );
+        let mutations = mutate_fasta(&file_struct, Some(1), &mut rng);
         assert!(mutations.0.contains_key("chr1"));
         assert!(mutations.1.contains_key("chr1"));
         let mutation_location = mutations.1["chr1"][0].0;
@@ -189,16 +190,11 @@ mod tests {
     #[test]
     fn test_mutate_fasta_no_mutations() {
         let seq: Vec<Nuc> = vec![N, N, A, A, A, C, C, G, A, T, C, C, C];
-        let file_struct: HashMap<String, Vec<Nuc>> = HashMap::from([
-            ("chr1".to_string(), seq.clone())
-        ]);
+        let file_struct: HashMap<String, Vec<Nuc>> =
+            HashMap::from([("chr1".to_string(), seq.clone())]);
         // if a random mutation suddenly pops up in a build, it's probably the seed for this.
         let mut rng = NeatRng::seed_from_u64(0);
-        let mutations = mutate_fasta(
-            &file_struct,
-            None,
-            &mut rng,
-        );
+        let mutations = mutate_fasta(&file_struct, None, &mut rng);
         assert!(mutations.0.contains_key("chr1"));
         assert!(mutations.1.contains_key("chr1"));
         assert!(mutations.1["chr1"].is_empty());

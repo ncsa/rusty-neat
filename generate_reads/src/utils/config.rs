@@ -1,16 +1,18 @@
 // This is the run configuration for this particular run, which holds the parameters needed by the
 // various side functions. It is build with a ConfigurationBuilder, which can take either a
 // config yaml file or command line arguments and turn them into the configuration.
+use crate::utils;
+use common;
 
-use std::collections::{HashMap};
-use std::string::String;
-use utils::cli::Cli;
-use log::{warn, info};
-use std::{env, fs};
-use std::path::{Path, PathBuf};
+use log::{info, warn};
 use rand_distr::num_traits::ToPrimitive;
 use serde_yaml::Value;
-use utils::file_tools::check_create_dir;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::string::String;
+use std::{env, fs};
+use utils::cli::Cli;
+use common::file_tools::check_create_dir;
 
 #[derive(Debug)]
 pub struct RunConfiguration {
@@ -47,7 +49,7 @@ pub struct RunConfiguration {
     pub fragment_st_dev: Option<f64>,
     pub produce_fastq: bool,
     pub produce_fasta: bool,
-    pub produce_vcf:  bool,
+    pub produce_vcf: bool,
     pub produce_bam: bool,
     pub rng_seed: Option<u64>,
     pub overwrite_output: bool,
@@ -76,7 +78,7 @@ pub struct ConfigBuilder {
     fragment_st_dev: Option<f64>,
     produce_fastq: bool,
     pub(crate) produce_fasta: bool,
-    pub(crate) produce_vcf:  bool,
+    pub(crate) produce_vcf: bool,
     produce_bam: bool,
     rng_seed: Option<u64>,
     overwrite_output: bool,
@@ -117,7 +119,8 @@ impl ConfigBuilder {
             panic!("No reference was specified.")
         }
         info!(
-            "Running rusty-neat to generate reads on {} with...", self.reference.clone().unwrap()
+            "Running rusty-neat to generate reads on {} with...",
+            self.reference.clone().unwrap()
         );
         info!("  >read length: {}", self.read_len);
         info!("  >coverage: {}", self.coverage);
@@ -128,12 +131,18 @@ impl ConfigBuilder {
             warn!("Overwriting any existing files.")
         }
         if self.minimum_mutations.is_some() {
-            info!("  >minimum mutations per contig: {}", self.minimum_mutations.unwrap())
+            info!(
+                "  >minimum mutations per contig: {}",
+                self.minimum_mutations.unwrap()
+            )
         }
         let output_path = &self.output_dir;
         // This check may be overkill, but here it is. Let's make sure we ended up with something
         if !output_path.as_path().is_dir() {
-            warn!("Output directory is not a directory: {:?}", self.output_dir.display());
+            warn!(
+                "Output directory is not a directory: {:?}",
+                self.output_dir.display()
+            );
             check_create_dir(output_path);
         }
         let file_prefix = format!("{}/{}", self.output_dir.display(), self.output_prefix);
@@ -152,7 +161,10 @@ impl ConfigBuilder {
             }
             if self.produce_fastq {
                 info!("\t> fragment mean: {}", self.fragment_mean.unwrap());
-                info!("\t> fragment standard deviation: {}", self.fragment_st_dev.unwrap());
+                info!(
+                    "\t> fragment standard deviation: {}",
+                    self.fragment_st_dev.unwrap()
+                );
                 info!("Producing fastq files:");
                 info!("\t> {}_r1.fastq", file_prefix);
                 info!("\t> {}_r2.fastq", file_prefix);
@@ -200,7 +212,10 @@ impl ConfigBuilder {
 }
 
 fn generate_error(key: &str, key_type: &str, value: &Value) -> String {
-    format!("Input {} could not be converted to {}: {:?}", key, key_type, value)
+    format!(
+        "Input {} could not be converted to {}: {:?}",
+        key, key_type, value
+    )
 }
 
 pub fn read_config_yaml<'d>(yaml: String) -> Box<RunConfiguration> {
@@ -214,8 +229,8 @@ pub fn read_config_yaml<'d>(yaml: String) -> Box<RunConfiguration> {
         Err(error) => panic!("Problem reading the config file: {}", error),
     };
     // Uses serde_yaml to read the file into a HashMap
-    let scrape_config: HashMap<String, Value> = serde_yaml::from_reader(file)
-        .expect("Could not read values");
+    let scrape_config: HashMap<String, Value> =
+        serde_yaml::from_reader(file).expect("Could not read values");
     // Create the config builder then update any items from the configuration file in the
     // configuration object and returns it.
     let mut config_builder = ConfigBuilder::new();
@@ -229,118 +244,102 @@ pub fn read_config_yaml<'d>(yaml: String) -> Box<RunConfiguration> {
                     panic!("Reference file not found: {}", value.as_str().unwrap())
                 } else {
                     // Okay, serde Value is weird for strings
-                    config_builder.reference = value
-                        .as_str()
-                        .unwrap()
-                        .to_string()
-                        .into();
+                    config_builder.reference = value.as_str().unwrap().to_string().into();
                 }
-            },
+            }
             _ => {
                 match &value.as_str() {
                     Some(".") => continue,
                     _ => match key.as_str() {
                         "read_len" => {
-                            config_builder.read_len = value.as_u64()
-                                .expect(&generate_error(
-                                    &key, "integer", &value
-                                ))
-                            as usize
-                        },
+                            config_builder.read_len = value
+                                .as_u64()
+                                .expect(&generate_error(&key, "integer", &value))
+                                as usize
+                        }
                         "coverage" => {
-                            config_builder.coverage = value.as_u64()
-                                .expect(&generate_error(
-                                    &key, "integer", &value
-                                ))
-                            as usize
-                        },
+                            config_builder.coverage = value
+                                .as_u64()
+                                .expect(&generate_error(&key, "integer", &value))
+                                as usize
+                        }
                         "mutation_rate" => {
-                            config_builder.mutation_rate = value.as_f64()
-                                .expect(&generate_error(
-                                    &key, "float", &value
-                                ))
+                            config_builder.mutation_rate = value
+                                .as_f64()
+                                .expect(&generate_error(&key, "float", &value))
                         }
                         "ploidy" => {
-                            config_builder.ploidy = value.as_u64()
-                                .expect(&generate_error(
-                                    &key, "integer", &value
-                                ))
-                            as usize
-                        },
+                            config_builder.ploidy = value
+                                .as_u64()
+                                .expect(&generate_error(&key, "integer", &value))
+                                as usize
+                        }
                         "paired_ended" => {
-                            config_builder.paired_ended = value.as_bool()
-                                .expect(&generate_error(
-                                    &key, "boolean", &value
-                                ))
-                        },
+                            config_builder.paired_ended = value
+                                .as_bool()
+                                .expect(&generate_error(&key, "boolean", &value))
+                        }
                         "fragment_mean" => {
-                            config_builder.fragment_mean = value.as_f64()
-                                .expect(&generate_error(
-                                    &key, "float", &value
-                                ))
+                            config_builder.fragment_mean = value
+                                .as_f64()
+                                .expect(&generate_error(&key, "float", &value))
                                 .into() // to make it an option
-                        },
+                        }
                         "fragment_st_dev" => {
-                            config_builder.fragment_st_dev = value.as_f64()
-                                .expect(&generate_error(
-                                    &key, "float", &value
-                                ))
+                            config_builder.fragment_st_dev = value
+                                .as_f64()
+                                .expect(&generate_error(&key, "float", &value))
                                 .into() // to make it an option
-                        },
+                        }
                         "produce_fastq" => {
-                            config_builder.produce_fastq = value.as_bool()
-                                .expect(&generate_error(
-                                    &key, "boolean", &value
-                                ))
-                        },
+                            config_builder.produce_fastq = value
+                                .as_bool()
+                                .expect(&generate_error(&key, "boolean", &value))
+                        }
                         "produce_fasta" => {
-                            config_builder.produce_fasta = value.as_bool()
-                                .expect(&generate_error(
-                                    &key, "boolean", &value
-                                ))
-                        },
+                            config_builder.produce_fasta = value
+                                .as_bool()
+                                .expect(&generate_error(&key, "boolean", &value))
+                        }
                         "produce_vcf" => {
-                            config_builder.produce_vcf = value.as_bool()
-                                .expect(&generate_error(
-                                    &key, "boolean", &value
-                                ))
-                        },
+                            config_builder.produce_vcf = value
+                                .as_bool()
+                                .expect(&generate_error(&key, "boolean", &value))
+                        }
                         "produce_bam" => {
-                            config_builder.produce_bam = value.as_bool()
-                                .expect(&generate_error(
-                                    &key, "boolean", &value
-                                ))
-                        },
+                            config_builder.produce_bam = value
+                                .as_bool()
+                                .expect(&generate_error(&key, "boolean", &value))
+                        }
                         "rng_seed" => {
-                            config_builder.rng_seed = value.as_u64()
-                                .expect(&generate_error(
-                                    &key, "64-bit integer", &value
-                                ))
+                            config_builder.rng_seed = value
+                                .as_u64()
+                                .expect(&generate_error(&key, "64-bit integer", &value))
                                 .into() // to make it an option
-                        },
+                        }
                         "overwrite_output" => {
-                            config_builder.overwrite_output = value.as_bool()
-                                .expect(&generate_error(
-                                    &key, "boolean", &value
-                                ))
-                        },
+                            config_builder.overwrite_output = value
+                                .as_bool()
+                                .expect(&generate_error(&key, "boolean", &value))
+                        }
                         "minimum_mutations" => {
-                            config_builder.minimum_mutations = Some(value.as_u64()
-                                .expect(&generate_error(
-                                    &key, "Valid integer", &value
-                                ))
-                                .to_usize()
-                                .unwrap())
-                        },
+                            config_builder.minimum_mutations = Some(
+                                value
+                                    .as_u64()
+                                    .expect(&generate_error(&key, "Valid integer", &value))
+                                    .to_usize()
+                                    .unwrap(),
+                            )
+                        }
                         "output_dir" => {
                             let output_path = value.as_str().unwrap().to_string();
                             config_builder.output_dir = PathBuf::from(output_path);
-                        },
+                        }
                         "output_prefix" => {
                             config_builder.output_prefix = value.as_str().unwrap().to_string()
-                        },
+                        }
                         _ => continue,
-                    }
+                    },
                 }
             }
         }
@@ -366,9 +365,8 @@ pub fn build_config_from_args(args: Cli) -> Box<RunConfiguration> {
     config_builder.coverage = args.coverage;
     // default is empty string, in which case the config builder controls the default
     if args.output_dir == "" {
-        config_builder.output_dir = env::current_dir().expect(
-            "Error finding current directory. Please specify --output-dir (-o) option."
-        )
+        config_builder.output_dir = env::current_dir()
+            .expect("Error finding current directory. Please specify --output-dir (-o) option.")
     } else {
         let output_path = Path::new(&args.output_dir);
         check_create_dir(output_path);
@@ -409,7 +407,7 @@ mod tests {
             overwrite_output: true,
             minimum_mutations: None,
             output_dir: PathBuf::from("/my/my"),
-            output_prefix: String::from("Hey.hey")
+            output_prefix: String::from("Hey.hey"),
         };
 
         println!("{:?}", test_configuration);
@@ -470,7 +468,7 @@ mod tests {
 
     #[test]
     fn test_command_line_inputs() {
-        let args: Cli = Cli{
+        let args: Cli = Cli {
             config: String::new(),
             reference: String::from("data/ecoli.fa"),
             output_dir: String::from("data"),
@@ -505,7 +503,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn test_cl_missing_ref() {
-        let args: Cli = Cli{
+        let args: Cli = Cli {
             config: String::new(),
             reference: String::from(""),
             output_dir: String::from("test_dir"),
@@ -552,7 +550,7 @@ mod tests {
         config.check_and_print_config();
         config.produce_vcf = true;
         config.check_and_print_config();
-        config.produce_bam= true;
+        config.produce_bam = true;
         config.check_and_print_config();
         // If it passes all the checks, we're good.
     }
@@ -598,7 +596,7 @@ mod tests {
 
     #[test]
     fn no_output_dir_given() {
-        let args: Cli = Cli{
+        let args: Cli = Cli {
             config: String::new(),
             reference: String::from("data/H1N1.fa"),
             output_dir: String::new(),
@@ -616,7 +614,7 @@ mod tests {
 
     #[test]
     fn test_minimum_mutations_and_others() {
-        let args: Cli = Cli{
+        let args: Cli = Cli {
             config: String::new(),
             reference: String::from("data/H1N1.fa"),
             output_dir: String::new(),

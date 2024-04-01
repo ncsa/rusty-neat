@@ -1,3 +1,7 @@
 [workspace]
-members = ["common", "generate_reads"]
+
+members = [
+    "generate_reads",
+    "common",
+]
 resolver = "2"

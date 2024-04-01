@@ -1,12 +1,12 @@
-use std::fs;
 use serde::{Deserialize, Serialize};
 use serde_json::*;
-use utils::quality_scores::QualityScoreModel;
+use std::fs;
+use common::models::quality_scores::QualityScoreModel;
 
 #[derive(Serialize, Deserialize)]
 pub struct QualityRaw {
     seed_stats: Vec<f64>,
-    stats_from_one: Vec<Vec<Vec<f64>>>
+    stats_from_one: Vec<Vec<Vec<f64>>>,
 }
 
 impl QualityRaw {
@@ -33,13 +33,13 @@ impl QualityRaw {
         let quality_score_options: Vec<usize> = (0..42).collect();
         let binned_scores = false;
 
-        QualityScoreModel {
+        QualityScoreModel::from(
             quality_score_options,
             binned_scores,
             assumed_read_length,
             seed_weights,
             weights_from_one,
-        }
+        )
     }
 }
 

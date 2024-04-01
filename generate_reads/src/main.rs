@@ -1,34 +1,33 @@
-extern crate rand;
 extern crate clap;
-extern crate log;
-extern crate simplelog;
-extern crate serde_yaml;
-extern crate rand_distr;
 extern crate itertools;
-extern crate rand_core;
+extern crate log;
+extern crate rand;
 extern crate rand_chacha;
-extern crate serde_json;
+extern crate rand_core;
+extern crate rand_distr;
 extern crate serde;
+extern crate serde_json;
+extern crate serde_yaml;
+extern crate simplelog;
 
 use common;
-use utils;
+pub mod utils;
 
+use clap::Parser;
+use log::*;
+use rand::thread_rng;
+use rand::SeedableRng;
+use rand_core::RngCore;
+use simplelog::*;
 use std::collections::HashMap;
 use std::fs::File;
-use clap::{Parser};
-use log::*;
-use simplelog::*;
-use rand::SeedableRng;
-use rand::thread_rng;
-use rand_core::RngCore;
 use utils::cli;
-use utils::config::{read_config_yaml, build_config_from_args};
-use utils::file_tools::check_parent;
+use utils::config::{build_config_from_args, read_config_yaml};
+use common::file_tools::check_parent;
+use common::neat_rng::NeatRng;
 use utils::runner::run_neat;
-use utils::neat_rng::NeatRng;
 
 fn main() {
-
     info!("Begin processing");
     // parse the arguments from the command line
     let args = cli::Cli::parse();
@@ -43,7 +42,7 @@ fn main() {
         _ => panic!(
             "Unknown log level, please set to one of \
             Trace, Debug, Info, Warn, Error, or Off (case insensitive)."
-        )
+        ),
     };
     // Check that the parent dir exists
     let log_destination = check_parent(&args.log_dest).unwrap();
@@ -62,8 +61,9 @@ fn main() {
             level_filter,
             Config::default(),
             File::create(log_destination).unwrap(),
-        )
-    ]).unwrap();
+        ),
+    ])
+    .unwrap();
     // set up the config struct based on whether there was an input config. Input config
     // overrides any other inputs.
     let config = if args.config != "" {
@@ -87,8 +87,6 @@ fn main() {
     info!("Generating random numbers using the seed: {}", seed);
     let mut rng: NeatRng = SeedableRng::seed_from_u64(seed);
     // run the generate reads main script
-    run_neat(config, &mut rng).unwrap_or_else(|error| {
-        panic!("Neat encountered a problem: {:?}", error)
-    })
+    run_neat(config, rng)
+        .unwrap_or_else(|error| panic!("Neat encountered a problem: {:?}", error))
 }
-

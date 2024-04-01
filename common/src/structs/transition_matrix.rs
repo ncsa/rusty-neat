@@ -1,7 +1,8 @@
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TransitionMatrix {
     // Nucleotide transition matrix. Rows represent the base we are mutating and the weights are
-    // in the standard nucleotide order (in the same a, c, g, t order)
+    // in the standard nucleotide order (in the same a, c, g, t order). This structure is
+    // fundamental to the others and to the mutation model in general.
     //
     // The model is a 4x4 matrix with zeros along the diagonal because, e.g., A can't "mutate" to A.
     // The model is usually symmetric, but technically, the probability for A -> G could be

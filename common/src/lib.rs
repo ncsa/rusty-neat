@@ -1,8 +1,11 @@
+pub mod structs;
 pub mod models;
-pub mod utils;
-pub mod variant_classes;
+pub mod neat_rng;
+pub mod file_tools;
 
 extern crate rand;
-extern crate rand_core;
 extern crate rand_chacha;
+extern crate rand_core;
 extern crate serde;
+extern crate serde_json;
+extern crate log;

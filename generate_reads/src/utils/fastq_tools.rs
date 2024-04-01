@@ -1,13 +1,17 @@
 // This library writes either single ended or paired-ended fastq files.
+use common;
+use crate::utils;
 
 use std::io::Write;
 use std::{fs, io};
+use std::collections::HashMap;
 
 use utils::fasta_tools::sequence_array_to_string;
-use utils::file_tools::open_file;
-use utils::neat_rng::NeatRng;
-use utils::quality_scores::QualityScoreModel;
-use utils::nucleotides::Nuc;
+use common::file_tools::open_file;
+use common::neat_rng::NeatRng;
+use common::structs::nucleotides::Nuc;
+use common::models::quality_scores::QualityScoreModel;
+use common::structs::variants::Variant;
 
 fn reverse_complement(sequence: &Vec<Nuc>) -> Vec<Nuc> {
     // Returns the reverse complement of a vector of u8's representing a DNA sequence.
@@ -20,12 +24,12 @@ fn reverse_complement(sequence: &Vec<Nuc>) -> Vec<Nuc> {
 }
 
 pub fn write_fastq(
-    fastq_filename: &str,
+    fasta_map: &Box<HashMap<String, Vec<Nuc>>>,
+    reads_dataset: &Box<HashMap<String, (usize, usize)>>,
     overwrite_output: bool,
+    fastq_filename: &str,
     paired_ended: bool,
-    dataset: Vec<&Vec<Nuc>>,
     quality_score_model: QualityScoreModel,
-    mut rng: &mut NeatRng,
 ) -> io::Result<()> {
     // Takes:
     // fastq_filename: prefix for the output fastq files.
@@ -36,16 +40,17 @@ pub fn write_fastq(
     //
     // Writes fastq files. At the moment, it only writes out single r1 file, but will eventually write
     // out r1 and r2 files.
-
+    //
     // name_prefix is for the prefix for the read names. Reads are numbered in output order
     // (Although this feature is currently untested and unknown).
     // (May need sorting.)
+    // todo, fold in the variants to the output reads,
     let name_prefix = "neat_generated_".to_string();
     let mut filename1 = String::from(fastq_filename) + "_r1.fastq";
     // open the file and append lines
     let mut outfile1 = open_file(&mut filename1, overwrite_output)
         .expect(&format!("Error opening output {}", filename1));
-    // setting up pairend ended reads For single ended reads, this will go unused.
+    // Setting up paired ended reads. For single ended reads, this will go unused.
     let mut filename2 = String::from(fastq_filename) + "_r2.fastq";
     // open the second file and append lines
     let mut outfile2 = open_file(&mut filename2, overwrite_output)
@@ -57,11 +62,13 @@ pub fn write_fastq(
         // This assumes that the sequence length is the correct length at this point.
         let read_length = sequence.len();
         // Need to convert the raw scores to a string
-        let quality_scores = quality_score_model.generate_quality_scores(
-            read_length, &mut rng
-        );
+        let quality_scores = quality_score_model.generate_quality_scores(read_length, &mut rng);
         // sequence name
-        writeln!(&mut outfile1, "@{}/1", name_prefix.clone() + &index.to_string())?;
+        writeln!(
+            &mut outfile1,
+            "@{}/1",
+            name_prefix.clone() + &index.to_string()
+        )?;
         // Array as a string
         writeln!(&mut outfile1, "{}", sequence_array_to_string(&sequence))?;
         // The stupid plus sign
@@ -71,19 +78,25 @@ pub fn write_fastq(
         index += 1;
         if paired_ended {
             // Need a quality score for this read as well
-            let quality_scores = quality_score_model.generate_quality_scores(
-                read_length, &mut rng
-            );
+            let quality_scores = quality_score_model.generate_quality_scores(read_length, &mut rng);
             // sequence name
-            writeln!(&mut outfile2, "@{}/2", name_prefix.clone() + &index.to_string())?;
+            writeln!(
+                &mut outfile2,
+                "@{}/2",
+                name_prefix.clone() + &index.to_string()
+            )?;
             // Array as a string
-            writeln!(&mut outfile2, "{}", sequence_array_to_string(&reverse_complement(&sequence)))?;
+            writeln!(
+                &mut outfile2,
+                "{}",
+                sequence_array_to_string(&reverse_complement(&sequence))
+            )?;
             // The stupid plus sign
             writeln!(&mut outfile2, "+")?;
             // Qual score of all F's for the whole thing.
             writeln!(&mut outfile2, "{}", quality_scores_to_str(quality_scores))?;
         }
-    };
+    }
     if !paired_ended {
         fs::remove_file(filename2)?;
     }
@@ -101,8 +114,8 @@ fn quality_scores_to_str(array: Vec<usize>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
     use rand_core::SeedableRng;
+    use std::path::Path;
     use utils::nucleotides::Nuc::*;
 
     #[test]
@@ -129,7 +142,8 @@ mod tests {
             dataset,
             quality_score_model,
             &mut rng,
-        ).unwrap();
+        )
+        .unwrap();
         let outfile1 = Path::new("test_single_r1.fastq");
         let outfile2 = Path::new("test_single_r2.fastq");
         assert!(outfile1.exists());
@@ -155,7 +169,8 @@ mod tests {
             dataset,
             quality_score_model,
             &mut rng,
-        ).unwrap();
+        )
+        .unwrap();
         let outfile1 = Path::new("test_paired_r1.fastq");
         let outfile2 = Path::new("test_paired_r2.fastq");
         assert!(outfile1.exists());

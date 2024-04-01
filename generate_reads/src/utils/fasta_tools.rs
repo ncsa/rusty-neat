@@ -1,31 +1,26 @@
 // This library contains tools needed to process fasta files as input and output.
+use common;
 
 use log::info;
-use std::io;
+use std::{io, str, usize};
 use std::io::Write;
 use std::*;
-use HashMap;
-use utils::file_tools::read_lines;
-use utils::file_tools::open_file;
-use utils::nucleotides::Nuc;
-
-pub fn sequence_array_to_string(input_array: &Vec<Nuc>) -> String {
-    // Converts a sequence vector into a string representing the DNA sequence
-    let mut return_string = String::new();
-    for nuc in input_array {
-        return_string += &nuc.nuc_to_char().to_string();
-    }
-    return_string
-}
+use std::collections::{HashMap, VecDeque};
+use common::file_tools::open_file;
+use common::file_tools::read_lines;
+use common::models::mutation_model::MutationModel;
+use common::structs::nucleotides::Nuc;
+use common::structs::nucleotides::base_to_nuc;
+use common::structs::variants::{Variant, VariantType};
 
 pub fn read_fasta(
-    fasta_path: &str
-) -> Result<(Box<HashMap<String, Vec<Nuc>>>, Vec<String>), io::Error> {
+    fasta_path: &str,
+) -> Result<(Box<HashMap<String, Vec<Nuc>>>, VecDeque<String>), io::Error> {
     // Reads a fasta file and turns it into a HashMap and puts it in the heap
     info!("Reading fasta: {}", fasta_path);
 
     let mut fasta_map: HashMap<String, Vec<Nuc>> = HashMap::new();
-    let mut fasta_order: Vec<String> = Vec::new();
+    let mut fasta_order: VecDeque<String> = VecDeque::new();
     let mut current_key = String::new();
 
     let lines = read_lines(fasta_path).unwrap();
@@ -34,80 +29,112 @@ pub fn read_fasta(
         Ok(l) => {
             if l.starts_with('>') {
                 if !current_key.is_empty() {
-                    fasta_map.entry(current_key.clone()).or_insert(temp_seq.clone());
+                    fasta_map
+                        .entry(current_key.clone())
+                        .or_insert(temp_seq.clone());
                 }
                 current_key = String::from(l.strip_prefix('>').unwrap());
-                fasta_order.push(current_key.clone());
+                fasta_order.push_back(current_key.clone());
                 temp_seq = vec![];
             } else {
                 for char in l.chars() {
-                    temp_seq.push(Nuc::base_to_nuc(char));
+                    temp_seq.push(base_to_nuc(char));
                 }
             }
-        },
-        Err(error) => panic!("Problem reading fasta file: {}", error)
+        }
+        Err(error) => panic!("Problem reading fasta file: {}", error),
     });
     // Need to pick up the last one
-    fasta_map.entry(current_key.clone()).or_insert(temp_seq.clone());
+    fasta_map
+        .entry(current_key.clone())
+        .or_insert(temp_seq.clone());
     Ok((Box::new(fasta_map), fasta_order))
 }
 
 pub fn write_fasta(
-    fasta_output: &Box<HashMap<String, Vec<Nuc>>>,
-    fasta_order: &Vec<String>,
+    reference_fasta: &Box<HashMap<String, Vec<Nuc>>>,
+    variants: &HashMap<String, HashMap<usize, Variant>>,
+    fasta_order: &VecDeque<String>,
     overwrite_output: bool,
     output_file: &str,
 ) -> io::Result<()> {
-    /*
-    Takes:
-        fasta_output: the hashmap of mutated sequences with contig names
-        fasta_order: A vector with the proper order for the fasta elements
-        output_file: the prefix for the output file name
-        ploidy: the number of copies of each chromosome the simulation is using
-    Returns:
-        Errors if there is a problem writing the file, otherwise it returns nothing.
-     */
-    // writing fasta output to files
+    // reference_fasta: the hashmap of mutated sequences with contig names
+    // variants: the location, type, and size of the variants that have been inserted in the fasta.
+    // fasta_lengths: A vector with the proper order for the fasta elements and lengths of the
+    //      sequences.
+    // overwrite_output: Boolean that controls whether an existing file is overwritten.
+    // output_file: the prefix for the output file name
+    const LINE_LENGTH: usize = 70; // fasta is usually writes with 70 characters per line
     let mut output_fasta = format!("{}.fasta", output_file);
     let mut outfile = open_file(&mut output_fasta, overwrite_output)
         .expect(&format!("Error opening {}", output_fasta));
     for contig in fasta_order {
-        let sequence = &fasta_output[contig];
+        let reference_sequence = &reference_fasta[contig];
+        let contig_length = reference_sequence.len();
         // Write contig name
         writeln!(&mut outfile, ">{}", contig)?;
         // write sequences[ploid] to this_fasta
         let mut i = 0;
-        let sequence_to_write: &Vec<Nuc> = &sequence;
-        while i < sequence_to_write.len() {
-            let mut line = String::new();
-            let mut max: usize = 70;
-            let this_length: usize = sequence_to_write[i..].len();
-            // If we don't have 70 characters, write out whatever is left.
-            if this_length < 70 {
-                max = this_length
+        let contig_variants = variants.get(contig).unwrap();
+        let variant_locations: Vec<usize> = contig_variants.keys().collect();
+        while i < *contig_length {
+            let mut mutated_line = String::new();
+            for j in 0..LINE_LENGTH {
+                // Check to make sure we are not out of bounds, which will happen if we
+                // reach the end and there are not exactly 70 bases left (basically, every time)
+                if i + j >= *contig_length {
+                    // ensure that the outer loop breaks after we perform the last writeln.
+                    i += j;
+                    break
+                }
+                let base_to_write: &Nuc = reference_sequence.get(&i).unwrap();
+                if *base_to_write == Nuc::N || variant_locations.contains(&(i+j)) {
+                    let variant_to_apply = contig_variants.get(&(i+j)).unwrap();
+                    mutated_line += match variant_to_apply.variant_type {
+                        VariantType::Indel => {
+                            if variant_to_apply.is_insertion() { // insertion
+                                let mut insertion_string = String::new();
+                                for nuc in variant_to_apply.alternate {
+                                    insertion_string += nuc.to_str();
+                                }
+                                &insertion_string
+                            } else { // Deletion
+                                // The plus one for the base will get added after this if check
+                                i += variant_to_apply.reference.len();
+                                &base_to_write.to_str().to_string()
+                            }
+                        },
+                        VariantType::SNP => {
+                            &variant_to_apply.alternate[0].to_str().to_string()
+                        },
+                    }
+                } else {
+                    mutated_line += base_to_write.to_str();
+                }
+                i += 1
             }
-            for j in 0..max {
-                line += &(sequence_to_write[i + j].nuc_to_char().to_string());
-            }
-            writeln!(&mut outfile, "{}", line)?;
-            i += 70;
+            writeln!(&mut outfile, "{}", mutated_line)?;
         }
-    };
+    }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use utils::nucleotides::Nuc::*;
+    use common::structs::nucleotides::Nuc::*;
+    use common::structs::nucleotides::sequence_array_to_string;
 
     #[test]
     fn test_conversions() {
         let initial_sequence = "AAAANNNNGGGGCCCCTTTTAAAA";
         let test_map: Vec<Nuc> = vec![
-            A, A, A, A, N, N, N, N, G, G, G, G, C, C, C, C, T, T, T, T, A, A, A, A
+            A, A, A, A, N, N, N, N, G, G, G, G, C, C, C, C, T, T, T, T, A, A, A, A,
         ];
-        let remap: Vec<Nuc> = initial_sequence.chars().map(|x| Nuc::base_to_nuc(x)).collect();
+        let remap: Vec<Nuc> = initial_sequence
+            .chars()
+            .map(|x| Nuc::base_to_nuc(x))
+            .collect();
         assert_eq!(remap, test_map);
         assert_eq!(sequence_array_to_string(&test_map), initial_sequence);
     }
@@ -129,18 +156,12 @@ mod tests {
     #[test]
     fn test_write_fasta() -> Result<(), Box<dyn error::Error>> {
         let seq1: Vec<Nuc> = vec![A, A, A, A, A, A, A, A, C, C, C, C, C, C, C, C];
-        let fasta_output: HashMap<String, Vec<Nuc>> = HashMap::from([
-            (String::from("H1N1_HA"), seq1)
-        ]);
+        let fasta_output: HashMap<String, Vec<Nuc>> =
+            HashMap::from([(String::from("H1N1_HA"), seq1)]);
         let fasta_pointer = Box::new(fasta_output);
         let fasta_order = vec![String::from("H1N1_HA")];
         let output_file = "test";
-        let test_write = write_fasta(
-            &fasta_pointer,
-            &fasta_order,
-            true,
-            output_file
-        ).unwrap();
+        let test_write = write_fasta(&fasta_pointer, &fasta_order, true, output_file).unwrap();
         let file_name = "test.fasta";
         assert_eq!(test_write, ());
         let attr = fs::metadata(file_name).unwrap();

@@ -15,15 +15,14 @@
 //! The standard RNG
 
 use rand_core::{CryptoRng, Error, RngCore, SeedableRng};
-
-use rand_chacha::ChaCha12Rng as Rng;
+use rand_chacha::ChaCha12Rng;
 
 /// The standard RNG. The PRNG algorithm in `NeatRng` is chosen to be efficient
 /// on the current platform, to be statistically strong and unpredictable
 /// (meaning a cryptographically secure PRNG).
 ///
 /// The current algorithm used is the ChaCha block cipher with 12 rounds. Please
-/// see this relevant [rand issue] for the discussion. This may change as new 
+/// see this relevant [rand issue] for the discussion. This may change as new
 /// evidence of cipher security and performance becomes available.
 ///
 /// The algorithm is deterministic but should not be considered reproducible
@@ -33,48 +32,34 @@ use rand_chacha::ChaCha12Rng as Rng;
 ///
 /// [rand_chacha]: https://crates.io/crates/rand_chacha
 /// [rand issue]: https://github.com/rust-random/rand/issues/932
-#[cfg_attr(doc_cfg, doc(cfg(feature = "std_rng")))]
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct NeatRng(Rng);
+pub struct NeatRng(ChaCha12Rng);
 
 impl RngCore for NeatRng {
-    #[inline(always)]
-    fn next_u32(&mut self) -> u32 {
-        self.0.next_u32()
-    }
+    fn next_u32(&mut self) -> u32 { self.0.next_u32() }
 
-    #[inline(always)]
-    fn next_u64(&mut self) -> u64 {
-        self.0.next_u64()
-    }
+    fn next_u64(&mut self) -> u64 { self.0.next_u64() }
 
-    #[inline(always)]
-    fn fill_bytes(&mut self, dest: &mut [u8]) {
-        self.0.fill_bytes(dest);
-    }
+    fn fill_bytes(&mut self, dest: &mut [u8]) { self.0.fill_bytes(dest); }
 
-    #[inline(always)]
     fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Error> {
         self.0.try_fill_bytes(dest)
     }
 }
 
 impl SeedableRng for NeatRng {
-    type Seed = <Rng as SeedableRng>::Seed;
+    type Seed = <ChaCha12Rng as SeedableRng>::Seed;
 
-    #[inline(always)]
-    fn from_seed(seed: Self::Seed) -> Self {
-        NeatRng(Rng::from_seed(seed))
-    }
 
-    #[inline(always)]
+    fn from_seed(seed: Self::Seed) -> Self { NeatRng(ChaCha12Rng::from_seed(seed)) }
+
+
     fn from_rng<R: RngCore>(rng: R) -> Result<Self, Error> {
-        Rng::from_rng(rng).map(NeatRng)
+        ChaCha12Rng::from_rng(rng).map(NeatRng)
     }
 }
 
 impl CryptoRng for NeatRng {}
-
 
 #[cfg(test)]
 mod test {
@@ -86,8 +71,10 @@ mod test {
         // Test value-stability of NeatRng. This is expected to break any time
         // the algorithm is changed.
         #[rustfmt::skip]
-            let seed = [1,0,0,0, 23,0,0,0, 200,1,0,0, 210,30,0,0,
-            0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0];
+            let seed = [
+            1,0,0,0, 23,0,0,0, 200,1,0,0, 210,30,0,0,
+            0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0
+        ];
 
         let target = [10719222850664546238, 14064965282130556830];
 

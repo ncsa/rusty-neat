@@ -1,16 +1,10 @@
 [package]
-name = "generate-reads"
+name = "generate_reads"
 version = "0.2.0"
-authors = ["Joshua Allen <jallen17@illinois.edu>"]
 edition = "2021"
-license = "LICENSE.md"
-
-[[bin]]
-name = "generate-reads"
-path = "src/main.rs"
-
 
 [dependencies]
+common = { path = "../common" }
 log = "0.4.21"
 xorshift = "0.1.3"
 chrono = "0.4.34"
@@ -19,6 +13,7 @@ serde_yaml = "0.9.32"
 clap = { version = "4.5.1", features = ["derive"] }
 itertools = "0.12.1"
 assert_fs = "1.1.1"
+rand = "0.9.0-alpha.1"
 rand_distr = "0.5.0-alpha.0"
 rand_core = "0.9.0-alpha.1"
 rand_chacha = "0.9.0-alpha.1"

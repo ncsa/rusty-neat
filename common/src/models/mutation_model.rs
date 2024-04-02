@@ -1,6 +1,7 @@
-use std::collections::HashMap;
 use rand::distributions::{WeightedIndex, Distribution};
 use rand::Rng;
+use std::borrow::BorrowMut;
+use rand_chacha::ChaCha20Rng;
 
 use structs::nucleotides::Nuc;
 use structs::transition_matrix::TransitionMatrix;
@@ -9,7 +10,6 @@ use models::indel_model::IndelModel;
 use models::quality_scores::QualityScoreModel;
 use models::sequencing_error_model::SequencingErrorModel;
 use models::snp_model::SnpModel;
-use neat_rng::NeatRng;
 
 #[derive(Clone)]
 pub struct MutationModel {
@@ -27,13 +27,10 @@ pub struct MutationModel {
     // moment, but this will get expanded out in time.
     pub variant_weights: [(VariantType, usize); 2],
     // These hold all the statistical model data we need to apply the mutations with this model
-    pub statistical_models: StatisticalModels,
-    // This is the rng for the run, which may not be needed depending on how this struct is
-    // being used.
-    pub rng: Option<NeatRng>,
+    statistical_models: StatisticalModels,
 }
 impl MutationModel {
-    pub fn new(rng: NeatRng) -> Self {
+    pub fn new() -> Self {
         // Creating the default model based on the default for the original NEAT.
         let mutation_rate = 0.001;
         let homozygous_frequency = 0.01;
@@ -48,45 +45,13 @@ impl MutationModel {
             homozygous_frequency,
             variant_weights,
             statistical_models,
-            rng: Some(rng),
         }
     }
 
-    #[allow(dead_code)]
-    // Todo I think I need this to generate the mutation model from data
-    pub fn default_no_rng() -> Self {
-        // Creating the default model based on the default for the original NEAT.
-        let mutation_rate = 0.001;
-        let homozygous_frequency = 0.01;
-        // Originally this was expressed as indel_fraction 0.05. To make it easier to sample, we
-        // will use weights. This would have been 0.95 and 0.05, so we divided both by 0.05 to get
-        // 19 and 1 as our weights. This means there is roughly 1 indel every 20 mutations.
-        let variant_weights = [(VariantType::SNP, 19), (VariantType::Indel, 1)];
-        let statistical_models = StatisticalModels::new();
-
-        MutationModel {
-            mutation_rate,
-            homozygous_frequency,
-            variant_weights,
-            statistical_models,
-            rng: None,
-        }
-    }
-
-    pub fn add_rng(
-        &mut self,
-        rng: &mut NeatRng
-    ) {
-        // Cloning the rng is my only choice here. I'm curious to see how the results turn out.
-        self.rng = Some(rng.clone());
-    }
-
-    pub fn get_mut_rng(&self) -> &mut NeatRng { &mut self.rng.clone().unwrap() }
-
-    fn generate_genotype(&self, ploidy: usize) -> (Vec<u8>, bool) {
+    fn generate_genotype(&mut self, ploidy: usize, mut rng: ChaCha20Rng) -> (Vec<u8>, bool) {
         // "Homozygous" is ambiguous for polyploid organisms, so we'll just take "heterozygous" to
         // mean roughly half the reads will have the variant, to keep it simple
-        let is_homozygous = self.get_mut_rng().gen_bool(self.homozygous_frequency);
+        let is_homozygous = rng.borrow_mut().gen_bool(self.homozygous_frequency);
         if is_homozygous {
             (vec![1; ploidy], true)
         } else {
@@ -96,20 +61,21 @@ impl MutationModel {
     }
 
     pub fn generate_mutation(
-        &self,
+        &mut self,
         reference_sequence: &Vec<Nuc>,
         variant_location: usize,
         ploidy: usize,
+        mut rng: ChaCha20Rng,
     ) -> Variant {
         // Select a genotype for the variant
-        let (genotype, is_homozygous) = self.generate_genotype(ploidy);
+        let (genotype, is_homozygous) = self.generate_genotype(ploidy, rng.clone());
         // Select a type of mutation.
         let mut dist = WeightedIndex::new(
             self.variant_weights
                 .iter()
-                .map(|item| item.0)
+                .map(|item| item.1)
         ).unwrap();
-        let variant_type = self.variant_weights[dist.sample(self.get_mut_rng())].0;
+        let variant_type = self.variant_weights[dist.sample(rng.borrow_mut())].0;
         let (reference, alternate) = match variant_type {
             VariantType::SNP => {
                 let trinuc_reference = reference_sequence.get(
@@ -118,7 +84,7 @@ impl MutationModel {
 
                 let alternate_base = self.statistical_models.snp_model.generate_snp(
                     &trinuc_reference,
-                    self.get_mut_rng(),
+                    &mut rng,
                 );
 
                 let reference = vec![trinuc_reference[1]];
@@ -128,10 +94,10 @@ impl MutationModel {
             },
             VariantType::Indel => {
                 let length = self.statistical_models.indel_model
-                    .generate_new_indel_length(self.get_mut_rng());
+                    .generate_new_indel_length(rng.borrow_mut());
                 if length > 0 { // insertion
                     let insertion_vec = self.statistical_models.indel_model
-                        .generate_random_insertion(length.abs() as usize, self.get_mut_rng())
+                        .generate_random_insertion(length.abs() as usize, rng.borrow_mut())
                         .clone();
                     let reference = vec![
                         reference_sequence.get(variant_location)
@@ -143,17 +109,21 @@ impl MutationModel {
                 } else { // deletion
                     // plus one because the first base is not deleted, but serves as a reference
                     // in the vcf
-                    let reference: Vec<Nuc> = vec![
-                        *(reference_sequence.get(
-                        &(variant_location..(variant_location + length.abs() as usize + 1))
-                    ).unwrap())];
-                    let alternate = vec![reference[0].clone()];
+                    let reference: Vec<Nuc> = reference_sequence
+                        .get(
+                        variant_location..(variant_location + length.abs() as usize + 1)
+                    )
+                        .unwrap()
+                        .iter()
+                        .map(|item| *item)
+                        .collect();
+                    let alternate: Vec<Nuc> = vec![reference[0].clone()];
 
                     (reference, alternate)
                 }
             },
         };
-        Variant::new(variant_type, &reference, &alternate, genotype, is_homozygous)
+        Variant::new(variant_type, variant_location, &reference, &alternate, genotype, is_homozygous)
     }
 }
 
@@ -209,7 +179,7 @@ mod tests {
     use super::*;
     use crate::structs::nucleotides::Nuc::*;
     use rand_core::SeedableRng;
-    use neat_rng::NeatRng;
+    use rand_chacha::ChaCha20Rng;
 
     #[test]
     fn test_transition_matrix_from_weights() {
@@ -217,7 +187,7 @@ mod tests {
         let c_weights = vec![20, 0, 1, 1];
         let g_weights = vec![1, 1, 0, 20];
         let t_weights = vec![20, 1, 20, 0];
-        let rng = NeatRng::seed_from_u64(0);
+        let rng = ChaCha20Rng::seed_from_u64(0);
         let matrix = TransitionMatrix::from(vec![a_weights, c_weights, g_weights, t_weights]);
         // It actually mutates the base
         // assert_ne!(test_model.generate_mutation

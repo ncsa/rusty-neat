@@ -1,3 +1,6 @@
+use std::collections::HashMap;
+use rand::Rng;
+use rand_chacha::ChaChaRng;
 use crate::structs::nucleotides::Nuc;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
@@ -16,10 +19,12 @@ pub struct Variant {
     // This is the type of variant. Any new types will need to be added to VariantType
     // to be implemented here.
     pub variant_type: VariantType,
+    // Position on the reference where the variant starts
+    pub position: usize,
     // The reference allele of interest. This is either one base or several bases for a deletion.
-    pub reference: &'static Vec<Nuc>,
+    pub reference: Vec<Nuc>,
     // The alternate allele of interest. This is either one base or several bases for an insertion.
-    pub alternate: &'static Vec<Nuc>,
+    pub alternate: Vec<Nuc>,
     // the genotype will tell us which ploid is mutated in vcf, fastq and bam.
     pub genotype: Vec<u8>,
     // Saved later for convenience
@@ -29,6 +34,7 @@ pub struct Variant {
 impl Variant {
     pub fn new(
         variant_type: VariantType,
+        position: usize,
         reference: &Vec<Nuc>,
         alternate: &Vec<Nuc>,
         genotype: Vec<u8>,
@@ -36,15 +42,59 @@ impl Variant {
     ) -> Self {
         Variant {
             variant_type,
-            reference,
-            alternate,
+            position,
+            reference: reference.clone(),
+            alternate: alternate.clone(),
             genotype,
             is_homozygous,
         }
     }
 
-    pub fn is_insertion(&self) -> bool {
-        self.reference.len() < self.alternate.len()
+    pub fn is_insertion(&self) -> bool { self.reference.len() < self.alternate.len() }
+
+    pub fn apply(&self, sequence: Vec<Nuc>, start: usize) -> Vec<Nuc> {
+        let location = self.position - start;
+        debug_assert_eq!(self.reference[0], sequence[location]);
+        match self.variant_type {
+            VariantType::Indel => {
+                if self.is_insertion() {
+                    // since the alternate includes the base from the reference in the first
+                    // position, we don't need to get it from the sequence.
+                    [
+                        sequence.get(..location).unwrap(),
+                        self.alternate.as_slice(),
+                        sequence.get(location+1..).unwrap()
+                    ].concat()
+                } else {
+                    // +1 in the first segment so that we grab the reference base,
+                    // what we are actually doing in the second is
+                    //     (self.reference.len() - 1) // to account for not deleting the first base
+                    //   + (location + 1) // to skip the reference base
+                    // since -1 and +1 cancel out, we just have length + location.
+                    // example:
+                    //     sequence = [A, C, C, G, T, C, A, A, A, T, T, G, C, T]
+                    //     start = 11243
+                    //     variant = { variant_type: Indel, position: 11245
+                    //                 reference: [C, G, T], alternate: [C] // Deletion of 2 bases
+                    //                 ... } // other info not relevant for now.
+                    // our location in this case is 2 (the index where the variant starts)
+                    // part 1 gives us [A, C, C] (all indexes <= 2)
+                    // part 2 gives us [C, A, A, A, T, T, G, C, T]
+                    // concatenating the 2 together gives us the sequence with a deletion of 2 bases
+                    [
+                        sequence.get(..location+1).unwrap(),
+                        sequence.get((self.reference.len() + location)..).unwrap(),
+                    ].concat()
+                }
+            },
+            VariantType::SNP => {
+                [
+                    sequence.get(..location).unwrap(),
+                    self.alternate.as_slice(),
+                    sequence.get((location + 1)..).unwrap(),
+                ].concat()
+            },
+        }
     }
 }
 

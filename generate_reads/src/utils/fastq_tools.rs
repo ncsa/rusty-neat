@@ -5,15 +5,18 @@ use crate::utils;
 use std::io::Write;
 use std::{fs, io};
 use std::collections::HashMap;
+use itertools::Itertools;
+use rand::seq::SliceRandom;
+use rand_chacha::ChaCha20Rng;
 
-use utils::fasta_tools::sequence_array_to_string;
+use common::structs::nucleotides::sequence_array_to_string;
 use common::file_tools::open_file;
-use common::neat_rng::NeatRng;
 use common::structs::nucleotides::Nuc;
 use common::models::quality_scores::QualityScoreModel;
 use common::structs::variants::Variant;
+use utils::apply_variants::apply_variants;
 
-fn reverse_complement(sequence: &Vec<Nuc>) -> Vec<Nuc> {
+fn reverse_complement(sequence: &[Nuc]) -> Vec<Nuc> {
     // Returns the reverse complement of a vector of u8's representing a DNA sequence.
     let length = sequence.len();
     let mut rev_comp = Vec::new();
@@ -25,11 +28,14 @@ fn reverse_complement(sequence: &Vec<Nuc>) -> Vec<Nuc> {
 
 pub fn write_fastq(
     fasta_map: &Box<HashMap<String, Vec<Nuc>>>,
-    reads_dataset: &Box<HashMap<String, (usize, usize)>>,
+    reads_dataset: &Box<HashMap<String, Vec<(usize, usize)>>>,
+    mutations: &Box<HashMap<String, HashMap<usize, Variant>>>,
+    read_length: usize,
     overwrite_output: bool,
     fastq_filename: &str,
     paired_ended: bool,
     quality_score_model: QualityScoreModel,
+    mut rng: ChaCha20Rng,
 ) -> io::Result<()> {
     // Takes:
     // fastq_filename: prefix for the output fastq files.
@@ -57,44 +63,77 @@ pub fn write_fastq(
         .expect(&format!("Error opening output {}", filename2));
     // write out sequence by sequence using index to track the numbering
     let mut index = 1;
-    // write sequences
-    for sequence in dataset {
-        // This assumes that the sequence length is the correct length at this point.
-        let read_length = sequence.len();
-        // Need to convert the raw scores to a string
-        let quality_scores = quality_score_model.generate_quality_scores(read_length, &mut rng);
-        // sequence name
-        writeln!(
-            &mut outfile1,
-            "@{}/1",
-            name_prefix.clone() + &index.to_string()
-        )?;
-        // Array as a string
-        writeln!(&mut outfile1, "{}", sequence_array_to_string(&sequence))?;
-        // The stupid plus sign
-        writeln!(&mut outfile1, "+")?;
-        // Qual score of all F's for the whole thing.
-        writeln!(&mut outfile1, "{}", quality_scores_to_str(quality_scores))?;
-        index += 1;
-        if paired_ended {
-            // Need a quality score for this read as well
-            let quality_scores = quality_score_model.generate_quality_scores(read_length, &mut rng);
+    // I think we need to produce the mutated fasta at this point.
+    for (contig, sequence) in fasta_map.iter() {
+        let contig_variants = mutations.get(contig).unwrap();
+        // This is just lists of tuples of numbers, so it should be small in memory.
+        let mut contig_reads: Vec<(usize, usize)> = reads_dataset.get(contig).unwrap().clone();
+        contig_reads.shuffle(&mut rng);
+
+        for (position1, position2) in contig_reads {
+            // Prepping the read
+            // Grab any relevant mutations
+            let relevant_mutations  =
+                contig_variants
+                    .iter()
+                    .filter(
+                        |(location, variant)|
+                        (position1 < **location) && (**location < position2)
+                    )
+                    .collect::<HashMap<_, _>>()
+                    .clone();
+            // grabbing the raw sequence plus a buffer
+            let raw_sequence = sequence.get(position1..(position2 + 50)).unwrap();
+            let mutated_sequence = apply_variants(
+                raw_sequence, relevant_mutations, position1, rng.clone()
+            );
+            let quality_scores = quality_score_model
+                .generate_quality_scores(read_length, &mut rng);
+            // Todo apply sequencing errors
+            let mutated_sequence = mutated_sequence
+                .get(..(position2 - position1))
+                .unwrap(); // Trim to length of initial fragment
+
             // sequence name
             writeln!(
-                &mut outfile2,
-                "@{}/2",
+                &mut outfile1,
+                "@{}/1",
                 name_prefix.clone() + &index.to_string()
             )?;
             // Array as a string
             writeln!(
-                &mut outfile2,
-                "{}",
-                sequence_array_to_string(&reverse_complement(&sequence))
+                &mut outfile1,
+                "{}", sequence_array_to_string(&mutated_sequence[..read_length])
             )?;
             // The stupid plus sign
-            writeln!(&mut outfile2, "+")?;
+            writeln!(&mut outfile1, "+")?;
             // Qual score of all F's for the whole thing.
-            writeln!(&mut outfile2, "{}", quality_scores_to_str(quality_scores))?;
+            writeln!(&mut outfile1, "{}", quality_scores_to_str(quality_scores))?;
+            index += 1;
+            if paired_ended {
+                // Need a quality score for this read as well
+                let quality_scores = quality_score_model.generate_quality_scores(
+                    read_length, &mut rng
+                );
+                // The second read is at the end of the fragment
+                let second_read = &mutated_sequence[(mutated_sequence.len() - read_length)..];
+                // sequence name
+                writeln!(
+                    &mut outfile2,
+                    "@{}/2",
+                    name_prefix.clone() + &index.to_string()
+                )?;
+                // Array as a string
+                writeln!(
+                    &mut outfile2,
+                    "{}",
+                    sequence_array_to_string(&reverse_complement(second_read))
+                )?;
+                // The stupid plus sign
+                writeln!(&mut outfile2, "+")?;
+                // Qual score of all F's for the whole thing.
+                writeln!(&mut outfile2, "{}", quality_scores_to_str(quality_scores))?;
+            }
         }
     }
     if !paired_ended {
@@ -116,7 +155,8 @@ mod tests {
     use super::*;
     use rand_core::SeedableRng;
     use std::path::Path;
-    use utils::nucleotides::Nuc::*;
+    use common::structs::nucleotides::Nuc::*;
+    use common::structs::variants::VariantType;
 
     #[test]
     fn test_reverse_complement() {
@@ -126,22 +166,40 @@ mod tests {
     }
 
     #[test]
-    fn test_write_fastq_single() {
-        let fastq_filename = "test_single";
+    fn test_write_fastq() {
+        let reference_seq = vec![A, G, T, A, C, T, C, A, G, T, G, T, T, C, C, T];
+        let fasta_map = Box::new(HashMap::from([
+            ("chr1".to_string(), reference_seq)
+        ]));
+        let reads_dataset = Box::new(HashMap::from([
+            ("chr1".to_string(), vec![(0, 4), (6, 10)])
+        ]));
+        let mutations = Box::new(HashMap::from([
+            ("chr1".to_string(), HashMap::from([
+                (0, Variant::new(VariantType::SNP, 0, &vec![A], &vec![T],
+                                 vec![0,1], false)),
+                (7, Variant::new(VariantType::Indel, 7, &vec![T],
+                                 &vec![T, A, C], vec![1, 1], true)),
+                (12, Variant::new(VariantType::SNP, 12, &vec![A], &vec![T],
+                                  vec![0,1], false))
+            ]))
+        ]));
+        let read_length = 4;
         let overwrite_output = true;
+        let fastq_filename = "test_single";
         let paired_ended = false;
-        let seq1 = vec![A, A, A, A, C, C, C, C];
-        let seq2 = vec![G, G, G, G, T, T, T, T];
-        let mut rng = NeatRng::seed_from_u64(0);
-        let dataset = vec![&seq1, &seq2];
+        let rng = ChaCha20Rng::seed_from_u64(0);
         let quality_score_model = QualityScoreModel::new();
         write_fastq(
-            fastq_filename,
+            &fasta_map,
+            &reads_dataset,
+            &mutations,
+            read_length,
             overwrite_output,
+            fastq_filename,
             paired_ended,
-            dataset,
-            quality_score_model,
-            &mut rng,
+            quality_score_model.clone(),
+            rng.clone()
         )
         .unwrap();
         let outfile1 = Path::new("test_single_r1.fastq");
@@ -149,28 +207,29 @@ mod tests {
         assert!(outfile1.exists());
         assert!(!outfile2.exists());
         fs::remove_file(outfile1).unwrap();
-    }
 
-    #[test]
-    fn test_write_fastq_paired() {
-        let fastq_filename = "test_paired";
-        // might as well test the o_o function as well
+        let reads_dataset = Box::new(HashMap::from([
+            ("chr1".to_string(), vec![(0, 8), (6, 14)])
+        ]));
+
+        let read_length = 4;
         let overwrite_output = false;
+        let fastq_filename = "test_paired";
         let paired_ended = true;
-        let seq1: Vec<Nuc> = vec![A, A, A, A, C, C, C, C];
-        let seq2 = vec![G, G, G, G, T, T, T, T];
-        let mut rng = NeatRng::seed_from_u64(0);
-        let dataset = vec![&seq1, &seq2];
-        let quality_score_model = QualityScoreModel::new();
+
         write_fastq(
-            fastq_filename,
+            &fasta_map,
+            &reads_dataset,
+            &mutations,
+            read_length,
             overwrite_output,
+            fastq_filename,
             paired_ended,
-            dataset,
             quality_score_model,
-            &mut rng,
+            rng.clone()
         )
-        .unwrap();
+            .unwrap();
+
         let outfile1 = Path::new("test_paired_r1.fastq");
         let outfile2 = Path::new("test_paired_r2.fastq");
         assert!(outfile1.exists());
@@ -178,4 +237,5 @@ mod tests {
         fs::remove_file(outfile1).unwrap();
         fs::remove_file(outfile2).unwrap();
     }
+
 }

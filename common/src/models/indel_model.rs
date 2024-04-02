@@ -7,7 +7,7 @@ use rand::Rng;
 // to be duplicated, but NEAT made no attempt to distinguish between the types of insertions or
 // deletions, since they are treated similarly by variant calling software.
 use structs::nucleotides::Nuc;
-use neat_rng::NeatRng;
+use rand_chacha::ChaCha20Rng;
 
 #[derive(Debug, Clone)]
 pub struct IndelModel {
@@ -37,7 +37,7 @@ impl IndelModel {
         }
     }
 
-    pub fn generate_new_indel_length(&self, mut rng: &mut NeatRng) -> i64 {
+    pub fn generate_new_indel_length(&self, mut rng: &mut ChaCha20Rng) -> i64 {
         let rand_num = rng.gen::<f64>();
         println!("number selected was {}", &rand_num);
         let is_insertion = { rand_num < self.insertion_probability };
@@ -50,7 +50,7 @@ impl IndelModel {
         }
     }
 
-    pub fn generate_random_insertion(&self, length: usize, rng: &mut NeatRng) -> Vec<Nuc> {
+    pub fn generate_random_insertion(&self, length: usize, rng: &mut ChaCha20Rng) -> Vec<Nuc> {
         // We could refine this with a nucleotide bias matrix. Maybe it would make a difference,
         // but probably not, since the presence of the insertion is more important than it's content,
         // for this use. If there was a call for it, maybe.
@@ -76,7 +76,8 @@ impl IndelModel {
 mod tests {
     use super::*;
     use structs::nucleotides::Nuc::*;
-    use structs::variants::VariantType;
+    use structs::variants::{VariantType, Variant};
+    use structs::transition_matrix::TransitionMatrix;
     use rand_core::SeedableRng;
 
     #[test]
@@ -84,7 +85,7 @@ mod tests {
         let test_indel_model = IndelModel::new();
         let input_sequence = vec![A, C, G, G, A];
         let transition_matrix = TransitionMatrix::new();
-        let mut rng = NeatRng::seed_from_u64(0);
+        let mut rng = ChaCha20Rng::seed_from_u64(0);
         let test_variant: Variant = test_indel_model.generate_variant(
             "chr1",
             &input_sequence,

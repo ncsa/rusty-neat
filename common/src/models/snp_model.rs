@@ -3,7 +3,7 @@ use std::slice::Iter;
 use rand::distributions::{Distribution, WeightedIndex};
 use structs::nucleotides::Nuc;
 use structs::transition_matrix::TransitionMatrix;
-use neat_rng::NeatRng;
+use rand_chacha::ChaCha20Rng;
 use self::SnpFrame::*;
 // The following section are the models for each type of variant. In order to create the variant,
 // we need to model its statistical property. NEAT included two types of variants: SNPs and Indels.
@@ -61,7 +61,7 @@ impl SnpModel {
         let mut trinuc_matrix: HashMap<SnpFrame, TransitionMatrix> = HashMap::new();
         for frame in SnpFrame::iterator() {
             snp_weights.insert(*frame, 1);
-            trinuc_matrix.insert(*frame, TransitionMatrix::new())
+            trinuc_matrix.insert(*frame, TransitionMatrix::new());
         }
         SnpModel {
             snp_weights,
@@ -76,11 +76,11 @@ impl SnpModel {
     pub fn generate_snp(
         &self,
         trinuc_reference: &[Nuc],
-        rng: &mut NeatRng
+        rng: &mut ChaCha20Rng
     ) -> Nuc {
         // We shouldn't have N's here. Basically, this matches the correct trinuc from the enum,
         // then uses that as the index for the trinuc matrix of interest.
-        let weights = self.trinuc_matrix[match trinuc_reference[0] {
+        let matrix = self.trinuc_matrix.get(&match trinuc_reference[0] {
             Nuc::A => {
                 match trinuc_reference[2] {
                     Nuc::A => ANA,
@@ -118,7 +118,15 @@ impl SnpModel {
                 }
             },
             Nuc::N => { panic!("Trying to use trinucleotide bias on an unknown base (N).") },
-        }];
+        }).unwrap();
+
+        let weights = match trinuc_reference[1] {
+            Nuc::A => matrix.a_weights.clone(),
+            Nuc::C => matrix.c_weights.clone(),
+            Nuc::G => matrix.g_weights.clone(),
+            Nuc::T => matrix.t_weights.clone(),
+            Nuc::N => { panic!("Trying to use trinucleotide bias on an unknown base (N).") },
+        };
 
         let mut dist = WeightedIndex::new(weights).unwrap();
         match dist.sample(rng) {

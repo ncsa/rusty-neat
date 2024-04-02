@@ -1,14 +1,16 @@
 use std::collections::HashMap;
 use itertools::Itertools;
 use rand::distributions::{WeightedIndex, Distribution};
+use rand_chacha::ChaCha20Rng;
 use common::models::mutation_model::MutationModel;
 use common::structs::variants::Variant;
 use common::structs::nucleotides::Nuc;
 
 pub fn generate_variants(
     reference_sequence: &Vec<Nuc>,
-    mutation_model: &MutationModel,
+    mutation_model: &mut MutationModel,
     ploidy: usize,
+    mut rng: ChaCha20Rng,
 ) -> HashMap<usize, Variant> {
     // Variants for this contig, organized by location. Each location may have only one variant.
     // And we may need to implement a further check that there aren't other types of overlaps.
@@ -24,11 +26,12 @@ pub fn generate_variants(
     // Todo: Add weights due to gc-bias and trinucleotide bias
     let dist = WeightedIndex::new(&weights).unwrap();
     while number_of_mutations > 0 {
-        let location = locations[dist.sample(mutation_model.get_mut_rng())];
+        let location = locations[dist.sample(&mut rng)];
         let mutation: Variant = mutation_model.generate_mutation(
             reference_sequence,
             location,
             ploidy,
+            rng.clone(),
         );
         if contig_variants.keys().contains(&location) {
             // We'll just throw out the previous one and use this one.

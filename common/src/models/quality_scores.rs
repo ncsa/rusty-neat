@@ -27,7 +27,7 @@ use serde_json;
 use std::fmt::{Display, Formatter};
 
 use file_tools::open_file;
-use neat_rng::NeatRng;
+use rand_chacha::ChaCha20Rng;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct QualityScoreModel {
@@ -146,7 +146,7 @@ impl QualityScoreModel {
     pub fn generate_quality_scores(
         &self,
         run_read_length: usize,
-        mut rng: &mut NeatRng,
+        mut rng: &mut ChaCha20Rng,
     ) -> Vec<usize> {
         // Generates a list of quality scores of length run_read_length using the model. If the
         // input read length differs, we do some index magic to extrapolate the model
@@ -305,7 +305,7 @@ mod tests {
     #[test]
     fn test_quality_scores_short() {
         let run_read_length = 100;
-        let mut rng = NeatRng::seed_from_u64(0);
+        let mut rng = ChaCha20Rng::seed_from_u64(0);
         let model = QualityScoreModel::new();
         let scores = model.generate_quality_scores(run_read_length, &mut rng);
         assert!(!scores.is_empty());
@@ -319,7 +319,7 @@ mod tests {
     #[test]
     fn test_quality_scores_same() {
         let run_read_length = 150;
-        let mut rng = NeatRng::seed_from_u64(0);
+        let mut rng = ChaCha20Rng::seed_from_u64(0);
         let model = QualityScoreModel::new();
         let scores = model.generate_quality_scores(run_read_length, &mut rng);
         assert!(!scores.is_empty());
@@ -333,7 +333,7 @@ mod tests {
     #[test]
     fn test_quality_scores_long() {
         let run_read_length = 200;
-        let mut rng = NeatRng::seed_from_u64(0);
+        let mut rng = ChaCha20Rng::seed_from_u64(0);
         let model = QualityScoreModel::new();
         let scores = model.generate_quality_scores(run_read_length, &mut rng);
         assert!(!scores.is_empty());
@@ -347,7 +347,7 @@ mod tests {
     #[test]
     fn test_quality_scores_vast_difference() {
         let run_read_length = 2000;
-        let mut rng = NeatRng::seed_from_u64(0);
+        let mut rng = ChaCha20Rng::seed_from_u64(0);
         let model = QualityScoreModel::new();
         let scores = model.generate_quality_scores(run_read_length, &mut rng);
         assert!(!scores.is_empty());

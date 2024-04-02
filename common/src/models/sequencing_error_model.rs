@@ -6,7 +6,7 @@ use structs::nucleotides::Nuc;
 use structs::sequencing_errors::SequencingError;
 use structs::sequencing_errors::{IndelErr, SnpErr};
 use structs::transition_matrix::TransitionMatrix;
-use neat_rng::NeatRng;
+use rand_chacha::ChaCha20Rng;
 use structs::sequencing_errors::SequencingError::{IndelError, SNPError};
 
 #[derive(Clone)]
@@ -52,7 +52,7 @@ impl SequencingErrorModel {
             transition_matrix: default_transition_matrix,
         }
     }
-    pub fn generate_snp_error(&self, base: Nuc, rng: &mut NeatRng) -> SequencingError {
+    pub fn generate_snp_error(&self, base: Nuc, rng: &mut ChaCha20Rng) -> SequencingError {
         // This is a basic mutation function for starting us off
         // Pick the weights list for the base that was input
         // We will use this simple model for sequence errors ultimately.
@@ -80,7 +80,7 @@ impl SequencingErrorModel {
         }
     }
 
-    pub fn generate_indel_error(&self, rng: &mut NeatRng) -> SequencingError {
+    pub fn generate_indel_error(&self, rng: &mut ChaCha20Rng) -> SequencingError {
         let dist = WeightedIndex::new(&self.length_weights).unwrap();
         let length = self.lengths[dist.sample(rng)];
         return if length > 0 {

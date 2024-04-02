@@ -7,13 +7,16 @@ use std::time::Duration;
 use log::info;
 use rand::prelude::SliceRandom;
 use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex};
+use std::sync::mpsc::channel;
+use rand::Rng;
+use rand_chacha::ChaCha20Rng;
 use common::models::mutation_model::MutationModel;
 use utils::config::RunConfiguration;
 use utils::fasta_tools::{read_fasta, write_fasta};
 use utils::fastq_tools::write_fastq;
-use utils::make_reads::generate_reads;
+use utils::generate_reads::generate_reads;
 use utils::mutate::mutate_fasta;
-use common::neat_rng::NeatRng;
 use common::structs::nucleotides::Nuc;
 use common::structs::variants::Variant;
 use utils::read_models::read_quality_score_model_json;
@@ -25,7 +28,7 @@ pub enum RunNeatError {
     GeneralBullshit,
 }
 
-pub fn run_neat(config: Box<RunConfiguration>, rng: NeatRng) -> Result<(), RunNeatError> {
+pub fn run_neat(config: Box<RunConfiguration>, mut rng: ChaCha20Rng) -> Result<(), RunNeatError> {
     // Create the prefix of the files to write
     let output_file = format!("{}/{}", config.output_dir.display(), config.output_prefix);
 
@@ -36,12 +39,14 @@ pub fn run_neat(config: Box<RunConfiguration>, rng: NeatRng) -> Result<(), RunNe
     // positions of the sequences, like a FAI, but that's a different type of problem to solve.
     // Alternative to that, require an index file and then use that to find the read positions?
     // That might be the easiest way to go.
-    let (fasta_map, mut fasta_order) = read_fasta(&config.reference)
+    let (
+        fasta_map, fasta_order
+    ) = read_fasta(&config.reference)
         .unwrap();
 
     let mut fasta_lengths: HashMap<String, usize> = HashMap::new();
     for contig in &fasta_order {
-        fasta_lengths.insert(contig.to_string(), fasta_map.get(&contig).unwrap().len())
+        fasta_lengths.insert(contig.to_string(), fasta_map.get(contig).unwrap().len());
     }
 
     // Load models that will be used for the runs.
@@ -53,47 +58,63 @@ pub fn run_neat(config: Box<RunConfiguration>, rng: NeatRng) -> Result<(), RunNe
 
     // Todo load all models and set up the run.
     // load mutation model
-    let mutation_model = MutationModel::new(rng);
+    let mut mutation_model = MutationModel::new();
 
     // Mutating the reference and recording the variant locations.
     info!("Generating variants");
     // I think looping like this will allow us to multithread easier
-    let mut all_variants: Box<HashMap<String, HashMap<usize, Variant>>> = Box::new(HashMap::new());
-    let mut all_reads: Box<HashMap<String, (usize, usize)>>;
-    let handle = thread::spawn(move || {
-        for contig in &fasta_order {
-            info!("Generating variants for {chromosome}");
-            let contig_sequence = fasta_map.get(contig).unwrap();
-            let contig_variants = generate_variants(
-                contig_sequence, &mutation_model, config.ploidy,
-            );
-            info!("Finished generating variants for {chromosome}");
-            all_variants.insert(contig.to_owned(), contig_variants);
 
-            let contig_reads = generate_reads(
-                contig_sequence.len(),
-                &contig_variants,
-                config.read_len,
-                config.coverage,
-                config.paired_ended,
-                config.fragment_mean,
-                config.fragment_st_dev,
-                mutation_model.get_mut_rng(),
-            );
+    // all variants will be a hashmap of the contig name indexing a hashmap of variants keyed by
+    // location. Basically, the Box moves the map to the heap, the mutex is a way to lock the file
+    // and arc handles the communication between threads. From the rust book.
+    let all_variants: Arc<Mutex<Box<HashMap<String, HashMap<usize, Variant>>>>> =
+        Arc::new(Mutex::new(Box::new(HashMap::new())));
+    let all_reads: Arc<Mutex<Box<HashMap<String, Vec<(usize, usize)>>>>> =
+        Arc::new(Mutex::new(Box::new(HashMap::new())));
 
-            // This all adds up to if this run is fasta only. If it is, then we don't
-            // need to generate reads
-            if config.produce_fasta &&
-                !config.produce_fastq &&
-                !config.produce_vcf &&
-                !config.produce_bam {
-                all_reads.insert(contig.to_owned(), *contig_reads.unwrap()[0])
-            }
-        }
+    let mut threads = Vec::with_capacity(4);
+    (0..4).for_each(|_| {
+        let all_variants_clone = Arc::clone(&all_variants);
+        let all_reads_clone = Arc::clone(&all_reads);
+
+        threads.push(thread::spawn(move || {
+            let result = {
+                for contig in fasta_order {
+                    info!("Generating variants for {contig}");
+                    let contig_sequence = &fasta_map.get(&contig).unwrap();
+                    let contig_variants = generate_variants(
+                        contig_sequence, &mut mutation_model, config.ploidy, rng.clone()
+                    );
+                    info!("Finished generating variants for {contig}");
+                    let mut all_variants =
+                        all_variants_clone.lock().unwrap();
+                    all_variants.insert(contig.to_owned(), contig_variants);
+
+                    // This all adds up to if this run is fasta only, then we can skip generating reads
+                    if config.produce_fastq ||
+                        config.produce_vcf ||
+                        config.produce_bam {
+                        let contig_reads = generate_reads(
+                            contig_sequence.len(),
+                            config.read_len,
+                            config.coverage,
+                            config.paired_ended,
+                            config.fragment_mean,
+                            config.fragment_st_dev,
+                            rng.clone(),
+                        ).expect("Error generating reads");
+                        let mut all_reads = all_reads_clone.lock().unwrap();
+
+                        all_reads.insert(contig.to_owned(), contig_reads);
+                    };
+                }
+                Ok(())
+            };
+            result.unwrap();
+        }));
     });
-
-    handle.join().unwrap();
-
+    let all_variants_clone = Arc::clone(&all_variants);
+    let all_variants = all_variants_clone.lock().unwrap();
     if config.produce_fasta {
         write_fasta(
             &fasta_map,
@@ -103,32 +124,35 @@ pub fn run_neat(config: Box<RunConfiguration>, rng: NeatRng) -> Result<(), RunNe
             &output_file,
         ).expect("Error writing fasta file!")
     }
-
-    // If we produce any more files, we will need to know the genotype. It will be used in the
-    // output vcf, bam, and in the fastq.
-
-    if config.produce_fastq {
-        write_fastq(
-            &fasta_map,
-            &all_reads,
-            config.overwrite_output,
-            &output_file,
-            config.paired_ended,
-            quality_score_model,
-        ).expect("Error writing fastq file(s)!")
-    }
-
-    // todo for the vcf and bam, we need to know things like genotype
-    if config.produce_vcf {
-        write_vcf(
-            &all_variants,
-            &fasta_order,
-            &fasta_lengths,
-            &config.reference,
-            config.overwrite_output,
-            &output_file,
-        ).expect("Error writing vcf file!")
-    }
+    //
+    // // If we produce any more files, we will need to know the genotype. It will be used in the
+    // // output vcf, bam, and in the fastq.
+    //
+    // if config.produce_fastq {
+    //     write_fastq(
+    //         &fasta_map,
+    //         &all_reads,
+    //         &all_variants,
+    //         config.read_len,
+    //         config.overwrite_output,
+    //         &output_file,
+    //         config.paired_ended,
+    //         quality_score_model,
+    //         rng.clone()
+    //     ).expect("Error writing fastq file(s)!")
+    // }
+    //
+    // // todo for the vcf and bam, we need to know things like genotype
+    // if config.produce_vcf {
+    //     write_vcf(
+    //         &all_variants,
+    //         &fasta_order,
+    //         &fasta_lengths,
+    //         &config.reference,
+    //         config.overwrite_output,
+    //         &output_file,
+    //     ).expect("Error writing vcf file!")
+    // }
 
     // let (mutated_map, variant_locations) =
     //     mutate_fasta(&fasta_map, config.minimum_mutations, &mut rng);
@@ -213,7 +237,7 @@ mod tests {
         config.output_dir = PathBuf::from("test");
         fs::create_dir("test").unwrap();
         let config = config.build();
-        let _ = run_neat(Box::new(config), &mut NeatRng::seed_from_u64(0)).unwrap();
+        let _ = run_neat(Box::new(config), ChaCha20Rng::seed_from_u64(0)).unwrap();
         fs::remove_dir_all("test").unwrap();
     }
 
@@ -227,7 +251,7 @@ mod tests {
         config.output_dir = PathBuf::from("output");
         fs::create_dir("output").unwrap();
         let config = config.build();
-        let _ = run_neat(Box::new(config), &mut NeatRng::seed_from_u64(0)).unwrap();
+        let _ = run_neat(Box::new(config), ChaCha20Rng::seed_from_u64(0)).unwrap();
         fs::remove_dir_all("output").unwrap();
     }
 }

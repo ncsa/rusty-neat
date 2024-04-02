@@ -12,7 +12,7 @@ use rand::seq::SliceRandom;
 use rand::RngCore;
 use rand_distr::{Distribution, Normal};
 use std::collections::{HashMap, HashSet, VecDeque};
-use common::neat_rng::NeatRng;
+use rand_chacha::ChaCha20Rng;
 use common::structs::nucleotides::Nuc;
 use common::structs::variants::Variant;
 
@@ -21,7 +21,7 @@ fn cover_dataset(
     read_length: usize,
     mut fragment_pool: Vec<usize>,
     coverage: usize,
-    mut rng: &mut NeatRng,
+    mut rng: &mut ChaCha20Rng,
 ) -> Vec<(usize, usize)> {
     // Takes:
     // span_length: Total number of bases in the sequence
@@ -104,13 +104,12 @@ fn cover_dataset(
 
 pub fn generate_reads(
     sequence_length: usize,
-    contig_variants: &HashMap<usize, Variant>,
     read_length: usize,
     coverage: usize,
     paired_ended: bool,
     mean: Option<f64>,
     st_dev: Option<f64>,
-    mut rng: &mut NeatRng,
+    mut rng: ChaCha20Rng,
 ) -> Result<Vec<(usize, usize)>, &'static str> {
     // Takes:
     // sequence_length: The length of the sequence to generate reads for.
@@ -138,9 +137,9 @@ pub fn generate_reads(
     info!("Generating read coordinates.");
     let read_positions: Vec<(usize, usize)> = cover_dataset(
         sequence_length,
-        *read_length,
+        read_length,
         fragment_pool,
-        *coverage,
+        coverage,
         &mut rng
     );
 
@@ -155,8 +154,8 @@ pub fn generate_reads(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::SeedableRng;
-    use common::neat_rng::NeatRng;
+    use rand_chacha::ChaCha20Rng;
+    use rand_core::SeedableRng;
     use common::structs::nucleotides::Nuc::*;
 
     #[test]
@@ -165,7 +164,7 @@ mod tests {
         let read_length = 10;
         let fragment_pool = vec![10];
         let coverage = 1;
-        let mut rng = NeatRng::seed_from_u64(0);
+        let mut rng = ChaCha20Rng::seed_from_u64(0);
 
         let cover = cover_dataset(span_length, read_length, fragment_pool, coverage, &mut rng);
         assert_eq!(cover[0], (0, 10))
@@ -177,7 +176,7 @@ mod tests {
         let read_length = 100;
         let fragment_pool = vec![300];
         let coverage = 1;
-        let mut rng = NeatRng::seed_from_u64(0);
+        let mut rng = ChaCha20Rng::seed_from_u64(0);
 
         let cover = cover_dataset(span_length, read_length, fragment_pool, coverage, &mut rng);
         assert_eq!(cover[0], (0, 300))
@@ -191,15 +190,15 @@ mod tests {
         let paired_ended = false;
         let mean = None;
         let st_dev = None;
-        let mut rng = NeatRng::seed_from_u64(0);
+        let rng = ChaCha20Rng::seed_from_u64(0);
         let reads = generate_reads(
-            &mutated_sequence.len(),
-            &read_length,
-            &coverage,
+            mutated_sequence.len(),
+            read_length,
+            coverage,
             paired_ended,
             mean,
             st_dev,
-            &mut rng,
+            rng,
         )
         .unwrap();
         println!("{:?}", reads);
@@ -214,26 +213,26 @@ mod tests {
         let paired_ended = false;
         let mean = None;
         let st_dev = None;
-        let mut rng = NeatRng::seed_from_u64(0);
+        let rng = ChaCha20Rng::seed_from_u64(0);
         let run1 = generate_reads(
-            &mutated_sequence,
-            &read_length,
-            &coverage,
+            mutated_sequence.len(),
+            read_length,
+            coverage,
             paired_ended,
             mean,
             st_dev,
-            &mut rng,
+            rng.clone(),
         )
         .unwrap();
 
         let run2 = generate_reads(
-            &mutated_sequence,
-            &read_length,
-            &coverage,
+            mutated_sequence.len(),
+            read_length,
+            coverage,
             paired_ended,
             mean,
             st_dev,
-            &mut rng,
+            rng.clone(),
         )
         .unwrap();
 
@@ -248,15 +247,15 @@ mod tests {
         let paired_ended = true;
         let mean = Some(200.0);
         let st_dev = Some(1.0);
-        let mut rng = NeatRng::seed_from_u64(0);
+        let mut rng = ChaCha20Rng::seed_from_u64(0);
         let reads = generate_reads(
-            &mutated_sequence,
-            &read_length,
-            &coverage,
+            mutated_sequence.len(),
+            read_length,
+            coverage,
             paired_ended,
             mean,
             st_dev,
-            &mut rng,
+            rng.clone(),
         );
         println!("{:?}", reads);
         assert!(!reads.unwrap().is_empty())

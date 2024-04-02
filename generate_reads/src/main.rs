@@ -21,10 +21,10 @@ use rand_core::RngCore;
 use simplelog::*;
 use std::collections::HashMap;
 use std::fs::File;
+use rand_chacha::ChaCha20Rng;
 use utils::cli;
 use utils::config::{build_config_from_args, read_config_yaml};
 use common::file_tools::check_parent;
-use common::neat_rng::NeatRng;
 use utils::runner::run_neat;
 
 fn main() {
@@ -85,7 +85,7 @@ fn main() {
         seed = seed_rng.next_u64();
     }
     info!("Generating random numbers using the seed: {}", seed);
-    let mut rng: NeatRng = SeedableRng::seed_from_u64(seed);
+    let rng: ChaCha20Rng = SeedableRng::seed_from_u64(seed);
     // run the generate reads main script
     run_neat(config, rng)
         .unwrap_or_else(|error| panic!("Neat encountered a problem: {:?}", error))

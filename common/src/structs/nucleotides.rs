@@ -39,8 +39,8 @@ impl Nuc {
         }
     }
 
-    pub fn to_str(&self) -> &str {
-        &self.to_char().to_string()
+    pub fn to_str(&self) -> String {
+        self.to_char().to_string()
     }
 
     pub fn complement(&self) -> Nuc {
@@ -68,11 +68,11 @@ pub fn base_to_nuc(char_of_interest: char) -> Nuc {
     };
 }
 
-pub fn sequence_array_to_string(input_array: &Vec<Nuc>) -> String {
+pub fn sequence_array_to_string(input_array: &[Nuc]) -> String {
     // Converts a sequence vector into a string representing the DNA sequence
     let mut return_string = String::new();
     for nuc in input_array {
-        return_string += nuc.to_str();
+        return_string += &nuc.to_str();
     }
     return_string
 }

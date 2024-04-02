@@ -1,6 +1,5 @@
 pub mod structs;
 pub mod models;
-pub mod neat_rng;
 pub mod file_tools;
 
 extern crate rand;

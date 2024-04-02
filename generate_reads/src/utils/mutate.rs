@@ -10,15 +10,15 @@ use log::{debug, error};
 use rand::distributions::WeightedIndex;
 use rand::prelude::*;
 use rand::Rng;
+use rand_chacha::ChaCha20Rng;
 use std::collections::HashMap;
 use common::models::mutation_model::MutationModel;
-use common::neat_rng::NeatRng;
 use common::structs::nucleotides::Nuc;
 
 pub fn mutate_fasta(
     file_struct: &HashMap<String, Vec<Nuc>>,
     minimum_mutations: Option<usize>,
-    mut rng: &mut NeatRng,
+    mut rng: &mut ChaCha20Rng,
 ) -> (
     Box<HashMap<String, Vec<Nuc>>>,
     Box<HashMap<String, Vec<(usize, Nuc, Nuc)>>>,
@@ -93,7 +93,7 @@ pub fn mutate_fasta(
 fn mutate_sequence(
     sequence: &Vec<Nuc>,
     num_positions: usize,
-    mut rng: &mut NeatRng,
+    mut rng: &mut ChaCha20Rng,
 ) -> (Vec<Nuc>, Vec<(usize, Nuc, Nuc)>) {
     // Takes:
     // sequence: A u8 vector representing a sequence of DNA
@@ -156,14 +156,14 @@ fn mutate_sequence(
 mod tests {
     use super::*;
     use rand::SeedableRng;
-    use common::neat_rng::NeatRng;
+    use rand_chacha::ChaCha20Rng;
     use common::structs::nucleotides::Nuc::*;
 
     #[test]
     fn test_mutate_sequence() {
         let seq1: Vec<Nuc> = vec![N, N, A, A, A, C, C, G, A, T, C, C, C];
         let num_positions = 2;
-        let mut rng = NeatRng::seed_from_u64(0);
+        let mut rng = ChaCha20Rng::seed_from_u64(0);
         let mutant = mutate_sequence(&seq1, num_positions, &mut rng);
         assert_eq!(mutant.0.len(), seq1.len());
         assert!(!mutant.1.is_empty());
@@ -176,7 +176,7 @@ mod tests {
         let seq: Vec<Nuc> = vec![N, N, A, A, A, C, C, G, A, T, C, C, C];
         let file_struct: HashMap<String, Vec<Nuc>> =
             HashMap::from([("chr1".to_string(), seq.clone())]);
-        let mut rng = NeatRng::seed_from_u64(0);
+        let mut rng = ChaCha20Rng::seed_from_u64(0);
         let mutations = mutate_fasta(&file_struct, Some(1), &mut rng);
         assert!(mutations.0.contains_key("chr1"));
         assert!(mutations.1.contains_key("chr1"));
@@ -193,7 +193,7 @@ mod tests {
         let file_struct: HashMap<String, Vec<Nuc>> =
             HashMap::from([("chr1".to_string(), seq.clone())]);
         // if a random mutation suddenly pops up in a build, it's probably the seed for this.
-        let mut rng = NeatRng::seed_from_u64(0);
+        let mut rng = ChaCha20Rng::seed_from_u64(0);
         let mutations = mutate_fasta(&file_struct, None, &mut rng);
         assert!(mutations.0.contains_key("chr1"));
         assert!(mutations.1.contains_key("chr1"));

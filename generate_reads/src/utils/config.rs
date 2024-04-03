@@ -14,7 +14,7 @@ use std::{env, fs};
 use utils::cli::Cli;
 use common::file_tools::check_create_dir;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RunConfiguration {
     // This struct holds all the parameters for this particular run. It is derived from input either
     // from a configuration file or from command line inputs. This is not built directly in the code,
@@ -189,6 +189,7 @@ impl ConfigBuilder {
 
     // Function to build the actual configuration.
     pub fn build(self) -> RunConfiguration {
+        self.check_and_print_config();
         RunConfiguration {
             reference: self.reference.unwrap(),
             read_len: self.read_len,
@@ -226,7 +227,11 @@ pub fn read_config_yaml<'d>(yaml: String) -> Box<RunConfiguration> {
     let f = fs::File::open(yaml);
     let file = match f {
         Ok(l) => l,
-        Err(error) => panic!("Problem reading the config file: {}", error),
+        Err(error) => panic!(
+            "Problem reading the config file: {}\nCurrent dir: {}",
+            error,
+            env::current_dir().unwrap().to_str().unwrap(),
+        ),
     };
     // Uses serde_yaml to read the file into a HashMap
     let scrape_config: HashMap<String, Value> =
@@ -344,7 +349,6 @@ pub fn read_config_yaml<'d>(yaml: String) -> Box<RunConfiguration> {
             }
         }
     }
-    let _ = &config_builder.check_and_print_config();
     Box::new(config_builder.build())
 }
 
@@ -380,7 +384,6 @@ pub fn build_config_from_args(args: Cli) -> Box<RunConfiguration> {
         config_builder.minimum_mutations = Some(input_min_muts);
     }
     // Wraps things in a Box to move this object to the heap
-    let _ = &config_builder.check_and_print_config();
     Box::new(config_builder.build())
 }
 
@@ -438,29 +441,29 @@ mod tests {
 
     #[test]
     fn test_read_config_yaml() {
-        let yaml = String::from("config/neat_test.yml");
+        let yaml = String::from("test_data/configs/neat_test.yml");
         let test_config = read_config_yaml(yaml);
-        assert_eq!(test_config.reference, "data/ecoli.fa".to_string());
+        assert_eq!(test_config.reference, "test_data/references/ecoli.fa".to_string());
         assert_eq!(test_config.coverage, 3);
     }
 
     #[test]
     #[should_panic]
     fn test_bad_yaml() {
-        let yaml = String::from("fake_file.yml");
+        let yaml = String::from("test_data/fake_file.yml");
         read_config_yaml(yaml);
     }
 
     #[test]
     #[should_panic]
     fn test_missing_ref() {
-        let yaml = String::from("config/simple_template.yml");
+        let yaml = String::from("test_data/configs/simple_template.yml");
         read_config_yaml(yaml);
     }
 
     #[test]
     fn test_creates_out_dir() {
-        let yaml = String::from("config/neat_test_bad.yml");
+        let yaml = String::from("test_data/configs/neat_test_bad.yml");
         read_config_yaml(yaml);
         assert!(Path::new("fake").is_dir());
         fs::remove_dir("fake").unwrap()
@@ -470,7 +473,7 @@ mod tests {
     fn test_command_line_inputs() {
         let args: Cli = Cli {
             config: String::new(),
-            reference: String::from("data/ecoli.fa"),
+            reference: String::from("test_data/references/ecoli.fa"),
             output_dir: String::from("data"),
             log_level: String::from("Trace"),
             log_dest: String::new(),
@@ -481,7 +484,8 @@ mod tests {
         };
 
         let test_config = build_config_from_args(args);
-        assert_eq!(test_config.reference, "data/ecoli.fa".to_string())
+        assert_eq!(test_config.reference, "test_data/references/ecoli.fa".to_string());
+        fs::remove_dir("data").unwrap();
     }
 
     #[test]
@@ -494,7 +498,7 @@ mod tests {
     #[test]
     fn test_creat_nonexisting_out() {
         let mut config = ConfigBuilder::new();
-        config.reference = Some("data/H1N1.fa".to_string());
+        config.reference = Some("test_data/references/H1N1.fa".to_string());
         config.output_dir = PathBuf::from("contig/");
         config.check_and_print_config();
         fs::remove_dir("contig").unwrap()
@@ -516,12 +520,13 @@ mod tests {
         };
 
         build_config_from_args(args);
+        fs::remove_dir("test_dir").unwrap()
     }
 
     #[test]
     fn test_overwrite_warn() {
         let mut config = ConfigBuilder::new();
-        config.reference = Option::from("data/H1N1.fa".to_string());
+        config.reference = Option::from("test_data/references/H1N1.fa".to_string());
         config.overwrite_output = true;
         config.check_and_print_config();
     }
@@ -529,7 +534,7 @@ mod tests {
     #[test]
     fn test_produce_fastq_messages() {
         let mut config = ConfigBuilder::new();
-        config.reference = Option::from("data/H1N1.fa".to_string());
+        config.reference = Option::from("test_data/references/H1N1.fa".to_string());
         config.paired_ended = true;
         config.fragment_mean = Some(100.0);
         config.fragment_st_dev = Some(10.0);
@@ -545,7 +550,7 @@ mod tests {
     #[test]
     fn test_produce_fasta_messages() {
         let mut config = ConfigBuilder::new();
-        config.reference = Some("data/H1N1.fa".to_string());
+        config.reference = Some("test_data/references/H1N1.fa".to_string());
         config.produce_fasta = true;
         config.check_and_print_config();
         config.produce_vcf = true;
@@ -559,7 +564,7 @@ mod tests {
     #[should_panic]
     fn test_no_files() {
         let mut config = ConfigBuilder::new();
-        config.reference = Some("data/H1N1.fa".to_string());
+        config.reference = Some("test_data/references/H1N1.fa".to_string());
         config.produce_fastq = false;
         config.check_and_print_config();
     }
@@ -568,7 +573,7 @@ mod tests {
     #[should_panic]
     fn test_no_frag_mean_or_stdev() {
         let mut config = ConfigBuilder::new();
-        config.reference = Some("data/H1N1.fa".to_string());
+        config.reference = Some("test_data/references/H1N1.fa".to_string());
         // paired end set to true, by default, fragment mean and st dev are None
         config.paired_ended = true;
         config.check_and_print_config();
@@ -578,7 +583,7 @@ mod tests {
     #[should_panic]
     fn test_no_frag_mean() {
         let mut config = ConfigBuilder::new();
-        config.reference = Some("data/H1N1.fa".to_string());
+        config.reference = Some("test_data/references/H1N1.fa".to_string());
         config.paired_ended = true;
         config.fragment_st_dev = Some(10.0);
         config.check_and_print_config();
@@ -588,7 +593,7 @@ mod tests {
     #[should_panic]
     fn test_no_stdev() {
         let mut config = ConfigBuilder::new();
-        config.reference = Some("data/H1N1.fa".to_string());
+        config.reference = Some("test_data/references/H1N1.fa".to_string());
         config.paired_ended = true;
         config.fragment_mean = Some(100.0);
         config.check_and_print_config();
@@ -598,7 +603,7 @@ mod tests {
     fn no_output_dir_given() {
         let args: Cli = Cli {
             config: String::new(),
-            reference: String::from("data/H1N1.fa"),
+            reference: String::from("test_data/references/H1N1.fa"),
             output_dir: String::new(),
             log_level: String::from("Trace"),
             log_dest: String::new(),
@@ -616,7 +621,7 @@ mod tests {
     fn test_minimum_mutations_and_others() {
         let args: Cli = Cli {
             config: String::new(),
-            reference: String::from("data/H1N1.fa"),
+            reference: String::from("test_data/references/H1N1.fa"),
             output_dir: String::new(),
             log_level: String::from("Trace"),
             log_dest: String::new(),

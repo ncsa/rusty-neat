@@ -128,7 +128,7 @@ impl SnpModel {
             Nuc::N => { panic!("Trying to use trinucleotide bias on an unknown base (N).") },
         };
 
-        let mut dist = WeightedIndex::new(weights).unwrap();
+        let dist = WeightedIndex::new(weights).unwrap();
         match dist.sample(rng) {
             0 => Nuc::A,
             1 => Nuc::C,

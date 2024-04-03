@@ -8,6 +8,7 @@ use rand::Rng;
 // deletions, since they are treated similarly by variant calling software.
 use structs::nucleotides::Nuc;
 use rand_chacha::ChaCha20Rng;
+use rand_core::RngCore;
 
 #[derive(Debug, Clone)]
 pub struct IndelModel {
@@ -21,7 +22,7 @@ pub struct IndelModel {
 
 impl IndelModel {
     pub fn new() -> Self {
-        // Default Indel model from the original NEAT
+        // Default Indel model from the original NEAT, scaled by the lowest value and rounded.
         let insertion_probability = 0.6;
         let ins_lengths: Vec<usize> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
         let ins_weights: Vec<usize> = vec![10, 10, 20, 5, 5, 5, 5, 5, 5, 5];
@@ -39,61 +40,74 @@ impl IndelModel {
 
     pub fn generate_new_indel_length(&self, mut rng: &mut ChaCha20Rng) -> i64 {
         let rand_num = rng.gen::<f64>();
-        println!("number selected was {}", &rand_num);
         let is_insertion = { rand_num < self.insertion_probability };
         if is_insertion {
-            let mut dist = WeightedIndex::new(&self.ins_weights).unwrap();
+            let dist = WeightedIndex::new(&self.ins_weights).unwrap();
             self.ins_lengths[dist.sample(&mut rng)] as i64
         } else {
-            let mut dist = WeightedIndex::new(&self.del_weights).unwrap();
+            let dist = WeightedIndex::new(&self.del_weights).unwrap();
             -(self.del_lengths[dist.sample(&mut rng)] as i64)
         }
     }
+}
 
-    pub fn generate_random_insertion(&self, length: usize, rng: &mut ChaCha20Rng) -> Vec<Nuc> {
-        // We could refine this with a nucleotide bias matrix. Maybe it would make a difference,
-        // but probably not, since the presence of the insertion is more important than it's content,
-        // for this use. If there was a call for it, maybe.
-        let mut insertion_vec = Vec::new();
-        for _ in 0..length {
-            insertion_vec.push(
-                // gen_range is equally weighted, which works fine for now.
-                match rng.gen_range(0..=3) {
+pub fn generate_random_insertion(length: usize, rng: &mut ChaCha20Rng) -> Vec<Nuc> {
+    // We could refine this with a nucleotide bias matrix. Maybe it would make a difference,
+    // but probably not, since the presence of the insertion is more important than it's content,
+    // for this use. If there was a call for it, maybe.
+    let mut insertion_vec = Vec::new();
+    for _ in 0..length {
+        insertion_vec.push(
+            // gen_range is equally weighted, which works fine for now.
+            match rng.gen_range(0..=3) {
                 0 => Nuc::A,
                 1 => Nuc::C,
                 2 => Nuc::G,
                 3 => Nuc::T,
-                // Since our range is 0..=3, this is unreachable, but Rust needs it.
+                // Since our range is `0..=3`, this is unreachable, but Rust needs it.
                 _ => panic!("gen_range generated an invalid number."),
-                }
-            )
-        }
-        insertion_vec
+            }
+        )
     }
+    insertion_vec
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use structs::nucleotides::Nuc::*;
-    use structs::variants::{VariantType, Variant};
-    use structs::transition_matrix::TransitionMatrix;
     use rand_core::SeedableRng;
 
     #[test]
-    fn test_generate_variant() {
-        let test_indel_model = IndelModel::new();
-        let input_sequence = vec![A, C, G, G, A];
-        let transition_matrix = TransitionMatrix::new();
+    fn test_indel_model() {
+        let indel_model = IndelModel {
+            insertion_probability: 0.75,
+            ins_lengths: vec![1, 2],
+            ins_weights: vec![100, 1],
+            del_lengths: vec![3, 4],
+            del_weights: vec![1, 1000],
+        };
         let mut rng = ChaCha20Rng::seed_from_u64(0);
-        let test_variant: Variant = test_indel_model.generate_variant(
-            "chr1",
-            &input_sequence,
-            0,
-            &transition_matrix,
-            &mut rng,
-        );
-        assert_eq!(test_variant.variant_type, VariantType::Indel);
-        assert_eq!(test_variant.reference, input_sequence);
+        let length = indel_model.generate_new_indel_length(&mut rng);
+        if length > 0 {
+            assert!((length == 1) || (length == 2));
+        } else {
+            assert!((length == -3) || (length == -4));
+        }
+    }
+
+    #[test]
+    fn test_generate_insertion () {
+        let mut rng = ChaCha20Rng::seed_from_u64(0);
+
+        let insertion = generate_random_insertion(10, &mut rng);
+        assert_eq!(insertion.len(), 10);
+        assert!(!insertion.contains(&N));
+
+        let insertion2 = generate_random_insertion(12, &mut rng);
+        assert_eq!(insertion2.len(), 12);
+        assert!(!insertion2.contains(&N));
+
+        println!("{:?} and {:?}", insertion, insertion2);
     }
 }

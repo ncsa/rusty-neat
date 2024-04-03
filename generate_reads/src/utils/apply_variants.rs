@@ -14,15 +14,15 @@ pub fn apply_variants(
     // is at position 3 + start relative to the entire reference.
     let mut positions_to_mutate = Vec::new();
     for location in relevant_variants.keys().into_iter() {
-        positions_to_mutate.push(location.clone() - start)
+        positions_to_mutate.push((*location).clone() - start)
     }
     let mut mutated_sequence = Vec::new();
     for mut position in 0..raw_sequence.len() {
         if positions_to_mutate.contains(&position) {
             let variant = relevant_variants.get(&(position + start)).unwrap();
-            let probability = 0.5;
-            if variant.is_homozygous {
-                let probability = 1.0;
+            let mut probability = 0.5;
+            if variant.is_homozygous() {
+                probability = 1.0;
             }
             // if it's heterozygous, we only want the variant half the time.
             if (&mut rng).gen_bool(probability) {

@@ -6,7 +6,7 @@ use rand_chacha::ChaCha20Rng;
 use structs::nucleotides::Nuc;
 use structs::transition_matrix::TransitionMatrix;
 use structs::variants::{Variant, VariantType};
-use models::indel_model::IndelModel;
+use models::indel_model::{IndelModel, generate_random_insertion};
 use models::quality_scores::QualityScoreModel;
 use models::sequencing_error_model::SequencingErrorModel;
 use models::snp_model::SnpModel;
@@ -48,15 +48,15 @@ impl MutationModel {
         }
     }
 
-    fn generate_genotype(&mut self, ploidy: usize, mut rng: ChaCha20Rng) -> (Vec<u8>, bool) {
+    fn generate_genotype(&mut self, ploidy: usize, mut rng: ChaCha20Rng) -> Vec<u8> {
         // "Homozygous" is ambiguous for polyploid organisms, so we'll just take "heterozygous" to
         // mean roughly half the reads will have the variant, to keep it simple
         let is_homozygous = rng.borrow_mut().gen_bool(self.homozygous_frequency);
         if is_homozygous {
-            (vec![1; ploidy], true)
+            vec![1; ploidy]
         } else {
             let num_ploids = ploidy/2;
-            ([vec![1; num_ploids], vec![0; ploidy-num_ploids]].concat(), false)
+            [vec![1; num_ploids], vec![0; ploidy-num_ploids]].concat()
         }
     }
 
@@ -68,9 +68,9 @@ impl MutationModel {
         mut rng: ChaCha20Rng,
     ) -> Variant {
         // Select a genotype for the variant
-        let (genotype, is_homozygous) = self.generate_genotype(ploidy, rng.clone());
+        let genotype= self.generate_genotype(ploidy, rng.clone());
         // Select a type of mutation.
-        let mut dist = WeightedIndex::new(
+        let dist = WeightedIndex::new(
             self.variant_weights
                 .iter()
                 .map(|item| item.1)
@@ -96,8 +96,7 @@ impl MutationModel {
                 let length = self.statistical_models.indel_model
                     .generate_new_indel_length(rng.borrow_mut());
                 if length > 0 { // insertion
-                    let insertion_vec = self.statistical_models.indel_model
-                        .generate_random_insertion(length.abs() as usize, rng.borrow_mut())
+                    let insertion_vec = generate_random_insertion(length.abs() as usize, rng.borrow_mut())
                         .clone();
                     let reference = vec![
                         reference_sequence.get(variant_location)
@@ -123,7 +122,7 @@ impl MutationModel {
                 }
             },
         };
-        Variant::new(variant_type, variant_location, &reference, &alternate, genotype, is_homozygous)
+        Variant::new(variant_type, &reference, &alternate, genotype)
     }
 }
 
@@ -177,7 +176,6 @@ impl StatisticalModels {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::structs::nucleotides::Nuc::*;
     use rand_core::SeedableRng;
     use rand_chacha::ChaCha20Rng;
 
@@ -187,8 +185,7 @@ mod tests {
         let c_weights = vec![20, 0, 1, 1];
         let g_weights = vec![1, 1, 0, 20];
         let t_weights = vec![20, 1, 20, 0];
-        let rng = ChaCha20Rng::seed_from_u64(0);
-        let matrix = TransitionMatrix::from(vec![a_weights, c_weights, g_weights, t_weights]);
+        TransitionMatrix::from(vec![a_weights, c_weights, g_weights, t_weights]);
         // It actually mutates the base
         // assert_ne!(test_model.generate_mutation
         // (

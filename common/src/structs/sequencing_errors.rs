@@ -77,7 +77,6 @@ mod tests {
     #[test]
     fn test_deletion() {
         let length = -16;
-        let sequence: Option<Vec<Nuc>> = None;
         let deletion = IndelErr {
             length,
             sequence: None,

@@ -1,4 +1,4 @@
-reference: test_data/ecoli.fa
+reference: test_data/references/H1N1.fa
 read_len: 10
 coverage: 3
 ploidy: 9
@@ -13,5 +13,5 @@ produce_fasta: true
 produce_fastq: false
 
 overwrite_output: true
-output_dir: test_data
+output_dir: fake
 output_prefix: testing

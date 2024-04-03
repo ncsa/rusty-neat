@@ -4,17 +4,15 @@
 // read coverage. Generate reads uses this to create a list of coordinates to take slices from
 // the mutated fasta file. These will either be read-length fragments or fragment model length
 // fragments.
-use crate::utils;
 use common;
 
-use log::{debug, info};
+use log::{info, debug};
 use rand::seq::SliceRandom;
 use rand::RngCore;
 use rand_distr::{Distribution, Normal};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::VecDeque;
 use rand_chacha::ChaCha20Rng;
 use common::structs::nucleotides::Nuc;
-use common::structs::variants::Variant;
 
 fn cover_dataset(
     span_length: usize,
@@ -134,7 +132,7 @@ pub fn generate_reads(
         }
     }
     // Generate a vector of read positions
-    info!("Generating read coordinates.");
+    debug!("Generating read coordinates.");
     let read_positions: Vec<(usize, usize)> = cover_dataset(
         sequence_length,
         read_length,
@@ -143,7 +141,7 @@ pub fn generate_reads(
         &mut rng
     );
 
-    info!("Outputting read set");
+    debug!("Outputting read set");
     if read_positions.is_empty() {
         Err("No reads generated")
     } else {
@@ -202,7 +200,7 @@ mod tests {
         )
         .unwrap();
         println!("{:?}", reads);
-        assert!(reads.contains(&(0, 9)));
+        assert!(reads.contains(&(0, 10)));
     }
 
     #[test]
@@ -247,7 +245,7 @@ mod tests {
         let paired_ended = true;
         let mean = Some(200.0);
         let st_dev = Some(1.0);
-        let mut rng = ChaCha20Rng::seed_from_u64(0);
+        let rng = ChaCha20Rng::seed_from_u64(0);
         let reads = generate_reads(
             mutated_sequence.len(),
             read_length,

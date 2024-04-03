@@ -60,7 +60,7 @@ mod tests {
 
     #[test]
     fn test_read_yaml() {
-        let filename = "test_data/test_model.json".to_string();
+        let filename = "test_data/models/test_model.json".to_string();
         let qual_data = parse_neat_quality_scores(&filename);
         assert_eq!(qual_data.seed_weights.len(), 42);
         assert_eq!(qual_data.weights_from_one.len(), 10);

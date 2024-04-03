@@ -4,8 +4,8 @@ use crate::utils;
 
 use std::io::Write;
 use std::{fs, io};
+use std::cmp::min;
 use std::collections::HashMap;
-use itertools::Itertools;
 use rand::seq::SliceRandom;
 use rand_chacha::ChaCha20Rng;
 
@@ -77,13 +77,14 @@ pub fn write_fastq(
                 contig_variants
                     .iter()
                     .filter(
-                        |(location, variant)|
+                        |(location, _)|
                         (position1 < **location) && (**location < position2)
                     )
                     .collect::<HashMap<_, _>>()
                     .clone();
             // grabbing the raw sequence plus a buffer
-            let raw_sequence = sequence.get(position1..(position2 + 50)).unwrap();
+            let end_plus_buffer = min(position2 + 50, sequence.len());
+            let raw_sequence = sequence.get(position1..end_plus_buffer).unwrap();
             let mutated_sequence = apply_variants(
                 raw_sequence, relevant_mutations, position1, rng.clone()
             );
@@ -176,12 +177,12 @@ mod tests {
         ]));
         let mutations = Box::new(HashMap::from([
             ("chr1".to_string(), HashMap::from([
-                (0, Variant::new(VariantType::SNP, 0, &vec![A], &vec![T],
-                                 vec![0,1], false)),
-                (7, Variant::new(VariantType::Indel, 7, &vec![T],
-                                 &vec![T, A, C], vec![1, 1], true)),
-                (12, Variant::new(VariantType::SNP, 12, &vec![A], &vec![T],
-                                  vec![0,1], false))
+                (0, Variant::new(VariantType::SNP, &vec![A], &vec![T],
+                                 vec![0,1])),
+                (7, Variant::new(VariantType::Indel, &vec![T],
+                                 &vec![T, A, C], vec![1, 1])),
+                (12, Variant::new(VariantType::SNP, &vec![A], &vec![T],
+                                  vec![0,1]))
             ]))
         ]));
         let read_length = 4;

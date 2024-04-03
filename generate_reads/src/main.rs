@@ -12,6 +12,7 @@ extern crate simplelog;
 
 use common;
 pub mod utils;
+mod data;
 
 use clap::Parser;
 use log::*;
@@ -19,7 +20,6 @@ use rand::thread_rng;
 use rand::SeedableRng;
 use rand_core::RngCore;
 use simplelog::*;
-use std::collections::HashMap;
 use std::fs::File;
 use rand_chacha::ChaCha20Rng;
 use utils::cli;
@@ -45,7 +45,7 @@ fn main() {
         ),
     };
     // Check that the parent dir exists
-    let log_destination = check_parent(&args.log_dest).unwrap();
+    let log_destination = check_parent(&args.log_dest, true).unwrap();
     // Set up the logger for the run
     CombinedLogger::init(vec![
         #[cfg(feature = "termcolor")]

@@ -1,6 +1,3 @@
-use std::collections::HashMap;
-use rand::Rng;
-use rand_chacha::ChaChaRng;
 use crate::structs::nucleotides::Nuc;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
@@ -19,82 +16,38 @@ pub struct Variant {
     // This is the type of variant. Any new types will need to be added to VariantType
     // to be implemented here.
     pub variant_type: VariantType,
-    // Position on the reference where the variant starts
-    pub position: usize,
     // The reference allele of interest. This is either one base or several bases for a deletion.
     pub reference: Vec<Nuc>,
     // The alternate allele of interest. This is either one base or several bases for an insertion.
     pub alternate: Vec<Nuc>,
     // the genotype will tell us which ploid is mutated in vcf, fastq and bam.
     pub genotype: Vec<u8>,
-    // Saved later for convenience
-    pub is_homozygous: bool,
 }
 
 impl Variant {
     pub fn new(
         variant_type: VariantType,
-        position: usize,
         reference: &Vec<Nuc>,
         alternate: &Vec<Nuc>,
         genotype: Vec<u8>,
-        is_homozygous: bool,
     ) -> Self {
+        match variant_type {
+            VariantType::Indel => assert_ne!(reference.len(), alternate.len()),
+            VariantType::SNP => assert_eq!(reference.len(), alternate.len()),
+        }
+
         Variant {
             variant_type,
-            position,
             reference: reference.clone(),
             alternate: alternate.clone(),
-            genotype,
-            is_homozygous,
+            genotype: genotype.clone(),
         }
     }
 
     pub fn is_insertion(&self) -> bool { self.reference.len() < self.alternate.len() }
 
-    pub fn apply(&self, sequence: Vec<Nuc>, start: usize) -> Vec<Nuc> {
-        let location = self.position - start;
-        debug_assert_eq!(self.reference[0], sequence[location]);
-        match self.variant_type {
-            VariantType::Indel => {
-                if self.is_insertion() {
-                    // since the alternate includes the base from the reference in the first
-                    // position, we don't need to get it from the sequence.
-                    [
-                        sequence.get(..location).unwrap(),
-                        self.alternate.as_slice(),
-                        sequence.get(location+1..).unwrap()
-                    ].concat()
-                } else {
-                    // +1 in the first segment so that we grab the reference base,
-                    // what we are actually doing in the second is
-                    //     (self.reference.len() - 1) // to account for not deleting the first base
-                    //   + (location + 1) // to skip the reference base
-                    // since -1 and +1 cancel out, we just have length + location.
-                    // example:
-                    //     sequence = [A, C, C, G, T, C, A, A, A, T, T, G, C, T]
-                    //     start = 11243
-                    //     variant = { variant_type: Indel, position: 11245
-                    //                 reference: [C, G, T], alternate: [C] // Deletion of 2 bases
-                    //                 ... } // other info not relevant for now.
-                    // our location in this case is 2 (the index where the variant starts)
-                    // part 1 gives us [A, C, C] (all indexes <= 2)
-                    // part 2 gives us [C, A, A, A, T, T, G, C, T]
-                    // concatenating the 2 together gives us the sequence with a deletion of 2 bases
-                    [
-                        sequence.get(..location+1).unwrap(),
-                        sequence.get((self.reference.len() + location)..).unwrap(),
-                    ].concat()
-                }
-            },
-            VariantType::SNP => {
-                [
-                    sequence.get(..location).unwrap(),
-                    self.alternate.as_slice(),
-                    sequence.get((location + 1)..).unwrap(),
-                ].concat()
-            },
-        }
+    pub fn is_homozygous(&self) -> bool {
+        return if self.genotype.contains(&0) { false } else { true }
     }
 }
 
@@ -102,29 +55,42 @@ impl Variant {
 mod tests {
     use super::*;
     use structs::nucleotides::Nuc::*;
+    use structs::variants::VariantType::*;
 
     #[test]
-    fn test_get_len() {
-        let my_variant = Variant::new(
-            VariantType::Indel,
-            &vec![A, A, A, T, C, G, T, T, T, A],
-            &vec![T, G, A, A, T, G],
-            vec![0, 1],
-            true,
-        );
-        assert_eq!(my_variant.get_length(), 5)
+    fn test_variant_creation() {
+        let variant = Variant {
+            // Not actually a valid variant, but just testing.
+            variant_type: SNP,
+            reference: vec![A, C, T, G],
+            alternate: vec![A],
+            genotype: vec![1, 1, 1],
+        };
+        assert_eq!(variant.variant_type, SNP);
+        assert_eq!(variant.variant_type, SNP);
+        assert!(variant.is_homozygous());
     }
 
     #[test]
-    fn test_contains() {
-        let test_variant = Variant::new(
-            VariantType::Indel,
-            &vec![A, A, A, T, C, G, T, T, T, A],
-            &vec![T, G, A, A, T, G],
+    fn test_variant_new() {
+        let variant = Variant::new(
+            Indel,
+            &vec![A],
+            &vec![A, C, T, G],
             vec![0, 1],
-            false,
         );
-        let test_pos = 13;
-        assert!(test_variant.contains(test_pos));
+        assert!(!variant.is_homozygous())
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_bad_variant_creation() {
+        Variant::new(
+            // with new it should catch this error
+            SNP,
+            &vec![A, C, T, G],
+            &vec![A],
+            vec![1, 1, 1],
+        );
     }
 }

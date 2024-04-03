@@ -3,7 +3,6 @@ pub mod config;
 pub mod fasta_tools;
 pub mod fastq_tools;
 pub mod generate_reads;
-pub mod mutate;
 pub mod read_models;
 pub mod read_old_data;
 pub mod runner;

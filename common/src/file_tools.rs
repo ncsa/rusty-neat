@@ -3,7 +3,7 @@ use log::warn;
 use std::fs::File;
 use std::io::{BufRead, Error};
 use std::path::Path;
-use std::{fs, io};
+use std::{env, fs, io};
 
 pub fn read_lines(filename: &str) -> io::Result<io::Lines<io::BufReader<File>>> {
     // This creates a buffer to read lines
@@ -22,14 +22,17 @@ pub fn open_file(mut filename: &mut str, overwrite_file: bool) -> Result<File, E
     }
 }
 
-pub fn check_parent(filename: &str) -> io::Result<&Path> {
+pub fn check_parent(filename: &str, create: bool) -> io::Result<&Path> {
     // checks that the parent dir exists and then if so creates the Path object open
     // and ready to write
     let file_path = Path::new(filename);
     let parent = file_path.parent().unwrap();
-    if !parent.exists() {
+    if !parent.exists() && create {
         check_create_dir(parent);
-    };
+    } else if !parent.exists() {
+        println!("{}", env::current_dir().unwrap().to_str().unwrap());
+        panic!("Directory {} does not exist!", parent.to_str().unwrap());
+    }
     Ok(file_path)
 }
 
@@ -47,13 +50,15 @@ mod tests {
     #[test]
     fn test_check_parent() {
         let filename = "test_data/H1N1.fa";
-        check_parent(filename).unwrap();
+        check_parent(filename, false).unwrap();
     }
 
     #[test]
-    #[should_panic]
     fn test_check_parent_fail() {
         let filename = "fake/test.fa";
-        check_parent(filename).unwrap();
+        assert!(!Path::new("fake").is_dir());
+        check_parent(filename, true).unwrap();
+        assert!(Path::new("fake").is_dir());
+        fs::remove_dir("fake").unwrap()
     }
 }

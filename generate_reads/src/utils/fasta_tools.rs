@@ -8,7 +8,6 @@ use std::*;
 use std::collections::{HashMap, VecDeque};
 use common::file_tools::open_file;
 use common::file_tools::read_lines;
-use common::models::mutation_model::MutationModel;
 use common::structs::nucleotides::Nuc;
 use common::structs::nucleotides::base_to_nuc;
 use common::structs::variants::{Variant, VariantType};
@@ -142,7 +141,7 @@ mod tests {
 
     #[test]
     fn test_read_fasta() {
-        let test_fasta = "test_data/H1N1.fa";
+        let test_fasta = "test_data/references/H1N1.fa";
         let (_test_map, map_order) = read_fasta(test_fasta).unwrap();
         assert_eq!(map_order[0], "H1N1_HA".to_string())
     }
@@ -152,6 +151,7 @@ mod tests {
     fn test_read_bad_fasta() {
         let test_fasta = "test_data/fake.fasta";
         read_fasta(test_fasta).unwrap();
+        fs::remove_dir("data").unwrap()
     }
 
     #[test]
@@ -160,30 +160,27 @@ mod tests {
         let fasta_map = Box::new(HashMap::from([
             ("chr1".to_string(), reference_seq.clone())
         ]));
-        let reads_dataset = Box::new(HashMap::from([
-            ("chr1".to_string(), vec![(0, 4), (6, 10)])
-        ]));
         let mutations = Box::new(HashMap::from([
             ("chr1".to_string(), HashMap::from([
-                (0, Variant::new(VariantType::SNP, 0, &vec![A], &vec![T],
-                                 vec![0,1], false)),
-                (7, Variant::new(VariantType::Indel, 7, &vec![T],
-                                 &vec![T, A, C], vec![1, 1], true)),
-                (12, Variant::new(VariantType::SNP, 12, &vec![A], &vec![T],
-                                  vec![0,1], false))
+                (0, Variant::new(VariantType::SNP, &vec![A], &vec![T],
+                                 vec![0,1])),
+                (7, Variant::new(VariantType::Indel, &vec![T], &vec![T, A, C],
+                                 vec![1, 1])),
+                (12, Variant::new(VariantType::SNP, &vec![A], &vec![T],
+                                  vec![0,1]))
             ]))
         ]));
 
         let fasta_output: HashMap<String, Vec<Nuc>> =
             HashMap::from([(String::from("chr1"), reference_seq)]);
-        let fasta_pointer = Box::new(fasta_output);
         let fasta_order = VecDeque::from([String::from("chr1")]);
         let output_file = "test";
         let test_write = write_fasta(
             &fasta_map,
             &mutations,
             &fasta_order,
-            false, output_file
+            false,
+            output_file
         ).unwrap();
         let file_name = "test.fasta";
         assert_eq!(test_write, ());

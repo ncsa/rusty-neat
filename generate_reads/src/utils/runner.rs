@@ -3,6 +3,7 @@ use crate::data;
 use common;
 
 use std::thread;
+use std::time;
 
 use log::info;
 use std::collections::{HashMap, VecDeque};
@@ -25,6 +26,7 @@ pub enum RunNeatError {
 }
 
 pub fn run_neat(config: Box<RunConfiguration>, rng: ChaCha20Rng) -> Result<(), RunNeatError> {
+    let now = time::Instant::now();
     // Create the prefix of the files to write
     let output_file = format!("{}/{}", config.output_dir.display(), config.output_prefix);
 
@@ -46,17 +48,18 @@ pub fn run_neat(config: Box<RunConfiguration>, rng: ChaCha20Rng) -> Result<(), R
 
     // Load models that will be used for the runs.
     // For now, we will use the one supplied, pulled directly from NEAT2.0's original model.
+    // Later these variables will take the config input.
     let input_quality_score_model = false;
     let input_quality_model = String::new();
 
     let quality_score_model = {
         if input_quality_score_model {
-            read_quality_score_raw_data(
-                RawQualityScoreData::new()
-            )
-        } else {
             read_quality_score_model_file(
                 &input_quality_model
+            )
+        } else {
+            read_quality_score_raw_data(
+                RawQualityScoreData::new()
             )
         }
     };
@@ -68,126 +71,52 @@ pub fn run_neat(config: Box<RunConfiguration>, rng: ChaCha20Rng) -> Result<(), R
     // Mutating the reference and recording the variant locations.
     info!("Generating variants");
 
-    let n = fasta_order.len();
+    // initialize all variants with the names of the contig, so it's not empty later
+    let mut all_variants: Box<HashMap<String, HashMap<usize, Variant>>> =
+        Box::new(HashMap::new());
+    for contig in &fasta_order {
+        all_variants.entry(contig.clone()).or_insert(HashMap::new());
+    }
+    let mut all_reads:Box<HashMap<String, Vec<(usize, usize)>>> = Box::new(HashMap::new());
 
-    // all variants will be a hashmap of the contig name indexing a hashmap of variants keyed by
-    // location. Basically, the Box moves the map to the heap, the mutex is a way to lock the file
-    // and arc handles the communication between threads. From the rust book.
-    let all_variants_mutex: Arc<Mutex<Box<HashMap<String, HashMap<usize, Variant>>>>> =
-        Arc::new(Mutex::new(Box::new(HashMap::new())));
-    let all_reads_mutex: Arc<Mutex<Box<HashMap<String, Vec<(usize, usize)>>>>> =
-        Arc::new(Mutex::new(Box::new(HashMap::new())));
-    let fasta_order_mutex: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(fasta_order));
-    let fasta_sequences_mutex: Arc<Mutex<Box<HashMap<String, Vec<Nuc>>>>> =
-        Arc::new(Mutex::new(fasta_map));
-    let mutation_model_mutex: Arc<Mutex<MutationModel>> = Arc::new(Mutex::new(mutation_model));
-    let confix_mutex: Arc<Mutex<Box<RunConfiguration>>> = Arc::new(Mutex::new(config));
-    let local_rng_mutex: Arc<Mutex<ChaCha20Rng>> = Arc::new(Mutex::new(rng.clone()));
+    for contig in &fasta_order {
+        info!("Generating variants for {}", contig);
+        let contig_sequence = fasta_map.get(contig).unwrap();
+        let contig_variants = generate_variants(
+            contig_sequence,
+            &mut mutation_model.clone(),
+            config.ploidy,
+            rng.clone()
+        );
 
-    let mut threads = Vec::with_capacity(n);
-    (0..n).for_each(|_| {
-        let all_variants_mutex_clone = Arc::clone(&all_variants_mutex);
-        let all_reads_mutex_clone = Arc::clone(&all_reads_mutex);
-        let fasta_order_mutex_clone = Arc::clone(&fasta_order_mutex);
-        let fasta_sequences_mutex_clone = Arc::clone(&fasta_sequences_mutex);
-        let mutation_model_mutex_clone = Arc::clone(&mutation_model_mutex);
-        let config_mutex_clone = Arc::clone(&confix_mutex);
-        let local_rng_mutex_clone = Arc::clone(&local_rng_mutex);
+        info!("Finished generating variants for {}", contig);
+        let _ = {
+            all_variants.insert(contig.to_owned(), contig_variants)
+        };
 
-        threads.push(thread::spawn(move || {
-            let result: Result<(), RunNeatError> = {
-                let contig = {
-                    let mut fasta_order = fasta_order_mutex_clone
-                        .lock()
-                        .unwrap();
-                    let contig = fasta_order.pop_front().unwrap().clone();
-                    fasta_order.push_back(contig.clone());
-                    contig
-                }.clone();
-                info!("Generating variants for {}", contig);
-                let contig_variants = {
-                    let config = config_mutex_clone.lock().unwrap();
-                    let mut local_rng =
-                        local_rng_mutex_clone
-                            .lock()
-                            .unwrap();
-                    let fasta_sequences = fasta_sequences_mutex_clone
-                        .lock()
-                        .unwrap();
-                    let contig_sequence = fasta_sequences.get(&contig).unwrap();
-                    let mutation_model =
-                        mutation_model_mutex_clone.lock().unwrap();
-                    generate_variants(
-                        contig_sequence,
-                        &mut mutation_model.clone(),
-                        config.ploidy,
-                        local_rng.clone()
-                    )
-                };
+        // This all means if this run is fasta only, we can skip generating reads
+        if config.produce_fastq ||
+            config.produce_vcf ||
+            config.produce_bam {
+            let contig_sequence_len = fasta_map[contig].len().clone();
+            let contig_reads = generate_reads(
+                contig_sequence_len,
+                config.read_len,
+                config.coverage,
+                config.paired_ended,
+                config.fragment_mean,
+                config.fragment_st_dev,
+                rng.clone(),
+            ).expect("Error generating reads");
 
-                info!("Finished generating variants for {}", contig);
-                let _ = {
-                    let mut all_variants =
-                        all_variants_mutex_clone.lock().unwrap();
-                    all_variants.insert(contig.to_owned(), contig_variants)
-                };
-
-                // This all means if this run is fasta only, we can skip generating reads
-                let config = config_mutex_clone.lock().unwrap();
-                if config.produce_fastq ||
-                    config.produce_vcf ||
-                    config.produce_bam {
-                    let contig_sequence_len = {
-                        let fasta_sequences =
-                            fasta_sequences_mutex_clone
-                                .lock()
-                                .unwrap();
-                        fasta_sequences[&contig].len()
-                    }.clone();
-                    let mut local_rng =
-                        local_rng_mutex_clone
-                            .lock()
-                            .unwrap();
-                    let contig_reads = generate_reads(
-                        contig_sequence_len,
-                        config.read_len,
-                        config.coverage,
-                        config.paired_ended,
-                        config.fragment_mean,
-                        config.fragment_st_dev,
-                        local_rng.clone(),
-                    ).expect("Error generating reads");
-                    let mut all_reads =
-                        all_reads_mutex_clone.lock().unwrap();
-
-                    all_reads.insert(contig.to_owned(), contig_reads);
-                };
-                Ok(())
-            };
-            result.unwrap();
-        }));
-    });
-
-    for handle in threads {
-        handle.join().unwrap();
+            all_reads.insert(contig.to_owned(), contig_reads);
+        };
     }
 
-    // I'm not sure if this is necessary, but going to grab the lock on these files for
-    // the remainder.
-    let all_variants_clone = Arc::clone(&all_variants_mutex);
-    let all_variants = all_variants_clone.lock().unwrap();
-    let fast_order_mutex_clone = Arc::clone(&fasta_order_mutex);
-    let fasta_order = fast_order_mutex_clone.lock().unwrap();
-    let fasta_sequences_mutex_clone = Arc::clone(&fasta_sequences_mutex);
-    let fasta_sequences = fasta_sequences_mutex_clone.lock().unwrap();
-    let config_mutex_clone = Arc::clone(&confix_mutex);
-    let config = config_mutex_clone.lock().unwrap();
-    let local_rng_mutex_clone = Arc::clone(&local_rng_mutex);
-    let local_rng = local_rng_mutex_clone.lock().unwrap();
-
     if config.produce_fasta {
+        info!("Producing fasta file");
         write_fasta(
-            &fasta_sequences,
+            &fasta_map,
             &all_variants,
             &fasta_order,
             config.overwrite_output,
@@ -288,6 +217,8 @@ pub fn run_neat(config: Box<RunConfiguration>, rng: ChaCha20Rng) -> Result<(), R
     //     .unwrap();
     //     info!("Processing complete")
     // }
+    let elapsed_time = now.elapsed();
+    info!("Total run time {} seconds.", elapsed_time.as_secs());
     Ok(())
 }
 

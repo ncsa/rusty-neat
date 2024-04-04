@@ -37,7 +37,10 @@ fn cover_dataset(
     // And picks those coordinates for a second read. Once the tail of the read is past the end,
     // we start over again at 0.
     //
-    // Reads that will be start and end of the fragment.
+    // We develop wildcards to move the start point around a bit to simulate random breaks from the
+    // chemistry procedures.
+    let factor: i32 = read_length as i32 / 4 ;
+    let wildcards: Vec<i32> = (-factor..factor).collect();
     let mut read_set: Vec<(usize, usize)> = vec![];
 
     let mut cover_fragment_pool: VecDeque<usize>;
@@ -83,7 +86,7 @@ fn cover_dataset(
             gap_size += fragment_length - (read_length * 2)
         };
         // Picks a number between zero and a quarter of a read length
-        let wildcard: usize = (rng.next_u32() % 10) as usize;
+        let wildcard: usize = wildcards[temp_end % 10] as usize;
         // adds to the start to give it some spice
         start += temp_end + wildcard;
         // sanity check. If we are already out of bounds, take the modulo

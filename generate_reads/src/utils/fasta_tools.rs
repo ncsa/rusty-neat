@@ -1,7 +1,6 @@
 // This library contains tools needed to process fasta files as input and output.
 use common;
 
-use log::info;
 use std::{io, str, usize};
 use std::io::Write;
 use std::*;
@@ -16,8 +15,6 @@ pub fn read_fasta(
     fasta_path: &str,
 ) -> Result<(Box<HashMap<String, Vec<Nuc>>>, VecDeque<String>), io::Error> {
     // Reads a fasta file and turns it into a HashMap and puts it in the heap
-    info!("Reading fasta: {}", fasta_path);
-
     let mut fasta_map: HashMap<String, Vec<Nuc>> = HashMap::new();
     let mut fasta_order: VecDeque<String> = VecDeque::new();
     let mut current_key = String::new();
@@ -51,8 +48,7 @@ pub fn read_fasta(
 }
 
 pub fn write_fasta(
-    reference_fasta: &Box<HashMap<String, Vec<Nuc>>>,
-    variants: &HashMap<String, HashMap<usize, Variant>>,
+    mutated_fasta: &Box<HashMap<String, Vec<Nuc>>>,
     fasta_order: &VecDeque<String>,
     overwrite_output: bool,
     output_file: &str,
@@ -68,51 +64,36 @@ pub fn write_fasta(
     let mut outfile = open_file(&mut output_fasta, overwrite_output)
         .expect(&format!("Error opening {}", output_fasta));
     for contig in fasta_order {
-        let reference_sequence = &reference_fasta[contig];
-        let contig_length = reference_sequence.len();
+        let sequence = &mutated_fasta[contig];
+        let contig_length = sequence.len();
         // Write contig name
         writeln!(&mut outfile, ">{}", contig)?;
         // write sequences[ploid] to this_fasta
         let mut i = 0;
-        let contig_variants = variants.get(contig).unwrap();
-        let variant_locations: Vec<&usize> = contig_variants.keys().collect();
         while i < contig_length {
-            let mut mutated_line = String::new();
-            for j in 0..LINE_LENGTH {
-                // Check to make sure we are not out of bounds, which will happen if we
-                // reach the end and there are not exactly 70 bases left (basically, every time)
-                if (i + j) >= contig_length {
-                    // ensure that the outer loop breaks after we perform the last writeln.
-                    i += j;
-                    break
-                }
-                let base_to_write: &Nuc = reference_sequence.get(i).unwrap();
-                if *base_to_write == Nuc::N || variant_locations.contains(&&(i + j)) {
-                    let variant_to_apply = contig_variants.get(&(i+j)).unwrap();
-                    mutated_line += &match variant_to_apply.variant_type {
-                        VariantType::Indel => {
-                            if variant_to_apply.is_insertion() { // insertion
-                                let mut insertion_string = String::new();
-                                for nuc in &variant_to_apply.alternate {
-                                    insertion_string += &nuc.to_str();
-                                }
-                                insertion_string
-                            } else { // Deletion
-                                // The plus one for the base will get added after this if check
-                                i += variant_to_apply.reference.len();
-                                base_to_write.to_str().to_string()
-                            }
-                        },
-                        VariantType::SNP => {
-                            variant_to_apply.alternate[0].to_str().to_string()
-                        },
+            let mut outlines = String::new();
+            // Generate a few lines before writing
+            'num_lines: for _ in 0..50 {
+                for j in 0..LINE_LENGTH {
+
+                    // Check to make sure we are not out of bounds, which will happen if we
+                    // reach the end and there are not exactly 70 bases left (basically, every time)
+                    if (i + j) >= contig_length {
+                        // append the remaining bases
+                        for base in sequence[i..].iter() {
+                            outlines += &base.to_str();
+                        }
+                        outlines += "\n";
+                        // ensure outer loop breaks after writing final line, break inner loop.
+                        i += j;
+                        break 'num_lines
                     }
-                } else {
-                    mutated_line += &base_to_write.to_str();
+                    outlines += &sequence[i+j].to_str();
+                    i += 1
                 }
-                i += 1
+                outlines += "\n";
             }
-            writeln!(&mut outfile, "{}", mutated_line)?;
+            writeln!(&mut outfile, "{}", outlines)?;
         }
     }
     Ok(())

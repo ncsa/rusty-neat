@@ -9,4 +9,6 @@ pub mod runner;
 pub mod vcf_tools;
 pub mod generate_variants;
 pub mod apply_variants;
+pub mod mutate_fasta;
+mod neat_rng;
 

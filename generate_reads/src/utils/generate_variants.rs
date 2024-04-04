@@ -16,6 +16,16 @@ pub fn generate_variants(
     // And we may need to implement a further check that there aren't other types of overlaps.
     // This will simply overwrite any existing value, so we just capture the last variant at each
     // location.
+
+    // We need to incorporate this idea
+
+    // let non_n_positions: Vec<usize> = mutated_record
+    //     .iter()
+    //     .enumerate()
+    //     .filter(|&(_, y)| *y != 4) // Filter out the N's
+    //     .map(|(x, _)| x)
+    //     .collect();
+
     let reference_length = reference_sequence.len();
     let mut contig_variants: HashMap<usize, Variant> = HashMap::new();
     let mut number_of_mutations = (reference_length as f64 * mutation_model.mutation_rate)

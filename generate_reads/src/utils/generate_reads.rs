@@ -37,6 +37,10 @@ fn cover_dataset(
     // And picks those coordinates for a second read. Once the tail of the read is past the end,
     // we start over again at 0.
     //
+    // todo I think I need to know the locations of the variants and if they are homozygous or
+    //  heterozygous. Maybe recast the variants map to that and input it in this function.
+    //  Basically, we want to tag these reads, so that when they are written later, we get stuff
+    //  like heterozygous reads only showing up on half the reads.
     // Reads that will be start and end of the fragment.
     let mut read_set: Vec<(usize, usize)> = vec![];
 
@@ -119,9 +123,10 @@ pub fn generate_reads(
     //
     // This takes a mutated sequence and produces a set of reads based on the mutated sequence. For
     // paired ended reads, this will generate a set of reads from each end, by taking the reverse
-    // complement int the output
+    // complement in the output
 
-    // We need to incorporate this idea
+    // todo We need to select for non-N areas for the reads, or at least have reads be more than 1/2
+    //  true bases, I think.
     let mut fragment_pool: Vec<usize> = Vec::new();
     if paired_ended {
         let num_frags = (sequence_length / read_length) * (coverage * 2);

@@ -9,7 +9,6 @@ use common::file_tools::open_file;
 use common::file_tools::read_lines;
 use common::structs::nucleotides::Nuc;
 use common::structs::nucleotides::base_to_nuc;
-use common::structs::variants::{Variant, VariantType};
 
 pub fn read_fasta(
     fasta_path: &str,

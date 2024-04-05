@@ -119,7 +119,7 @@ pub fn run_neat(config: Box<RunConfiguration>, rng: ChaCha20Rng) -> Result<(), R
                 info!("Generating variants for {}", contig);
                 let contig_variants = {
                     let config = config_mutex_clone.lock().unwrap();
-                    let mut local_rng =
+                    let local_rng =
                         local_rng_mutex_clone
                             .lock()
                             .unwrap();
@@ -155,7 +155,7 @@ pub fn run_neat(config: Box<RunConfiguration>, rng: ChaCha20Rng) -> Result<(), R
                                 .unwrap();
                         fasta_sequences[&contig].len()
                     }.clone();
-                    let mut local_rng =
+                    let local_rng =
                         local_rng_mutex_clone
                             .lock()
                             .unwrap();
@@ -223,8 +223,6 @@ pub fn run_neat(config: Box<RunConfiguration>, rng: ChaCha20Rng) -> Result<(), R
     // the remainder.
     let all_reads_clone = Arc::clone(&all_reads_mutex);
     let mut all_reads = all_reads_clone.lock().unwrap();
-    let all_variants_clone = Arc::clone(&all_variants_mutex);
-    let all_variants = all_variants_clone.lock().unwrap();
     let fast_order_mutex_clone = Arc::clone(&fasta_order_mutex);
     let fasta_order = fast_order_mutex_clone.lock().unwrap();
     let fasta_sequences_mutex_clone = Arc::clone(&fasta_sequences_mutex);

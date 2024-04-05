@@ -1,5 +1,3 @@
-use crate::utils::read_models::read_quality_score_model_file;
-
 pub struct RawQualityScoreData {
     pub(crate) data: String,
 }

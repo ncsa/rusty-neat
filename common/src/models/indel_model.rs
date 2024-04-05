@@ -8,7 +8,6 @@ use rand::Rng;
 // deletions, since they are treated similarly by variant calling software.
 use structs::nucleotides::Nuc;
 use rand_chacha::ChaCha20Rng;
-use rand_core::RngCore;
 
 #[derive(Debug, Clone)]
 pub struct IndelModel {

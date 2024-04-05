@@ -12,6 +12,7 @@ use rand_chacha::ChaCha20Rng;
 
 use utils::config::RunConfiguration;
 use utils::fasta_tools::{read_fasta, write_fasta};
+use utils::fastq_tools::write_fastq;
 use utils::generate_reads::generate_reads;
 use utils::read_models::{read_quality_score_model_file, read_quality_score_raw_data};
 use utils::generate_variants::generate_variants;
@@ -23,7 +24,7 @@ use utils::mutate_fasta::apply_mutations;
 
 #[derive(Debug)]
 pub enum RunNeatError {
-    GeneralBullshit,
+    GeneralRunError,
 }
 
 pub fn run_neat(config: Box<RunConfiguration>, rng: ChaCha20Rng) -> Result<(), RunNeatError> {
@@ -41,6 +42,14 @@ pub fn run_neat(config: Box<RunConfiguration>, rng: ChaCha20Rng) -> Result<(), R
     let (fasta_map, fasta_order) =
         read_fasta(&config.reference)
             .unwrap();
+
+    // todo!
+    // let non_n_positions: Vec<usize> = mutated_record
+    //     .iter()
+    //     .enumerate()
+    //     .filter(|&(_, y)| *y != 4) // Filter out the N's
+    //     .map(|(x, _)| x)
+    //     .collect();
 
     let mut fasta_lengths: HashMap<String, usize> = HashMap::new();
     for contig in &fasta_order {
@@ -78,8 +87,8 @@ pub fn run_neat(config: Box<RunConfiguration>, rng: ChaCha20Rng) -> Result<(), R
     // and arc handles the communication between threads. From the rust book.
     let all_variants_mutex: Arc<Mutex<Box<HashMap<String, HashMap<usize, Variant>>>>> =
         Arc::new(Mutex::new(Box::new(HashMap::new())));
-    let all_reads_mutex: Arc<Mutex<Box<HashMap<String, Vec<(usize, usize)>>>>> =
-        Arc::new(Mutex::new(Box::new(HashMap::new())));
+    let all_reads_mutex: Arc<Mutex<Box<Vec<(String, usize, usize)>>>> =
+        Arc::new(Mutex::new(Box::new(Vec::new())));
     let fasta_order_mutex: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(fasta_order));
     let fasta_sequences_mutex: Arc<Mutex<Box<HashMap<String, Vec<Nuc>>>>> =
         Arc::new(Mutex::new(fasta_map));
@@ -159,10 +168,12 @@ pub fn run_neat(config: Box<RunConfiguration>, rng: ChaCha20Rng) -> Result<(), R
                         config.fragment_st_dev,
                         local_rng.clone(),
                     ).expect("Error generating reads");
+                    // append contig name to all reads
                     let mut all_reads =
                         all_reads_mutex_clone.lock().unwrap();
-
-                    all_reads.insert(contig.to_owned(), contig_reads);
+                    for read in contig_reads{
+                        all_reads.push((contig.clone(), read.0, read.1))
+                    }
                 };
 
                 // For vcf only, we don't need to waste time mutating the contig.
@@ -210,43 +221,41 @@ pub fn run_neat(config: Box<RunConfiguration>, rng: ChaCha20Rng) -> Result<(), R
 
     // I'm not sure if this is necessary, but going to grab the lock on these files for
     // the remainder.
+    let all_reads_clone = Arc::clone(&all_reads_mutex);
+    let mut all_reads = all_reads_clone.lock().unwrap();
     let all_variants_clone = Arc::clone(&all_variants_mutex);
     let all_variants = all_variants_clone.lock().unwrap();
     let fast_order_mutex_clone = Arc::clone(&fasta_order_mutex);
     let fasta_order = fast_order_mutex_clone.lock().unwrap();
     let fasta_sequences_mutex_clone = Arc::clone(&fasta_sequences_mutex);
-    let fasta_sequences = fasta_sequences_mutex_clone.lock().unwrap();
+    // at this point the sequences are mutated, so we rename the variable.
+    let mutated_fasta_sequences = fasta_sequences_mutex_clone.lock().unwrap();
     let config_mutex_clone = Arc::clone(&confix_mutex);
     let config = config_mutex_clone.lock().unwrap();
 
     if config.produce_fasta {
         info!("Producing the fasta file.");
         write_fasta(
-            &fasta_sequences,
+            &mutated_fasta_sequences,
             &fasta_order,
             config.overwrite_output,
             &output_file,
         ).expect("Error writing fasta file!")
     }
-    //
-    // // If we produce any more files, we will need to know the genotype. It will be used in the
-    // // output vcf, bam, and in the fastq.
-    //
-    // if config.produce_fastq {
-    //     write_fastq(
-    //         &fasta_map,
-    //         &all_reads,
-    //         &all_variants,
-    //         config.read_len,
-    //         config.overwrite_output,
-    //         &output_file,
-    //         config.paired_ended,
-    //         quality_score_model,
-    //         rng.clone()
-    //     ).expect("Error writing fastq file(s)!")
-    // }
-    //
-    // // todo for the vcf and bam, we need to know things like genotype
+
+    if config.produce_fastq {
+        write_fastq(
+            &mutated_fasta_sequences,
+            &mut all_reads,
+            config.read_len,
+            config.overwrite_output,
+            &output_file,
+            config.paired_ended,
+            quality_score_model,
+            rng.clone()
+        ).expect("Error writing fastq file(s)!")
+    }
+
     // if config.produce_vcf {
     //     write_vcf(
     //         &all_variants,

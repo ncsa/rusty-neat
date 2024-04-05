@@ -131,34 +131,27 @@ mod tests {
     #[should_panic]
     fn test_read_bad_fasta() {
         let test_fasta = "data/fake.fasta";
-        read_fasta(test_fasta).unwrap();
-        fs::remove_dir("data").unwrap()
+        let result = panic::catch_unwind(|| { read_fasta(test_fasta).unwrap() });
+        fs::remove_dir("data").unwrap();
+        assert!(result.is_err())
     }
 
     #[test]
     fn test_write_fasta() -> Result<(), Box<dyn error::Error>> {
-        let reference_seq = vec![A, G, T, A, C, T, C, A, G, T, G, T, T, C, C, T];
+        let mutated_seq1 = vec![A, G, T, A, C, T, C, A, G, T, G, T, T, C, C, T];
+        let mutated_seq2 = vec![G, C, G, C, G, C, T, T, T, T, G, G, C, A, C, G, T, A, A];
         let fasta_map = Box::new(HashMap::from([
-            ("chr1".to_string(), reference_seq.clone())
-        ]));
-        let mutations = Box::new(HashMap::from([
-            ("chr1".to_string(), HashMap::from([
-                (0, Variant::new(VariantType::SNP, &vec![A], &vec![T],
-                                 vec![0,1])),
-                (7, Variant::new(VariantType::Indel, &vec![T], &vec![T, A, C],
-                                 vec![1, 1])),
-                (12, Variant::new(VariantType::SNP, &vec![A], &vec![T],
-                                  vec![0,1]))
-            ]))
+            ("chr1".to_string(), mutated_seq1.clone()),
+            ("chr2".to_string(), mutated_seq2.clone()),
         ]));
 
-        let fasta_output: HashMap<String, Vec<Nuc>> =
-            HashMap::from([(String::from("chr1"), reference_seq)]);
-        let fasta_order = VecDeque::from([String::from("chr1")]);
+        let fasta_order = VecDeque::from([
+            String::from("chr1"),
+            String::from("chr2"),
+        ]);
         let output_file = "test";
         let test_write = write_fasta(
             &fasta_map,
-            &mutations,
             &fasta_order,
             false,
             output_file

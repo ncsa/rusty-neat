@@ -12,6 +12,8 @@ pub fn apply_variants(
 ) -> Vec<Nuc> {
     // since this is a fragment, our 0 index is relative to our start position. So an index of 3
     // is at position 3 + start relative to the entire reference.
+
+    // todo modify so that only half the reads of a heterzygote get the mutation.
     let mut positions_to_mutate = Vec::new();
     for location in relevant_variants.keys().into_iter() {
         positions_to_mutate.push((*location).clone() - start)
@@ -57,4 +59,29 @@ pub fn apply_variants(
         position += 1
     }
     mutated_sequence
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use common::structs::nucleotides::Nuc::*;
+
+    #[test]
+    fn test_apply_variants() {
+        let raw_sequence = [A, C, G, T, T, A, G, C];
+        let relevant_variants = HashMap::from([
+            (&1, &Variant::new(
+                VariantType::SNP,
+                &vec![C],
+                &vec![T],
+                vec![1,0],
+            )),
+            (&3, &Variant::new(
+                VariantType::Indel,
+                &vec![T, T],
+                &vec![T],
+                vec![0,1],
+            ))
+        ]);
+    }
 }

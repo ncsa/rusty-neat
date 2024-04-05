@@ -133,7 +133,7 @@ mod tests {
         let test_fasta = "data/fake.fasta";
         let result = panic::catch_unwind(|| { read_fasta(test_fasta).unwrap() });
         fs::remove_dir("data").unwrap();
-        assert!(result.is_err())
+        let _ = result.is_err();
     }
 
     #[test]

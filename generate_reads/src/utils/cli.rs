@@ -54,7 +54,7 @@ pub struct Cli {
     // These options relate to the logging features and are not overridden by a config
     #[arg(long="log-level", default_value_t=String::from("Trace"), help="Enter one of Trace, Debug, Info, Warn, Error, Off")]
     pub log_level: String,
-    #[arg(long="log-dest", default_value_t=env::current_dir().unwrap().display().to_string() + "neat_out.log", help="Full path and name to log file")]
+    #[arg(long="log-dest", default_value_t=env::current_dir().unwrap().display().to_string() + "/neat_out.log", help="Full path and name to log file")]
     pub log_dest: String,
 }
 

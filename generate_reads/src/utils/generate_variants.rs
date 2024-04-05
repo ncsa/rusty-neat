@@ -17,7 +17,7 @@ pub fn generate_variants(
     // This will simply overwrite any existing value, so we just capture the last variant at each
     // location.
 
-    // We need to incorporate this idea
+    // todo We need to incorporate this idea
 
     // let non_n_positions: Vec<usize> = mutated_record
     //     .iter()
@@ -25,6 +25,7 @@ pub fn generate_variants(
     //     .filter(|&(_, y)| *y != 4) // Filter out the N's
     //     .map(|(x, _)| x)
     //     .collect();
+    // We don't want variants in our N zones, I think
 
     let reference_length = reference_sequence.len();
     let mut contig_variants: HashMap<usize, Variant> = HashMap::new();

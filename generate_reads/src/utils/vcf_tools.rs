@@ -3,13 +3,20 @@ extern crate log;
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::io::Write;
+use rand::prelude::SliceRandom;
+use rand_chacha::ChaCha20Rng;
 use common::file_tools::open_file;
 use common::structs::nucleotides::sequence_array_to_string;
 use common::structs::variants::Variant;
 
-fn genotype_to_string(genotype: &Vec<u8>) -> String {
+fn genotype_to_string(genotype: &mut Vec<u8>, mut rng: ChaCha20Rng) -> String {
     // Converts a vector of 0s and 1s representing genotype to a standard
     // vcf genotype string.
+    //
+    // In order to make the vcf look a little more realistic, we shuffle the genotypes, that way
+    // it doesn't look like one ploid got all the mutations. I actually don't know if this is
+    // realistic or not, but that's what we're doing.
+    genotype.shuffle(&mut rng);
     let geno_str = genotype.iter().map(|x| x.to_string() + "/").collect::<String>();
     geno_str.strip_suffix("/").expect(
         &format!("Problem with genotype string: {:?}", genotype)
@@ -17,12 +24,13 @@ fn genotype_to_string(genotype: &Vec<u8>) -> String {
 }
 
 pub fn write_vcf(
-    variant_locations: &Box<HashMap<String, HashMap<usize, Variant>>>,
+    variant_locations: &mut Box<HashMap<String, HashMap<usize, Variant>>>,
     fasta_order: &VecDeque<String>,
     fasta_lengths: &HashMap<String, usize>,
     reference_path: &str,
     overwrite_output: bool,
     output_file_prefix: &str,
+    rng: ChaCha20Rng,
 ) -> io::Result<()> {
     // Takes:
     // variant_locations: A map of contig names keyed to lists of variants in that contig
@@ -96,16 +104,17 @@ pub fn write_vcf(
     )?;
     // insert mutations
     for contig in fasta_order.iter() {
-        for (position, mutation) in &variant_locations[contig] {
+        for (position, mutation) in variant_locations.get_mut(contig).unwrap() {
             // Format the output line. Any fields without data will be a simple period. Quality
-            // is set to 37 for all these variants.
+            // is set to 37 for all these variants, to indicate in the golden vcf that these are
+            // the generated variants.
             let line = format!(
                 "{}\t{}\t.\t{}\t{}\t37\tPASS\t.\tGT\t{}",
                 contig,
                 position + 1,
                 sequence_array_to_string(&mutation.reference),
                 sequence_array_to_string(&mutation.alternate),
-                genotype_to_string(&mutation.genotype),
+                genotype_to_string(&mut mutation.genotype, rng.clone()),
             );
             writeln!(&mut outfile, "{}", line)?;
         }
@@ -125,13 +134,14 @@ mod tests {
 
     #[test]
     fn test_genotype_to_string() {
-        let genotype = vec![0, 1, 0];
-        assert_eq!(String::from("0/1/0"), genotype_to_string(&genotype));
+        let mut genotype = vec![0, 1, 0];
+        let rng = ChaCha20Rng::seed_from_u64(0);
+        assert_eq!(String::from("0/1/0"), genotype_to_string(&mut genotype, rng));
     }
 
     #[test]
     pub fn test_write_vcf() {
-        let variant_locations = Box::from(HashMap::from([
+        let mut variant_locations = Box::from(HashMap::from([
             (
                 "chr1".to_string(),
                 HashMap::from([
@@ -158,12 +168,13 @@ mod tests {
         let output_file_prefix = "good_test";
         let rng = ChaCha20Rng::seed_from_u64(0);
         let result = write_vcf(
-            &variant_locations,
+            &mut variant_locations,
             &fasta_order,
             &fasta_length,
             reference_path,
             overwrite_output,
             output_file_prefix,
+            rng,
         );
         result.unwrap();
         assert!(Path::new("good_test.vcf").exists());

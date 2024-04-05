@@ -12,8 +12,6 @@ use common::structs::nucleotides::sequence_array_to_string;
 use common::file_tools::open_file;
 use common::structs::nucleotides::Nuc;
 use common::models::quality_scores::QualityScoreModel;
-use common::structs::variants::Variant;
-use utils::apply_variants::apply_variants;
 
 fn reverse_complement(sequence: &[Nuc]) -> Vec<Nuc> {
     // Returns the reverse complement of a vector of u8's representing a DNA sequence.
@@ -133,7 +131,6 @@ mod tests {
     use rand_core::SeedableRng;
     use std::path::Path;
     use common::structs::nucleotides::Nuc::*;
-    use common::structs::variants::VariantType;
 
     #[test]
     fn test_reverse_complement() {

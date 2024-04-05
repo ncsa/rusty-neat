@@ -101,6 +101,7 @@ pub fn write_fasta(
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
     use super::*;
     use common::structs::nucleotides::Nuc::*;
     use common::structs::nucleotides::base_to_nuc;
@@ -132,8 +133,10 @@ mod tests {
     fn test_read_bad_fasta() {
         let test_fasta = "data/fake.fasta";
         let result = panic::catch_unwind(|| { read_fasta(test_fasta).unwrap() });
-        fs::remove_dir("data").unwrap();
-        let _ = result.is_err();
+        if Path::new("data").is_dir() {
+            fs::remove_dir("data").unwrap();
+        }
+        result.unwrap();
     }
 
     #[test]

@@ -5,10 +5,6 @@
 // mutate_sequence adds actual mutations to the fasta sequence
 
 use std::collections::HashMap;
-use rand::prelude::*;
-use rand::Rng;
-use log::{debug, error};
-use rand::distributions::WeightedIndex;
 use common::structs::nucleotides::Nuc;
 use common::structs::variants::{Variant, VariantType};
 

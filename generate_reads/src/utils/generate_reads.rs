@@ -6,7 +6,7 @@
 // fragments.
 use common;
 
-use log::{info, debug};
+use log::debug;
 use rand::seq::SliceRandom;
 use rand::RngCore;
 use rand_distr::{Distribution, Normal};
@@ -256,7 +256,6 @@ mod tests {
             st_dev,
             rng.clone(),
         );
-        println!("{:?}", reads);
         assert!(!reads.unwrap().is_empty())
     }
 }

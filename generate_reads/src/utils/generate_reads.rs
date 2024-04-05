@@ -120,8 +120,9 @@ pub fn generate_reads(
     // This takes a mutated sequence and produces a set of reads based on the mutated sequence. For
     // paired ended reads, this will generate a set of reads from each end, by taking the reverse
     // complement int the output
+
+    // We need to incorporate this idea
     let mut fragment_pool: Vec<usize> = Vec::new();
-    // todo adjust endpoints for indels.
     if paired_ended {
         let num_frags = (sequence_length / read_length) * (coverage * 2);
         let fragment_distribution = Normal::new(mean.unwrap(), st_dev.unwrap()).unwrap();

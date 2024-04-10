@@ -63,9 +63,7 @@ impl SequencingErrorModel {
             Nuc::G => &self.transition_matrix.g_weights,
             Nuc::T => &self.transition_matrix.t_weights,
             // return the N value for N with no further computation.
-            Nuc::N => {
-                return SNPError(SnpErr::new(Nuc::N));
-            }
+            _ => panic!("Ve should not be trying to mutated unknown bases!")
         };
         // Now we create a distribution from the weights and sample our choices.
         let dist = WeightedIndex::new(weights).unwrap();
@@ -76,7 +74,7 @@ impl SequencingErrorModel {
             3 => SNPError(SnpErr::new(Nuc::T)),
             // technically, the following part isn't reachable because of how we have constructed
             // things. Our weights vector has a max length of 4, but Rust doesn't know that.
-            _ => SNPError(SnpErr::new(Nuc::N)),
+            _ => panic!("Invalid index selected!"),
         }
     }
 
@@ -93,7 +91,7 @@ impl SequencingErrorModel {
                     1 => Nuc::C,
                     2 => Nuc::G,
                     3 => Nuc::T,
-                    _ => Nuc::N,
+                    _ => panic!("Invalid index selected"),
                 })
             }
             // Insertion of sequence

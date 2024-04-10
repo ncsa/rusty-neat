@@ -52,8 +52,8 @@ fn main() {
         TermLogger::new(
             level_filter,
             Config::default(),
-            TerminalMode::Stdout,
-            ColorChoice::Always,
+            TerminalMode::Mixed,
+            ColorChoice::Auto,
         ),
         #[cfg(not(feature = "termcolor"))]
         SimpleLogger::new(LevelFilter::Trace, Config::default()),
@@ -64,6 +64,7 @@ fn main() {
         ),
     ])
     .unwrap();
+
     // set up the config struct based on whether there was an input config. Input config
     // overrides any other inputs.
     let config = if args.config != "" {

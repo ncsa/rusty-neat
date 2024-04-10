@@ -10,6 +10,7 @@ use models::indel_model::{IndelModel, generate_random_insertion};
 use models::quality_scores::QualityScoreModel;
 use models::sequencing_error_model::SequencingErrorModel;
 use models::snp_model::SnpModel;
+use structs::fasta_map::{FastaBlock, insert_variant};
 
 #[derive(Clone)]
 pub struct MutationModel {
@@ -25,7 +26,7 @@ pub struct MutationModel {
     pub homozygous_frequency: f64,
     // If a variant occurs, this is how frequently each type occurs. There are only 2 types at the
     // moment, but this will get expanded out in time.
-    pub variant_weights: [(VariantType, usize); 2],
+    pub variant_weights: [(VariantType, usize); 3],
     // These hold all the statistical model data we need to apply the mutations with this model
     statistical_models: StatisticalModels,
 }
@@ -35,9 +36,15 @@ impl MutationModel {
         let mutation_rate = 0.001;
         let homozygous_frequency = 0.01;
         // Originally this was expressed as indel_fraction 0.05. To make it easier to sample, we
-        // will use weights. This would have been 0.95 and 0.05, so we divided both by 0.05 to get
-        // 19 and 1 as our weights. This means there is roughly 1 indel every 20 mutations.
-        let variant_weights = [(VariantType::SNP, 19), (VariantType::Indel, 1)];
+        // will use weights. This would have been 0.95 and 0.05, combine with an insertion
+        // frequency (relative to their being an indel variant) was 0.6.
+        // This gives us a probability of insertion of 0.6 * 0.05 = 0.03 * 100 = 3
+        //                 probability of deletion of  0.4 * 0.05 = 0.02 * 100 = 2
+        //                 probability of SNP of       0.95              * 100 = 95
+        // which works out to roughly 1 indel every 20 mutations (as originally envisioned).
+        let variant_weights = [
+            (VariantType::SNP, 95), (VariantType::Insertion, 3), (VariantType::Deletion, 2)
+        ];
         let statistical_models = StatisticalModels::new();
 
         MutationModel {
@@ -63,10 +70,11 @@ impl MutationModel {
     pub fn generate_mutation(
         &mut self,
         reference_sequence: &Vec<Nuc>,
+        fasta_blocks: &Vec<FastaBlock>,
         variant_location: usize,
         ploidy: usize,
         mut rng: ChaCha20Rng,
-    ) -> Variant {
+    ) -> Vec<FastaBlock> {
         // Select a genotype for the variant
         let genotype= self.generate_genotype(ploidy, rng.clone());
         // Select a type of mutation.
@@ -76,9 +84,12 @@ impl MutationModel {
                 .map(|item| item.1)
         ).unwrap();
         let variant_type = self.variant_weights[dist.sample(rng.borrow_mut())].0;
+        // todo figure out which block to mutate
+        //   figure out the mutation to add
+        //   Add a function in FastaMap to add a block to a vector
         let (reference, alternate) = match variant_type {
             VariantType::SNP => {
-                let trinuc_reference = reference_sequence.get(
+                let trinuc_reference = &reference_sequence.get(
                     variant_location-1..=variant_location+1
                 ).unwrap();
 
@@ -92,37 +103,42 @@ impl MutationModel {
 
                 (reference, alternate)
             },
-            VariantType::Indel => {
-                let length = self.statistical_models.indel_model
-                    .generate_new_indel_length(rng.borrow_mut());
-                if length > 0 { // insertion
-                    let insertion_vec = generate_random_insertion(length.abs() as usize, rng.borrow_mut())
-                        .clone();
-                    let reference = vec![
-                        reference_sequence.get(variant_location)
-                            .unwrap()
-                            .clone()
-                    ];
-                    let alternate = [reference.clone(), insertion_vec.clone()].concat();
-                    (reference, alternate)
-                } else { // deletion
-                    // plus one because the first base is not deleted, but serves as a reference
-                    // in the vcf
-                    let reference: Vec<Nuc> = reference_sequence
-                        .get(
-                        variant_location..(variant_location + length.abs() as usize + 1)
-                    )
+            VariantType::Insertion => {
+                let length = self.statistical_models.indel_model.new_insert_length(&mut rng);
+                let insertion_vec = generate_random_insertion(
+                    length.abs() as usize, rng.borrow_mut()
+                );
+                let reference = vec![
+                    reference_sequence.get(variant_location)
                         .unwrap()
-                        .iter()
-                        .map(|item| *item)
-                        .collect();
-                    let alternate: Vec<Nuc> = vec![reference[0].clone()];
+                        .clone()
+                ];
+                let alternate = [reference.clone(), insertion_vec.clone()].concat();
+                (reference, alternate)
+            },
+            VariantType::Deletion => {
+                // todo Deletions are a bitch. I need to think about them.
+                let length = self.statistical_models.indel_model.new_delete_length(&mut rng);
+                // +1 is so that we grab a base for the reference in the VCF. This is similar
+                // to how we appended bases to the reference in the insertion model.
+                let reference: Vec<Nuc> = reference_sequence
+                    .get(variant_location..(variant_location + length + 1))
+                    .unwrap()
+                    .iter()
+                    .map(|item| *item)
+                    .collect();
+                let alternate: Vec<Nuc> = vec![reference[0].clone()];
 
-                    (reference, alternate)
-                }
+                (reference, alternate)
             },
         };
-        Variant::new(variant_type, &reference, &alternate, genotype)
+        let variant_to_insert = Variant::new(
+            variant_type, &reference, &alternate, genotype
+        );
+        let return_blocks: Vec<FastaBlock> = insert_variant(
+            fasta_blocks, variant_to_insert, variant_location
+        );
+        return_blocks
     }
 }
 

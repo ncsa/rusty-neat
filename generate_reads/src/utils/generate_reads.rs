@@ -188,7 +188,7 @@ mod tests {
 
     #[test]
     fn test_generate_reads_single() {
-        let mutated_sequence = vec![A, A, C, A, T, T, T, T, A, A, A, A, A, G, G, G, N, N, N, N];
+        let mutated_sequence = vec![A, A, C, A, T, T, T, T, A, A, A, A, A, G, G, G, N(4)];
         let read_length = 10;
         let coverage = 1;
         let paired_ended = false;
@@ -211,7 +211,7 @@ mod tests {
 
     #[test]
     fn test_seed_rng() {
-        let mutated_sequence = vec![A, A, C, A, T, T, T, T, A, A, A, A, A, G, G, G, N, N, N, N];
+        let mutated_sequence = vec![A, A, C, A, T, T, T, T, A, A, A, A, A, G, G, G, N(4)];
         let read_length = 10;
         let coverage = 1;
         let paired_ended = false;

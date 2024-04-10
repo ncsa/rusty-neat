@@ -7,3 +7,4 @@ pub mod nucleotides;
 pub mod sequencing_errors;
 pub mod transition_matrix;
 pub mod variants;
+pub mod fasta_map;

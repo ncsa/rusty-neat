@@ -6,13 +6,21 @@
 //     N = 4
 // This is intended to make it easier to store them. I think this will be an easier way to read
 // the code, and I'm hoping it does not incur any extra computational burden
+// To portray blocks of N's, N will have an integer assigned that gives a count of the string of
+// N's. To accurately display variants, without losing track of the index we will use a 'P'
+// character, which will print as empty string and act as a placeholder in the ref or alt of an
+// indel or more complex variant. Placeholders also have a size.
+
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub enum Nuc {
     A,
     C,
     G,
     T,
-    N,
+    // unknown bases, prints as random strings of bases
+    N(usize),
+    // Placeholder bases, print as empty string, but move the index.
+    P(usize),
 }
 impl Nuc {
     pub fn int_to_nuc(input_integer: usize) -> Nuc {
@@ -22,25 +30,44 @@ impl Nuc {
             1 => Nuc::C,
             2 => Nuc::G,
             3 => Nuc::T,
-            _ => Nuc::N,
+            // Note that we do not read in any placeholders.
+            _ => Nuc::N(1),
         };
     }
 
-    pub fn to_char(&self) -> char {
+    pub fn consolidate(&self, other: Self) -> Result<Self, &'static str> {
+        use self::Nuc::*;
+        // The idea here is to make sure we have summed all the N's up into one number, so we aren't
+        // eating up extra space.
+        match self {
+            P(num) => {
+                match other {
+                    P(other_num) => Ok(P(num + other_num)),
+                    _ => Err(panic!(
+                        "Trying to combine a placeholder with a non placeholder is undefined!"
+                    )),
+                }
+            },
+            N(num) => match other {
+                N(other_num) => Ok(N(num + other_num)),
+                _ => Err(panic!("Trying to combine an N with a non N is undefined!")),
+            },
+            _ => Err(panic!("Trying to consolidate uncounted bases! {:?}, {:?}", self, other)),
+        }
+    }
+
+    pub fn to_string(&self) -> String {
         // Canonical conversion from base u8 representation back into the character.
         // We're returning a string instead of a char to facilitate. No attempt to preserve or display
         // any soft masking.
         match self {
-            Nuc::A => 'A',
-            Nuc::C => 'C',
-            Nuc::G => 'G',
-            Nuc::T => 'T',
-            Nuc::N => 'N',
+            Nuc::A => "A".to_string(),
+            Nuc::C => "C".to_string(),
+            Nuc::G => "G".to_string(),
+            Nuc::T => "T".to_string(),
+            Nuc::N(num) => { (0..*num).map({ |_| "N" }).collect::<String>() },
+            Nuc::P(_) => "".to_string(),
         }
-    }
-
-    pub fn to_str(&self) -> String {
-        self.to_char().to_string()
     }
 
     pub fn complement(&self) -> Nuc {
@@ -50,7 +77,7 @@ impl Nuc {
             Nuc::C => Nuc::G,
             Nuc::G => Nuc::C,
             Nuc::T => Nuc::A,
-            Nuc::N => Nuc::N,
+            _ => *self,
         };
     }
 }
@@ -64,7 +91,8 @@ pub fn base_to_nuc(char_of_interest: char) -> Nuc {
         'C' | 'c' => Nuc::C,
         'G' | 'g' => Nuc::G,
         'T' | 't' => Nuc::T,
-        _ => Nuc::N,
+        // Note that we will not read in any placeholder characters.
+        _ => Nuc::N(1),
     };
 }
 
@@ -72,7 +100,7 @@ pub fn sequence_array_to_string(input_array: &[Nuc]) -> String {
     // Converts a sequence vector into a string representing the DNA sequence
     let mut return_string = String::new();
     for nuc in input_array {
-        return_string += &nuc.to_str();
+        return_string += &nuc.to_string();
     }
     return_string
 }
@@ -102,13 +130,13 @@ mod tests {
         assert_eq!(Nuc::int_to_nuc(num2 as usize), Nuc::C);
         assert_eq!(Nuc::int_to_nuc(num3 as usize), Nuc::G);
         assert_eq!(Nuc::int_to_nuc(num4), Nuc::T);
-        assert_eq!(Nuc::int_to_nuc(num5 as usize), Nuc::N)
+        assert_eq!(Nuc::int_to_nuc(num5 as usize), Nuc::N(1))
     }
 
     #[test]
     fn test_nuc_to_char() {
         let my_nuc = Nuc::C;
-        assert_eq!(my_nuc.to_char(), 'C');
+        assert_eq!(my_nuc.to_string(), "C".to_string());
     }
     #[test]
     fn test_complement() {
@@ -116,12 +144,12 @@ mod tests {
         let nuc2 = Nuc::C;
         let nuc3 = Nuc::G;
         let nuc4 = Nuc::T;
-        let nuc5 = Nuc::N;
+        let nuc5 = Nuc::N(1);
 
         assert_eq!(nuc1.complement(), Nuc::T);
         assert_eq!(nuc2.complement(), Nuc::G);
         assert_eq!(nuc3.complement(), Nuc::C);
         assert_eq!(nuc4.complement(), Nuc::A);
-        assert_eq!(nuc5.complement(), Nuc::N);
+        assert_eq!(nuc5.complement(), Nuc::N(1));
     }
 }

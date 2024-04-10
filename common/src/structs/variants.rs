@@ -1,9 +1,11 @@
-use crate::structs::nucleotides::Nuc;
+use structs::nucleotides::Nuc;
+use self::VariantType::*;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub enum VariantType {
     SNP,
-    Indel,
+    Insertion,
+    Deletion,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -32,8 +34,8 @@ impl Variant {
         genotype: Vec<u8>,
     ) -> Self {
         match variant_type {
-            VariantType::Indel => assert_ne!(reference.len(), alternate.len()),
-            VariantType::SNP => assert_eq!(reference.len(), alternate.len()),
+            Insertion | Deletion => assert_ne!(reference.len(), alternate.len()),
+            SNP => assert_eq!(reference.len(), alternate.len()),
         }
 
         Variant {
@@ -43,8 +45,6 @@ impl Variant {
             genotype: genotype.clone(),
         }
     }
-
-    pub fn is_insertion(&self) -> bool { self.reference.len() < self.alternate.len() }
 
     pub fn is_homozygous(&self) -> bool {
         return if self.genotype.contains(&0) { false } else { true }
@@ -74,7 +74,7 @@ mod tests {
     #[test]
     fn test_variant_new() {
         let variant = Variant::new(
-            Indel,
+            Insertion,
             &vec![A],
             &vec![A, C, T, G],
             vec![0, 1],

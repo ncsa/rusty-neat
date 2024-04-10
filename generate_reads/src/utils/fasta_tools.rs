@@ -8,6 +8,7 @@ use std::collections::{HashMap, VecDeque};
 use common::file_tools::open_file;
 use common::file_tools::read_lines;
 use common::structs::nucleotides::Nuc;
+use common::structs::nucleotides::Nuc::*;
 use common::structs::nucleotides::base_to_nuc;
 
 pub fn read_fasta(
@@ -17,7 +18,7 @@ pub fn read_fasta(
     let mut fasta_map: HashMap<String, Vec<Nuc>> = HashMap::new();
     let mut fasta_order: VecDeque<String> = VecDeque::new();
     let mut current_key = String::new();
-
+    // Todo read in N's as N(count) where count is a u64 of the number of N's in a row we observe.
     let lines = read_lines(fasta_path).unwrap();
     let mut temp_seq: Vec<Nuc> = vec![];
     lines.for_each(|line| match line {
@@ -32,8 +33,38 @@ pub fn read_fasta(
                 fasta_order.push_back(current_key.clone());
                 temp_seq = vec![];
             } else {
+                // If we encounter N's, this will count them up for us.
+                let mut n_run: usize = 0;
+                let mut within_n_block = false;
                 for char in l.chars() {
-                    temp_seq.push(base_to_nuc(char));
+                    let input_base = base_to_nuc(char);
+                    match input_base {
+                        A| C | G | T => {
+                            // If we just exited an N block we need to clean up that
+                            if within_n_block {
+                                within_n_block = false;
+                                // push our N-block
+                                temp_seq.push(N(n_run));
+                                n_run = 0;
+                            }
+                            // Either way, we push the new nucleotide
+                            temp_seq.push(input_base)
+                        }
+                        N(_) => {
+                            if !within_n_block {
+                                // This is the start of a new N-block, so we reset the counter,
+                                // set the flag to true, and proceed.
+                                within_n_block = true;
+                                n_run = 1;
+                            } else {
+                                // Each new N encountered simply adds 1 to the total.
+                                n_run += 1;
+                            }
+
+                        }
+                        _ => panic!("Error reading in a nucleotide.")
+                    }
+                    ;
                 }
             }
         }
@@ -80,14 +111,15 @@ pub fn write_fasta(
                     if (i + j) >= contig_length {
                         // append the remaining bases
                         for base in sequence[i..].iter() {
-                            outlines += &base.to_str();
+                            outlines += &base.to_string();
                         }
                         outlines += "\n";
                         // ensure outer loop breaks after writing final line, break inner loop.
                         i += j;
+                        // todo this is missing a line break after the last full 70 chars.
                         break 'num_lines
                     }
-                    outlines += &sequence[i+j].to_str();
+                    outlines += &sequence[i+j].to_string();
                     i += 1
                 }
                 outlines += "\n";
@@ -110,7 +142,7 @@ mod tests {
     fn test_conversions() {
         let initial_sequence = "AAAANNNNGGGGCCCCTTTTAAAA";
         let test_map: Vec<Nuc> = vec![
-            A, A, A, A, N, N, N, N, G, G, G, G, C, C, C, C, T, T, T, T, A, A, A, A,
+            A, A, A, A, N(4), G, G, G, G, C, C, C, C, T, T, T, T, A, A, A, A,
         ];
         let remap: Vec<Nuc> = initial_sequence
             .chars()

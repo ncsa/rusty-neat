@@ -1,13 +1,18 @@
 use rand::distributions::{WeightedIndex, Distribution};
 use rand::Rng;
+
+use structs::nucleotides::Nuc;
+use rand_chacha::ChaCha20Rng;
+
 // The following section are the models for each type of variant. In order to create the variant,
 // we need to model its statistical property. NEAT included two types of variants: SNPs and Indels.
 // Note that indels are actually two types, insertions and deletions, but they are usually classed
 // together in the literature and are usually short. Insertions are often slips that cause sections
 // to be duplicated, but NEAT made no attempt to distinguish between the types of insertions or
 // deletions, since they are treated similarly by variant calling software.
-use structs::nucleotides::Nuc;
-use rand_chacha::ChaCha20Rng;
+//
+// We have the variants separated out in the variants struct, into Insertion and Deletion, but they
+// will share this model to avoid duplicating code, since code-wise they are closely linked.
 
 #[derive(Debug, Clone)]
 pub struct IndelModel {
@@ -37,16 +42,16 @@ impl IndelModel {
         }
     }
 
-    pub fn generate_new_indel_length(&self, mut rng: &mut ChaCha20Rng) -> i64 {
-        let rand_num = rng.gen::<f64>();
-        let is_insertion = { rand_num < self.insertion_probability };
-        if is_insertion {
-            let dist = WeightedIndex::new(&self.ins_weights).unwrap();
-            self.ins_lengths[dist.sample(&mut rng)] as i64
-        } else {
-            let dist = WeightedIndex::new(&self.del_weights).unwrap();
-            -(self.del_lengths[dist.sample(&mut rng)] as i64)
-        }
+    pub fn new_insert_length(&self, mut rng: &mut ChaCha20Rng) -> usize {
+        // This function uses the insertion weights to choose an insertion length from the list.
+        let dist = WeightedIndex::new(&self.ins_weights).unwrap();
+        self.ins_lengths[dist.sample(&mut rng)]
+    }
+
+    pub fn new_delete_length(&self, mut rng: &mut ChaCha20Rng) -> usize {
+        // This function is the same as above, but uses the deletion lengths instead.
+        let dist = WeightedIndex::new(&self.del_weights).unwrap();
+        self.del_lengths[dist.sample(&mut rng)]
     }
 }
 
@@ -101,11 +106,11 @@ mod tests {
 
         let insertion = generate_random_insertion(10, &mut rng);
         assert_eq!(insertion.len(), 10);
-        assert!(!insertion.contains(&N));
+        assert!(!insertion.contains(&N(1)));
 
         let insertion2 = generate_random_insertion(12, &mut rng);
         assert_eq!(insertion2.len(), 12);
-        assert!(!insertion2.contains(&N));
+        assert!(!insertion2.contains(&N(1)));
 
         println!("{:?} and {:?}", insertion, insertion2);
     }

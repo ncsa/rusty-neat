@@ -87,7 +87,7 @@ impl SnpModel {
                     Nuc::C => ANC,
                     Nuc::G => ANG,
                     Nuc::T => ANT,
-                    Nuc::N => { panic!("Trying to use trinucleotide bias on an unknown base (N).") }
+                    _ => { panic!("Trying to use trinucleotide bias on an unknown base (N).") }
                 }
             },
             Nuc::C => {
@@ -96,7 +96,7 @@ impl SnpModel {
                     Nuc::C => CNC,
                     Nuc::G => CNG,
                     Nuc::T => CNT,
-                    Nuc::N => { panic!("Trying to use trinucleotide bias on an unknown base (N).") }
+                    _ => { panic!("Trying to use trinucleotide bias on an unknown base (N).") }
                 }
             },
             Nuc::G => {
@@ -105,7 +105,7 @@ impl SnpModel {
                     Nuc::C => GNC,
                     Nuc::G => GNG,
                     Nuc::T => GNT,
-                    Nuc::N => { panic!("Trying to use trinucleotide bias on an unknown base (N).") }
+                    _ => { panic!("Trying to use trinucleotide bias on an unknown base (N).") }
                 }
             },
             Nuc::T => {
@@ -114,10 +114,10 @@ impl SnpModel {
                     Nuc::C => TNC,
                     Nuc::G => TNG,
                     Nuc::T => TNT,
-                    Nuc::N => { panic!("Trying to use trinucleotide bias on an unknown base (N).") }
+                    _ => { panic!("Trying to use trinucleotide bias on an unknown base (N).") }
                 }
             },
-            Nuc::N => { panic!("Trying to use trinucleotide bias on an unknown base (N).") },
+            _ => { panic!("Trying to use trinucleotide bias on an unknown base (N).") },
         }).unwrap();
 
         let weights = match trinuc_reference[1] {
@@ -125,7 +125,7 @@ impl SnpModel {
             Nuc::C => matrix.c_weights.clone(),
             Nuc::G => matrix.g_weights.clone(),
             Nuc::T => matrix.t_weights.clone(),
-            Nuc::N => { panic!("Trying to use trinucleotide bias on an unknown base (N).") },
+            _ => { panic!("Trying to use trinucleotide bias on an unknown base (N).") },
         };
 
         let dist = WeightedIndex::new(weights).unwrap();

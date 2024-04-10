@@ -21,6 +21,7 @@ use common::structs::variants::Variant;
 use common::models::mutation_model::MutationModel;
 use data::quality_score_data::RawQualityScoreData;
 use utils::mutate_fasta::apply_mutations;
+use crate::utils::fasta_map::FastaMap;
 
 #[derive(Debug)]
 pub enum RunNeatError {
@@ -34,27 +35,17 @@ pub fn run_neat(config: Box<RunConfiguration>, rng: ChaCha20Rng) -> Result<(), R
 
     // Reading the reference file into memory
     info!("Mapping reference fasta file: {}", &config.reference);
-    // Trying to think of how to avoid copying this. We could read the file, get the order, but
-    // skip the reading in for now, let the threads handle that. Or we could create an index of byte
-    // positions of the sequences, like a FAI, but that's a different type of problem to solve.
-    // Alternative to that, require an index file and then use that to find the read positions?
-    // That might be the easiest way to go.
-    let (fasta_map, fasta_order) =
+    // fasta_sequences instead of being what we use will be a part of what we use that is
+    // referenced later and is intended to be static otherwise.
+    let (fasta_sequences, fasta_order) =
         read_fasta(&config.reference)
             .unwrap();
 
-    // todo!
-    // let non_n_positions: Vec<usize> = mutated_record
-    //     .iter()
-    //     .enumerate()
-    //     .filter(|&(_, y)| *y != 4) // Filter out the N's
-    //     .map(|(x, _)| x)
-    //     .collect();
-
-    let mut fasta_lengths: HashMap<String, usize> = HashMap::new();
-    for contig in &fasta_order {
-        fasta_lengths.insert(contig.to_string(), fasta_map.get(contig).unwrap().len());
-    }
+    // The fasta map will be a series of coordinates of stretches of reference and variant
+    // positions. All variants will have a set length and a ref and alt of that exact same length,
+    // which will allow us to easily output one or the other during the output phase simply by
+    // changing which one we reference.
+    let fasta_map = FastaMap::build_from_reference(&fasta_sequences).unwrap();
 
     // Load models that will be used for the runs.
     // For now, we will use the one supplied, pulled directly from NEAT2.0's original model.
@@ -90,8 +81,8 @@ pub fn run_neat(config: Box<RunConfiguration>, rng: ChaCha20Rng) -> Result<(), R
     let all_reads_mutex: Arc<Mutex<Box<Vec<(String, usize, usize)>>>> =
         Arc::new(Mutex::new(Box::new(Vec::new())));
     let fasta_order_mutex: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(fasta_order));
-    let fasta_sequences_mutex: Arc<Mutex<Box<HashMap<String, Vec<Nuc>>>>> =
-        Arc::new(Mutex::new(fasta_map));
+    let fasta_map_mutex: Arc<Mutex<Box<FastaMap>>> =
+        Arc::new(Mutex::new(Box::new(fasta_map)));
     let mutation_model_mutex: Arc<Mutex<MutationModel>> = Arc::new(Mutex::new(mutation_model));
     let confix_mutex: Arc<Mutex<Box<RunConfiguration>>> = Arc::new(Mutex::new(config));
     let local_rng_mutex: Arc<Mutex<ChaCha20Rng>> = Arc::new(Mutex::new(rng.clone()));
@@ -101,7 +92,7 @@ pub fn run_neat(config: Box<RunConfiguration>, rng: ChaCha20Rng) -> Result<(), R
         let all_variants_mutex_clone = Arc::clone(&all_variants_mutex);
         let all_reads_mutex_clone = Arc::clone(&all_reads_mutex);
         let fasta_order_mutex_clone = Arc::clone(&fasta_order_mutex);
-        let fasta_sequences_mutex_clone = Arc::clone(&fasta_sequences_mutex);
+        let fasta_map_mutex_clone = Arc::clone(&fasta_map_mutex);
         let mutation_model_mutex_clone = Arc::clone(&mutation_model_mutex);
         let config_mutex_clone = Arc::clone(&confix_mutex);
         let local_rng_mutex_clone = Arc::clone(&local_rng_mutex);
@@ -123,14 +114,16 @@ pub fn run_neat(config: Box<RunConfiguration>, rng: ChaCha20Rng) -> Result<(), R
                         local_rng_mutex_clone
                             .lock()
                             .unwrap();
-                    let fasta_sequences = fasta_sequences_mutex_clone
+                    let fasta_map = fasta_map_mutex_clone
                         .lock()
                         .unwrap();
-                    let contig_sequence = fasta_sequences.get(&contig).unwrap();
+                    // todo update to fasta map syntax
+                    let contig_map = fasta_map.map.get(&contig).unwrap();
                     let mutation_model =
                         mutation_model_mutex_clone.lock().unwrap();
                     generate_variants(
-                        contig_sequence,
+                        contig_map,
+                        &fasta_sequences[&contig],
                         &mut mutation_model.clone(),
                         config.ploidy,
                         local_rng.clone()
@@ -149,11 +142,11 @@ pub fn run_neat(config: Box<RunConfiguration>, rng: ChaCha20Rng) -> Result<(), R
                     config.produce_bam {
                     info!("Generating reads for the output for {}", &contig);
                     let contig_sequence_len = {
-                        let fasta_sequences =
-                            fasta_sequences_mutex_clone
+                        let fasta_map =
+                            fasta_map_mutex_clone
                                 .lock()
                                 .unwrap();
-                        fasta_sequences[&contig].len()
+                        fasta_map[&contig].len()
                     }.clone();
                     let local_rng =
                         local_rng_mutex_clone
@@ -181,11 +174,11 @@ pub fn run_neat(config: Box<RunConfiguration>, rng: ChaCha20Rng) -> Result<(), R
                     !(config.produce_fasta || config.produce_bam || config.produce_fastq) {
                     info!("Mutating the reference sequence of {}", &contig);
                     let mut sequence_to_mutate = {
-                        let fasta_sequences =
-                            fasta_sequences_mutex_clone
+                        let fasta_map =
+                            fasta_map_mutex_clone
                                 .lock()
                                 .unwrap();
-                        fasta_sequences[&contig].clone()
+                        fasta_map[&contig].clone()
                     };
 
                     let contig_variants = {
@@ -199,13 +192,13 @@ pub fn run_neat(config: Box<RunConfiguration>, rng: ChaCha20Rng) -> Result<(), R
                     ).expect("Error applying mutations");
                     // update our fasta map with the mutated sequence.
                     let _ = {
-                        let mut fasta_sequences =
-                            fasta_sequences_mutex_clone
+                        let mut fasta_map =
+                            fasta_map_mutex_clone
                                 .lock()
                                 .unwrap();
                         // I believe doing this will overwrite the reference sequence, which is what
                         // we're trying to accomplish here.
-                        fasta_sequences.insert(contig, sequence_to_mutate);
+                        fasta_map.insert(contig, sequence_to_mutate);
                     };
 
                 }
@@ -225,16 +218,16 @@ pub fn run_neat(config: Box<RunConfiguration>, rng: ChaCha20Rng) -> Result<(), R
     let mut all_reads = all_reads_clone.lock().unwrap();
     let fast_order_mutex_clone = Arc::clone(&fasta_order_mutex);
     let fasta_order = fast_order_mutex_clone.lock().unwrap();
-    let fasta_sequences_mutex_clone = Arc::clone(&fasta_sequences_mutex);
+    let fasta_map_mutex_clone = Arc::clone(&fasta_map_mutex);
     // at this point the sequences are mutated, so we rename the variable.
-    let mutated_fasta_sequences = fasta_sequences_mutex_clone.lock().unwrap();
+    let mutated_fasta_map = fasta_map_mutex_clone.lock().unwrap();
     let config_mutex_clone = Arc::clone(&confix_mutex);
     let config = config_mutex_clone.lock().unwrap();
 
     if config.produce_fasta {
         info!("Producing the fasta file.");
         write_fasta(
-            &mutated_fasta_sequences,
+            &mutated_fasta_map,
             &fasta_order,
             config.overwrite_output,
             &output_file,
@@ -243,7 +236,7 @@ pub fn run_neat(config: Box<RunConfiguration>, rng: ChaCha20Rng) -> Result<(), R
 
     if config.produce_fastq {
         write_fastq(
-            &mutated_fasta_sequences,
+            &mutated_fasta_map,
             &mut all_reads,
             config.read_len,
             config.overwrite_output,

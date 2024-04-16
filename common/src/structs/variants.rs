@@ -60,10 +60,10 @@ mod tests {
     #[test]
     fn test_variant_creation() {
         let variant = Variant {
-            // Not actually a valid variant, but just testing.
+            // Not actually a valid variant, but just testing the constructor
             variant_type: SNP,
             reference: vec![A, C, T, G],
-            alternate: vec![A],
+            alternate: vec![A, P(3)],
             genotype: vec![1, 1, 1],
         };
         assert_eq!(variant.variant_type, SNP);
@@ -75,8 +75,19 @@ mod tests {
     fn test_variant_new() {
         let variant = Variant::new(
             Insertion,
-            &vec![A],
+            &vec![A, P(3)],
             &vec![A, C, T, G],
+            vec![0, 1],
+        );
+        assert!(!variant.is_homozygous())
+    }
+
+    #[test]
+    fn test_deletion_new() {
+        let variant = Variant::new(
+            Deletion,
+            &vec![A, C, T, G],
+            &vec![A, P(3)],
             vec![0, 1],
         );
         assert!(!variant.is_homozygous())
@@ -89,7 +100,7 @@ mod tests {
             // with new it should catch this error
             SNP,
             &vec![A, C, T, G],
-            &vec![A],
+            &vec![A, P(3)],
             vec![1, 1, 1],
         );
     }

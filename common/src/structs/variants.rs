@@ -18,17 +18,20 @@ pub struct Variant {
     // This is the type of variant. Any new types will need to be added to VariantType
     // to be implemented here.
     pub variant_type: VariantType,
+    // the location, in reference coordinates, of the start of this variant
+    pub location: usize,
     // The reference allele of interest. This is either one base or several bases for a deletion.
     pub reference: Vec<Nuc>,
     // The alternate allele of interest. This is either one base or several bases for an insertion.
     pub alternate: Vec<Nuc>,
-    // the genotype will tell us which ploid is mutated in vcf, fastq and bam.
+    // the genotype will tell us if it is heterozygous or homozygous.
     pub genotype: Vec<u8>,
 }
 
 impl Variant {
     pub fn new(
         variant_type: VariantType,
+        location: usize,
         reference: &Vec<Nuc>,
         alternate: &Vec<Nuc>,
         genotype: Vec<u8>,
@@ -40,6 +43,7 @@ impl Variant {
 
         Variant {
             variant_type,
+            location,
             reference: reference.clone(),
             alternate: alternate.clone(),
             genotype: genotype.clone(),
@@ -47,6 +51,8 @@ impl Variant {
     }
 
     pub fn is_homozygous(&self) -> bool {
+        // We won't have any 0/0[/0/0...] genotypes in NEAT, so it's sufficient to check that there is a zero
+        // (0/1 or 1/1).
         return if self.genotype.contains(&0) { false } else { true }
     }
 }
@@ -62,8 +68,9 @@ mod tests {
         let variant = Variant {
             // Not actually a valid variant, but just testing the constructor
             variant_type: SNP,
+            location: 222,
             reference: vec![A, C, T, G],
-            alternate: vec![A, P(3)],
+            alternate: vec![A],
             genotype: vec![1, 1, 1],
         };
         assert_eq!(variant.variant_type, SNP);
@@ -75,7 +82,8 @@ mod tests {
     fn test_variant_new() {
         let variant = Variant::new(
             Insertion,
-            &vec![A, P(3)],
+            10,
+            &vec![A],
             &vec![A, C, T, G],
             vec![0, 1],
         );
@@ -86,8 +94,9 @@ mod tests {
     fn test_deletion_new() {
         let variant = Variant::new(
             Deletion,
+            22,
             &vec![A, C, T, G],
-            &vec![A, P(3)],
+            &vec![A],
             vec![0, 1],
         );
         assert!(!variant.is_homozygous())
@@ -99,8 +108,9 @@ mod tests {
         Variant::new(
             // with new it should catch this error
             SNP,
+            22,
             &vec![A, C, T, G],
-            &vec![A, P(3)],
+            &vec![A],
             vec![1, 1, 1],
         );
     }

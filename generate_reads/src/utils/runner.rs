@@ -18,10 +18,10 @@ use utils::read_models::{read_quality_score_model_file, read_quality_score_raw_d
 use utils::generate_variants::generate_variants;
 use common::structs::nucleotides::Nuc;
 use common::structs::variants::Variant;
+use common::structs::fasta_map::FastaMap;
 use common::models::mutation_model::MutationModel;
 use data::quality_score_data::RawQualityScoreData;
 use utils::mutate_fasta::apply_mutations;
-use crate::utils::fasta_map::FastaMap;
 
 #[derive(Debug)]
 pub enum RunNeatError {
@@ -122,7 +122,7 @@ pub fn run_neat(config: Box<RunConfiguration>, rng: ChaCha20Rng) -> Result<(), R
                     let mutation_model =
                         mutation_model_mutex_clone.lock().unwrap();
                     generate_variants(
-                        contig_map,
+                        contig_map.clone(),
                         &fasta_sequences[&contig],
                         &mut mutation_model.clone(),
                         config.ploidy,

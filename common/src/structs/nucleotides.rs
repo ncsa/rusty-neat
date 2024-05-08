@@ -18,9 +18,7 @@ pub enum Nuc {
     G,
     T,
     // unknown bases, prints as random strings of bases
-    N(usize),
-    // Placeholder bases, print as empty string, but move the index.
-    P(usize),
+    N,
 }
 impl Nuc {
     pub fn int_to_nuc(input_integer: usize) -> Nuc {
@@ -31,30 +29,10 @@ impl Nuc {
             2 => Nuc::G,
             3 => Nuc::T,
             // Note that we do not read in any placeholders.
-            _ => Nuc::N(1),
+            _ => Nuc::N,
         };
     }
 
-    pub fn consolidate(&self, other: Self) -> Result<Self, &'static str> {
-        use self::Nuc::*;
-        // The idea here is to make sure we have summed all the N's up into one number, so we aren't
-        // eating up extra space.
-        match self {
-            P(num) => {
-                match other {
-                    P(other_num) => Ok(P(num + other_num)),
-                    _ => Err(panic!(
-                        "Trying to combine a placeholder with a non placeholder is undefined!"
-                    )),
-                }
-            },
-            N(num) => match other {
-                N(other_num) => Ok(N(num + other_num)),
-                _ => Err(panic!("Trying to combine an N with a non N is undefined!")),
-            },
-            _ => Err(panic!("Trying to consolidate uncounted bases! {:?}, {:?}", self, other)),
-        }
-    }
 
     pub fn to_string(&self) -> String {
         // Canonical conversion from base u8 representation back into the character.
@@ -65,8 +43,7 @@ impl Nuc {
             Nuc::C => "C".to_string(),
             Nuc::G => "G".to_string(),
             Nuc::T => "T".to_string(),
-            Nuc::N(num) => { (0..*num).map({ |_| "N" }).collect::<String>() },
-            Nuc::P(_) => "".to_string(),
+            Nuc::N => "N".to_string(),
         }
     }
 
@@ -92,7 +69,7 @@ pub fn base_to_nuc(char_of_interest: char) -> Nuc {
         'G' | 'g' => Nuc::G,
         'T' | 't' => Nuc::T,
         // Note that we will not read in any placeholder characters.
-        _ => Nuc::N(1),
+        _ => Nuc::N,
     };
 }
 
@@ -130,7 +107,7 @@ mod tests {
         assert_eq!(Nuc::int_to_nuc(num2 as usize), Nuc::C);
         assert_eq!(Nuc::int_to_nuc(num3 as usize), Nuc::G);
         assert_eq!(Nuc::int_to_nuc(num4), Nuc::T);
-        assert_eq!(Nuc::int_to_nuc(num5 as usize), Nuc::N(1))
+        assert_eq!(Nuc::int_to_nuc(num5 as usize), Nuc::N)
     }
 
     #[test]
@@ -144,12 +121,12 @@ mod tests {
         let nuc2 = Nuc::C;
         let nuc3 = Nuc::G;
         let nuc4 = Nuc::T;
-        let nuc5 = Nuc::N(1);
+        let nuc5 = Nuc::N;
 
         assert_eq!(nuc1.complement(), Nuc::T);
         assert_eq!(nuc2.complement(), Nuc::G);
         assert_eq!(nuc3.complement(), Nuc::C);
         assert_eq!(nuc4.complement(), Nuc::A);
-        assert_eq!(nuc5.complement(), Nuc::N(1));
+        assert_eq!(nuc5.complement(), Nuc::N);
     }
 }

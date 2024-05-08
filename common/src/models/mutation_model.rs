@@ -10,7 +10,7 @@ use models::indel_model::{IndelModel, generate_random_insertion};
 use models::quality_scores::QualityScoreModel;
 use models::sequencing_error_model::SequencingErrorModel;
 use models::snp_model::SnpModel;
-use structs::fasta_map::{FastaBlock, insert_variant};
+use structs::fasta_map::{SequenceBlock, insert_variant};
 
 #[derive(Clone)]
 pub struct MutationModel {
@@ -70,11 +70,11 @@ impl MutationModel {
     pub fn generate_mutation(
         &mut self,
         reference_sequence: &Vec<Nuc>,
-        fasta_blocks: &Vec<FastaBlock>,
+        fasta_blocks: &Vec<SequenceBlock>,
         variant_location: usize,
         ploidy: usize,
         mut rng: ChaCha20Rng,
-    ) -> Vec<FastaBlock> {
+    ) -> Vec<SequenceBlock> {
         // Select a genotype for the variant
         let genotype= self.generate_genotype(ploidy, rng.clone());
         // Select a type of mutation.
@@ -105,9 +105,7 @@ impl MutationModel {
             },
             VariantType::Insertion => {
                 let length = self.statistical_models.indel_model.new_insert_length(&mut rng);
-                let insertion_vec = generate_random_insertion(
-                    length.abs() as usize, rng.borrow_mut()
-                );
+                let insertion_vec = generate_random_insertion(length, rng.borrow_mut());
                 let reference = vec![
                     reference_sequence.get(variant_location)
                         .unwrap()
@@ -135,7 +133,7 @@ impl MutationModel {
         let variant_to_insert = Variant::new(
             variant_type, &reference, &alternate, genotype
         );
-        let return_blocks: Vec<FastaBlock> = insert_variant(
+        let return_blocks: Vec<SequenceBlock> = insert_variant(
             fasta_blocks, variant_to_insert, variant_location
         );
         return_blocks

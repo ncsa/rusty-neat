@@ -5,16 +5,16 @@ use rand_chacha::ChaCha20Rng;
 use common::models::mutation_model::MutationModel;
 use common::structs::variants::Variant;
 use common::structs::nucleotides::Nuc;
-use common::structs::fasta_map::FastaBlock;
+use common::structs::fasta_map::SequenceBlock;
 use common::structs::fasta_map::BlockType::*;
 
 pub fn generate_variants(
-    contig_map: (usize, Vec<FastaBlock>),
+    contig_map: (usize, Vec<SequenceBlock>),
     reference_sequence: &Vec<Nuc>,
     mutation_model: &mut MutationModel,
     ploidy: usize,
     mut rng: ChaCha20Rng,
-) -> (usize, Vec<FastaBlock>) {
+) -> (usize, Vec<SequenceBlock>) {
     // todo work in the reference map, fewer calls to the ref sequence itself. Maybe we don't even
     //   need it for this.
     // Variants for this contig, organized by location. Each location may have only one variant.
@@ -26,7 +26,7 @@ pub fn generate_variants(
     let mut number_of_mutations = (*reference_length as f64 * mutation_model.mutation_rate)
         .round() as usize;
     // Because of how N's are represented, we will not add variants to any non-n section
-    let mut blocks: Vec<FastaBlock> = contig_map.1;
+    let mut blocks: Vec<SequenceBlock> = contig_map.1;
 
     let weights: Vec<usize> = get_weights(&blocks);
     let positions: Vec<usize> = (0..reference_length).collect();
@@ -48,18 +48,18 @@ pub fn generate_variants(
     contig_map.clone()
 }
 
-fn get_weights(fasta_map: &Vec<FastaBlock>) -> Vec<usize> {
+fn get_weights(fasta_map: &Vec<SequenceBlock>) -> Vec<usize> {
     // todo incorporate GC-bias and trinuc bias.
     let mut weights = Vec::new();
     for block in fasta_map {
         match block.block_type {
             // The only place we want to insert variants.
             // Todo this is where we'd want to insert some calculated weights.
-            Allowed => {
+            Standard => {
                 for _ in block.start..block.end {
                     weights.push(1);
                 }
-            },
+            }
             // no variants in N blocks
             NBlock => {
                 for _ in block.start..block.end {

@@ -2,6 +2,6 @@
 
 members = [
     "generate_reads",
-    "common",
+    "common", "fasta_reader",
 ]
 resolver = "2"

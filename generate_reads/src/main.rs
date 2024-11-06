@@ -9,6 +9,7 @@ extern crate serde;
 extern crate serde_json;
 extern crate serde_yaml;
 extern crate simplelog;
+extern crate fasta_reader;
 
 use common;
 pub mod utils;
@@ -16,9 +17,8 @@ mod data;
 
 use clap::Parser;
 use log::*;
-use rand::thread_rng;
+use rand::{thread_rng, RngCore};
 use rand::SeedableRng;
-use rand_core::RngCore;
 use simplelog::*;
 use std::fs::File;
 use rand_chacha::ChaCha20Rng;

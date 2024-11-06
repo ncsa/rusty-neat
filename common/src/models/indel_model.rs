@@ -1,7 +1,5 @@
 use rand::distributions::{WeightedIndex, Distribution};
 use rand::Rng;
-
-use structs::nucleotides::Nuc;
 use rand_chacha::ChaCha20Rng;
 
 // The following section are the models for each type of variant. In order to create the variant,

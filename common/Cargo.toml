@@ -4,7 +4,7 @@ version = "0.2.0"
 authors = ["Joshua Allen <jallen17@illinois.edu>"]
 
 [dependencies]
-rand = "0.9.0-alpha.1"
+rand = "*"
 rand_core = "0.9.0-alpha.1"
 rand_chacha = "0.9.0-alpha.1"
 serde = { version = "1.0.197", features = ["derive"] }

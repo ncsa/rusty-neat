@@ -23,14 +23,14 @@ pub enum Nuc {
 impl Nuc {
     pub fn int_to_nuc(input_integer: usize) -> Nuc {
         // Similar to previous, but allows an integer representation, useful for sampling an index.
-        return match input_integer {
+        match input_integer {
             0 => Nuc::A,
             1 => Nuc::C,
             2 => Nuc::G,
             3 => Nuc::T,
             // Note that we do not read in any placeholders.
             _ => Nuc::N,
-        };
+        }
     }
 
 

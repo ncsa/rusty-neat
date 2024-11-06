@@ -62,8 +62,12 @@ impl SequenceBlock {
     }
 
     pub fn len(&self) -> usize {
-        // absolute values protect against sequences that are numbered backwards for valid reasons
-        (self.start - self.end).abs()
+        // This function basically does absolute value for usize
+        if self.start >= self.end {
+            self.start  - self.end
+        } else {
+            self.end - self.start
+        }
     }
 }
 
@@ -179,7 +183,7 @@ pub fn insert_variant(
     fasta_blocks: &ContigBlock, variant: Variant, variant_location: usize
 ) -> ContigBlock {
     // Todo: re-write this using ContigBlock
-    let mut return_blocks = Vec::with_capacity(fasta_blocks.len() + 2);
+    let mut return_blocks = Vec::with_capacity(fasta_blocks.len + 2);
     for block in fasta_blocks {
         if (block.start < variant_location) && (variant_location < block.end_point()) {
             if block.block_type != BlockType::Standard {

@@ -8,7 +8,7 @@ use std::collections::{HashSet, VecDeque};
 use rand::RngCore;
 use rand::seq::SliceRandom;
 use rand_distr::{Normal, Distribution};
-use utils::neat_rng::NeatRng;
+use super::neat_rng::NeatRng;
 fn cover_dataset(
     span_length: usize,
     read_length: usize,

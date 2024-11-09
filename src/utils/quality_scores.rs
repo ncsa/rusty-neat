@@ -21,11 +21,11 @@
 //   * Assumes a fixed read length, meaning you have to extrapolate for longer read lengths.
 //   * In Python, at least, this was slow, although in retrospect it didn't eat up much memory.
 use std::fmt::{Display, Formatter};
-use utils::neat_rng::NeatRng;
 use rand::distributions::WeightedIndex;
 use rand::prelude::Distribution;
 use serde::{Deserialize, Serialize};
-use utils::file_tools::open_file;
+use super::neat_rng::NeatRng;
+use super::file_tools::open_file;
 
 #[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize)]

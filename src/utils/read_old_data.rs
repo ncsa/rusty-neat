@@ -1,7 +1,7 @@
 use std::fs;
 use serde::{Deserialize, Serialize};
 use serde_json::*;
-use utils::quality_scores::QualityScoreModel;
+use super::quality_scores::QualityScoreModel;
 
 #[derive(Serialize, Deserialize)]
 pub struct QualityRaw {

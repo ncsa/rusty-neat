@@ -5,9 +5,9 @@ use std::io;
 use std::io::Write;
 use rand::Rng;
 use rand::seq::IndexedRandom;
-use utils::nucleotides::u8_to_base;
-use utils::file_tools::open_file;
-use utils::neat_rng::NeatRng;
+use super::nucleotides::u8_to_base;
+use super::file_tools::open_file;
+use super::neat_rng::NeatRng;
 
 fn genotype_to_string(genotype: Vec<usize>) -> String {
     /*

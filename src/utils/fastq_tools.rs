@@ -3,10 +3,10 @@
 use std::io::Write;
 use std::{fs, io};
 
-use utils::fasta_tools::sequence_array_to_string;
-use utils::file_tools::open_file;
-use utils::neat_rng::NeatRng;
-use utils::quality_scores::QualityScoreModel;
+use super::fasta_tools::sequence_array_to_string;
+use super::file_tools::open_file;
+use super::neat_rng::NeatRng;
+use super::quality_scores::QualityScoreModel;
 
 fn complement(nucleotide: u8) -> u8 {
     // 0 = A, 1 = C, 2 = G, 3 = T,

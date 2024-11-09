@@ -9,8 +9,8 @@ use rand::prelude::*;
 use rand::Rng;
 use log::{debug, error};
 use rand::distributions::WeightedIndex;
-use utils::nucleotides::NucModel;
-use utils::neat_rng::NeatRng;
+use super::nucleotides::NucModel;
+use super::neat_rng::NeatRng;
 
 pub fn mutate_fasta(
     file_struct: &HashMap<String, Vec<u8>>,

@@ -9,7 +9,7 @@
 // track of extra numbers. So this is intended to simplify everything
 use rand::distributions::WeightedIndex;
 use rand::prelude::Distribution;
-use utils::neat_rng::NeatRng;
+use super::neat_rng::NeatRng;
 
 pub fn base_to_u8(char_of_interest: char) -> u8 {
     // This defines the relationship between the 4 possible nucleotides in DNA and

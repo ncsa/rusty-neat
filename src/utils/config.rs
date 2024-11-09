@@ -4,13 +4,13 @@
 
 use std::collections::{HashMap};
 use std::string::String;
-use utils::cli::Cli;
 use log::{warn, info};
 use std::{env, fs};
 use std::path::{Path, PathBuf};
 use rand_distr::num_traits::ToPrimitive;
 use serde_yaml::Value;
-use utils::file_tools::check_create_dir;
+use super::cli::Cli;
+use super::file_tools::check_create_dir;
 
 #[derive(Debug)]
 pub struct RunConfiguration {

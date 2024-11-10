@@ -2,11 +2,9 @@ extern crate clap;
 extern crate log;
 extern crate simplelog;
 extern crate serde_yaml;
-extern crate itertools;
 extern crate serde_json;
 extern crate serde;
 extern crate simple_rng;
-extern crate statrs;
 
 mod utils;
 

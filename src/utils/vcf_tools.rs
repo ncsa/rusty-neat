@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::io;
 use std::io::Write;
 use rand::Rng;
-use rand::seq::IndexedRandom;
+use rand::seq::IteratorRandom;
 use super::nucleotides::u8_to_base;
 use super::file_tools::open_file;
 use super::neat_rng::NeatRng;
@@ -108,7 +108,7 @@ mod tests {
     use rand::SeedableRng;
     use super::*;
     use std::path::Path;
-    use utils::neat_rng::NeatRng;
+    use super::neat_rng::NeatRng;
 
     #[test]
     fn test_genotype_to_string() {

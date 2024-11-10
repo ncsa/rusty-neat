@@ -7,7 +7,6 @@ pub mod mutate;
 pub mod fastq_tools;
 pub mod vcf_tools;
 pub mod nucleotides;
-pub mod neat_rng;
 pub mod runner;
 pub mod quality_scores;
 pub mod read_old_data;

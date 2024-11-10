@@ -2,10 +2,10 @@
 
 use std::io::Write;
 use std::{fs, io};
+use simple_rng::Rng;
 
 use super::fasta_tools::sequence_array_to_string;
 use super::file_tools::open_file;
-use super::neat_rng::NeatRng;
 use super::quality_scores::QualityScoreModel;
 
 fn complement(nucleotide: u8) -> u8 {
@@ -35,8 +35,9 @@ pub fn write_fastq(
     overwrite_output: bool,
     paired_ended: bool,
     dataset: Vec<&Vec<u8>>,
+    dataset_order: Vec<usize>,
     quality_score_model: QualityScoreModel,
-    mut rng: &mut NeatRng,
+    mut rng: &mut Rng,
 ) -> io::Result<()> {
     // Takes:
     // fastq_filename: prefix for the output fastq files.
@@ -61,32 +62,31 @@ pub fn write_fastq(
     // open the second file and append lines
     let mut outfile2 = open_file(&mut filename2, overwrite_output)
         .expect(&format!("Error opening output {}", filename2));
-    // write out sequence by sequence using index to track the numbering
-    let mut index = 1;
-    // write sequences
-    for sequence in dataset {
+    // write sequences. Orderd index is used for numbering, while read_index is from the shuffled
+    // index array from a previous step
+    for (order_index, read_index) in dataset_order.iter().enumerate() {
+        let sequence = dataset[*read_index].clone();
         // This assumes that the sequence length is the correct length at this point.
-        let read_length = sequence.len();
+        let read_length = sequence.len() as u32;
         // Need to convert the raw scores to a string
         let quality_scores = quality_score_model.generate_quality_scores(
-            read_length, &mut rng
+            read_length as usize, &mut rng
         );
         // sequence name
-        writeln!(&mut outfile1, "@{}/1", name_prefix.clone() + &index.to_string())?;
+        writeln!(&mut outfile1, "@{}{}/1", name_prefix.clone(), order_index + 1)?;
         // Array as a string
         writeln!(&mut outfile1, "{}", sequence_array_to_string(&sequence))?;
         // The stupid plus sign
         writeln!(&mut outfile1, "+")?;
         // Qual score of all F's for the whole thing.
         writeln!(&mut outfile1, "{}", quality_scores_to_str(quality_scores))?;
-        index += 1;
         if paired_ended {
             // Need a quality score for this read as well
             let quality_scores = quality_score_model.generate_quality_scores(
-                read_length, &mut rng
+                read_length as usize, &mut rng
             );
             // sequence name
-            writeln!(&mut outfile2, "@{}/2", name_prefix.clone() + &index.to_string())?;
+            writeln!(&mut outfile2, "@{}{}/2", name_prefix.clone(), order_index + 1)?;
             // Array as a string
             writeln!(&mut outfile2, "{}", sequence_array_to_string(&reverse_complement(&sequence)))?;
             // The stupid plus sign
@@ -101,7 +101,7 @@ pub fn write_fastq(
     Ok(())
 }
 
-fn quality_scores_to_str(array: Vec<usize>) -> String {
+fn quality_scores_to_str(array: Vec<u32>) -> String {
     let mut score_text = String::new();
     for score in array {
         score_text += &(((score + 33) as u8) as char).to_string();
@@ -113,7 +113,6 @@ fn quality_scores_to_str(array: Vec<usize>) -> String {
 mod tests {
     use super::*;
     use std::path::Path;
-    use rand_core::SeedableRng;
 
     #[test]
     fn test_complement() {
@@ -144,14 +143,20 @@ mod tests {
         let paired_ended = false;
         let seq1 = vec![0, 0, 0, 0, 1, 1, 1, 1];
         let seq2 = vec![2, 2, 2, 2, 3, 3, 3, 3,];
-        let mut rng = NeatRng::seed_from_u64(0);
+        let mut rng = Rng::new_from_seed(vec![
+            "Hello".to_string(),
+            "Cruel".to_string(),
+            "World".to_string(),
+        ]);
         let dataset = vec![&seq1, &seq2];
+        let dataset_order = vec![1, 0];
         let quality_score_model = QualityScoreModel::new();
         write_fastq(
             fastq_filename,
             overwrite_output,
             paired_ended,
             dataset,
+            dataset_order,
             quality_score_model,
             &mut rng,
         ).unwrap();
@@ -170,14 +175,20 @@ mod tests {
         let paired_ended = true;
         let seq1 = vec![0, 0, 0, 0, 1, 1, 1, 1];
         let seq2 = vec![2, 2, 2, 2, 3, 3, 3, 3,];
-        let mut rng = NeatRng::seed_from_u64(0);
+        let mut rng = Rng::new_from_seed(vec![
+            "Hello".to_string(),
+            "Cruel".to_string(),
+            "World".to_string(),
+        ]);
         let dataset = vec![&seq1, &seq2];
+        let dataset_order = vec![1, 0];
         let quality_score_model = QualityScoreModel::new();
         write_fastq(
             fastq_filename,
             overwrite_output,
             paired_ended,
             dataset,
+            dataset_order,
             quality_score_model,
             &mut rng,
         ).unwrap();

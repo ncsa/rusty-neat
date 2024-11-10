@@ -3,19 +3,17 @@
 // mutations introduced
 //
 // mutate_sequence adds actual mutations to the fasta sequence
+extern crate simple_rng;
 
 use std::collections::HashMap;
-use rand::prelude::*;
-use rand::Rng;
 use log::{debug, error};
-use rand::distributions::WeightedIndex;
 use super::nucleotides::NucModel;
-use super::neat_rng::NeatRng;
+use simple_rng::{Rng, DiscreteDistribution};
 
 pub fn mutate_fasta(
     file_struct: &HashMap<String, Vec<u8>>,
     minimum_mutations: Option<usize>,
-    mut rng: &mut NeatRng
+    mut rng: &mut Rng
 ) -> (Box<HashMap<String, Vec<u8>>>, Box<HashMap<String, Vec<(usize, u8, u8)>>>) {
     // Takes:
     // file_struct: a hashmap of contig names (keys) and a vector
@@ -48,11 +46,11 @@ pub fn mutate_fasta(
         // Add or subtract a few extra positions.
         rough_num_positions += {
             // A random amount up to 10% of the reads
-            let factor: f64 = rng.gen::<f64>() * 0.10;
+            let factor: f64 = rng.random() * 0.10;
             // 25% of the time subtract, otherwise we'll add.
             let sign: f64 = if rng.gen_bool(0.25) { -1.0 } else { 1.0 };
             // add or subtract up to 10% of the reads.
-            rough_num_positions * (sign * factor)
+            rough_num_positions + (sign * factor)
         };
         let rounded_num_positions = rough_num_positions.round() as usize;
         // Round the number of positions to the nearest usize.
@@ -86,7 +84,7 @@ pub fn mutate_fasta(
 fn mutate_sequence(
     sequence: &Vec<u8>,
     num_positions: usize,
-    mut rng: &mut NeatRng
+    mut rng: &mut Rng
 ) -> (Vec<u8>, Vec<(usize, u8, u8)>) {
     // Takes:
     // sequence: A u8 vector representing a sequence of DNA
@@ -103,7 +101,7 @@ fn mutate_sequence(
     let mut mutated_record = sequence.clone();
     // Randomly select num_positions from positions, weighted by gc bias and whatever. For now
     // all he weights are just equal.
-    let weights = vec![1; mutated_record.len()];
+    let weights = vec![1.0; mutated_record.len()];
     // find all non n positions.
     let non_n_positions: Vec<usize> = mutated_record
         .iter()
@@ -112,7 +110,7 @@ fn mutate_sequence(
         .map(|(x, _)| x)
         .collect();
     // create the distribution
-    let dist = WeightedIndex::new(weights).unwrap();
+    let dist = DiscreteDistribution::new(&weights, false);
     // now choose a random selection of num_positions without replacement
     let mut indexes_to_mutate: Vec<usize> = Vec::new();
     for _ in 0..num_positions {
@@ -143,15 +141,17 @@ fn mutate_sequence(
 
 #[cfg(test)]
 mod tests {
-    use rand::SeedableRng;
-    use utils::neat_rng::NeatRng;
     use super::*;
 
     #[test]
     fn test_mutate_sequence() {
         let seq1: Vec<u8> = vec![4, 4, 0, 0, 0, 1, 1, 2, 0, 3, 1, 1, 1];
         let num_positions = 2;
-        let mut rng = NeatRng::seed_from_u64(0);
+        let mut rng = Rng::new_from_seed(vec![
+            "Hello".to_string(),
+            "Cruel".to_string(),
+            "World".to_string(),
+        ]);
         let mutant = mutate_sequence(&seq1, num_positions, &mut rng);
         assert_eq!(mutant.0.len(), seq1.len());
         assert!(!mutant.1.is_empty());
@@ -165,7 +165,11 @@ mod tests {
         let file_struct: HashMap<String, Vec<u8>> = HashMap::from([
                 ("chr1".to_string(), seq.clone())
             ]);
-        let mut rng = NeatRng::seed_from_u64(0);
+        let mut rng = Rng::new_from_seed(vec![
+            "Hello".to_string(),
+            "Cruel".to_string(),
+            "World".to_string(),
+        ]);
         let mutations = mutate_fasta(
             &file_struct,
             Some(1),
@@ -187,7 +191,11 @@ mod tests {
             ("chr1".to_string(), seq.clone())
         ]);
         // if a random mutation suddenly pops up in a build, it's probably the seed for this.
-        let mut rng = NeatRng::seed_from_u64(0);
+        let mut rng = Rng::new_from_seed(vec![
+            "Hello".to_string(),
+            "Cruel".to_string(),
+            "World".to_string(),
+        ]);
         let mutations = mutate_fasta(
             &file_struct,
             None,

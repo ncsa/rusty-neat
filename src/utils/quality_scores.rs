@@ -21,11 +21,9 @@
 //   * Assumes a fixed read length, meaning you have to extrapolate for longer read lengths.
 //   * In Python, at least, this was slow, although in retrospect it didn't eat up much memory.
 use std::fmt::{Display, Formatter};
-use rand::distributions::WeightedIndex;
-use rand::prelude::Distribution;
 use serde::{Deserialize, Serialize};
-use super::neat_rng::NeatRng;
 use super::file_tools::open_file;
+use simple_rng::{DiscreteDistribution, Rng};
 
 #[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize)]
@@ -33,20 +31,20 @@ pub struct QualityScoreModel {
     // This is the vector of the quality scores possible in this dataset. This could be a list
     // of numbers from 1-42, for example, or bins of scores, [2, 13, 27, 33] or whatever the
     // dataset uses. This list is expected to be sorted.
-    pub(crate) quality_score_options: Vec<usize>,
+    pub(crate) quality_score_options: Vec<u32>,
     // True for binned scores, false for continuous
     pub(crate) binned_scores: bool,
     // The assumed read length of this dataset. The model will assume this read length and adjust
     // on a per-run basis in a deterministic way (doubling positional weight arrays)
     pub(crate) assumed_read_length: usize,
     // Weights for the first position in the read length.
-    pub(crate) seed_weights: Vec<usize>,
+    pub(crate) seed_weights: Vec<u32>,
     // A matrix for each subsequent position along the read length after the first. Each row is a
     // weight vector based on the previous score. For example, for possible scores 0-41, inclusive,
     // there would be 42 vectors (one for each possible previous score), each giving the weights for
     // the current position (one weight for each of 42 scores), for a 42 x 42 vector at each
     // position along the read length.
-    pub(crate) weights_from_one: Vec<Vec<Vec<usize>>>,
+    pub(crate) weights_from_one: Vec<Vec<Vec<u32>>>,
 }
 
 impl Display for QualityScoreModel {
@@ -70,9 +68,9 @@ impl QualityScoreModel {
         // We'll construct a base toy model that just favors higher scores for now. We'll work on
         // parsing out this from real data then we can fill this out better.
         let default_quality_scores = vec![2, 11, 25, 37];
-        let default_seed_weight: Vec<usize> = vec![1, 3, 5, 1];
-        let default_base_weights: Vec<usize> = vec![1, 1, 2, 5];
-        let default_read_length = 150;
+        let default_seed_weight: Vec<u32> = vec![1, 3, 5, 1];
+        let default_base_weights: Vec<u32> = vec![1, 1, 2, 5];
+        let default_read_length: usize = 150;
         let mut default_score_weights = Vec::with_capacity(default_read_length);
         let mut single_position = Vec::new();
         // The first position (0) will always be an empty vector. This is more to make it easy to
@@ -126,16 +124,16 @@ impl QualityScoreModel {
             self.weights_from_one,
         )
     }
-    pub fn generate_quality_scores(&self, run_read_length: usize, mut rng: &mut NeatRng) -> Vec<usize> {
+    pub fn generate_quality_scores(&self, run_read_length: usize, mut rng: &mut Rng) -> Vec<u32> {
         // Generates a list of quality scores of length run_read_length using the model. If the
         // input read length differs, we do some index magic to extrapolate the model
         // run_read_length: The desired read length for the model to generate.
         // rng: The random number generator for the run.
 
         // This will be the list of scores generated. We already know it is run_read_length long
-        let mut score_list: Vec<usize> = Vec::with_capacity(run_read_length);
+        let mut score_list: Vec<u32> = Vec::with_capacity(run_read_length);
         // Create the distribution with WeightedIndex
-        let dist = WeightedIndex::new(&self.seed_weights).unwrap();
+        let dist = DiscreteDistribution::new(&self.seed_weights, false);
         // sample the scores list with the seed weights applied to generate the first score.
         // Samples an index based on the weights, which then selects the quality score.
         let seed_score = self.quality_score_options[dist.sample(&mut rng)];
@@ -149,7 +147,7 @@ impl QualityScoreModel {
         // of mismatches between model read length and run read length
         // We can skip the first one, since we already generated it above. On loop 1, we will look
         // at that seed score to get our first set of weights.
-        let mut current_index: usize = 1;
+        let mut current_index = 1;
         for i in indexes {
             // The weight at this index is the score weights for position i, given a
             // previous score of score_list[i-1]
@@ -161,12 +159,12 @@ impl QualityScoreModel {
             ).unwrap();
             // Now we have an index (in the default case 0..<4) of a vector for the position, based
             // on the previous score.
-            let weights: &Vec<usize> = self.weights_from_one.get(i)
+            let weights: &Vec<u32> = self.weights_from_one.get(i)
                 .expect("Error with quality score remap index.")
                 .get(score_position)
                 .expect("Error finding weights vector");
             // Now we build the dist and sample as above.
-            let dist = WeightedIndex::new(weights).unwrap();
+            let dist = DiscreteDistribution::new(weights, false);
             let score = self.quality_score_options[dist.sample(&mut rng)];
             score_list.push(score);
             current_index += 1;
@@ -220,7 +218,6 @@ impl QualityScoreModel {
 
 #[cfg(test)]
 mod tests {
-    use rand_core::SeedableRng;
     use super::*;
 
     #[test]
@@ -320,7 +317,11 @@ mod tests {
     #[test]
     fn test_quality_scores_short() {
         let run_read_length = 100;
-        let mut rng = NeatRng::seed_from_u64(0);
+        let mut rng = Rng::new_from_seed(vec![
+            "hello".to_string(),
+            "cruel".to_string(),
+            "world".to_string(),
+        ]);
         let model = QualityScoreModel::new();
         let scores = model.generate_quality_scores(run_read_length, &mut rng);
         assert!(!scores.is_empty());
@@ -331,7 +332,11 @@ mod tests {
     #[test]
     fn test_quality_scores_same() {
         let run_read_length = 150;
-        let mut rng = NeatRng::seed_from_u64(0);
+        let mut rng = Rng::new_from_seed(vec![
+            "hello".to_string(),
+            "cruel".to_string(),
+            "world".to_string(),
+        ]);
         let model = QualityScoreModel::new();
         let scores = model.generate_quality_scores(run_read_length, &mut rng);
         assert!(!scores.is_empty());
@@ -342,7 +347,11 @@ mod tests {
     #[test]
     fn test_quality_scores_long() {
         let run_read_length = 200;
-        let mut rng = NeatRng::seed_from_u64(0);
+        let mut rng = Rng::new_from_seed(vec![
+            "hello".to_string(),
+            "cruel".to_string(),
+            "world".to_string(),
+        ]);
         let model = QualityScoreModel::new();
         let scores = model.generate_quality_scores(run_read_length, &mut rng);
         assert!(!scores.is_empty());
@@ -353,7 +362,11 @@ mod tests {
     #[test]
     fn test_quality_scores_vast_difference() {
         let run_read_length = 2000;
-        let mut rng = NeatRng::seed_from_u64(0);
+        let mut rng = Rng::new_from_seed(vec![
+            "hello".to_string(),
+            "cruel".to_string(),
+            "world".to_string(),
+        ]);
         let model = QualityScoreModel::new();
         let scores = model.generate_quality_scores(run_read_length, &mut rng);
         assert!(!scores.is_empty());

@@ -6,5 +6,5 @@
 /.idea/
 
 # Added by cargo
-
 /target
+/simple_rng/target

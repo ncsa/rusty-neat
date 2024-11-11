@@ -1,15 +1,12 @@
 extern crate clap;
 extern crate itertools;
 extern crate log;
-extern crate rand;
-extern crate rand_chacha;
-extern crate rand_core;
-extern crate rand_distr;
 extern crate serde;
 extern crate serde_json;
 extern crate serde_yaml;
 extern crate simplelog;
 extern crate fasta_reader;
+extern crate simple_rng;
 
 use common;
 pub mod utils;
@@ -17,15 +14,13 @@ mod data;
 
 use clap::Parser;
 use log::*;
-use rand::{thread_rng, RngCore};
-use rand::SeedableRng;
 use simplelog::*;
 use std::fs::File;
-use rand_chacha::ChaCha20Rng;
 use utils::cli;
 use utils::config::{build_config_from_args, read_config_yaml};
 use common::file_tools::check_parent;
 use utils::runner::run_neat;
+use simple_rng::Rng;
 
 fn main() {
     info!("Begin processing");

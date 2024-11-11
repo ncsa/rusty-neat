@@ -1,16 +1,15 @@
-use rand::distributions::{WeightedIndex, Distribution};
-use rand::Rng;
+use simple_rng::{Rng, DiscreteDistribution};
 use std::borrow::BorrowMut;
-use rand_chacha::ChaCha20Rng;
-
-use structs::nucleotides::Nuc;
+use std::collections::HashMap;
+use log::{warn, info};
+use std::env::var;
 use structs::transition_matrix::TransitionMatrix;
 use structs::variants::{Variant, VariantType};
 use models::indel_model::{IndelModel, generate_random_insertion};
 use models::quality_scores::QualityScoreModel;
 use models::sequencing_error_model::SequencingErrorModel;
 use models::snp_model::SnpModel;
-use structs::fasta_map::{SequenceBlock, insert_variant};
+use structs::fasta_map::{SequenceBlock, ContigBlock};
 
 #[derive(Clone)]
 pub struct MutationModel {
@@ -24,26 +23,39 @@ pub struct MutationModel {
     // was inherited from both parents (in the case of humans). The definition of "homozygous"
     // is ambiguous in polyploid organisms. We'll take it to mean "on all ploids"
     pub homozygous_frequency: f64,
-    // If a variant occurs, this is how frequently each type occurs. There are only 2 types at the
-    // moment, but this will get expanded out in time.
-    pub variant_weights: [(VariantType, usize); 3],
+    // If a variant occurs, this is how frequently each type occurs. There are only 3 types at the
+    // moment, but this will get expanded out in time. This data item will need to be expanded to
+    // account for it. The canonical order is:
+    //    1. SNP
+    //    2. Insertion
+    //    3. Deletion
+    pub variant_weights: [u32; 3],
     // These hold all the statistical model data we need to apply the mutations with this model
     statistical_models: StatisticalModels,
 }
+
+const VARIANT_TYPES: [VariantType; 3] = [
+    VariantType::SNP,       // 1
+    VariantType::Insertion, // 2
+    VariantType::Deletion,  // 3
+];
+
 impl MutationModel {
     pub fn new() -> Self {
         // Creating the default model based on the default for the original NEAT.
         let mutation_rate = 0.001;
         let homozygous_frequency = 0.01;
-        // Originally this was expressed as indel_fraction 0.05. To make it easier to sample, we
-        // will use weights. This would have been 0.95 and 0.05, combine with an insertion
-        // frequency (relative to their being an indel variant) was 0.6.
+        // Originally this was expressed as indel_fraction 0.05. We're using weights for
+        // readability. This gets converted to a cumulative density function by the
+        // DiscreteDistribution struct. This would have been 0.95 and 0.05, combine with an
+        // insertion frequency (relative to their being an indel variant) was 0.6.
         // This gives us a probability of insertion of 0.6 * 0.05 = 0.03 * 100 = 3
         //                 probability of deletion of  0.4 * 0.05 = 0.02 * 100 = 2
         //                 probability of SNP of       0.95              * 100 = 95
-        // which works out to roughly 1 indel every 20 mutations (as originally envisioned).
         let variant_weights = [
-            (VariantType::SNP, 95), (VariantType::Insertion, 3), (VariantType::Deletion, 2)
+            95, // snp
+            3, // insertion
+            2, //deletion
         ];
         let statistical_models = StatisticalModels::new();
 
@@ -55,7 +67,7 @@ impl MutationModel {
         }
     }
 
-    fn generate_genotype(&mut self, ploidy: usize, mut rng: ChaCha20Rng) -> Vec<u8> {
+    fn generate_genotype(&mut self, ploidy: usize, mut rng: &mut Rng) -> Vec<u8> {
         // "Homozygous" is ambiguous for polyploid organisms, so we'll just take "heterozygous" to
         // mean roughly half the reads will have the variant, to keep it simple
         let is_homozygous = rng.borrow_mut().gen_bool(self.homozygous_frequency);
@@ -69,21 +81,22 @@ impl MutationModel {
 
     pub fn generate_mutation(
         &mut self,
-        reference_sequence: &Vec<Nuc>,
+        reference_sequence: &Vec<u8>,
         fasta_blocks: &Vec<SequenceBlock>,
         variant_location: usize,
         ploidy: usize,
-        mut rng: ChaCha20Rng,
-    ) -> Vec<SequenceBlock> {
+        mut rng: Rng,
+    ) -> Variant {
         // Select a genotype for the variant
-        let genotype= self.generate_genotype(ploidy, rng.clone());
+        let genotype= self.generate_genotype(ploidy, &mut rng);
         // Select a type of mutation.
-        let dist = WeightedIndex::new(
-            self.variant_weights
-                .iter()
-                .map(|item| item.1)
-        ).unwrap();
-        let variant_type = self.variant_weights[dist.sample(rng.borrow_mut())].0;
+        let dist = DiscreteDistribution::new(&Vec::from(self.variant_weights));
+        let index = dist.sample(&mut rng);
+        let variant_type = if index > VARIANT_TYPES.len() || index < 0 {
+            panic!("Weird result from sampling variant type: {}", index)
+        } else {
+            VARIANT_TYPES[index]
+        };
         // todo figure out which block to mutate
         //   figure out the mutation to add
         //   Add a function in FastaMap to add a block to a vector
@@ -119,24 +132,25 @@ impl MutationModel {
                 let length = self.statistical_models.indel_model.new_delete_length(&mut rng);
                 // +1 is so that we grab a base for the reference in the VCF. This is similar
                 // to how we appended bases to the reference in the insertion model.
-                let reference: Vec<Nuc> = reference_sequence
-                    .get(variant_location..(variant_location + length + 1))
+                let reference: Vec<u8> = reference_sequence
+                    .get(variant_location..(variant_location + length as usize + 1))
                     .unwrap()
                     .iter()
                     .map(|item| *item)
                     .collect();
-                let alternate: Vec<Nuc> = vec![reference[0].clone()];
+                let alternate: Vec<u8> = vec![reference[0].clone()];
 
                 (reference, alternate)
             },
         };
         let variant_to_insert = Variant::new(
-            variant_type, &reference, &alternate, genotype
+            variant_type,
+            variant_location,
+            &reference,
+            &alternate,
+            genotype,
         );
-        let return_blocks: Vec<SequenceBlock> = insert_variant(
-            fasta_blocks, variant_to_insert, variant_location
-        );
-        return_blocks
+        variant_to_insert
     }
 }
 
@@ -190,8 +204,6 @@ impl StatisticalModels {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand_core::SeedableRng;
-    use rand_chacha::ChaCha20Rng;
 
     #[test]
     fn test_transition_matrix_from_weights() {

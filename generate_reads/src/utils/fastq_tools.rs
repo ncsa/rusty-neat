@@ -134,14 +134,14 @@ mod tests {
 
     #[test]
     fn test_reverse_complement() {
-        let read: Vec<Nuc> = vec![A, A, A, A, C, C, C, C];
-        let revcomp: Vec<Nuc> = vec![G, G, G, G, T, T, T, T];
+        let read: Vec<Nuc> = vec![Ada, Ada, Ada, Ada, Cyt, Cyt, Cyt, Cyt];
+        let revcomp: Vec<Nuc> = vec![Gua, Gua, Gua, Gua, Thy, Thy, Thy, Thy];
         assert_eq!(reverse_complement(&read), revcomp);
     }
 
     #[test]
     fn test_write_fastq() {
-        let mutated_reference_seq = vec![A, G, T, A, C, T, C, A, G, T, G, T, T, C, C, T];
+        let mutated_reference_seq = vec![Ada, Gua, Thy, Ada, Cyt, Thy, Cyt, Ada, Gua, Thy, Gua, Thy, Thy, Cyt, Cyt, Thy];
         let mutated_fasta_map = Box::new(HashMap::from([
             ("chr1".to_string(), mutated_reference_seq)
         ]));

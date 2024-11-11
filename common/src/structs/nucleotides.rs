@@ -11,73 +11,51 @@
 // character, which will print as empty string and act as a placeholder in the ref or alt of an
 // indel or more complex variant. Placeholders also have a size.
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
-pub enum Nuc {
-    A,
-    C,
-    G,
-    T,
-    // unknown bases, prints as random strings of bases
-    N,
+
+pub fn base_to_string(b: u8) -> String {
+    base_to_char(b).to_string()
 }
-impl Nuc {
-    pub fn int_to_nuc(input_integer: usize) -> Nuc {
-        // Similar to previous, but allows an integer representation, useful for sampling an index.
-        match input_integer {
-            0 => Nuc::A,
-            1 => Nuc::C,
-            2 => Nuc::G,
-            3 => Nuc::T,
-            // Note that we do not read in any placeholders.
-            _ => Nuc::N,
-        }
-    }
 
-
-    pub fn to_string(&self) -> String {
-        // Canonical conversion from base u8 representation back into the character.
-        // We're returning a string instead of a char to facilitate. No attempt to preserve or display
-        // any soft masking.
-        match self {
-            Nuc::A => "A".to_string(),
-            Nuc::C => "C".to_string(),
-            Nuc::G => "G".to_string(),
-            Nuc::T => "T".to_string(),
-            Nuc::N => "N".to_string(),
-        }
-    }
-
-    pub fn complement(&self) -> Nuc {
-        // matches with the complement of each nucleotide.
-        return match self {
-            Nuc::A => Nuc::T,
-            Nuc::C => Nuc::G,
-            Nuc::G => Nuc::C,
-            Nuc::T => Nuc::A,
-            _ => *self,
-        };
+pub fn base_to_char(b: u8) -> char {
+    match b {
+        0 => 'A',
+        1 => 'C',
+        2 => 'G',
+        3 => 'T',
+        _ => 'N',
     }
 }
 
-pub fn base_to_nuc(char_of_interest: char) -> Nuc {
+pub fn complement(base: u8) -> u8 {
+    // matches with the complement of each nucleotide.
+    match base {
+        0 => 3,
+        1 => 2,
+        2 => 1,
+        3 => 0,
+        _ => base,
+    }
+}
+
+
+pub fn char_to_base(c: char) -> u8 {
     // This defines the relationship between the 4 possible nucleotides in DNA and
     // the character from an input sequence. Everything that isn't a recognized base is
     // considered an N for Neat. Note that NEAT ignores soft masking.
-    return match char_of_interest {
-        'A' | 'a' => Nuc::A,
-        'C' | 'c' => Nuc::C,
-        'G' | 'g' => Nuc::G,
-        'T' | 't' => Nuc::T,
-        // Note that we will not read in any placeholder characters.
-        _ => Nuc::N,
-    };
+    match c {
+        'A' | 'a' => 0,
+        'C' | 'c' => 1,
+        'G' | 'g' => 2,
+        'T' | 't' => 3,
+        _ => 4,
+    }
 }
 
-pub fn sequence_array_to_string(input_array: &[Nuc]) -> String {
+pub fn sequence_array_to_string(input_array: Vec<u8>) -> String {
     // Converts a sequence vector into a string representing the DNA sequence
-    let mut return_string = String::new();
+    let mut return_string = String::with_capacity(input_array.len());
     for nuc in input_array {
-        return_string += &nuc.to_string();
+        return_string.push(base_to_char(nuc));
     }
     return_string
 }
@@ -89,44 +67,32 @@ mod tests {
     #[test]
     fn test_base_to_nuc() {
         let test_nuc = 'A';
-        assert_eq!(base_to_nuc(test_nuc), Nuc::A);
+        assert_eq!(char_to_base(test_nuc), 0);
     }
 
     #[test]
     fn cast_type() {
         let num1: u8 = 0;
-        assert_eq!(Nuc::int_to_nuc(num1 as usize), Nuc::A)
-    }
-
-    #[test]
-    fn test_num_to_nuc() {
-        let num2: i8 = 1;
-        let num3: i32 = 2;
-        let num4: usize = 3;
-        let num5: u64 = 9;
-        assert_eq!(Nuc::int_to_nuc(num2 as usize), Nuc::C);
-        assert_eq!(Nuc::int_to_nuc(num3 as usize), Nuc::G);
-        assert_eq!(Nuc::int_to_nuc(num4), Nuc::T);
-        assert_eq!(Nuc::int_to_nuc(num5 as usize), Nuc::N)
+        assert_eq!(base_to_char(num1), 'A')
     }
 
     #[test]
     fn test_nuc_to_char() {
-        let my_nuc = Nuc::C;
-        assert_eq!(my_nuc.to_string(), "C".to_string());
+        let my_nuc = 1;
+        assert_eq!(base_to_string(my_nuc), "C");
     }
     #[test]
     fn test_complement() {
-        let nuc1 = Nuc::A;
-        let nuc2 = Nuc::C;
-        let nuc3 = Nuc::G;
-        let nuc4 = Nuc::T;
-        let nuc5 = Nuc::N;
+        let nuc1 = 0_u8;
+        let nuc2 = 1_u8;
+        let nuc3 = 2_u8;
+        let nuc4 = 3_u8;
+        let nuc5 = 4_u8;
 
-        assert_eq!(nuc1.complement(), Nuc::T);
-        assert_eq!(nuc2.complement(), Nuc::G);
-        assert_eq!(nuc3.complement(), Nuc::C);
-        assert_eq!(nuc4.complement(), Nuc::A);
-        assert_eq!(nuc5.complement(), Nuc::N);
+        assert_eq!(complement(nuc1), nuc4);
+        assert_eq!(complement(nuc2), nuc3);
+        assert_eq!(complement(nuc3), nuc2);
+        assert_eq!(complement(nuc4), nuc1);
+        assert_eq!(complement(nuc5), nuc5);
     }
 }

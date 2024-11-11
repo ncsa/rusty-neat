@@ -1,6 +1,4 @@
-use rand::distributions::{WeightedIndex, Distribution};
-use rand::Rng;
-use rand_chacha::ChaCha20Rng;
+use simple_rng::{DiscreteDistribution, Rng};
 
 // The following section are the models for each type of variant. In order to create the variant,
 // we need to model its statistical property. NEAT included two types of variants: SNPs and Indels.
@@ -16,20 +14,20 @@ use rand_chacha::ChaCha20Rng;
 pub struct IndelModel {
     // Based what was in the original NEAT
     insertion_probability: f64,
-    ins_lengths: Vec<usize>,
-    ins_weights: Vec<usize>,
-    del_lengths: Vec<usize>,
-    del_weights: Vec<usize>,
+    ins_lengths: Vec<u32>,
+    ins_weights: Vec<u32>,
+    del_lengths: Vec<u32>,
+    del_weights: Vec<u32>,
 }
 
 impl IndelModel {
     pub fn new() -> Self {
         // Default Indel model from the original NEAT, scaled by the lowest value and rounded.
         let insertion_probability = 0.6;
-        let ins_lengths: Vec<usize> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
-        let ins_weights: Vec<usize> = vec![10, 10, 20, 5, 5, 5, 5, 5, 5, 5];
-        let del_lengths: Vec<usize> = vec![1, 2, 3, 4, 5];
-        let del_weights: Vec<usize> = vec![3, 2, 2, 2, 1];
+        let ins_lengths: Vec<u32> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+        let ins_weights: Vec<u32> = vec![10, 10, 20, 5, 5, 5, 5, 5, 5, 5];
+        let del_lengths: Vec<u32> = vec![1, 2, 3, 4, 5];
+        let del_weights: Vec<u32> = vec![3, 2, 2, 2, 1];
 
         IndelModel {
             insertion_probability,
@@ -40,36 +38,27 @@ impl IndelModel {
         }
     }
 
-    pub fn new_insert_length(&self, mut rng: &mut ChaCha20Rng) -> usize {
+    pub fn new_insert_length(&self, mut rng: &mut Rng) -> u32 {
         // This function uses the insertion weights to choose an insertion length from the list.
-        let dist = WeightedIndex::new(&self.ins_weights).unwrap();
+        let dist = DiscreteDistribution::new(&self.ins_weights);
         self.ins_lengths[dist.sample(&mut rng)]
     }
 
-    pub fn new_delete_length(&self, mut rng: &mut ChaCha20Rng) -> usize {
+    pub fn new_delete_length(&self, mut rng: &mut Rng) -> u32 {
         // This function is the same as above, but uses the deletion lengths instead.
-        let dist = WeightedIndex::new(&self.del_weights).unwrap();
+        let dist = DiscreteDistribution::new(&self.del_weights);
         self.del_lengths[dist.sample(&mut rng)]
     }
 }
 
-pub fn generate_random_insertion(length: usize, rng: &mut ChaCha20Rng) -> Vec<Nuc> {
+pub fn generate_random_insertion(length: u32, rng: &mut Rng) -> Vec<u8> {
     // We could refine this with a nucleotide bias matrix. Maybe it would make a difference,
     // but probably not, since the presence of the insertion is more important than it's content,
     // for this use. If there was a call for it, maybe.
     let mut insertion_vec = Vec::new();
     for _ in 0..length {
-        insertion_vec.push(
-            // gen_range is equally weighted, which works fine for now.
-            match rng.gen_range(0..=3) {
-                0 => Nuc::A,
-                1 => Nuc::C,
-                2 => Nuc::G,
-                3 => Nuc::T,
-                // Since our range is `0..=3`, this is unreachable, but Rust needs it.
-                _ => panic!("gen_range generated an invalid number."),
-            }
-        )
+        // since our range is restricted, we are covered
+        insertion_vec.push(rng.range_i64(0, 4).unwrap() as u8)
     }
     insertion_vec
 }
@@ -77,8 +66,6 @@ pub fn generate_random_insertion(length: usize, rng: &mut ChaCha20Rng) -> Vec<Nu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use structs::nucleotides::Nuc::*;
-    use rand_core::SeedableRng;
 
     #[test]
     fn test_indel_model() {
@@ -89,26 +76,32 @@ mod tests {
             del_lengths: vec![3, 4],
             del_weights: vec![1, 1000],
         };
-        let mut rng = ChaCha20Rng::seed_from_u64(0);
-        let length = indel_model.generate_new_indel_length(&mut rng);
+        let mut rng = Rng::new_from_seed(vec![
+            "Hello".to_string(),
+            "Cruel".to_string(),
+            "World".to_string(),
+        ]);
+        let length = indel_model.new_insert_length(&mut rng);
         if length > 0 {
             assert!((length == 1) || (length == 2));
-        } else {
-            assert!((length == -3) || (length == -4));
         }
     }
 
     #[test]
     fn test_generate_insertion () {
-        let mut rng = ChaCha20Rng::seed_from_u64(0);
+        let mut rng = Rng::new_from_seed(vec![
+            "Hello".to_string(),
+            "Cruel".to_string(),
+            "World".to_string(),
+        ]);
 
         let insertion = generate_random_insertion(10, &mut rng);
         assert_eq!(insertion.len(), 10);
-        assert!(!insertion.contains(&N(1)));
+        assert!(!insertion.contains(&4));
 
         let insertion2 = generate_random_insertion(12, &mut rng);
         assert_eq!(insertion2.len(), 12);
-        assert!(!insertion2.contains(&N(1)));
+        assert!(!insertion2.contains(&4));
 
         println!("{:?} and {:?}", insertion, insertion2);
     }

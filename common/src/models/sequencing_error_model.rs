@@ -1,13 +1,10 @@
 use log::debug;
-use rand::distributions::WeightedIndex;
-use rand::prelude::Distribution;
 
-use structs::nucleotides::Nuc;
 use structs::sequencing_errors::SequencingError;
 use structs::sequencing_errors::{IndelErr, SnpErr};
 use structs::transition_matrix::TransitionMatrix;
-use rand_chacha::ChaCha20Rng;
 use structs::sequencing_errors::SequencingError::{IndelError, SNPError};
+use simple_rng::{Rng, DiscreteDistribution};
 
 #[derive(Clone)]
 pub struct SequencingErrorModel {
@@ -52,53 +49,56 @@ impl SequencingErrorModel {
             transition_matrix: default_transition_matrix,
         }
     }
-    pub fn generate_snp_error(&self, base: Nuc, rng: &mut ChaCha20Rng) -> SequencingError {
+    pub fn generate_snp_error(&self, base: u8, rng: &mut Rng) -> SequencingError {
         // This is a basic mutation function for starting us off
         // Pick the weights list for the base that was input
         // We will use this simple model for sequence errors ultimately.
         debug!("Generating basic SNP variant");
-        let weights: &Vec<usize> = match base {
-            Nuc::A => &self.transition_matrix.a_weights,
-            Nuc::C => &self.transition_matrix.c_weights,
-            Nuc::G => &self.transition_matrix.g_weights,
-            Nuc::T => &self.transition_matrix.t_weights,
-            // return the N value for N with no further computation.
+        let weights: &Vec<u32> = match base {
+            0 => &self.transition_matrix.a_weights,
+            1 => &self.transition_matrix.c_weights,
+            2 => &self.transition_matrix.g_weights,
+            3 => &self.transition_matrix.t_weights,
             _ => panic!("Ve should not be trying to mutated unknown bases!")
         };
         // Now we create a distribution from the weights and sample our choices.
-        let dist = WeightedIndex::new(weights).unwrap();
+        let dist = DiscreteDistribution::new(weights);
         match dist.sample(rng) {
-            0 => SNPError(SnpErr::new(Nuc::A)),
-            1 => SNPError(SnpErr::new(Nuc::C)),
-            2 => SNPError(SnpErr::new(Nuc::G)),
-            3 => SNPError(SnpErr::new(Nuc::T)),
+            0 => SNPError(SnpErr::new(0)),
+            1 => SNPError(SnpErr::new(1)),
+            2 => SNPError(SnpErr::new(2)),
+            3 => SNPError(SnpErr::new(3)),
             // technically, the following part isn't reachable because of how we have constructed
             // things. Our weights vector has a max length of 4, but Rust doesn't know that.
             _ => panic!("Invalid index selected!"),
         }
     }
 
-    pub fn generate_indel_error(&self, rng: &mut ChaCha20Rng) -> SequencingError {
-        let dist = WeightedIndex::new(&self.length_weights).unwrap();
+    pub fn generate_indel_error(&self, rng: &mut Rng) -> SequencingError {
+        let dist = DiscreteDistribution::new(&Vec::from(self.length_weights));
         let length = self.lengths[dist.sample(rng)];
-        return if length > 0 {
+        if length > 0 {
             // insertion
             let mut sequence = Vec::new();
-            let dist = WeightedIndex::new(&self.insertion_bias).unwrap();
+            let dist = DiscreteDistribution::new(&Vec::from(self.insertion_bias));
             for _ in 0..length {
-                sequence.push(match dist.sample(rng) {
-                    0 => Nuc::A,
-                    1 => Nuc::C,
-                    2 => Nuc::G,
-                    3 => Nuc::T,
-                    _ => panic!("Invalid index selected"),
-                })
+                sequence.push(dist.sample(rng) as u8)
             }
             // Insertion of sequence
             IndelError(IndelErr::new(length, Some(sequence)))
         } else {
             // Deletion of length bases
             IndelError(IndelErr::new(length, None))
-        };
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_sequencing_error_model() {
+        println!("TODO");
+        assert_eq!(1, 1)
     }
 }

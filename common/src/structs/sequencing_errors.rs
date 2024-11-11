@@ -1,16 +1,14 @@
-use crate::structs::nucleotides::Nuc;
-
 #[derive(PartialEq, Debug)]
 pub struct SnpErr {
-    nucleotide: Nuc,
+    nucleotide: u8,
 }
 
 impl SnpErr {
-    pub fn new(nucleotide: Nuc) -> Self {
+    pub fn new(nucleotide: u8) -> Self {
         SnpErr { nucleotide }
     }
 
-    pub fn retrieve(&self) -> Nuc {
+    pub fn retrieve(&self) -> u8 {
         self.nucleotide
     }
 }
@@ -20,11 +18,11 @@ pub struct IndelErr {
     // Both insertions and deletions have a length (positive for insertions, negative for deletions)
     length: i8,
     // Only insertions need to return the vector of added nucleotides.
-    sequence: Option<Vec<Nuc>>,
+    sequence: Option<Vec<u8>>,
 }
 
 impl IndelErr {
-    pub fn new(length: i8, sequence: Option<Vec<Nuc>>) -> Self {
+    pub fn new(length: i8, sequence: Option<Vec<u8>>) -> Self {
         IndelErr { length, sequence }
     }
 
@@ -32,7 +30,7 @@ impl IndelErr {
         self.length
     }
 
-    pub fn sequence(&self) -> &Option<Vec<Nuc>> {
+    pub fn sequence(&self) -> &Option<Vec<u8>> {
         &self.sequence
     }
 }
@@ -52,11 +50,10 @@ pub enum SequencingErrorType {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use structs::nucleotides::Nuc::*;
 
     #[test]
     fn test_snp() {
-        let nucleotide = A;
+        let nucleotide = 0;
         let snp = SnpErr { nucleotide };
         assert_eq!(snp, SnpErr::new(nucleotide));
         assert_eq!(snp.retrieve(), nucleotide);
@@ -65,7 +62,7 @@ mod tests {
     #[test]
     fn test_insertion() {
         let length = 16;
-        let sequence = vec![A, A, A, A, A, A, A, A, G, T, A, C, G, T, A, A];
+        let sequence = vec![0, 0, 0, 0, 0, 0, 0, 0, 2, 3, 0, 1, 2, 3, 0, 0];
         let insertion = IndelErr {
             length,
             sequence: Some(sequence.clone()),

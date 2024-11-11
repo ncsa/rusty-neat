@@ -68,18 +68,18 @@ mod tests {
 
     #[test]
     fn test_apply_variants() {
-        let raw_sequence = [A, C, G, T, T, A, G, C];
+        let raw_sequence = [Ada, Cyt, Gua, Thy, Thy, Ada, Gua, Cyt];
         let relevant_variants = HashMap::from([
             (&1, &Variant::new(
                 VariantType::SNP,
-                &vec![C],
-                &vec![T],
+                &vec![Cyt],
+                &vec![Thy],
                 vec![1,0],
             )),
             (&3, &Variant::new(
                 VariantType::Indel,
-                &vec![T, T],
-                &vec![T],
+                &vec![Thy, Thy],
+                &vec![Thy],
                 vec![0,1],
             ))
         ]);

@@ -1,14 +1,14 @@
 // Various file tools needed throughout the code.
 use log::warn;
 use std::fs::File;
-use std::io::{BufRead, Error};
+use std::io::{BufReader, BufRead, Error, Lines};
 use std::path::Path;
 use std::{env, fs, io};
 
-pub fn read_lines(filename: &str) -> io::Result<io::Lines<io::BufReader<File>>> {
+pub fn read_lines(filename: &str) -> io::Result<Lines<BufReader<File>>> {
     // This creates a buffer to read lines
     let file = File::open(filename)?;
-    Ok(io::BufReader::new(file).lines())
+    Ok(BufReader::new(file).lines())
 }
 
 pub fn open_file(mut filename: &mut str, overwrite_file: bool) -> Result<File, Error> {

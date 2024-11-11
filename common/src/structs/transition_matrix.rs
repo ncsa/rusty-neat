@@ -7,10 +7,10 @@ pub struct TransitionMatrix {
     // The model is a 4x4 matrix with zeros along the diagonal because, e.g., A can't "mutate" to A.
     // The model is usually symmetric, but technically, the probability for A -> G could be
     // different from the probability for G -> A, but in practice, this seems to not be the case.
-    pub(crate) a_weights: Vec<usize>,
-    pub(crate) c_weights: Vec<usize>,
-    pub(crate) g_weights: Vec<usize>,
-    pub(crate) t_weights: Vec<usize>,
+    pub(crate) a_weights: Vec<u32>,
+    pub(crate) c_weights: Vec<u32>,
+    pub(crate) g_weights: Vec<u32>,
+    pub(crate) t_weights: Vec<u32>,
 }
 
 impl TransitionMatrix {
@@ -24,7 +24,7 @@ impl TransitionMatrix {
         }
     }
 
-    pub fn from(weights: Vec<Vec<usize>>) -> Self {
+    pub fn from(weights: Vec<Vec<u32>>) -> Self {
         // Supply a vector of 4 vectors that define the mutation chance
         // from the given base to the other 4 bases.
 

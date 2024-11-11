@@ -57,26 +57,26 @@ mod tests {
 
     #[test]
     fn test_apply_mutations() {
-        let seq1: Vec<Nuc> = vec![A, A, C, T, T, G, G, C, A, T, C, C, C];
+        let seq1: Vec<Nuc> = vec![Ada, Ada, Cyt, Thy, Thy, Gua, Gua, Cyt, Ada, Thy, Cyt, Cyt, Cyt];
         let mutations = HashMap::from([
             (3, Variant::new(
-                VariantType::SNP, &vec![T], &vec![G], vec![0, 1]
+                VariantType::SNP, &vec![Thy], &vec![Gua], vec![0, 1]
             )),
             (5, Variant::new(
-                VariantType::Indel, &vec![G, G, C], &vec![G], vec![1, 1]
+                VariantType::Indel, &vec![Gua, Gua, Cyt], &vec![Gua], vec![1, 1]
             )),
         ]);
         let mutant = apply_mutations(&seq1, &mutations).unwrap();
         assert_eq!(mutant.len(), seq1.len() - 2);
-        assert_eq!(mutant[3], G);
-        assert_eq!(mutant[6], A);
+        assert_eq!(mutant[3], Gua);
+        assert_eq!(mutant[6], Ada);
     }
 
     #[test]
     fn test_output_correct() {
         let mut fasta_map = HashMap::from([
-            ("chr1".to_string(), vec![A, C, C, G, T, G, G, C, A, G, A]),
-            ("chr2".to_string(), vec![T, T, A, G, C, C, T, T, A, G, G, T, T, T, A])
+            ("chr1".to_string(), vec![Ada, Cyt, Cyt, Gua, Thy, Gua, Gua, Cyt, Ada, Gua, Ada]),
+            ("chr2".to_string(), vec![Thy, Thy, Ada, Gua, Cyt, Cyt, Thy, Thy, Ada, Gua, Gua, Thy, Thy, Thy, Ada])
         ]);
         let chrom_order = VecDeque::from(
             ["chr1".to_string(), "chr2".to_string()]
@@ -84,24 +84,24 @@ mod tests {
         let all_variants = HashMap::from([
             ("chr1".to_string(), HashMap::from([
                 (3, Variant::new(
-                    VariantType::SNP, &vec![G], &vec![A], vec![0, 1]
+                    VariantType::SNP, &vec![Gua], &vec![Ada], vec![0, 1]
                 )),
                 (5, Variant::new(
-                    VariantType::Indel, &vec![G, G, C], &vec![G], vec![1, 1]
+                    VariantType::Indel, &vec![Gua, Gua, Cyt], &vec![Gua], vec![1, 1]
                 ))
             ])),
             ("chr2".to_string(), HashMap::from([
                  (7, Variant::new(
-                     VariantType::SNP, &vec![T], &vec![G], vec![0, 1]
+                     VariantType::SNP, &vec![Thy], &vec![Gua], vec![0, 1]
                  )),
                  (11, Variant::new(
-                     VariantType::Indel, &vec![T], &vec![T, T], vec![1, 1]
+                     VariantType::Indel, &vec![Thy], &vec![Thy, Thy], vec![1, 1]
                  ))
             ])),
         ]);
         let output_map = HashMap::from([
-            ("chr1", vec![A, C, C, A, T, G, A, G, A]),
-            ("chr2", vec![T, T, A, G, C, C, T, G, A, G, G, T, T, T, T, A])
+            ("chr1", vec![Ada, Cyt, Cyt, Ada, Thy, Gua, Ada, Gua, Ada]),
+            ("chr2", vec![Thy, Thy, Ada, Gua, Cyt, Cyt, Thy, Gua, Ada, Gua, Gua, Thy, Thy, Thy, Thy, Ada])
         ]);
         for contig in chrom_order {
             let contig_variants = all_variants.get(&contig).unwrap().clone();

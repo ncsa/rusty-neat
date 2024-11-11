@@ -1,4 +1,3 @@
-use structs::nucleotides::Nuc;
 use self::VariantType::*;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
@@ -21,9 +20,9 @@ pub struct Variant {
     // the location, in reference coordinates, of the start of this variant
     pub location: usize,
     // The reference allele of interest. This is either one base or several bases for a deletion.
-    pub reference: Vec<Nuc>,
+    pub reference: Vec<u8>,
     // The alternate allele of interest. This is either one base or several bases for an insertion.
-    pub alternate: Vec<Nuc>,
+    pub alternate: Vec<u8>,
     // the genotype will tell us if it is heterozygous or homozygous.
     pub genotype: Vec<u8>,
 }
@@ -32,8 +31,8 @@ impl Variant {
     pub fn new(
         variant_type: VariantType,
         location: usize,
-        reference: &Vec<Nuc>,
-        alternate: &Vec<Nuc>,
+        reference: &Vec<u8>,
+        alternate: &Vec<u8>,
         genotype: Vec<u8>,
     ) -> Self {
         match variant_type {
@@ -60,8 +59,7 @@ impl Variant {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use structs::nucleotides::Nuc::*;
-    use structs::variants::VariantType::*;
+    use structs::variants::VariantType::{SNP, Insertion, Deletion};
 
     #[test]
     fn test_variant_creation() {
@@ -69,8 +67,8 @@ mod tests {
             // Not actually a valid variant, but just testing the constructor
             variant_type: SNP,
             location: 222,
-            reference: vec![A, C, T, G],
-            alternate: vec![A],
+            reference: vec![0, 1, 3, 2],
+            alternate: vec![0],
             genotype: vec![1, 1, 1],
         };
         assert_eq!(variant.variant_type, SNP);
@@ -83,8 +81,8 @@ mod tests {
         let variant = Variant::new(
             Insertion,
             10,
-            &vec![A],
-            &vec![A, C, T, G],
+            &vec![0],
+            &vec![0, 1, 3, 2],
             vec![0, 1],
         );
         assert!(!variant.is_homozygous())
@@ -95,8 +93,8 @@ mod tests {
         let variant = Variant::new(
             Deletion,
             22,
-            &vec![A, C, T, G],
-            &vec![A],
+            &vec![0, 1, 3, 2],
+            &vec![0],
             vec![0, 1],
         );
         assert!(!variant.is_homozygous())
@@ -109,8 +107,8 @@ mod tests {
             // with new it should catch this error
             SNP,
             22,
-            &vec![A, C, T, G],
-            &vec![A],
+            &vec![0, 1, 3, 2],
+            &vec![0],
             vec![1, 1, 1],
         );
     }

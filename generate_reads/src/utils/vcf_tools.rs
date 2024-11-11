@@ -147,15 +147,15 @@ mod tests {
                 HashMap::from([
                     (3, Variant::new(
                         VariantType::SNP,
-                        &vec![A],
-                        &vec![C],
+                        &vec![Ada],
+                        &vec![Cyt],
                         vec![1, 0]
                     )
                     ),
                     (7, Variant::new(
                         VariantType::SNP,
-                        &vec![T],
-                        &vec![G],
+                        &vec![Thy],
+                        &vec![Gua],
                         vec![1, 1])
                     )
                 ])

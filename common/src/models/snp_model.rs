@@ -1,9 +1,7 @@
 use std::collections::HashMap;
 use std::slice::Iter;
-use rand::distributions::{Distribution, WeightedIndex};
-use structs::nucleotides::Nuc;
+use simple_rng::{DiscreteDistribution, Rng};
 use structs::transition_matrix::TransitionMatrix;
-use rand_chacha::ChaCha20Rng;
 use self::SnpFrame::*;
 // The following section are the models for each type of variant. In order to create the variant,
 // we need to model its statistical property. NEAT included two types of variants: SNPs and Indels.
@@ -16,22 +14,10 @@ enum SnpFrame {
     // These SNP frames represent the 16 different trinculeotide contexts, with N representing
     // any of the 4 other bases. So each SnpFrame represents 4 trinucleotide combinations, for a
     // total of 64 possible trinucleotide combinations.
-    ANA,
-    ANC,
-    ANG,
-    ANT,
-    CNA,
-    CNC,
-    CNG,
-    CNT,
-    GNA,
-    GNC,
-    GNG,
-    GNT,
-    TNA,
-    TNC,
-    TNG,
-    TNT,
+    ANA, ANC, ANG, ANT,
+    CNA, CNC, CNG, CNT,
+    GNA, GNC, GNG, GNT,
+    TNA, TNC, TNG, TNT,
 }
 
 impl SnpFrame {
@@ -68,52 +54,52 @@ impl SnpModel {
             trinuc_matrix,
         }
     }
-    fn generate_bias(&self, input_sequence: &Vec<Nuc>) -> Vec<usize> {
+    fn generate_bias(&self, input_sequence: &Vec<u8>) -> Vec<usize> {
         todo!()
         // We need some way to use this model to bias positions of SNPs, but it's not clear yet how.
     }
 
     pub fn generate_snp(
         &self,
-        trinuc_reference: &[Nuc],
-        rng: &mut ChaCha20Rng
-    ) -> Nuc {
+        trinuc_reference: &[u8],
+        rng: &mut Rng
+    ) -> u8 {
         // We shouldn't have N's here. Basically, this matches the correct trinuc from the enum,
         // then uses that as the index for the trinuc matrix of interest.
         let matrix = self.trinuc_matrix.get(&match trinuc_reference[0] {
-            Nuc::A => {
+            0 => {
                 match trinuc_reference[2] {
-                    Nuc::A => ANA,
-                    Nuc::C => ANC,
-                    Nuc::G => ANG,
-                    Nuc::T => ANT,
+                    0 => ANA,
+                    1 => ANC,
+                    2 => ANG,
+                    3 => ANT,
                     _ => { panic!("Trying to use trinucleotide bias on an unknown base (N).") }
                 }
             },
-            Nuc::C => {
+            1 => {
                 match trinuc_reference[2] {
-                    Nuc::A => CNA,
-                    Nuc::C => CNC,
-                    Nuc::G => CNG,
-                    Nuc::T => CNT,
+                    0 => CNA,
+                    1 => CNC,
+                    2 => CNG,
+                    3 => CNT,
                     _ => { panic!("Trying to use trinucleotide bias on an unknown base (N).") }
                 }
             },
-            Nuc::G => {
+            2 => {
                 match trinuc_reference[2] {
-                    Nuc::A => GNA,
-                    Nuc::C => GNC,
-                    Nuc::G => GNG,
-                    Nuc::T => GNT,
+                    0 => GNA,
+                    1 => GNC,
+                    2 => GNG,
+                    3 => GNT,
                     _ => { panic!("Trying to use trinucleotide bias on an unknown base (N).") }
                 }
             },
-            Nuc::T => {
+            3 => {
                 match trinuc_reference[2] {
-                    Nuc::A => TNA,
-                    Nuc::C => TNC,
-                    Nuc::G => TNG,
-                    Nuc::T => TNT,
+                    0 => TNA,
+                    1 => TNC,
+                    2 => TNG,
+                    3 => TNT,
                     _ => { panic!("Trying to use trinucleotide bias on an unknown base (N).") }
                 }
             },
@@ -121,20 +107,24 @@ impl SnpModel {
         }).unwrap();
 
         let weights = match trinuc_reference[1] {
-            Nuc::A => matrix.a_weights.clone(),
-            Nuc::C => matrix.c_weights.clone(),
-            Nuc::G => matrix.g_weights.clone(),
-            Nuc::T => matrix.t_weights.clone(),
+            0 => matrix.a_weights.clone(),
+            1 => matrix.c_weights.clone(),
+            2 => matrix.g_weights.clone(),
+            3 => matrix.t_weights.clone(),
             _ => { panic!("Trying to use trinucleotide bias on an unknown base (N).") },
         };
 
-        let dist = WeightedIndex::new(weights).unwrap();
-        match dist.sample(rng) {
-            0 => Nuc::A,
-            1 => Nuc::C,
-            2 => Nuc::G,
-            3 => Nuc::T,
-            _ => { panic!("Invalid nucleotide reference.") },
-        }
+        let dist = DiscreteDistribution::new(&weights);
+        dist.sample(rng) as u8
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_snp_model() {
+        println!("TODO");
+        assert_eq!(1, 1)
     }
 }

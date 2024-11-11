@@ -188,7 +188,7 @@ mod tests {
 
     #[test]
     fn test_generate_reads_single() {
-        let mutated_sequence = vec![A, A, C, A, T, T, T, T, A, A, A, A, A, G, G, G, N(4)];
+        let mutated_sequence = vec![Ada, Ada, Cyt, Ada, Thy, Thy, Thy, Thy, Ada, Ada, Ada, Ada, Ada, Gua, Gua, Gua, Unk(4)];
         let read_length = 10;
         let coverage = 1;
         let paired_ended = false;
@@ -211,7 +211,7 @@ mod tests {
 
     #[test]
     fn test_seed_rng() {
-        let mutated_sequence = vec![A, A, C, A, T, T, T, T, A, A, A, A, A, G, G, G, N(4)];
+        let mutated_sequence = vec![Ada, Ada, Cyt, Ada, Thy, Thy, Thy, Thy, Ada, Ada, Ada, Ada, Ada, Gua, Gua, Gua, Unk(4)];
         let read_length = 10;
         let coverage = 1;
         let paired_ended = false;
@@ -245,7 +245,7 @@ mod tests {
 
     #[test]
     fn test_generate_reads_paired() {
-        let mutated_sequence: Vec<Nuc> = std::iter::repeat(A).take(100_000).collect();
+        let mutated_sequence: Vec<Nuc> = std::iter::repeat(Ada).take(100_000).collect();
         let read_length = 100;
         let coverage = 1;
         let paired_ended = true;

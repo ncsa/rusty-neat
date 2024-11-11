@@ -1,4 +1,5 @@
-reference: test_data/references/H1N1.fa
+reference: test_data/ecoli.fa
+#reference: test_data/references/H1N1.fa
 read_len: 10
 coverage: 3
 ploidy: 9

@@ -45,7 +45,7 @@ mod tests {
 
     #[test]
     fn test_check_parent() {
-        let filename = "data/H1N1.fa";
+        let filename = "test_data/H1N1.fa";
         check_parent(filename).unwrap();
     }
 

@@ -1,7 +1,7 @@
 use std::fs;
 use serde::{Deserialize, Serialize};
 use serde_json::*;
-use utils::quality_scores::QualityScoreModel;
+use super::quality_scores::QualityScoreModel;
 
 #[derive(Serialize, Deserialize)]
 pub struct QualityRaw {
@@ -11,9 +11,9 @@ pub struct QualityRaw {
 
 impl QualityRaw {
     fn convert_to_weights(&self) -> QualityScoreModel {
-        let mut seed_weights: Vec<usize> = Vec::new();
+        let mut seed_weights: Vec<u32> = Vec::new();
         for item in &self.seed_stats {
-            let weight = (item * 10e5).round() as usize;
+            let weight = ((item * 10e5).round() as u64 % (u32::MAX as u64)) as u32;
             seed_weights.push(weight);
         }
         let mut weights_from_one = Vec::new();
@@ -22,7 +22,7 @@ impl QualityRaw {
             for j in 0..self.stats_from_one[i].len() {
                 let mut score_arrays = Vec::new();
                 for k in 0..self.stats_from_one[i][j].len() {
-                    let weight = (self.stats_from_one[i][j][k] * 10e5).round() as usize;
+                    let weight = (self.stats_from_one[i][j][k] * 10e5).round() as u32;
                     score_arrays.push(weight);
                 }
                 position_arrays.push(score_arrays.clone())
@@ -30,7 +30,7 @@ impl QualityRaw {
             weights_from_one.push(position_arrays.clone())
         }
         let assumed_read_length = seed_weights.len();
-        let quality_score_options: Vec<usize> = (0..42).collect();
+        let quality_score_options: Vec<u32> = (0..42).collect();
         let binned_scores = false;
 
         QualityScoreModel {

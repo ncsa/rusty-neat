@@ -7,9 +7,7 @@
 // This is intended to make it easier to store them. We thought about using the u8 representation
 // of the character as built into Rust, but we'd then have to figure out the translations and keep
 // track of extra numbers. So this is intended to simplify everything
-use rand::distributions::WeightedIndex;
-use rand::prelude::Distribution;
-use utils::neat_rng::NeatRng;
+use simple_rng::{DiscreteDistribution, Rng};
 
 pub fn base_to_u8(char_of_interest: char) -> u8 {
     // This defines the relationship between the 4 possible nucleotides in DNA and
@@ -45,10 +43,10 @@ pub struct NucModel {
     //
     // By definition, the model is a 4x4 matrix with zeros along the diagonal
     // because, e.g., A can't "mutate" to A.
-    a: Vec<usize>,
-    c: Vec<usize>,
-    g: Vec<usize>,
-    t: Vec<usize>,
+    a: Vec<u32>,
+    c: Vec<u32>,
+    g: Vec<u32>,
+    t: Vec<u32>,
 }
 
 impl NucModel {
@@ -64,7 +62,7 @@ impl NucModel {
 
     #[allow(dead_code)]
     // todo, once we have numbers we can implement this.
-    pub fn from(weights: Vec<Vec<usize>>) -> Self {
+    pub fn from(weights: Vec<Vec<u32>>) -> Self {
         // Supply a vector of 4 vectors that define the mutation chance
         // from the given base to the other 4 bases.
 
@@ -86,12 +84,12 @@ impl NucModel {
         }
     }
 
-    pub fn choose_new_nuc(&self, base: u8, mut rng: &mut NeatRng) -> u8 {
+    pub fn choose_new_nuc(&self, base: u8, rng: &mut Rng) -> u8 {
 
         // the canonical choices for DNA, as defined above
         let choices: [u8; 4] = [0, 1, 2, 3];
         // Pick the weights list for the base that was input
-        let weights: Vec<usize> = match base {
+        let weights: Vec<u32> = match base {
             0 => self.a.clone(),
             1 => self.c.clone(),
             2 => self.g.clone(),
@@ -100,14 +98,13 @@ impl NucModel {
             _ => { return 4; },
         };
         // Now we create a distribution from the weights and sample our choices.
-        let dist = WeightedIndex::new(weights).unwrap();
-        choices[dist.sample(&mut rng)]
+        let dist = DiscreteDistribution::new(&weights, false);
+        choices[dist.sample(rng)]
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use rand_core::SeedableRng;
     use super::*;
 
     #[test]
@@ -136,8 +133,14 @@ mod tests {
         let c_weights = vec![20, 0, 1, 1];
         let g_weights = vec![1, 1, 0, 20];
         let t_weights = vec![20, 1, 20, 0];
-        let mut rng = NeatRng::seed_from_u64(0);
-        let test_model = NucModel::from(vec![a_weights, c_weights, g_weights, t_weights]);
+        let mut rng = Rng::new_from_seed(vec![
+            "Hello".to_string(),
+            "Cruel".to_string(),
+            "World".to_string(),
+        ]);
+        let test_model = NucModel::from(
+            vec![a_weights, c_weights, g_weights, t_weights]
+        );
         // It actually mutates the base
         assert_ne!(test_model.choose_new_nuc(0, &mut rng), 0);
         assert_ne!(test_model.choose_new_nuc(1, &mut rng), 1);

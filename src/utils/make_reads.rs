@@ -5,16 +5,14 @@
 // the mutated fasta file. These will either be read-length fragments or fragment model length
 // fragments.
 use std::collections::{HashSet, VecDeque};
-use rand::RngCore;
-use rand::seq::SliceRandom;
-use rand_distr::{Normal, Distribution};
-use utils::neat_rng::NeatRng;
+use simple_rng::{NormalDistribution, Rng};
+
 fn cover_dataset(
     span_length: usize,
     read_length: usize,
     mut fragment_pool: Vec<usize>,
     coverage: usize,
-    mut rng: &mut NeatRng,
+    rng: &mut Rng,
 ) -> Vec<(usize, usize)> {
     // Takes:
     // span_length: Total number of bases in the sequence
@@ -41,7 +39,7 @@ fn cover_dataset(
         cover_fragment_pool = VecDeque::from([read_length]);
     } else {
         // shuffle the fragment pool
-        fragment_pool.shuffle(&mut rng);
+        rng.shuffle_in_place(&mut fragment_pool);
         cover_fragment_pool = VecDeque::from(fragment_pool)
     }
     // Gap size to keep track of how many uncovered bases we have per layer, to help decide if we
@@ -79,7 +77,7 @@ fn cover_dataset(
             gap_size += fragment_length - (read_length * 2)
         };
         // Picks a number between zero and a quarter of a read length
-        let wildcard: usize = (rng.next_u32() % (read_length/4) as u32) as usize;
+        let wildcard: usize = (rng.rand_u32() % (read_length/4) as u32) as usize;
         // adds to the start to give it some spice
         start += temp_end + wildcard;
         // sanity check. If we are already out of bounds, take the modulo
@@ -103,7 +101,7 @@ pub fn generate_reads(
     paired_ended: bool,
     mean: Option<f64>,
     st_dev: Option<f64>,
-    mut rng: &mut NeatRng,
+    mut rng: &mut Rng,
 ) -> Result<Box<HashSet<Vec<u8>>>, &'static str>{
     // Takes:
     // mutated_sequence: a vector of u8's representing the mutated sequence.
@@ -119,7 +117,7 @@ pub fn generate_reads(
     let mut fragment_pool: Vec<usize> = Vec::new();
     if paired_ended {
         let num_frags = (mutated_sequence.len() / read_length) * (coverage * 2);
-        let fragment_distribution = Normal::new(mean.unwrap(), st_dev.unwrap()).unwrap();
+        let fragment_distribution = NormalDistribution::new(mean.unwrap(), st_dev.unwrap());
         // add fragments to the fragment pool
         for _ in 0..num_frags {
             let frag = fragment_distribution.sample(&mut rng).round() as usize;
@@ -153,8 +151,7 @@ pub fn generate_reads(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::SeedableRng;
-    use utils::neat_rng::NeatRng;
+    use simple_rng::Rng;
 
     #[test]
     fn test_cover_dataset() {
@@ -162,7 +159,11 @@ mod tests {
         let read_length = 10;
         let fragment_pool = vec![10];
         let coverage = 1;
-        let mut rng = NeatRng::seed_from_u64(0);
+        let mut rng = Rng::new_from_seed(vec![
+            "Hello".to_string(),
+            "Cruel".to_string(),
+            "World".to_string(),
+        ]);
 
         let cover = cover_dataset(
             span_length,
@@ -180,7 +181,11 @@ mod tests {
         let read_length = 100;
         let fragment_pool = vec![300];
         let coverage = 1;
-        let mut rng = NeatRng::seed_from_u64(0);
+        let mut rng = Rng::new_from_seed(vec![
+            "Hello".to_string(),
+            "Cruel".to_string(),
+            "World".to_string(),
+        ]);
 
         let cover = cover_dataset(
             span_length,
@@ -200,7 +205,11 @@ mod tests {
         let paired_ended = false;
         let mean = None;
         let st_dev = None;
-        let mut rng = NeatRng::seed_from_u64(0);
+        let mut rng = Rng::new_from_seed(vec![
+            "Hello".to_string(),
+            "Cruel".to_string(),
+            "World".to_string(),
+        ]);
         let reads = generate_reads(
             &mutated_sequence,
             &read_length,
@@ -222,7 +231,11 @@ mod tests {
         let paired_ended = false;
         let mean = None;
         let st_dev = None;
-        let mut rng = NeatRng::seed_from_u64(0);
+        let mut rng = Rng::new_from_seed(vec![
+            "Hello".to_string(),
+            "Cruel".to_string(),
+            "World".to_string(),
+        ]);
         let run1 = generate_reads(
             &mutated_sequence,
             &read_length,
@@ -254,7 +267,11 @@ mod tests {
         let paired_ended = true;
         let mean = Some(200.0);
         let st_dev = Some(1.0);
-        let mut rng = NeatRng::seed_from_u64(0);
+        let mut rng = Rng::new_from_seed(vec![
+            "Hello".to_string(),
+            "Cruel".to_string(),
+            "World".to_string(),
+        ]);
         let reads = generate_reads(
             &mutated_sequence,
             &read_length,

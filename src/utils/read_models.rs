@@ -1,4 +1,4 @@
-use utils::quality_scores::QualityScoreModel;
+use super::quality_scores::QualityScoreModel;
 use std::fs;
 use serde_json;
 pub fn read_quality_score_model_json(filename: &str) -> QualityScoreModel {

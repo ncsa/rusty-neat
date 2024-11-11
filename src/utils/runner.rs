@@ -1,16 +1,15 @@
 use std::collections::HashSet;
 use log::info;
-use rand::prelude::SliceRandom;
-use utils::config::RunConfiguration;
-use utils::fasta_tools::{read_fasta, write_fasta};
-use utils::fastq_tools::write_fastq;
-use utils::make_reads::generate_reads;
-use utils::mutate::mutate_fasta;
-use utils::neat_rng::NeatRng;
-use utils::vcf_tools::write_vcf;
-use utils::read_models::read_quality_score_model_json;
+use simple_rng::Rng;
+use super::config::RunConfiguration;
+use super::fasta_tools::{read_fasta, write_fasta};
+use super::fastq_tools::write_fastq;
+use super::make_reads::generate_reads;
+use super::mutate::mutate_fasta;
+use super::vcf_tools::write_vcf;
+use super::read_models::read_quality_score_model_json;
 
-pub fn run_neat(config: Box<RunConfiguration>, mut rng: &mut NeatRng) -> Result<(), &'static str>{
+pub fn run_neat(config: Box<RunConfiguration>, mut rng: &mut Rng) -> Result<(), &'static str>{
     // Create the prefix of the files to write
     let output_file = format!("{}/{}", config.output_dir.display(), config.output_prefix);
 
@@ -76,8 +75,9 @@ pub fn run_neat(config: Box<RunConfiguration>, mut rng: &mut NeatRng) -> Result<
 
     if config.produce_fastq {
         info!("Shuffling output fastq data");
-        let mut outsets: Box<Vec<&Vec<u8>>> = Box::new(read_sets.iter().collect());
-        outsets.shuffle(&mut rng);
+        let outsets: Box<Vec<&Vec<u8>>> = Box::new(read_sets.iter().collect());
+        let mut outsets_order: Vec<usize> = (0..outsets.len()).collect();
+        rng.shuffle_in_place(&mut outsets_order);
 
         info!("Writing fastq");
         write_fastq(
@@ -85,6 +85,7 @@ pub fn run_neat(config: Box<RunConfiguration>, mut rng: &mut NeatRng) -> Result<
             config.overwrite_output,
             config.paired_ended,
             *outsets,
+            outsets_order,
             quality_score_model,
             rng,
         ).unwrap();
@@ -95,11 +96,10 @@ pub fn run_neat(config: Box<RunConfiguration>, mut rng: &mut NeatRng) -> Result<
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::fs;
     use std::path::PathBuf;
-    use rand_core::SeedableRng;
-    use utils::config::ConfigBuilder;
-    use super::*;
+    use super::super::config::ConfigBuilder;
 
     #[test]
     fn test_runner() {
@@ -109,9 +109,14 @@ mod tests {
         config.output_dir = PathBuf::from("test");
         fs::create_dir("test").unwrap();
         let config = config.build();
+        let mut rng = Rng::new_from_seed(vec![
+            "Hello".to_string(),
+            "Cruel".to_string(),
+            "World".to_string(),
+        ]);
         let _ = run_neat(
             Box::new(config),
-            &mut NeatRng::seed_from_u64(0),
+            &mut rng,
         ).unwrap();
         fs::remove_dir_all("test").unwrap();
     }
@@ -126,9 +131,14 @@ mod tests {
         config.output_dir = PathBuf::from("output");
         fs::create_dir("output").unwrap();
         let config = config.build();
+        let mut rng = Rng::new_from_seed(vec![
+            "Hello".to_string(),
+            "Cruel".to_string(),
+            "World".to_string(),
+        ]);
         let _ = run_neat(
             Box::new(config),
-            &mut NeatRng::seed_from_u64(0),
+            &mut rng,
         ).unwrap();
         fs::remove_dir_all("output").unwrap();
     }

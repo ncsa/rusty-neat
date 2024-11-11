@@ -1,0 +1,8 @@
+[package]
+name = "simple_rng"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+chrono = "0.4.38"
+statrs = "0.17.1"

@@ -6,7 +6,7 @@
 extern crate simple_rng;
 
 use std::collections::HashMap;
-use log::{debug, error};
+use log::{debug, error, warn};
 use super::nucleotides::NucModel;
 use simple_rng::{Rng, DiscreteDistribution};
 
@@ -83,7 +83,7 @@ pub fn mutate_fasta(
 
 fn mutate_sequence(
     sequence: &Vec<u8>,
-    num_positions: usize,
+    mut num_positions: usize,
     mut rng: &mut Rng
 ) -> (Vec<u8>, Vec<(usize, u8, u8)>) {
     // Takes:
@@ -102,17 +102,25 @@ fn mutate_sequence(
     // Randomly select num_positions from positions, weighted by gc bias and whatever. For now
     // all he weights are just equal.
     let weights = vec![1.0; mutated_record.len()];
-    // find all non n positions.
-    let non_n_positions: Vec<usize> = mutated_record
-        .iter()
-        .enumerate()
-        .filter(|&(_, y)| *y != 4) // Filter out the N's
-        .map(|(x, _)| x)
-        .collect();
+    // find all non n positions. This gives us a vector of valid indexes. We also build the weighted
+    // vector that corresponds to our non-n positions
+    let mut non_n_positions: Vec<usize> = Vec::with_capacity(sequence.len());
+    let mut pared_weights: Vec<f64> = Vec::with_capacity(sequence.len());
+    for (index, base) in mutated_record.iter().enumerate() {
+        if *base != 4 {
+            pared_weights.push(weights[index]);
+            non_n_positions.push(index.clone());
+        }
+    }
+
     // create the distribution
-    let dist = DiscreteDistribution::new(&weights, false);
+    let dist = DiscreteDistribution::new(&pared_weights, false);
     // now choose a random selection of num_positions without replacement
     let mut indexes_to_mutate: Vec<usize> = Vec::new();
+    if num_positions > non_n_positions.len() {
+        warn!("Mutating all positions in a sequence (this seems like it shouldn't happen)");
+        num_positions = non_n_positions.len();
+    }
     for _ in 0..num_positions {
         let pos = non_n_positions[dist.sample(&mut rng)];
         indexes_to_mutate.push(pos);

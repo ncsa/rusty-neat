@@ -4,5 +4,6 @@ members = [
     "generate_reads",
     "common",
     "fasta_reader",
+    "simple_rng",
 ]
 resolver = "2"

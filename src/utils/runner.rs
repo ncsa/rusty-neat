@@ -104,7 +104,7 @@ mod tests {
     #[test]
     fn test_runner() {
         let mut config = RunConfiguration::build();
-        config.reference = Some("data/H1N1.fa".to_string());
+        config.reference = Some("test_data/H1N1.fa".to_string());
         // Because we are building this the wrong way, we need to manually create the output dir
         config.output_dir = PathBuf::from("test");
         fs::create_dir("test").unwrap();
@@ -122,9 +122,9 @@ mod tests {
     }
 
     #[test]
-    fn test_runner_files_messagse() {
+    fn test_runner_files_messages() {
         let mut config = ConfigBuilder::new();
-        config.reference = Some("data/H1N1.fa".to_string());
+        config.reference = Some("test_data/H1N1.fa".to_string());
         config.produce_fasta = true;
         config.produce_vcf = true;
         // Because we are building this the wrong way, we need to manually create the output dir

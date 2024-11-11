@@ -112,7 +112,7 @@ mod tests {
 
     #[test]
     fn test_read_fasta() {
-        let test_fasta = "data/H1N1.fa";
+        let test_fasta = "test_data/H1N1.fa";
         let (_test_map, map_order) = read_fasta(test_fasta).unwrap();
         assert_eq!(map_order[0], "H1N1_HA".to_string())
     }
@@ -120,7 +120,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn test_read_bad_fasta() {
-        let test_fasta = "data/fake.fasta";
+        let test_fasta = "test_data/fake.fasta";
         read_fasta(test_fasta).unwrap();
     }
 

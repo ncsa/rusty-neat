@@ -438,7 +438,7 @@ mod tests {
     fn test_read_config_yaml() {
         let yaml = String::from("config/neat_test.yml");
         let test_config = read_config_yaml(yaml);
-        assert_eq!(test_config.reference, "data/ecoli.fa".to_string());
+        assert_eq!(test_config.reference, "test_data/ecoli.fa".to_string());
         assert_eq!(test_config.coverage, 3);
     }
 
@@ -468,8 +468,8 @@ mod tests {
     fn test_command_line_inputs() {
         let args: Cli = Cli{
             config: String::new(),
-            reference: String::from("data/ecoli.fa"),
-            output_dir: String::from("data"),
+            reference: String::from("test_data/ecoli.fa"),
+            output_dir: String::from("test_data"),
             log_level: String::from("Trace"),
             log_dest: String::new(),
             output_file_prefix: String::from("test"),
@@ -479,7 +479,7 @@ mod tests {
         };
 
         let test_config = build_config_from_args(args);
-        assert_eq!(test_config.reference, "data/ecoli.fa".to_string())
+        assert_eq!(test_config.reference, "test_data/ecoli.fa".to_string())
     }
 
     #[test]
@@ -492,7 +492,7 @@ mod tests {
     #[test]
     fn test_creat_nonexisting_out() {
         let mut config = ConfigBuilder::new();
-        config.reference = Some("data/H1N1.fa".to_string());
+        config.reference = Some("test_data/H1N1.fa".to_string());
         config.output_dir = PathBuf::from("contig/");
         config.check_and_print_config();
         fs::remove_dir("contig").unwrap()
@@ -519,7 +519,7 @@ mod tests {
     #[test]
     fn test_overwrite_warn() {
         let mut config = ConfigBuilder::new();
-        config.reference = Option::from("data/H1N1.fa".to_string());
+        config.reference = Option::from("test_data/H1N1.fa".to_string());
         config.overwrite_output = true;
         config.check_and_print_config();
     }
@@ -527,7 +527,7 @@ mod tests {
     #[test]
     fn test_produce_fastq_messages() {
         let mut config = ConfigBuilder::new();
-        config.reference = Option::from("data/H1N1.fa".to_string());
+        config.reference = Option::from("test_data/H1N1.fa".to_string());
         config.paired_ended = true;
         config.fragment_mean = Some(100.0);
         config.fragment_st_dev = Some(10.0);
@@ -543,7 +543,7 @@ mod tests {
     #[test]
     fn test_produce_fasta_messages() {
         let mut config = ConfigBuilder::new();
-        config.reference = Some("data/H1N1.fa".to_string());
+        config.reference = Some("test_data/H1N1.fa".to_string());
         config.produce_fasta = true;
         config.check_and_print_config();
         config.produce_vcf = true;
@@ -557,7 +557,7 @@ mod tests {
     #[should_panic]
     fn test_no_files() {
         let mut config = ConfigBuilder::new();
-        config.reference = Some("data/H1N1.fa".to_string());
+        config.reference = Some("test_data/H1N1.fa".to_string());
         config.produce_fastq = false;
         config.check_and_print_config();
     }
@@ -566,7 +566,7 @@ mod tests {
     #[should_panic]
     fn test_no_frag_mean_or_stdev() {
         let mut config = ConfigBuilder::new();
-        config.reference = Some("data/H1N1.fa".to_string());
+        config.reference = Some("test_data/H1N1.fa".to_string());
         // paired end set to true, by default, fragment mean and st dev are None
         config.paired_ended = true;
         config.check_and_print_config();
@@ -576,7 +576,7 @@ mod tests {
     #[should_panic]
     fn test_no_frag_mean() {
         let mut config = ConfigBuilder::new();
-        config.reference = Some("data/H1N1.fa".to_string());
+        config.reference = Some("test_data/H1N1.fa".to_string());
         config.paired_ended = true;
         config.fragment_st_dev = Some(10.0);
         config.check_and_print_config();
@@ -586,7 +586,7 @@ mod tests {
     #[should_panic]
     fn test_no_stdev() {
         let mut config = ConfigBuilder::new();
-        config.reference = Some("data/H1N1.fa".to_string());
+        config.reference = Some("test_data/H1N1.fa".to_string());
         config.paired_ended = true;
         config.fragment_mean = Some(100.0);
         config.check_and_print_config();
@@ -596,7 +596,7 @@ mod tests {
     fn no_output_dir_given() {
         let args: Cli = Cli{
             config: String::new(),
-            reference: String::from("data/H1N1.fa"),
+            reference: String::from("test_data/H1N1.fa"),
             output_dir: String::new(),
             log_level: String::from("Trace"),
             log_dest: String::new(),
@@ -614,7 +614,7 @@ mod tests {
     fn test_minimum_mutations_and_others() {
         let args: Cli = Cli{
             config: String::new(),
-            reference: String::from("data/H1N1.fa"),
+            reference: String::from("test_data/H1N1.fa"),
             output_dir: String::new(),
             log_level: String::from("Trace"),
             log_dest: String::new(),

@@ -9,7 +9,7 @@ use models::indel_model::{IndelModel, generate_random_insertion};
 use models::quality_scores::QualityScoreModel;
 use models::sequencing_error_model::SequencingErrorModel;
 use models::snp_model::SnpModel;
-use structs::fasta_map::{SequenceBlock, ContigBlock};
+use structs::fasta_map::{SequenceBlock, Contig};
 
 #[derive(Clone)]
 pub struct MutationModel {

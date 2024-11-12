@@ -1,11 +1,13 @@
-use std::collections::HashMap;
-use std::fs::read_to_string;
+use std::collections::{HashMap, VecDeque};
+use std::ffi::OsString;
+use std::fs::{read_to_string, File};
+use std::path::PathBuf;
 use std::str::FromStr;
 
 // The SequenceBlock has coordinates that map back to the original reference. Local manipulations
 // of the block can use local coordinates, but any variant locations etc will be modified by the
 // ref start point
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct SequenceBlock {
     // start is the index for when this feature begins on the reference sequence. Start is always
     // relative to the original sequence
@@ -13,20 +15,20 @@ pub struct SequenceBlock {
     // end is where this feature ends, relative to the reference.
     pub ref_end: usize,
     pub length: usize,
-    pub file: String,
+    pub file: OsString,
 }
 
 impl SequenceBlock {
-    pub fn new(ref_start: usize, ref_end:usize, file: String) -> Result<Self, ()> {
-        if ref_start >= ref_end {
+    pub fn new(ref_start: usize, length:usize, file: OsString) -> Result<Self, ()> {
+        if length <= 0 {
             panic!(
-                "Bad coordinates for sequence block start: {} >= end: {}", ref_start, ref_end
+                "Bad parameters for sequence block start: {} length: {}", ref_start, length
             )
         } else {
             Ok(SequenceBlock {
                 ref_start,
-                ref_end,
-                length: ref_end - ref_start,
+                ref_end: ref_start + length,
+                length,
                 file,
             })
         }
@@ -34,6 +36,18 @@ impl SequenceBlock {
 
     pub fn len(&self) -> usize {
         self.length
+    }
+
+    pub fn retrieve_all(&mut self) -> Result<Vec<u8>, ()> {
+        // There should only be one line, and since these are programmatically generated, there
+        // shouldn't be an issue with security. If the format is wrong, then the map part should
+        // throw an error. Had to use vec::from rather than collect for reasons unknown (can't
+        // clone a u8?
+        Ok(read_to_string(&self.file)
+            .unwrap()
+            .lines()
+            .map(|x: &str| u8::from_str(x).unwrap())
+            .collect())
     }
 
     pub fn retrieve(&mut self, start: usize, end: usize) -> Result<Vec<u8>, &'static str> {
@@ -52,11 +66,7 @@ impl SequenceBlock {
             // shouldn't be an issue with security. If the format is wrong, then the map part should
             // throw an error. Had to use vec::from rather than collect for reasons unknown (can't
             // clone a u8?
-            let buffer: Vec<u8> = read_to_string(&self.file)
-                .unwrap()
-                .lines()
-                .map(|x: &str| u8::from_str(x).unwrap())
-                .collect();
+            let buffer: Vec<u8> = self.retrieve_all().unwrap();
             // start for this function is expected to be a coordinate from the overall contig,
             // so we modify by the known start and end point of this block to get the final
             // coordinates
@@ -64,25 +74,38 @@ impl SequenceBlock {
             let block_end = end - self.ref_start;
             Ok(buffer[block_start..block_end].to_owned())
         }
-
     }
 }
 
-#[derive(Debug)]
-// Each ContigBlock contains multiple sequence blocks, which map to files containing sequences that
-// are 128Kb long.
-pub struct ContigBlock {
-    pub name: String,
-    pub len: usize,
-    pub blocks: Vec<SequenceBlock>
+#[derive(Clone, Debug)]
+pub enum RegionType {
+    NRegion,
+    NonNRegion,
 }
 
-impl ContigBlock {
-    fn new(name: String, len: usize, blocks: Vec<SequenceBlock>) -> Result<Self, &'static str> {
-        Ok(ContigBlock {
+#[derive(Debug)]
+// Each Contig contains multiple sequence blocks, which map to files containing sequences that
+// are 128Kb long.
+pub struct Contig {
+    pub name: String,
+    pub len: usize,
+    pub blocks: Vec<SequenceBlock>,
+    pub contig_map: Vec<(usize, usize, RegionType)>
+}
+
+impl Contig {
+    pub fn new(
+        name: String,
+        len: usize,
+        blocks: Vec<SequenceBlock>,
+        map: Vec<(usize, usize, RegionType)>
+    ) -> Result<Self, &'static str> {
+
+        Ok(Contig {
             name,
             len,
-            blocks
+            blocks,
+            contig_map: map,
         })
     }
 }
@@ -90,8 +113,16 @@ impl ContigBlock {
 #[derive(Debug)]
 // The fasta map holds all the data for retrieving items from the fasta files
 pub struct FastaMap {
-    pub map: HashMap<String, ContigBlock>
+    // A vector of Contig objects, one for each contig in the fasta file
+    pub contigs: Vec<Contig>,
+    // This maps the short contig name, used throughout, to the full name from the fasta file
+    pub name_map: HashMap<String, String>,
+    // This is a VecDeque with the contig short names in the order they appeared in the fasta
+    // We need the correct order to output a valid file at the end.
+    pub contig_order: VecDeque<String>,
 }
+
+
 
 #[cfg(test)]
 mod tests {

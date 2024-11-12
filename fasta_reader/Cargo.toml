@@ -1,0 +1,15 @@
+[package]
+name = "fasta_reader"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[dependencies]
+num-traits=">=0.2"
+serde = "^1"
+serde_derive = "^1"
+serde_json = "^1"
+log = "0.4"
+common = { path = "../common" }
+chrono = "0.4.38"
+tempfile = "3.14.0"

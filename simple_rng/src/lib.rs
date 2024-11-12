@@ -91,11 +91,12 @@ impl Rng {
             if frac == 1.0 {
                 return true
             }
-            panic!("Invalid frac for gen_bool {} (must be in [0.0, 1.0)", frac)
+            panic!("Invalid proportion for gen_bool {} (must be in [0.0, 1.0))", frac)
         }
         // This is just `2.0.powi(64)`, but written this way because it is not available
-        // in `no_std` mode. (from rand 0.8.5 docs). We used u64 max + 1, the equivalent
-        let p_int = (frac * (u64::MAX as f64 + 1.0)) as u64;
+        // in `no_std` mode. (from rand 0.8.5 docs).
+        // We used u64 max to guarantee the number was a valid u64, in case our frac was close to 1
+        let p_int = (frac * (u64::MAX as f64)) as u64;
         let x = self.rand_int();
         x < p_int
     }
@@ -110,19 +111,22 @@ impl Rng {
         }
     }
 
-    pub fn range_i64(&mut self, min:i64, max:i64) -> i64 {
-        ((min.clone() as f64) + (self.random() * ((max - min) as f64))) as i64
+    pub fn range_i64(&mut self, min:i64, max:i64) -> Result<i64, String> {
+        if max > i64::MAX {
+            return Err("Max value out of range for i64".to_string())
+        }
+        Ok(((min.clone() as f64) + (self.random() * ((max - min) as f64).round())) as i64)
     }
 
     pub fn rand_int(&mut self) -> u64 {
         let temp = self.random();
-        // Keeping it within range of u32 to prevent overflow
         let ret_num: f64 = temp * (u64::MAX as f64);
-        ret_num.trunc() as u64
+        ret_num.round() as u64
     }
 
     pub fn rand_u32(&mut self) -> u32 {
         let ret_num = self.rand_int();
+        // Modulo the number to u32 max to guarantee a valid u32
         (ret_num % (u32::MAX as u64)) as u32
     }
 
@@ -173,22 +177,21 @@ impl NormalDistribution {
 /// (see also github.com/zstephens/neat-genreads). We may try the statrs Categorical distribution
 /// as well, as I think it does the same thing.
 pub struct DiscreteDistribution {
-    degenerate: bool,
     cumulative_probability: Vec<f64>,
 }
 
 impl DiscreteDistribution {
-    pub fn new <T>(w_vec: &Vec<T>, degenerate: bool) -> Self
+    pub fn new <T>(w_vec: &Vec<T>) -> Self
         where
-            f64: From<T>, T: Copy,
+            f64: From<T>, T: Copy, // examples are like u32 and i64
             T: Into<f64> + Copy,
     {
-        // let's first convert weights to f64
+        // let's first convert weights to f64 to facilitate calculations
         let mut w_vec_64: Vec<f64> = Vec::with_capacity(w_vec.len());
         for number in w_vec {
             w_vec_64.push(f64::from(*number).into());
         }
-        let cumulative_probability = if !degenerate {
+        let cumulative_probability = {
             let sum_weights: f64 = w_vec_64.iter().sum();
             let mut normalized_weights = Vec::with_capacity(w_vec.len());
             // we no longer need the w_vec_64 after this, so we consume it
@@ -196,12 +199,9 @@ impl DiscreteDistribution {
                 normalized_weights.push(weight / sum_weights);
             }
             cumulative_sum(&mut normalized_weights)
-        } else {
-            vec![1.0]
         };
 
         DiscreteDistribution {
-            degenerate,
             cumulative_probability,
         }
     }
@@ -212,15 +212,13 @@ impl DiscreteDistribution {
         let mut lo: usize = 0;
         let mut hi: usize = self.cumulative_probability.len();
         // bisect left
-        if !self.degenerate {
-            let r = rng.random();
-            while lo < hi {
-                let mid = (lo + hi) / 2;
-                if r > self.cumulative_probability[mid] {
-                    lo = mid + 1;
-                } else {
-                    hi = mid;
-                }
+        let r = rng.random();
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if r > self.cumulative_probability[mid] {
+                lo = mid + 1;
+            } else {
+                hi = mid;
             }
         }
         lo
@@ -243,7 +241,7 @@ mod tests {
     #[test]
     fn test_discrete_distribution() {
         let weights: Vec<f64> = vec![1.1, 2.0, 1.0, 8.0, 0.2, 2.0];
-        let d = DiscreteDistribution::new(&weights, false);
+        let d = DiscreteDistribution::new(&weights);
         let mut rng = Rng::new_from_seed(vec![
             "Hello".to_string(),
             "Cruel".to_string(),

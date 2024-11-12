@@ -4,11 +4,8 @@
 /.ipynb_checkpoints/
 /.vscode/
 /.idea/
-/simple_rng/python2env/
-/simple_rng/.ipynb_checkpoints/
-/simple_rng/.vscode/
-/simple_rng/.idea/
 
 # Added by cargo
+
 /target
-/simple_rng/target
+/common/target

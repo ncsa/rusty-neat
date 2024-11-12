@@ -7,7 +7,7 @@ use std::str::FromStr;
 // The SequenceBlock has coordinates that map back to the original reference. Local manipulations
 // of the block can use local coordinates, but any variant locations etc will be modified by the
 // ref start point
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SequenceBlock {
     // start is the index for when this feature begins on the reference sequence. Start is always
     // relative to the original sequence
@@ -38,19 +38,21 @@ impl SequenceBlock {
         self.length
     }
 
-    pub fn retrieve_all(&mut self) -> Result<Vec<u8>, ()> {
+    pub fn retrieve_all(&self) -> Result<Vec<u8>, ()> {
         // There should only be one line, and since these are programmatically generated, there
         // shouldn't be an issue with security. If the format is wrong, then the map part should
         // throw an error. Had to use vec::from rather than collect for reasons unknown (can't
         // clone a u8?
-        Ok(read_to_string(&self.file)
-            .unwrap()
-            .lines()
-            .map(|x: &str| u8::from_str(x).unwrap())
-            .collect())
+        let mut result_vec = Vec::new();
+        for line in read_to_string(&self.file).unwrap().lines() {
+            for char in line.chars() {
+                result_vec.push(char as u8);
+            }
+        };
+        Ok(result_vec)
     }
 
-    pub fn retrieve(&mut self, start: usize, end: usize) -> Result<Vec<u8>, &'static str> {
+    pub fn retrieve(&self, start: usize, end: usize) -> Result<Vec<u8>, &'static str> {
         if start >= end {
             panic!(
                 "Bad coordinates for sequence block retrieval: {} >= end: {}", start, end

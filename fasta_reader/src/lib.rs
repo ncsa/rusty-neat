@@ -1,9 +1,8 @@
 use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
-use std::fs::{read_to_string, File};
+use std::fs::File;
 use std::io;
-use std::hash::Hash;
-use std::io::{BufRead, BufReader, ErrorKind, Write};
+use std::io::Write;
 use common::file_tools::read_lines;
 use common::structs::fasta_map::{FastaMap, SequenceBlock, Contig, RegionType};
 use tempfile::TempDir;
@@ -16,8 +15,8 @@ pub const DICT_SIZE: usize = 32768usize; // i.e., 32kb
 pub fn read_fasta(
     fasta_path: &str,
     fragment_max: usize,
-    temp_dir: TempDir
-) -> Result<(Box<FastaMap>), io::Error> {
+    temp_dir: &TempDir
+) -> Result<Box<FastaMap>, io::Error> {
     // Here's the basic idea:
     //     1. Read in 128kb worth of sequence (or the entire sequence)
     //     2. Recode the sequence as a series of u8 digits [0, 4]
@@ -92,7 +91,7 @@ pub fn read_fasta(
                         sequence_blocks.push(SequenceBlock::new(
                             block_start.clone(),
                             num_bases.clone(),
-                            file_path,
+                            file_path.clone(),
                         ).unwrap());
 
                         // Reset buffers
@@ -126,11 +125,12 @@ pub fn read_fasta(
                     let long_name = l[1..].to_string();
                     current_key = extract_key_name(&long_name);
                     name_map.entry(current_key.clone()).or_insert(long_name);
+                    contig_order.push_back(current_key.clone());
                 } else {
                     for char in l.chars() {
                         // Catch any potential index out of range problems here
                         if local_index >= BUFSIZE {
-                            let tail = buffer[BUFSIZE-fragment_max..];
+                            let tail = buffer[BUFSIZE-fragment_max..].to_owned();
                             // overwrite the beginning of the next buffer with the end of this one
                             // to create an overlap
                             padding_length = tail.len();
@@ -162,7 +162,7 @@ pub fn read_fasta(
                             local_index = padding_length;
                             block_index += 1
                         }
-                        *buffer[local_index] = *char_to_base(char);
+                        buffer[local_index] = char_to_base(char);
                         local_index += 1;
                         contig_length += 1;
                     }
@@ -181,7 +181,7 @@ pub fn read_fasta(
         &current_key,
         block_index,
     )?;
-
+    println!("{:?}", &file_path);
     // record sequence block info
     sequence_blocks.push(SequenceBlock::new(
         block_start.clone(),
@@ -200,13 +200,13 @@ pub fn read_fasta(
     ).unwrap());
 
     // Return box object with final FastaMap object, which will be used for processing
-    Ok((Box::new(
+    Ok(Box::new(
         FastaMap {
             contigs,
             name_map,
             contig_order,
         }
-    )))
+    ))
 }
 
 fn extract_key_name(key: &str) -> String {
@@ -244,7 +244,7 @@ fn build_contig_map(sequence_blocks: &Vec<SequenceBlock>) -> Vec<(usize, usize, 
     let mut region_end = 0;
     let mut inside_n_region = false;
 
-    for mut block in sequence_blocks {
+    for block in sequence_blocks {
         let block_sequence = block.retrieve_all().unwrap();
         for base in block_sequence {
             match base {
@@ -299,9 +299,12 @@ fn write_buffer_to_file(
             "sequence file already exists (Unexpected!)"))
     };
     let mut tmp_file = File::create(&sequence_file_path)?;
-    for i in 0..num_bases {
-        tmp_file.write(buffer[i].as_bytes())?;
-    };
+    let bufstr = buffer[..num_bases]
+        .iter()
+        .map(|x| x.to_string())
+        .collect::<Vec<String>>()
+        .join("");
+    writeln!(tmp_file, "{}", bufstr)?;
     Ok((num_bases, sequence_file_path.into_os_string()))
 }
 
@@ -331,8 +334,7 @@ impl GatherStats {
                     }
                     line_count += 1
                 },
-                Some(Err(E)) => return Err(E),
-                _ => panic!("Unknown fasta read error"),
+                Err(E) => return Err(E),
             }
         };
 
@@ -350,10 +352,11 @@ mod tests {
 
     #[test]
     fn test_read_fasta() {
-        // let test_fasta = "test_data/H1N1.fa";
-        // let (test_map, map_order) =
-        //     read_fasta(test_fasta, 350).unwrap();
-        // assert_eq!(map_order[0], "H1N1_HA".to_string());
+        let test_fasta = "test_data/H1N1.fa";
+        let temp_dir = tempfile::tempdir().unwrap();
+        let test_map = read_fasta(test_fasta, 350, &temp_dir).unwrap();
+        assert_eq!(test_map.contig_order[0], "H1N1_HA".to_string());
+        temp_dir.close().unwrap();
     }
 
     #[test]

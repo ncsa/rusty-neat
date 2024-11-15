@@ -32,7 +32,7 @@ Use the help menu to see the available options and leave an issue if you find so
 To compile and run rusty-neat yourself, you will need the Rust environment (https://www.rust-lang.org/tools/install), with cargo. You will also need git installed for your operating system. You will then need to git clone and cd into the repo directory. From your home directory in Linux the process might look something like:
 
 ```angular2html
-~/$ git clone git@github.com/ncsa/rusty-neat.git
+~/$ git clone git@github.com:ncsa/rusty-neat.git
 ~/$ cd rusty-neat
 ~/rusty-neat/$
 ```

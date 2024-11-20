@@ -62,7 +62,8 @@ impl Mash {
 mod tests {
     use super::*;
 
-    // To test this function I plugged the above code into a javascript
+    // To test this function I plugged the above code into a javascript compiler online and compared
+    // the outputs
 
     #[test]
     fn test_mash() {

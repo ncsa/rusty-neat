@@ -4,7 +4,7 @@ use structs::sequencing_errors::SequencingError;
 use structs::sequencing_errors::{IndelErr, SnpErr};
 use structs::transition_matrix::TransitionMatrix;
 use structs::sequencing_errors::SequencingError::{IndelError, SNPError};
-use simple_rng::{Rng, DiscreteDistribution};
+use simple_rng::{NeatRng, DiscreteDistribution};
 
 #[derive(Clone)]
 pub struct SequencingErrorModel {
@@ -49,7 +49,7 @@ impl SequencingErrorModel {
             transition_matrix: default_transition_matrix,
         }
     }
-    pub fn generate_snp_error(&self, base: u8, rng: &mut Rng) -> SequencingError {
+    pub fn generate_snp_error(&self, base: u8, rng: &mut NeatRng) -> SequencingError {
         // This is a basic mutation function for starting us off
         // Pick the weights list for the base that was input
         // We will use this simple model for sequence errors ultimately.
@@ -74,7 +74,7 @@ impl SequencingErrorModel {
         }
     }
 
-    pub fn generate_indel_error(&self, rng: &mut Rng) -> SequencingError {
+    pub fn generate_indel_error(&self, rng: &mut NeatRng) -> SequencingError {
         let dist = DiscreteDistribution::new(&Vec::from(self.length_weights));
         let length = self.lengths[dist.sample(rng)];
         if length > 0 {

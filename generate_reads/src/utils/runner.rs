@@ -1,6 +1,7 @@
 use crate::utils;
 use crate::data;
 use common;
+use tempfile;
 
 use std::thread;
 use std::time;
@@ -8,7 +9,6 @@ use std::time;
 use log::info;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
-use rand_chacha::ChaCha20Rng;
 
 use utils::config::RunConfiguration;
 use utils::fasta_tools::{read_fasta, write_fasta};
@@ -16,10 +16,10 @@ use utils::fastq_tools::write_fastq;
 use utils::generate_reads::generate_reads;
 use utils::read_models::{read_quality_score_model_file, read_quality_score_raw_data};
 use utils::generate_variants::generate_variants;
-use common::structs::nucleotides::Nuc;
 use common::structs::variants::Variant;
 use common::structs::fasta_map::FastaMap;
 use common::models::mutation_model::MutationModel;
+use simple_rng::NeatRng;
 use data::quality_score_data::RawQualityScoreData;
 use utils::mutate_fasta::apply_mutations;
 
@@ -28,24 +28,18 @@ pub enum RunNeatError {
     GeneralRunError,
 }
 
-pub fn run_neat(config: Box<RunConfiguration>, rng: ChaCha20Rng) -> Result<(), RunNeatError> {
+pub fn run_neat(config: Box<RunConfiguration>, rng: NeatRng) -> Result<(), RunNeatError> {
     let start = time::Instant::now();
     // Create the prefix of the files to write
     let output_file = format!("{}/{}", config.output_dir.display(), config.output_prefix);
 
     // Reading the reference file into memory
     info!("Mapping reference fasta file: {}", &config.reference);
-    // fasta_sequences instead of being what we use will be a part of what we use that is
-    // referenced later and is intended to be static otherwise.
-    let (fasta_sequences, fasta_order) =
-        read_fasta(&config.reference)
-            .unwrap();
-
-    // The fasta map will be a series of coordinates of stretches of reference and variant
-    // positions. All variants will have a set length and a ref and alt of that exact same length,
-    // which will allow us to easily output one or the other during the output phase simply by
-    // changing which one we reference.
-    let fasta_map = FastaMap::build_from_reference(&fasta_sequences).unwrap();
+    let working_dir = tempfile::tempdir().unwrap();
+    // The FastaMap struct consists of a vector of Contig objects, each describing a
+    // block of Sequence, broken up into chunks in the SequenceBlock objects. It also
+    // holds a name_map hashmap that links tho contig name from the Fasta with the shortname
+    let fasta_map = read_fasta(&config.reference, 300, ).unwrap();
 
     // Load models that will be used for the runs.
     // For now, we will use the one supplied, pulled directly from NEAT2.0's original model.

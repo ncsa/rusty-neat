@@ -12,7 +12,7 @@ use mash::Mash;
 use statrs::distribution::{ContinuousCDF, Normal};
 
 #[derive(Debug)]
-pub struct Rng {
+pub struct NeatRng {
     // This will be a simple seeded random number generator and some associated
     // functions. The other RNGs I have tried were too complicated and designed
     // with crypto in mind, which is much more complicated than we need for genomic
@@ -28,8 +28,8 @@ pub struct Rng {
 }
 
 
-impl Rng {
-    pub fn new_from_seed(seed_list: Vec<String>) -> Rng {
+impl NeatRng {
+    pub fn new_from_seed(seed_list: Vec<String>) -> NeatRng {
         // The seed list is assumed to be a vector of strings. We'll have
         // to figure out a clever way to construct seed strings from random seeds
         // For the default string, we present the abstract of the initial paper up to the first
@@ -61,7 +61,7 @@ impl Rng {
             }
         }
 
-        Rng {
+        NeatRng {
             seed_vec,
             s0,
             s1,
@@ -82,23 +82,16 @@ impl Rng {
     }
 
     pub fn gen_bool(&mut self, frac: f64) -> bool {
-        // Uses a Bernoulli distribution to generate a fractional probability
-        // Then an input from the RNG to sample
-        //
-        // This method is lifted from rand 0.85, but with restrictions edited so we can use our
-        // custom RNG
+        // Checks if a random number is less than the requested frac, which is taken as the
+        // percent chance of true.
         if !(0.0..1.0).contains(&frac) {
             if frac == 1.0 {
                 return true
             }
             panic!("Invalid proportion for gen_bool {} (must be in [0.0, 1.0))", frac)
         }
-        // This is just `2.0.powi(64)`, but written this way because it is not available
-        // in `no_std` mode. (from rand 0.8.5 docs).
-        // We used u64 max to guarantee the number was a valid u64, in case our frac was close to 1
-        let p_int = (frac * (u64::MAX as f64)) as u64;
-        let x = self.rand_int();
-        x < p_int
+
+        self.random() < frac
     }
 
     pub fn shuffle_in_place<T: Clone>(&mut self, a: &mut Vec<T>) {
@@ -162,7 +155,7 @@ impl NormalDistribution {
         self.distribution.inverse_cdf(x)
     }
 
-    pub fn sample(&self, rng: &mut Rng) -> f64 {
+    pub fn sample(&self, rng: &mut NeatRng) -> f64 {
         // Takes a statrs NormalDistribution object, uses the ICDF to start with a probability (our
         // RNG, which generates numbers between 0 and 1 with approximately normal distribution) and
         // generate the corresponding Y value from the PDF. Very handy!
@@ -206,7 +199,7 @@ impl DiscreteDistribution {
         }
     }
 
-    pub fn sample(&self, rng: &mut Rng) -> usize {
+    pub fn sample(&self, rng: &mut NeatRng) -> usize {
         // returns a random index for the distribution, based on cumulative probability
         // This is basically an icdf for a discrete distribution
         let mut lo: usize = 0;
@@ -242,7 +235,7 @@ mod tests {
     fn test_discrete_distribution() {
         let weights: Vec<f64> = vec![1.1, 2.0, 1.0, 8.0, 0.2, 2.0];
         let d = DiscreteDistribution::new(&weights);
-        let mut rng = Rng::new_from_seed(vec![
+        let mut rng = NeatRng::new_from_seed(vec![
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),
@@ -259,7 +252,7 @@ mod tests {
 
     #[test]
     fn test_gen_bool() {
-        let mut rng = Rng::new_from_seed(vec![
+        let mut rng = NeatRng::new_from_seed(vec![
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),
@@ -273,7 +266,7 @@ mod tests {
 
     #[test]
     fn test_random() {
-        let mut rng = Rng::new_from_seed(vec![
+        let mut rng = NeatRng::new_from_seed(vec![
             "hello".to_string(),
             "cruel".to_string(),
             "world".to_string(),
@@ -289,7 +282,7 @@ mod tests {
     #[test]
     fn test_shuffle_in_place() {
         let mut my_vec = vec![1, 2, 3, 4, 5, 6, 7, 8, 9];
-        let mut rng = Rng::new_from_seed(vec![
+        let mut rng = NeatRng::new_from_seed(vec![
             "hello".to_string(),
             "cruel".to_string(),
             "world".to_string(),
@@ -304,21 +297,21 @@ mod tests {
     fn test_range() {
         let min = 0;
         let max = 10;
-        let mut rng = Rng::new_from_seed(vec![
+        let mut rng = NeatRng::new_from_seed(vec![
             "hello".to_string(),
             "cruel".to_string(),
             "world".to_string(),
         ]);
         let num = rng.range_i64(min, max);
-        assert_eq!(num, 8);
+        assert_eq!(num, Ok(8));
         let num2 = rng.range_i64(min, max);
-        assert_eq!(num2, 5);
-        assert_eq!(rng.range_i64(-3, 5), 1);
+        assert_eq!(num2, Ok(5));
+        assert_eq!(rng.range_i64(-3, 5), Ok(1));
     }
 
     #[test]
     fn test_rand_int() {
-        let mut rng = Rng::new_from_seed(vec![
+        let mut rng = NeatRng::new_from_seed(vec![
             "hello".to_string(),
             "cruel".to_string(),
             "world".to_string(),

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::slice::Iter;
-use simple_rng::{DiscreteDistribution, Rng};
+use simple_rng::{DiscreteDistribution, NeatRng};
 use structs::transition_matrix::TransitionMatrix;
 use self::SnpFrame::*;
 // The following section are the models for each type of variant. In order to create the variant,
@@ -62,7 +62,7 @@ impl SnpModel {
     pub fn generate_snp(
         &self,
         trinuc_reference: &[u8],
-        rng: &mut Rng
+        rng: &mut NeatRng
     ) -> u8 {
         // We shouldn't have N's here. Basically, this matches the correct trinuc from the enum,
         // then uses that as the index for the trinuc matrix of interest.

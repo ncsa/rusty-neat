@@ -1,4 +1,4 @@
-use simple_rng::{DiscreteDistribution, Rng};
+use simple_rng::{DiscreteDistribution, NeatRng};
 
 // The following section are the models for each type of variant. In order to create the variant,
 // we need to model its statistical property. NEAT included two types of variants: SNPs and Indels.
@@ -38,20 +38,20 @@ impl IndelModel {
         }
     }
 
-    pub fn new_insert_length(&self, mut rng: &mut Rng) -> u32 {
+    pub fn new_insert_length(&self, mut rng: &mut NeatRng) -> u32 {
         // This function uses the insertion weights to choose an insertion length from the list.
         let dist = DiscreteDistribution::new(&self.ins_weights);
         self.ins_lengths[dist.sample(&mut rng)]
     }
 
-    pub fn new_delete_length(&self, mut rng: &mut Rng) -> u32 {
+    pub fn new_delete_length(&self, mut rng: &mut NeatRng) -> u32 {
         // This function is the same as above, but uses the deletion lengths instead.
         let dist = DiscreteDistribution::new(&self.del_weights);
         self.del_lengths[dist.sample(&mut rng)]
     }
 }
 
-pub fn generate_random_insertion(length: u32, rng: &mut Rng) -> Vec<u8> {
+pub fn generate_random_insertion(length: u32, rng: &mut NeatRng) -> Vec<u8> {
     // We could refine this with a nucleotide bias matrix. Maybe it would make a difference,
     // but probably not, since the presence of the insertion is more important than it's content,
     // for this use. If there was a call for it, maybe.
@@ -76,7 +76,7 @@ mod tests {
             del_lengths: vec![3, 4],
             del_weights: vec![1, 1000],
         };
-        let mut rng = Rng::new_from_seed(vec![
+        let mut rng = NeatRng::new_from_seed(vec![
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),
@@ -89,7 +89,7 @@ mod tests {
 
     #[test]
     fn test_generate_insertion () {
-        let mut rng = Rng::new_from_seed(vec![
+        let mut rng = NeatRng::new_from_seed(vec![
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),

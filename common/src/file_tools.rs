@@ -4,6 +4,7 @@ use std::fs::File;
 use std::io::{BufReader, BufRead, Error, Lines};
 use std::path::Path;
 use std::{env, fs, io};
+use std::ffi::OsString;
 
 pub fn read_lines(filename: &str) -> io::Result<Lines<BufReader<File>>> {
     // This creates a buffer to read lines

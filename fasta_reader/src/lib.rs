@@ -3,9 +3,9 @@ use std::ffi::OsString;
 use std::fs::File;
 use std::io;
 use std::io::Write;
+use tempfile::TempDir;
 use common::file_tools::read_lines;
 use common::structs::fasta_map::{FastaMap, SequenceBlock, Contig, RegionType};
-use tempfile::TempDir;
 use common::structs::fasta_map::RegionType::{NRegion, NonNRegion};
 use common::structs::nucleotides::char_to_base;
 
@@ -289,7 +289,14 @@ fn write_buffer_to_file(
     key: &str,
     index: usize
 ) -> Result<(usize, OsString), io::Error> {
-    let num_bases = contig_len - start;
+    // num_bases covers us if we do not need the entire buffer. This will tell us how much to write
+    let num_bases =
+        if (contig_len - start) > BUFSIZE {
+            BUFSIZE
+        } else {
+            contig_len - start
+        };
+
     let sequence_file_path = temp_dir
         .path()
         .join(format!("{}_{:010}.seq", &key, index));
@@ -304,7 +311,7 @@ fn write_buffer_to_file(
         .map(|x| x.to_string())
         .collect::<Vec<String>>()
         .join("");
-    writeln!(tmp_file, "{}", bufstr)?;
+    writeln!(&mut tmp_file, "{}", bufstr)?;
     Ok((num_bases, sequence_file_path.into_os_string()))
 }
 
@@ -334,7 +341,7 @@ impl GatherStats {
                     }
                     line_count += 1
                 },
-                Err(E) => return Err(E),
+                Err(e) => return Err(e),
             }
         };
 
@@ -348,7 +355,25 @@ impl GatherStats {
 
 #[cfg(test)]
 mod tests {
+    use std::fs::{read_to_string, File};
     use super::*;
+
+    #[test]
+    fn test_write_buffer() {
+        let test = [0_u8; BUFSIZE];
+        let temp_dir = tempfile::tempdir().unwrap();
+        let (num_bases, segment_file) = write_buffer_to_file(&test, 200000, 25, &temp_dir, "test", 3).unwrap();
+        assert_eq!(num_bases, BUFSIZE);
+        // below is the decode code from fasta_map
+        let mut result_vec = Vec::with_capacity(BUFSIZE);
+        for line in read_to_string(segment_file).unwrap().lines() {
+            for char in line.chars() {
+                result_vec.push((char as u8) % 4);
+            }
+        };
+        assert_eq!(Vec::from(test), result_vec);
+
+    }
 
     #[test]
     fn test_read_fasta() {

@@ -24,7 +24,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json;
 use std::fmt::{Display, Formatter};
-use simple_rng::{Rng, DiscreteDistribution};
+use simple_rng::{NeatRng, DiscreteDistribution};
 
 use file_tools::open_file;
 
@@ -148,7 +148,7 @@ impl QualityScoreModel {
     pub fn generate_quality_scores(
         &self,
         run_read_length: u32,
-        mut rng: &mut Rng,
+        mut rng: &mut NeatRng,
     ) -> Vec<u32> {
         // Generates a list of quality scores of length run_read_length using the model. If the
         // input read length differs, we do some index magic to extrapolate the model
@@ -306,7 +306,7 @@ mod tests {
     #[test]
     fn test_quality_scores_short() {
         let run_read_length = 100;
-        let mut rng = Rng::new_from_seed(vec![
+        let mut rng = NeatRng::new_from_seed(vec![
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),
@@ -324,7 +324,7 @@ mod tests {
     #[test]
     fn test_quality_scores_same() {
         let run_read_length = 150;
-        let mut rng = Rng::new_from_seed(vec![
+        let mut rng = NeatRng::new_from_seed(vec![
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),
@@ -342,7 +342,7 @@ mod tests {
     #[test]
     fn test_quality_scores_long() {
         let run_read_length = 200;
-        let mut rng = Rng::new_from_seed(vec![
+        let mut rng = NeatRng::new_from_seed(vec![
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),
@@ -360,7 +360,7 @@ mod tests {
     #[test]
     fn test_quality_scores_vast_difference() {
         let run_read_length = 2000;
-        let mut rng = Rng::new_from_seed(vec![
+        let mut rng = NeatRng::new_from_seed(vec![
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),

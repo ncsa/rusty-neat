@@ -1,4 +1,4 @@
-use simple_rng::{Rng, DiscreteDistribution};
+use simple_rng::{NeatRng, DiscreteDistribution};
 use std::borrow::BorrowMut;
 use std::collections::HashMap;
 use log::{warn, info};
@@ -67,7 +67,7 @@ impl MutationModel {
         }
     }
 
-    fn generate_genotype(&mut self, ploidy: usize, mut rng: &mut Rng) -> Vec<u8> {
+    fn generate_genotype(&mut self, ploidy: usize, mut rng: &mut NeatRng) -> Vec<u8> {
         // "Homozygous" is ambiguous for polyploid organisms, so we'll just take "heterozygous" to
         // mean roughly half the reads will have the variant, to keep it simple
         let is_homozygous = rng.borrow_mut().gen_bool(self.homozygous_frequency);
@@ -85,7 +85,7 @@ impl MutationModel {
         fasta_blocks: &Vec<SequenceBlock>,
         variant_location: usize,
         ploidy: usize,
-        mut rng: Rng,
+        mut rng: NeatRng,
     ) -> Variant {
         // Select a genotype for the variant
         let genotype= self.generate_genotype(ploidy, &mut rng);

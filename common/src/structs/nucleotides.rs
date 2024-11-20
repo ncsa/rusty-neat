@@ -1,16 +1,11 @@
-// Throughout this program, we will build off the Nuc enum. Enums have implied numbering, so that:
+// Representing bases by a simple u8 num
 //     A = 0
 //     C = 1
 //     G = 2
 //     T = 3
-//     N = 4
+//     N (or other unknown chars) = 4
 // This is intended to make it easier to store them. I think this will be an easier way to read
 // the code, and I'm hoping it does not incur any extra computational burden
-// To portray blocks of N's, N will have an integer assigned that gives a count of the string of
-// N's. To accurately display variants, without losing track of the index we will use a 'P'
-// character, which will print as empty string and act as a placeholder in the ref or alt of an
-// indel or more complex variant. Placeholders also have a size.
-
 
 pub fn base_to_string(b: u8) -> String {
     base_to_char(b).to_string()
@@ -22,6 +17,7 @@ pub fn base_to_char(b: u8) -> char {
         1 => 'C',
         2 => 'G',
         3 => 'T',
+        // Todo: replace the "N" with a randomly generated character from ACGT
         _ => 'N',
     }
 }

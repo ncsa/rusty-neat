@@ -20,7 +20,7 @@ use utils::cli;
 use utils::config::{build_config_from_args, read_config_yaml};
 use common::file_tools::check_parent;
 use utils::runner::run_neat;
-use simple_rng::Rng;
+use simple_rng::NeatRng;
 
 fn main() {
     info!("Begin processing");

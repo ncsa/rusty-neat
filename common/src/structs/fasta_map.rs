@@ -46,7 +46,10 @@ impl SequenceBlock {
         let mut result_vec = Vec::new();
         for line in read_to_string(&self.file).unwrap().lines() {
             for char in line.chars() {
-                result_vec.push(char as u8);
+                // characters are 0, 1, 2, or 3, because they are adjacent and sequential in UTF-8,
+                // = 48, 49, 50, 51
+                // we can use modulo arithmetic to recover the original u8
+                result_vec.push((char as u8) % 4u8);
             }
         };
         Ok(result_vec)
@@ -132,8 +135,8 @@ mod tests {
 
     #[test]
     fn test_basic_map() {
-        // use crate::structs::nucleotides::Nuc::*;
-        //
+        let read = 0x30u8;
+        println!("{}", read);
         // let read = vec![
         //     Unk, Unk, Unk, Unk, Unk, Unk, Unk, Unk, Unk, Unk,
         //     Unk, Unk, Ada, Cyt, Thy, Unk, Unk, Unk, Ada, Unk

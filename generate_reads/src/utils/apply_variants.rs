@@ -5,11 +5,14 @@ use simple_rng::{NeatRng, DiscreteDistribution};
 pub fn apply_variants(
     raw_sequence: &[u8],
     relevant_variants: HashMap<usize, &Variant>,
+    raw_sequence: &[Nuc],
+    relevant_variants: HashMap<&usize, &Variant>,
     start: usize,
     mut rng: NeatRng,
 ) -> Vec<u8> {
     // since this is a fragment, our 0 index is relative to our start position. So an index of 3
     // is at position 3 + start relative to the entire reference.
+
     // todo modify so that only half the reads of a heterzygote get the mutation.
     let mut positions_to_mutate = Vec::new();
     for location in relevant_variants.keys() {

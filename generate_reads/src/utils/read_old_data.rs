@@ -63,9 +63,9 @@ mod tests {
         let filename = "test_data/models/test_model.json".to_string();
         let qual_data = parse_neat_quality_scores(&filename);
         assert_eq!(qual_data.seed_weights.len(), 42);
-        assert_eq!(qual_data.weights_from_one.len(), 10);
-        assert_eq!(qual_data.weights_from_one[0].len(), 10);
-        assert_eq!(qual_data.weights_from_one[0][0].len(), 10);
+        assert_eq!(qual_data.distros_from_one.len(), 10);
+        assert_eq!(qual_data.distros_from_one[0].len(), 10);
+        assert_eq!(qual_data.distros_from_one[0][0].len(), 10);
         let mut out_file = "test_data/test.json".to_string();
         qual_data.write_out_quality_model(&mut out_file).unwrap();
         fs::remove_file(out_file).expect("Failed in removing test json file");

@@ -7,18 +7,26 @@
 // This is intended to make it easier to store them. I think this will be an easier way to read
 // the code, and I'm hoping it does not incur any extra computational burden
 
-pub fn base_to_string(b: u8) -> String {
-    base_to_char(b).to_string()
+use simple_rng::NeatRng;
+
+const ALLOWED_NUCS: [char; 4] = ['A', 'C', 'G', 'T'];
+
+pub fn base_to_string(b: u8, rng: &mut NeatRng) -> String {
+    base_to_char(b, rng).to_string()
 }
 
-pub fn base_to_char(b: u8) -> char {
+pub fn base_to_char(b: u8, rng: &mut NeatRng) -> char {
     match b {
         0 => 'A',
         1 => 'C',
         2 => 'G',
         3 => 'T',
-        // Todo: replace the "N" with a randomly generated character from ACGT
-        _ => 'N',
+        _ => {
+            // Motivation for omitting 1 is that telomeric regions in animals tend to be C deficient
+            // We could further improve this potentially in the future
+            let index = rng.choose(&vec![0, 2, 3]);
+            ALLOWED_NUCS[index]
+        },
     }
 }
 
@@ -47,11 +55,11 @@ pub fn char_to_base(c: char) -> u8 {
     }
 }
 
-pub fn sequence_array_to_string(input_array: Vec<u8>) -> String {
+pub fn sequence_array_to_string(input_array: &Vec<u8>, rng: &mut NeatRng) -> String {
     // Converts a sequence vector into a string representing the DNA sequence
     let mut return_string = String::with_capacity(input_array.len());
     for nuc in input_array {
-        return_string.push(base_to_char(nuc));
+        return_string.push(base_to_char(*nuc, rng));
     }
     return_string
 }
@@ -59,6 +67,7 @@ pub fn sequence_array_to_string(input_array: Vec<u8>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use simple_rng::NeatRng;
 
     #[test]
     fn test_base_to_nuc() {
@@ -68,14 +77,24 @@ mod tests {
 
     #[test]
     fn cast_type() {
+        let mut rng = NeatRng::new_from_seed(vec![
+            "Hello".to_string(),
+            "Cruel".to_string(),
+            "World".to_string(),
+        ]);
         let num1: u8 = 0;
-        assert_eq!(base_to_char(num1), 'A')
+        assert_eq!(base_to_char(num1, &mut rng), 'A')
     }
 
     #[test]
     fn test_nuc_to_char() {
+        let mut rng = NeatRng::new_from_seed(vec![
+            "Hello".to_string(),
+            "Cruel".to_string(),
+            "World".to_string(),
+        ]);
         let my_nuc = 1;
-        assert_eq!(base_to_string(my_nuc), "C");
+        assert_eq!(base_to_string(my_nuc, &mut rng), "C");
     }
     #[test]
     fn test_complement() {

@@ -1,8 +1,12 @@
 [package]
 name = "simple_rng"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+authors.workspace = true
+description.workspace = true
+repository.workspace = true
+edition.workspace = true
 
 [dependencies]
 chrono = "0.4.38"
 statrs = "0.17.1"
+serde = { version = "1.0.215", features = ["derive"] }

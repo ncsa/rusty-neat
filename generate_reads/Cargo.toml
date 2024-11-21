@@ -1,7 +1,10 @@
 [package]
 name = "generate_reads"
-version = "0.2.0"
-edition = "2021"
+version.workspace = true
+authors.workspace = true
+description.workspace = true
+repository.workspace = true
+edition.workspace = true
 
 [dependencies]
 common = { path = "../common" }

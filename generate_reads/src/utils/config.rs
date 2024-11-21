@@ -5,7 +5,6 @@ use crate::utils;
 use common;
 
 use log::{info, warn};
-use rand_distr::num_traits::ToPrimitive;
 use serde_yaml::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -51,7 +50,7 @@ pub struct RunConfiguration {
     pub produce_fasta: bool,
     pub produce_vcf: bool,
     pub produce_bam: bool,
-    pub rng_seed: Option<u64>,
+    pub rng_seed: Option<String>,
     pub overwrite_output: bool,
     pub minimum_mutations: Option<usize>,
     pub output_dir: PathBuf,
@@ -80,7 +79,7 @@ pub struct ConfigBuilder {
     pub(crate) produce_fasta: bool,
     pub(crate) produce_vcf: bool,
     produce_bam: bool,
-    rng_seed: Option<u64>,
+    rng_seed: Option<String>,
     overwrite_output: bool,
     pub(crate) minimum_mutations: Option<usize>,
     pub(crate) output_dir: PathBuf,
@@ -181,9 +180,6 @@ impl ConfigBuilder {
         }
         if self.produce_bam {
             info!("Produce bam file: {}.bam", file_prefix)
-        }
-        if self.rng_seed.is_some() {
-            info!("Using rng seed: {}", self.rng_seed.unwrap())
         }
     }
 
@@ -318,8 +314,8 @@ pub fn read_config_yaml<'d>(yaml: String) -> Box<RunConfiguration> {
                         }
                         "rng_seed" => {
                             config_builder.rng_seed = value
-                                .as_u64()
-                                .expect(&generate_error(&key, "64-bit integer", &value))
+                                .as_str()
+                                .expect(&generate_error(&key, "string", &value))
                                 .into() // to make it an option
                         }
                         "overwrite_output" => {

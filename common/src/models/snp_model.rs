@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::slice::Iter;
 use simple_rng::{DiscreteDistribution, NeatRng};
-use structs::transition_matrix::TransitionMatrix;
+use crate::structs::transition_matrix::TransitionMatrix;
 use self::SnpFrame::*;
 // The following section are the models for each type of variant. In order to create the variant,
 // we need to model its statistical property. NEAT included two types of variants: SNPs and Indels.
@@ -31,11 +31,11 @@ impl SnpFrame {
 
 #[derive(Debug, Clone)]
 pub struct SnpModel {
-    // Relative weights given to each SNP frame.
-    snp_weights: HashMap<SnpFrame, usize>,
+    // Relative weights given to each SNP frame. Ultimately this will be imputed from data.
+    snp_distr: DiscreteDistribution,
     // The transition matrix is the chance of mutating the middle base from A, C, T, or G to a
     // different base (4x4 matrix with 0s on the diagonal).
-    trinuc_matrix: HashMap<SnpFrame, TransitionMatrix>,
+    trinuc_distros: HashMap<SnpFrame, TransitionMatrix>,
 }
 
 impl SnpModel {
@@ -43,30 +43,33 @@ impl SnpModel {
         // Creating the default trinuc bias model for snps. In this model, all trinucleotides
         // mutate with equal probability and middle base mutates with the same probability no matter
         // the context (the default transition matrix).
-        let mut snp_weights: HashMap<SnpFrame, usize> = HashMap::new();
-        let mut trinuc_matrix: HashMap<SnpFrame, TransitionMatrix> = HashMap::new();
+
+        // One weight for each snp frame.
+        let mut snp_weights: Vec<f64> = Vec::with_capacity(16);
+        let mut trinuc_distros: HashMap<SnpFrame, TransitionMatrix> = HashMap::new();
         for frame in SnpFrame::iterator() {
-            snp_weights.insert(*frame, 1);
-            trinuc_matrix.insert(*frame, TransitionMatrix::new());
+            snp_weights.push(1.0);
+            trinuc_distros.insert(*frame, TransitionMatrix::default());
         }
+        let snp_distr = DiscreteDistribution::new(&snp_weights);
         SnpModel {
-            snp_weights,
-            trinuc_matrix,
+            snp_distr,
+            trinuc_distros,
         }
     }
-    fn generate_bias(&self, input_sequence: &Vec<u8>) -> Vec<usize> {
+    fn generate_bias(&self, _input_sequence: &Vec<u8>) -> Vec<usize> {
         todo!()
         // We need some way to use this model to bias positions of SNPs, but it's not clear yet how.
     }
 
     pub fn generate_snp(
         &self,
-        trinuc_reference: &[u8],
+        trinuc_reference: &[u8; 3],
         rng: &mut NeatRng
     ) -> u8 {
         // We shouldn't have N's here. Basically, this matches the correct trinuc from the enum,
         // then uses that as the index for the trinuc matrix of interest.
-        let matrix = self.trinuc_matrix.get(&match trinuc_reference[0] {
+        let matrix = self.trinuc_distros.get(&match trinuc_reference[0] {
             0 => {
                 match trinuc_reference[2] {
                     0 => ANA,
@@ -106,16 +109,13 @@ impl SnpModel {
             _ => { panic!("Trying to use trinucleotide bias on an unknown base (N).") },
         }).unwrap();
 
-        let weights = match trinuc_reference[1] {
-            0 => matrix.a_weights.clone(),
-            1 => matrix.c_weights.clone(),
-            2 => matrix.g_weights.clone(),
-            3 => matrix.t_weights.clone(),
+        match trinuc_reference[1] {
+            0 => matrix.a_dist.sample(rng) as u8,
+            1 => matrix.c_dist.sample(rng) as u8,
+            2 => matrix.g_dist.sample(rng) as u8,
+            3 => matrix.t_dist.sample(rng) as u8,
             _ => { panic!("Trying to use trinucleotide bias on an unknown base (N).") },
-        };
-
-        let dist = DiscreteDistribution::new(&weights);
-        dist.sample(rng) as u8
+        }
     }
 }
 

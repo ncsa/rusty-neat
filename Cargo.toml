@@ -6,4 +6,12 @@ members = [
     "fasta_reader",
     "simple_rng",
 ]
+
 resolver = "2"
+
+[workspace.package]
+version = '0.2.0'
+edition = '2021'
+authors = ["Joshua Allen"]
+description = "Generates a randomly mutated fastq file, along with golden vcf and bam to compare results"
+repository = "https://github.com/ncsa/rusty-neat"

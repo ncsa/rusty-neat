@@ -1,8 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
-use std::fs::{read_to_string, File};
-use std::path::PathBuf;
-use std::str::FromStr;
+use std::fs::read_to_string;
 
 // The SequenceBlock has coordinates that map back to the original reference. Local manipulations
 // of the block can use local coordinates, but any variant locations etc will be modified by the
@@ -15,11 +13,11 @@ pub struct SequenceBlock {
     // end is where this feature ends, relative to the reference.
     pub ref_end: usize,
     pub length: usize,
-    pub file: OsString,
+    pub data_file: OsString,
 }
 
 impl SequenceBlock {
-    pub fn new(ref_start: usize, length:usize, file: OsString) -> Result<Self, ()> {
+    pub fn new(ref_start: usize, length:usize, data_file: OsString) -> Result<Self, ()> {
         if length <= 0 {
             panic!(
                 "Bad parameters for sequence block start: {} length: {}", ref_start, length
@@ -29,7 +27,7 @@ impl SequenceBlock {
                 ref_start,
                 ref_end: ref_start + length,
                 length,
-                file,
+                data_file,
             })
         }
     }
@@ -44,7 +42,7 @@ impl SequenceBlock {
         // throw an error. Had to use vec::from rather than collect for reasons unknown (can't
         // clone a u8?
         let mut result_vec = Vec::new();
-        for line in read_to_string(&self.file).unwrap().lines() {
+        for line in read_to_string(&self.data_file).unwrap().lines() {
             for char in line.chars() {
                 // characters are 0, 1, 2, or 3, because they are adjacent and sequential in UTF-8,
                 // = 48, 49, 50, 51
@@ -127,36 +125,85 @@ pub struct FastaMap {
     pub contig_order: VecDeque<String>,
 }
 
+impl FastaMap {
+    pub fn from(
+        contigs: Vec<Contig>,
+        name_map: HashMap<String, String>,
+        contig_order: VecDeque<String>
+    ) -> Self {
+        FastaMap {
+            contigs,
+            name_map,
+            contig_order,
+        }
+    }
+}
 
 
 #[cfg(test)]
 mod tests {
+    use serde_json::to_string;
+    use crate::structs::fasta_map::RegionType::{NRegion, NonNRegion};
     use super::*;
 
     #[test]
     fn test_basic_map() {
         let read = 0x30u8;
         println!("{}", read);
-        // let read = vec![
-        //     Unk, Unk, Unk, Unk, Unk, Unk, Unk, Unk, Unk, Unk,
-        //     Unk, Unk, Ada, Cyt, Thy, Unk, Unk, Unk, Ada, Unk
-        // ];
-        // let fasta_sequence = Box::new(HashMap::from([
-        //     ("chr 1".to_string(), read)
-        // ]));
-        // let fasta_map = FastaMap::build_from_reference(&fasta_sequence).unwrap();
-        //
-        // let expected_output = "FastaMap { map: {\"chr 1\": \
-        // (20, [\
-        // FastaBlock { start: 0, block_type: NBlock }, \
-        // FastaBlock { start: 12, block_type: Allowed }, \
-        // FastaBlock { start: 15, block_type: NBlock }, \
-        // FastaBlock { start: 18, block_type: Allowed }, \
-        // FastaBlock { start: 19, block_type: NBlock }\
-        // ])} }".to_string();
-        //
-        // let test_out = format!("{:?}", fasta_map);
-        //
-        // assert_eq!(test_out, expected_output)
+        let read = vec![
+            4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+            4, 4, 0, 1, 3, 4, 4, 4, 0, 4,
+        ];
+        let data_file = "test.seq";
+        let sequence_block = SequenceBlock::new(
+            0, 20, data_file.parse().unwrap()
+        ).unwrap();
+        let sequences = vec![sequence_block];
+        let contig_map = Vec::from([
+            (0, 12, NRegion),
+            (12, 15, NonNRegion),
+            (15, 18, NRegion),
+            (18, 19, NonNRegion),
+            (19, 20, NRegion),
+        ]);
+        let contig = Contig::new(
+            "Test_contig".to_string(),
+            10,
+            sequences,
+            contig_map,
+        ).unwrap();
+        let name_map = HashMap::from([
+            ("Test_contig".to_string(), ">Test_contig\n".to_string())
+        ]);
+        let contigs = Vec::from([contig]);
+        let contig_order = VecDeque::from(["Test_contig".to_string()]);
+        let fasta_map = FastaMap::from(
+            contigs,
+            name_map,
+            contig_order,
+        );
+
+        let expected_output = "FastaMap { \
+        contigs: [Contig { \
+            name: \"Test_contig\", \
+            len: 10, \
+            blocks: [SequenceBlock { \
+                ref_start: 0, \
+                ref_end: 20, \
+                length: 20, \
+                data_file: \"test.seq\" \
+                }], \
+            contig_map: [\
+                (0, 12, NRegion), \
+                (12, 15, NonNRegion), \
+                (15, 18, NRegion), \
+                (18, 19, NonNRegion), \
+                (19, 20, NRegion)] }], \
+            name_map: {\"Test_contig\": \">Test_contig\\n\"}, \
+            contig_order: [\"Test_contig\"] }";
+
+        let test_out = format!("{:?}", fasta_map);
+
+        assert_eq!(test_out, expected_output)
     }
 }

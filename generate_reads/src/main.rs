@@ -12,6 +12,7 @@ use common;
 pub mod utils;
 mod data;
 
+use chrono::Utc;
 use clap::Parser;
 use log::*;
 use simplelog::*;
@@ -72,17 +73,33 @@ fn main() {
     };
     // Generate the RNG used for this run. If one was given in the config file, use that, or else
     // use thread_rng to generate a random seed, then seed using a SeedableRng based on StdRng
-    let seed: u64;
-    if !config.rng_seed.is_none() {
-        seed = config.rng_seed.unwrap();
-    } else {
-        // We pick a random u64 to use as a seed
-        let mut seed_rng = thread_rng();
-        seed = seed_rng.next_u64();
-    }
-    info!("Generating random numbers using the seed: {}", seed);
-    let rng: ChaCha20Rng = SeedableRng::seed_from_u64(seed);
+    let mut seed_vec: Vec<String> = Vec::new();
+    let user_input = (&config.rng_seed).clone();
+    let seed_vec = match user_input {
+        Some(u) => {
+            // For read it as a string, hopefully
+            let raw_seed = u.to_owned();
+            for seed_term in raw_seed.split_whitespace() {
+                seed_vec.push(seed_term.to_string());
+            }
+            info!("Seed string to regenerate these exact results: {}", &raw_seed);
+            seed_vec
+        },
+        _ => {
+            // Since no seed was provided, we'll use a datetime stamp with nanoseconds
+            // The seed can be any space separated or tab separated series of strings
+            // e.g., "Every good boy does Fine"
+            // seeds are case-sensitive
+            let timestamp = Utc::now().format("%Y %m %d %H %M %S %f").to_string();
+            for item in timestamp.split_whitespace() {
+                seed_vec.push(item.to_string());
+            }
+            info!("Seed string to regenerate these exact results: {}", &timestamp);
+            seed_vec
+        },
+    };
+    let rng: NeatRng = NeatRng::new_from_seed(seed_vec);
     // run the generate reads main script
-    run_neat(config, rng)
+    run_neat(&config, rng)
         .unwrap_or_else(|error| panic!("Neat encountered a problem: {:?}", error))
 }

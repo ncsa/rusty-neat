@@ -1,9 +1,9 @@
 use log::debug;
 
-use structs::sequencing_errors::SequencingError;
-use structs::sequencing_errors::{IndelErr, SnpErr};
-use structs::transition_matrix::TransitionMatrix;
-use structs::sequencing_errors::SequencingError::{IndelError, SNPError};
+use crate::structs::sequencing_errors::SequencingError;
+use crate::structs::sequencing_errors::{IndelErr, SnpErr};
+use crate::structs::transition_matrix::TransitionMatrix;
+use crate::structs::sequencing_errors::SequencingError::{IndelError, SNPError};
 use simple_rng::{NeatRng, DiscreteDistribution};
 
 #[derive(Clone)]
@@ -12,41 +12,35 @@ pub struct SequencingErrorModel {
     // We will retain that idea and assume it is accurate.
     error_rate: f64,
     lengths: [i8; 4],
-    length_weights: [u32; 4],
+    length_distr: DiscreteDistribution,
     insertion_probability: f64,
-    insertion_bias: [u32; 4],
-    transition_matrix: TransitionMatrix,
+    insertion_bias: DiscreteDistribution,
+    transition_distros: TransitionMatrix,
 }
 
 impl SequencingErrorModel {
     pub fn new() -> Self {
-        // This is the default sequencing error model employed by NEAT2, scaled to be weights
-        // instead of percentages (each item multiplied by a factor of 10/(min(row)) and rounded)
-        // Original:
-        // [[0.0, 0.4918, 0.3377, 0.1705],
-        //   [0.5238, 0.0, 0.2661, 0.2101],
-        //   [0.3754, 0.2355, 0.0, 0.389],
-        //   [0.2505, 0.2552, 0.4942, 0.0]]
-        let default_transition_matrix = TransitionMatrix::from(vec![
-            vec![0, 29, 20, 10],
-            vec![25, 0, 13, 10],
-            vec![15, 10, 0, 17],
-            vec![10, 10, 20, 0],
-        ]);
+        // This is the default sequencing error model employed by NEAT2
+        let default_transition_distros = TransitionMatrix::from(
+            vec![0.0, 0.4918, 0.3377, 0.1705],
+            vec![0.5238, 0.0, 0.2661, 0.2101],
+            vec![0.3754, 0.2355, 0.0, 0.389],
+            vec![0.2505, 0.2552, 0.4942, 0.0],
+        );
         let default_error_rate = 0.01;
         let default_lengths = [-2, -1, 1, 2];
-        let default_length_weights = [1, 999, 999, 1];
+        let default_length_distr = DiscreteDistribution::new(&vec![0.001, 0.999, 0.999, 0.001]);
         let default_insertion_probability = 0.4;
         // default is no bias
-        let default_insertion_bias = [1, 1, 1, 1];
+        let default_insertion_bias = DiscreteDistribution::new(&vec![1.0, 1.0, 1.0, 1.0]);
 
         SequencingErrorModel {
             error_rate: default_error_rate,
             lengths: default_lengths,
-            length_weights: default_length_weights,
+            length_distr: default_length_distr,
             insertion_probability: default_insertion_probability,
             insertion_bias: default_insertion_bias,
-            transition_matrix: default_transition_matrix,
+            transition_distros: default_transition_distros,
         }
     }
     pub fn generate_snp_error(&self, base: u8, rng: &mut NeatRng) -> SequencingError {
@@ -54,16 +48,15 @@ impl SequencingErrorModel {
         // Pick the weights list for the base that was input
         // We will use this simple model for sequence errors ultimately.
         debug!("Generating basic SNP variant");
-        let weights: &Vec<u32> = match base {
-            0 => &self.transition_matrix.a_weights,
-            1 => &self.transition_matrix.c_weights,
-            2 => &self.transition_matrix.g_weights,
-            3 => &self.transition_matrix.t_weights,
-            _ => panic!("Ve should not be trying to mutated unknown bases!")
+        let weights: &DiscreteDistribution = match base {
+            0 => &self.transition_distros.a_dist,
+            1 => &self.transition_distros.c_dist,
+            2 => &self.transition_distros.g_dist,
+            3 => &self.transition_distros.t_dist,
+            _ => panic!("Trying to mutate an unknown bases!")
         };
         // Now we create a distribution from the weights and sample our choices.
-        let dist = DiscreteDistribution::new(weights);
-        match dist.sample(rng) {
+        match weights.sample(rng) {
             0 => SNPError(SnpErr::new(0)),
             1 => SNPError(SnpErr::new(1)),
             2 => SNPError(SnpErr::new(2)),
@@ -75,14 +68,12 @@ impl SequencingErrorModel {
     }
 
     pub fn generate_indel_error(&self, rng: &mut NeatRng) -> SequencingError {
-        let dist = DiscreteDistribution::new(&Vec::from(self.length_weights));
-        let length = self.lengths[dist.sample(rng)];
+        let length = self.lengths[self.length_distr.sample(rng)];
         if length > 0 {
             // insertion
             let mut sequence = Vec::new();
-            let dist = DiscreteDistribution::new(&Vec::from(self.insertion_bias));
             for _ in 0..length {
-                sequence.push(dist.sample(rng) as u8)
+                sequence.push(self.insertion_bias.sample(rng) as u8)
             }
             // Insertion of sequence
             IndelError(IndelErr::new(length, Some(sequence)))
@@ -98,6 +89,7 @@ mod tests {
     use super::*;
     #[test]
     fn test_sequencing_error_model() {
+        // todo needs tests
         println!("TODO");
         assert_eq!(1, 1)
     }

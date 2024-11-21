@@ -1,15 +1,11 @@
 use simple_rng::{NeatRng, DiscreteDistribution};
 use std::borrow::BorrowMut;
-use std::collections::HashMap;
-use log::{warn, info};
-use std::env::var;
-use structs::transition_matrix::TransitionMatrix;
-use structs::variants::{Variant, VariantType};
-use models::indel_model::{IndelModel, generate_random_insertion};
-use models::quality_scores::QualityScoreModel;
-use models::sequencing_error_model::SequencingErrorModel;
-use models::snp_model::SnpModel;
-use structs::fasta_map::{SequenceBlock, Contig};
+use crate::structs::transition_matrix::TransitionMatrix;
+use crate::structs::variants::{Variant, VariantType};
+use crate::models::indel_model::{IndelModel, generate_random_insertion};
+use crate::models::quality_scores::QualityScoreModel;
+use crate::models::sequencing_error_model::SequencingErrorModel;
+use crate::models::snp_model::SnpModel;
 
 #[derive(Clone)]
 pub struct MutationModel {
@@ -29,7 +25,7 @@ pub struct MutationModel {
     //    1. SNP
     //    2. Insertion
     //    3. Deletion
-    pub variant_weights: [u32; 3],
+    pub variant_dist: DiscreteDistribution,
     // These hold all the statistical model data we need to apply the mutations with this model
     statistical_models: StatisticalModels,
 }
@@ -53,21 +49,22 @@ impl MutationModel {
         //                 probability of deletion of  0.4 * 0.05 = 0.02 * 100 = 2
         //                 probability of SNP of       0.95              * 100 = 95
         let variant_weights = [
-            95, // snp
-            3, // insertion
-            2, //deletion
+            0.95, // snp
+            0.03, // insertion
+            0.02, //deletion
         ];
+        let variant_dist = DiscreteDistribution::new(&Vec::from(variant_weights));
         let statistical_models = StatisticalModels::new();
 
         MutationModel {
             mutation_rate,
             homozygous_frequency,
-            variant_weights,
+            variant_dist,
             statistical_models,
         }
     }
 
-    fn generate_genotype(&mut self, ploidy: usize, mut rng: &mut NeatRng) -> Vec<u8> {
+    fn generate_genotype(&mut self, ploidy: usize, rng: &mut NeatRng) -> Vec<u8> {
         // "Homozygous" is ambiguous for polyploid organisms, so we'll just take "heterozygous" to
         // mean roughly half the reads will have the variant, to keep it simple
         let is_homozygous = rng.borrow_mut().gen_bool(self.homozygous_frequency);
@@ -82,17 +79,15 @@ impl MutationModel {
     pub fn generate_mutation(
         &mut self,
         reference_sequence: &Vec<u8>,
-        fasta_blocks: &Vec<SequenceBlock>,
         variant_location: usize,
         ploidy: usize,
-        mut rng: NeatRng,
+        mut rng: &mut NeatRng,
     ) -> Variant {
         // Select a genotype for the variant
         let genotype= self.generate_genotype(ploidy, &mut rng);
         // Select a type of mutation.
-        let dist = DiscreteDistribution::new(&Vec::from(self.variant_weights));
-        let index = dist.sample(&mut rng);
-        let variant_type = if index > VARIANT_TYPES.len() || index < 0 {
+        let index = self.variant_dist.sample(&mut rng);
+        let variant_type = if index > VARIANT_TYPES.len() {
             panic!("Weird result from sampling variant type: {}", index)
         } else {
             VARIANT_TYPES[index]
@@ -102,10 +97,11 @@ impl MutationModel {
         //   Add a function in FastaMap to add a block to a vector
         let (reference, alternate) = match variant_type {
             VariantType::SNP => {
-                let trinuc_reference = &reference_sequence.get(
-                    variant_location-1..=variant_location+1
-                ).unwrap();
-
+                let trinuc_reference = [
+                    reference_sequence[variant_location-1],
+                    reference_sequence[variant_location],
+                    reference_sequence[variant_location+1],
+                ];
                 let alternate_base = self.statistical_models.snp_model.generate_snp(
                     &trinuc_reference,
                     &mut rng,
@@ -139,7 +135,6 @@ impl MutationModel {
                     .map(|item| *item)
                     .collect();
                 let alternate: Vec<u8> = vec![reference[0].clone()];
-
                 (reference, alternate)
             },
         };
@@ -148,7 +143,7 @@ impl MutationModel {
             variant_location,
             &reference,
             &alternate,
-            genotype,
+            &genotype,
         );
         variant_to_insert
     }
@@ -169,28 +164,12 @@ struct StatisticalModels {
 impl StatisticalModels {
     pub fn new() -> Self {
         // use the default transition matrix, snp model and indel model
-        let transition_matrix = TransitionMatrix::new();
+        let transition_matrix = TransitionMatrix::default();
         let snp_model = SnpModel::new();
-        let indel_model = IndelModel::new();
+        let indel_model = IndelModel::default();
         let quality_score_model = QualityScoreModel::new();
         let sequencing_error_model = SequencingErrorModel::new();
 
-        StatisticalModels {
-            transition_matrix,
-            quality_score_model,
-            snp_model,
-            indel_model,
-            sequencing_error_model,
-        }
-    }
-
-    pub fn from(
-        transition_matrix: TransitionMatrix,
-        quality_score_model: QualityScoreModel,
-        snp_model: SnpModel,
-        indel_model: IndelModel,
-        sequencing_error_model: SequencingErrorModel,
-    ) -> Self {
         StatisticalModels {
             transition_matrix,
             quality_score_model,
@@ -207,11 +186,11 @@ mod tests {
 
     #[test]
     fn test_transition_matrix_from_weights() {
-        let a_weights = vec![0, 20, 1, 20];
-        let c_weights = vec![20, 0, 1, 1];
-        let g_weights = vec![1, 1, 0, 20];
-        let t_weights = vec![20, 1, 20, 0];
-        TransitionMatrix::from(vec![a_weights, c_weights, g_weights, t_weights]);
+        let a_weights = vec![0.0, 20.0, 1.0, 20.0];
+        let c_weights = vec![20.0, 0.0, 1.0, 1.0];
+        let g_weights = vec![1.0, 1.0, 0.0, 20.0];
+        let t_weights = vec![20.0, 1.0, 20.0, 0.0];
+        TransitionMatrix::from(a_weights, c_weights, g_weights, t_weights);
         // It actually mutates the base
         // assert_ne!(test_model.generate_mutation
         // (

@@ -3,20 +3,19 @@ extern crate log;
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::io::Write;
-use rand::prelude::SliceRandom;
-use rand_chacha::ChaCha20Rng;
+use simple_rng::NeatRng;
 use common::file_tools::open_file;
 use common::structs::nucleotides::sequence_array_to_string;
 use common::structs::variants::Variant;
 
-fn genotype_to_string(genotype: &mut Vec<u8>, mut rng: ChaCha20Rng) -> String {
+fn genotype_to_string(genotype: &mut Vec<u8>, rng: &mut NeatRng) -> String {
     // Converts a vector of 0s and 1s representing genotype to a standard
     // vcf genotype string.
     //
     // In order to make the vcf look a little more realistic, we shuffle the genotypes, that way
     // it doesn't look like one ploid got all the mutations. I actually don't know if this is
     // realistic or not, but that's what we're doing.
-    genotype.shuffle(&mut rng);
+    rng.shuffle_in_place(genotype);
     let geno_str = genotype.iter().map(|x| x.to_string() + "/").collect::<String>();
     geno_str.strip_suffix("/").expect(
         &format!("Problem with genotype string: {:?}", genotype)
@@ -30,7 +29,7 @@ pub fn write_vcf(
     reference_path: &str,
     overwrite_output: bool,
     output_file_prefix: &str,
-    rng: ChaCha20Rng,
+    mut rng: &mut NeatRng,
 ) -> io::Result<()> {
     // Takes:
     // variant_locations: A map of contig names keyed to lists of variants in that contig
@@ -112,9 +111,9 @@ pub fn write_vcf(
                 "{}\t{}\t.\t{}\t{}\t37\tPASS\t.\tGT\t{}",
                 contig,
                 position + 1,
-                sequence_array_to_string(&mutation.reference),
-                sequence_array_to_string(&mutation.alternate),
-                genotype_to_string(&mut mutation.genotype, rng.clone()),
+                sequence_array_to_string(&mutation.reference, &mut rng),
+                sequence_array_to_string(&mutation.alternate, &mut rng),
+                genotype_to_string(&mut mutation.genotype, &mut rng),
             );
             writeln!(&mut outfile, "{}", line)?;
         }
@@ -125,17 +124,19 @@ pub fn write_vcf(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::SeedableRng;
     use std::fs;
     use std::path::Path;
-    use rand_chacha::ChaCha20Rng;
-    use common::structs::nucleotides::Nuc::*;
+    use simple_rng::NeatRng;
     use common::structs::variants::{Variant, VariantType};
 
     #[test]
     fn test_genotype_to_string() {
         let mut genotype = vec![0, 1, 0];
-        let rng = ChaCha20Rng::seed_from_u64(0);
+        let mut rng = NeatRng::new_from_seed(vec![
+            "Hello".to_string(),
+            "Cruel".to_string(),
+            "World".to_string(),
+        ]);
         assert_eq!(String::from("0/1/0"), genotype_to_string(&mut genotype, rng));
     }
 

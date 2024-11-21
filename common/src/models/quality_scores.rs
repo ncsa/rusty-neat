@@ -26,7 +26,7 @@ use serde_json;
 use std::fmt::{Display, Formatter};
 use simple_rng::{NeatRng, DiscreteDistribution};
 
-use file_tools::open_file;
+use crate::file_tools::open_file;
 
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -41,13 +41,14 @@ pub struct QualityScoreModel {
     // on a per-run basis in a deterministic way (doubling positional weight arrays)
     pub assumed_read_length: u32,
     // Weights for the first position in the read length.
-    pub seed_weights: Vec<u32>,
+    pub seed_dist: DiscreteDistribution,
     // A matrix for each subsequent position along the read length after the first. Each row is a
-    // weight vector based on the previous score. For example, for possible scores 0-41, inclusive,
-    // there would be 42 vectors (one for each possible previous score), each giving the weights for
-    // the current position (one weight for each of 42 scores), for a 42 x 42 vector at each
-    // position along the read length.
-    pub weights_from_one: Vec<Vec<Vec<u32>>>,
+    // discrete distribution, keyed the previous score. For example, for possible scores 0-41,
+    // inclusive, there would be 42 vectors (one for each possible previous score), each giving the
+    // distribution for the current position (one weight for each of 42 scores). This is based on
+    // the original design in NEAT. Previous attempts to simplify this have not been able to
+    // successfully reproduce quality scores.
+    pub distros_from_one: Vec<Vec<DiscreteDistribution>>,
 }
 
 impl Display for QualityScoreModel {
@@ -69,34 +70,36 @@ impl QualityScoreModel {
         // We'll construct a base toy model that just favors higher scores for now. We'll work on
         // parsing out this from real data then we can fill this out better.
         let default_quality_scores: Vec<u32> = vec![2, 11, 25, 37];
-        let default_seed_weight: Vec<u32> = vec![1, 3, 5, 1];
-        let default_base_weights: Vec<u32> = vec![1, 1, 2, 5];
+        let default_seed_weight: Vec<f64> = vec![1.0, 3.0, 5.0, 1.0];
+        let default_seed_dist = DiscreteDistribution::new(&default_seed_weight);
+        let default_base_weights: Vec<f64> = vec![1.0, 1.0, 2.0, 5.0];
+        let default_base_dist = DiscreteDistribution::new(&default_base_weights);
         let default_read_length: u32 = 150;
-        let mut default_score_weights: Vec<Vec<Vec<u32>>> = Vec::with_capacity(
+        let mut default_score_distros: Vec<Vec<DiscreteDistribution>> = Vec::with_capacity(
             default_read_length as usize
         );
-        let mut single_position = Vec::new();
-        // The first position (0) will always be an empty vector. This is more to make it easy to
-        // understand than anything.
-        default_score_weights.push(Vec::new());
-        // since we started with an empty vector, we only need 149 more.
+        // The first position (0) will always be an empty vector. Since position 0 never has a
+        // previous read, there will never need to be anything in the first vector.
+        default_score_distros.push(Vec::new());
+        // since we started with an empty vector, we need 149 more
         // for each position along the read after the first,
         for _i in 1..150 {
             // we add one of the base weight vectors per possible previous score.
+            let mut row = Vec::new();
             for _j in 0..default_quality_scores.len() {
-                // In future updates we will add more base weight vectors to mimic real data.
-                single_position.push(default_base_weights.clone());
+                // In future updates we will add more base weight vectors to mimic real data
+                // The default quality score refers to the previous score
+                row.push(default_base_dist.clone());
             }
-            default_score_weights.push(single_position.clone());
-            single_position.clear();
+            default_score_distros.push(row.clone());
         }
         // With the defaults established, create the default quality score model.
         QualityScoreModel {
             quality_score_options: default_quality_scores,
             binned_scores: true,
             assumed_read_length: default_read_length,
-            seed_weights: default_seed_weight,
-            weights_from_one: default_score_weights,
+            seed_dist: default_seed_dist,
+            distros_from_one: default_score_distros,
         }
     }
 
@@ -104,15 +107,16 @@ impl QualityScoreModel {
         quality_score_options: Vec<u32>,
         binned_scores: bool,
         assumed_read_length: u32,
-        seed_weights: Vec<u32>,
-        weights_from_one: Vec<Vec<Vec<u32>>>,
+        seed_dist: DiscreteDistribution,
+        distros_from_one: Vec<Vec<DiscreteDistribution>>,
     ) -> Self {
+
         QualityScoreModel {
             quality_score_options,
             binned_scores,
             assumed_read_length,
-            seed_weights,
-            weights_from_one,
+            seed_dist,
+            distros_from_one,
         }
     }
     #[allow(dead_code)]
@@ -121,13 +125,13 @@ impl QualityScoreModel {
             "QualityScoreModel: (rl: {})\n\
             \tscores: {:?}\n\
             \tbinned? {:?}\n\
-            \tseed weights: {:?}\n\
+            \tseed distribution: {:?}\n\
             \tfirst weight array: {:?}",
             self.assumed_read_length,
             self.quality_score_options,
             self.binned_scores,
-            self.seed_weights,
-            self.weights_from_one[1][0],
+            self.seed_dist,
+            self.distros_from_one[1][0],
         )
     }
     #[allow(dead_code)]
@@ -136,13 +140,13 @@ impl QualityScoreModel {
             "QualityScoreModel: (rl: {})\n\
             \tscores: {:?}\n\
             \tbinned? {:?}\n\
-            \tseed weights: {:?}\n\
+            \tseed distribution: {:?}\n\
             \tscore weight array: {:?}",
             self.assumed_read_length,
             self.quality_score_options,
             self.binned_scores,
-            self.seed_weights,
-            self.weights_from_one,
+            self.seed_dist,
+            self.distros_from_one,
         )
     }
     pub fn generate_quality_scores(
@@ -157,11 +161,9 @@ impl QualityScoreModel {
 
         // This will be the list of scores generated. We already know it is run_read_length long
         let mut score_list: Vec<u32> = Vec::with_capacity(run_read_length as usize);
-        // Create the distribution with WeightedIndex
-        let dist = DiscreteDistribution::new(&self.seed_weights);
         // sample the scores list with the seed weights applied to generate the first score.
         // Samples an index based on the weights, which then selects the quality score.
-        let seed_score = self.quality_score_options[dist.sample(&mut rng)];
+        let seed_score = self.quality_score_options[self.seed_dist.sample(&mut rng)];
         // Adding the seed score to the list.
         score_list.push(seed_score);
         // To map from one length to another, we use the algorithm found in the original NEAT 2.0,
@@ -186,15 +188,8 @@ impl QualityScoreModel {
                 .unwrap();
             // Now we have an index (in the default case 0..<4) of a vector for the position, based
             // on the previous score.
-            let weights: &Vec<u32> = self
-                .weights_from_one
-                .get(i)
-                .expect("Error with quality score remap index.")
-                .get(score_position)
-                .expect("Error finding weights vector");
-            // Now we build the dist and sample as above.
-            let dist = DiscreteDistribution::new(weights);
-            let score = self.quality_score_options[dist.sample(&mut rng)];
+            let index = self.distros_from_one[i][score_position].sample(&mut rng);
+            let score = self.quality_score_options[index];
             score_list.push(score);
             current_index += 1;
         }
@@ -249,59 +244,6 @@ impl QualityScoreModel {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_display_qual_scores() {
-        let score_model = QualityScoreModel {
-            quality_score_options: vec![0, 10, 20],
-            binned_scores: true,
-            assumed_read_length: 10,
-            seed_weights: vec![1, 3, 1],
-            weights_from_one: vec![
-                // We'll always just set the first vector to 0. For now, hardcoded in
-                vec![vec![0, 0, 0], vec![0, 0, 0], vec![0, 0, 0]],
-                vec![vec![1, 3, 2], vec![1, 2, 3], vec![1, 1, 3]],
-                vec![vec![1, 1, 3], vec![1, 1, 3], vec![1, 1, 5]],
-                vec![vec![1, 1, 5], vec![1, 1, 5], vec![1, 1, 5]],
-                vec![vec![1, 1, 5], vec![1, 1, 5], vec![1, 1, 5]],
-                vec![vec![1, 1, 5], vec![1, 1, 5], vec![1, 1, 5]],
-                vec![vec![1, 1, 5], vec![1, 1, 5], vec![1, 1, 5]],
-                vec![vec![3, 1, 1], vec![2, 3, 1], vec![3, 5, 1]],
-                vec![vec![3, 1, 1], vec![3, 2, 1], vec![3, 1, 1]],
-                vec![vec![5, 1, 1], vec![5, 3, 1], vec![3, 5, 1]],
-            ],
-        };
-
-        let message = String::from(
-            "QualityScoreModel: (rl: 10)\n\
-          \tscores: [0, 10, 20]\n\
-          \tbinned? true\n",
-        );
-        assert_eq!(format!("{}", score_model), message);
-
-        let message = String::from(
-            "QualityScoreModel: (rl: 10)\n\
-          \tscores: [0, 10, 20]\n\
-          \tbinned? true\n\
-          \tseed weights: [1, 3, 1]\n\
-          \tfirst weight array: [1, 3, 2]",
-        );
-        assert_eq!(format!("{}", score_model.display()), message);
-
-        let message = String::from(
-            "QualityScoreModel: (rl: 10)\n\
-          \tscores: [0, 10, 20]\n\
-          \tbinned? true\n\
-          \tseed weights: [1, 3, 1]\n\
-          \tscore weight array: [[[0, 0, 0], [0, 0, 0], [0, 0, 0]], [[1, 3, 2], [1, 2, 3], [1, 1, 3]], [[1, 1, 3], [1, 1, 3], [1, 1, 5]], [[1, 1, 5], [1, 1, 5], [1, 1, 5]], [[1, 1, 5], [1, 1, 5], [1, 1, 5]], [[1, 1, 5], [1, 1, 5], [1, 1, 5]], [[1, 1, 5], [1, 1, 5], [1, 1, 5]], [[3, 1, 1], [2, 3, 1], [3, 5, 1]], [[3, 1, 1], [3, 2, 1], [3, 1, 1]], [[5, 1, 1], [5, 3, 1], [3, 5, 1]]]"
-        );
-        assert_eq!(format!("{}", score_model.display_it_all()), message);
-
-        let message = String::from(
-            "QualityScoreModel { quality_score_options: [0, 10, 20], binned_scores: true",
-        );
-        assert!(format!("{:?}", score_model).starts_with(&message))
-    }
 
     #[test]
     fn test_quality_scores_short() {

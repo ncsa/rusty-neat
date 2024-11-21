@@ -33,7 +33,7 @@ impl Variant {
         location: usize,
         reference: &Vec<u8>,
         alternate: &Vec<u8>,
-        genotype: Vec<u8>,
+        genotype: &Vec<u8>,
     ) -> Self {
         match variant_type {
             Insertion | Deletion => assert_ne!(reference.len(), alternate.len()),
@@ -52,14 +52,14 @@ impl Variant {
     pub fn is_homozygous(&self) -> bool {
         // We won't have any 0/0[/0/0...] genotypes in NEAT, so it's sufficient to check that there is a zero
         // (0/1 or 1/1).
-        return if self.genotype.contains(&0) { false } else { true }
+        if self.genotype.contains(&0) { false } else { true }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use structs::variants::VariantType::{SNP, Insertion, Deletion};
+    use crate::structs::variants::VariantType::{SNP, Insertion, Deletion};
 
     #[test]
     fn test_variant_creation() {
@@ -83,7 +83,7 @@ mod tests {
             10,
             &vec![0],
             &vec![0, 1, 3, 2],
-            vec![0, 1],
+            &vec![0, 1],
         );
         assert!(!variant.is_homozygous())
     }
@@ -95,7 +95,7 @@ mod tests {
             22,
             &vec![0, 1, 3, 2],
             &vec![0],
-            vec![0, 1],
+            &vec![0, 1],
         );
         assert!(!variant.is_homozygous())
     }
@@ -109,7 +109,7 @@ mod tests {
             22,
             &vec![0, 1, 3, 2],
             &vec![0],
-            vec![1, 1, 1],
+            &vec![1, 1, 1],
         );
     }
 }

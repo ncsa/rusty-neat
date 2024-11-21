@@ -10,8 +10,9 @@ mod mash;
 
 use mash::Mash;
 use statrs::distribution::{ContinuousCDF, Normal};
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct NeatRng {
     // This will be a simple seeded random number generator and some associated
     // functions. The other RNGs I have tried were too complicated and designed
@@ -136,6 +137,7 @@ impl NeatRng {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct NormalDistribution {
     distribution: Normal,
 }
@@ -169,26 +171,19 @@ impl NormalDistribution {
 /// from the py/probability.py file in tag 2.1 of github.com/ncsa/neat
 /// (see also github.com/zstephens/neat-genreads). We may try the statrs Categorical distribution
 /// as well, as I think it does the same thing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiscreteDistribution {
     cumulative_probability: Vec<f64>,
 }
 
 impl DiscreteDistribution {
-    pub fn new <T>(w_vec: &Vec<T>) -> Self
-        where
-            f64: From<T>, T: Copy, // examples are like u32 and i64
-            T: Into<f64> + Copy,
+    pub fn new(w_vec: &Vec<f64>) -> Self
     {
-        // let's first convert weights to f64 to facilitate calculations
-        let mut w_vec_64: Vec<f64> = Vec::with_capacity(w_vec.len());
-        for number in w_vec {
-            w_vec_64.push(f64::from(*number).into());
-        }
         let cumulative_probability = {
-            let sum_weights: f64 = w_vec_64.iter().sum();
+            let sum_weights: f64 = w_vec.iter().sum();
             let mut normalized_weights = Vec::with_capacity(w_vec.len());
             // we no longer need the w_vec_64 after this, so we consume it
-            for weight in w_vec_64 {
+            for weight in w_vec{
                 normalized_weights.push(weight / sum_weights);
             }
             cumulative_sum(&mut normalized_weights)
@@ -281,16 +276,16 @@ mod tests {
 
     #[test]
     fn test_shuffle_in_place() {
-        let mut my_vec = vec![1, 2, 3, 4, 5, 6, 7, 8, 9];
+        let mut my_vec = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
         let mut rng = NeatRng::new_from_seed(vec![
             "hello".to_string(),
             "cruel".to_string(),
             "world".to_string(),
         ]);
         rng.shuffle_in_place(&mut my_vec);
-        assert_eq!(my_vec, vec![5, 7, 6, 3, 2, 1, 9, 4, 8]);
+        assert_eq!(my_vec, vec![5.0, 7.0, 6.0, 3.0, 2.0, 1.0, 9.0, 4.0, 8.0]);
         rng.shuffle_in_place(&mut my_vec);
-        assert_eq!(my_vec, vec![4, 9, 1, 8, 3, 7, 2, 6, 5]);
+        assert_eq!(my_vec, vec![4.0, 9.0, 1.0, 8.0, 3.0, 7.0, 2.0, 6.0, 5.0]);
     }
 
     #[test]

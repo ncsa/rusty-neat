@@ -28,7 +28,7 @@ pub enum RunNeatError {
     GeneralRunError,
 }
 
-pub fn run_neat(config: Box<RunConfiguration>, rng: NeatRng) -> Result<(), RunNeatError> {
+pub fn run_neat(config: &Box<RunConfiguration>, rng: NeatRng) -> Result<(), RunNeatError> {
     let start = time::Instant::now();
     // Create the prefix of the files to write
     let output_file = format!("{}/{}", config.output_dir.display(), config.output_prefix);
@@ -64,8 +64,6 @@ pub fn run_neat(config: Box<RunConfiguration>, rng: NeatRng) -> Result<(), RunNe
 
     // Mutating the reference and recording the variant locations.
     info!("Generating simulated dataset");
-
-    let n = fasta_order.len();
 
     // all variants will be a hashmap of the contig name indexing a hashmap of variants keyed by
     // location. Basically, the Box moves the map to the heap, the mutex is a way to lock the file

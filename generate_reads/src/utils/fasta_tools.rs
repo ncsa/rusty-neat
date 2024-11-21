@@ -6,12 +6,11 @@ use std::io::Write;
 use std::*;
 use std::collections::{HashMap, VecDeque};
 use fasta_reader::read_fasta;
-use fasta_reader::dna_string::DnaString;
-use fasta_reader::NucleotideBlock::*;
+
 
 
 pub fn write_fasta(
-    mutated_fasta: &Box<HashMap<String, Vec<Nuc>>>,
+    mutated_fasta: &Box<HashMap<String, Vec<u8>>>,
     fasta_order: &VecDeque<String>,
     overwrite_output: bool,
     output_file: &str,
@@ -68,31 +67,6 @@ pub fn write_fasta(
 mod tests {
     use std::path::Path;
     use super::*;
-
-    #[test]
-    fn test_read_fasta() {
-        let test_fasta = "test_data/references/small.fa";
-        let (test_map, map_order) = read_fasta(test_fasta).unwrap();
-        assert_eq!(map_order[0], "H1N1_HA".to_string());
-        let expected_map = HashMap::from(
-            ("H1N1_HA", HashMap::from([
-                (0, NonN(8)),
-                (8, NucBlock(DnaString::from_dna_string("TTCT")))
-            ]))
-        );
-        assert_eq!(*test_map, expected_map)
-    }
-
-    #[test]
-    #[should_panic]
-    fn test_read_bad_fasta() {
-        let test_fasta = "data/fake.fasta";
-        let result = panic::catch_unwind(|| { read_fasta(test_fasta).unwrap() });
-        if Path::new("data").is_dir() {
-            fs::remove_dir("data").unwrap();
-        }
-        result.unwrap();
-    }
 
     #[test]
     fn test_write_fasta() -> Result<(), Box<dyn error::Error>> {

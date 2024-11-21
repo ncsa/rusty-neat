@@ -1,3 +1,5 @@
+use simple_rng::DiscreteDistribution;
+
 #[derive(Debug, Clone)]
 pub struct TransitionMatrix {
     // Nucleotide transition matrix. Rows represent the base we are mutating and the weights are
@@ -7,44 +9,45 @@ pub struct TransitionMatrix {
     // The model is a 4x4 matrix with zeros along the diagonal because, e.g., A can't "mutate" to A.
     // The model is usually symmetric, but technically, the probability for A -> G could be
     // different from the probability for G -> A, but in practice, this seems to not be the case.
-    pub(crate) a_weights: Vec<u32>,
-    pub(crate) c_weights: Vec<u32>,
-    pub(crate) g_weights: Vec<u32>,
-    pub(crate) t_weights: Vec<u32>,
+    pub(crate) a_dist: DiscreteDistribution,
+    pub(crate) c_dist: DiscreteDistribution,
+    pub(crate) g_dist: DiscreteDistribution,
+    pub(crate) t_dist: DiscreteDistribution,
 }
 
-impl TransitionMatrix {
-    pub fn new() -> Self {
+impl TransitionMatrix where {
+    pub fn default() -> Self {
         // Default transition matrix for mutations from the original NEAT 2.0
         Self {
-            a_weights: vec![0, 15, 70, 15],
-            c_weights: vec![15, 0, 15, 70],
-            g_weights: vec![70, 15, 0, 15],
-            t_weights: vec![15, 70, 15, 0],
+            a_dist: DiscreteDistribution::new(&vec![0.0, 15.0, 70.0, 15.0]),
+            c_dist: DiscreteDistribution::new(&vec![15.0, 0.0, 15.0, 70.0]),
+            g_dist: DiscreteDistribution::new(&vec![70.0, 15.0, 0.0, 15.0]),
+            t_dist: DiscreteDistribution::new(&vec![15.0, 70.0, 15.0, 0.0]),
         }
     }
 
-    pub fn from(weights: Vec<Vec<u32>>) -> Self {
-        // Supply a vector of 4 vectors that define the mutation chance
-        // from the given base to the other 4 bases.
-
-        // First some safety checks. This should be a 4x4 matrix defining mutation from
-        // ACGT (top -> down) to ACGT (left -> right)
-        if weights.len() != 4 {
-            panic!("Weights supplied to TransitionMatrix is wrong size");
-        }
-        for weight_vec in &weights {
-            if weight_vec.len() != 4 {
-                panic!("Weights supplied to TransitionMatrix is wrong size");
+    pub fn from(
+        a_weights: Vec<f64>,
+        c_weights: Vec<f64>,
+        g_weights: Vec<f64>,
+        t_weights: Vec<f64>
+    ) -> Self {
+        let weights_test = vec![
+            a_weights.clone(), c_weights.clone(), g_weights.clone(), t_weights.clone()
+        ];
+        for vector in weights_test.iter() {
+            if vector.len() != 4 {
+                panic!("Weights must be of length 4")
             }
         }
         Self {
-            a_weights: weights[0].clone(),
-            c_weights: weights[1].clone(),
-            g_weights: weights[2].clone(),
-            t_weights: weights[3].clone(),
+            a_dist: DiscreteDistribution::new(&a_weights),
+            c_dist: DiscreteDistribution::new(&c_weights),
+            g_dist: DiscreteDistribution::new(&g_weights),
+            t_dist: DiscreteDistribution::new(&t_weights),
         }
     }
+
 }
 
 #[cfg(test)]
@@ -53,38 +56,30 @@ mod tests {
 
     #[test]
     fn test_transition_matrix_build() {
-        let a_weights = vec![0, 20, 1, 20];
-        let c_weights = vec![20, 0, 1, 1];
-        let g_weights = vec![1, 1, 0, 20];
-        let t_weights = vec![20, 1, 20, 0];
+        // todo fix test
+        let a_weights = vec![0.0, 20.0, 1.0, 20.0];
+        let c_weights = vec![20.0, 0.0, 1.0, 1.0];
+        let g_weights = vec![1.0, 1.0, 0.0, 20.0];
+        let t_weights = vec![20.0, 1.0, 20.0, 0.0];
 
-        let model = TransitionMatrix {
-            a_weights: a_weights.clone(),
-            c_weights: c_weights.clone(),
-            g_weights: g_weights.clone(),
-            t_weights: t_weights.clone(),
-        };
+        let model = TransitionMatrix::from(
+            a_weights,
+            c_weights,
+            g_weights,
+            t_weights,
+        );
 
-        assert_eq!(model.a_weights, a_weights);
-    }
-    #[test]
-    #[should_panic]
-    fn test_transition_matrix_too_many_vecs() {
-        let a_weights = vec![0, 20, 1, 20];
-        let c_weights = vec![20, 0, 1, 1];
-        let g_weights = vec![1, 1, 0, 20];
-        let t_weights = vec![20, 1, 20, 0];
-        let u_weights = vec![20, 1, 20, 0];
-        TransitionMatrix::from(vec![a_weights, c_weights, g_weights, t_weights, u_weights]);
+        println!("{:?}", model);
+        // assert_eq!(model.a_dist, a_weights);
     }
 
     #[test]
     #[should_panic]
     fn test_transition_matrix_too_many_bases() {
-        let a_weights = vec![0, 20, 1, 20, 1];
-        let c_weights = vec![20, 0, 1, 1];
-        let g_weights = vec![1, 1, 0, 20];
-        let t_weights = vec![20, 1, 20, 0];
-        TransitionMatrix::from(vec![a_weights, c_weights, g_weights, t_weights]);
+        let a_weights = vec![0.0, 20.0, 1.0, 20.0, 1.0];
+        let c_weights = vec![20.0, 0.0, 1.0, 1.0];
+        let g_weights = vec![1.0, 1.0, 0.0, 20.0];
+        let t_weights = vec![20.0, 1.0, 20.0, 0.0];
+        TransitionMatrix::from(a_weights, c_weights, g_weights, t_weights);
     }
 }

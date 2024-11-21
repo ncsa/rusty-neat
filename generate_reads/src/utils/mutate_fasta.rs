@@ -5,13 +5,12 @@
 // mutate_sequence adds actual mutations to the fasta sequence
 
 use std::collections::HashMap;
-use common::structs::nucleotides::Nuc;
 use common::structs::variants::{Variant, VariantType};
 
 pub fn apply_mutations(
-    sequence: &Vec<Nuc>,
+    sequence: &Vec<u8>,
     mutations_to_apply: &HashMap<usize, Variant>,
-) -> Result<Vec<Nuc>, &'static str> {
+) -> Result<Vec<u8>, Err> {
     // Takes:
     // sequence: a vector of nucleotides representing the reference sequence.
     // mutations_to_apply: A hashmap of mutations to apply indexed by position.
@@ -19,22 +18,21 @@ pub fn apply_mutations(
     // Returns:
     // A vector of nucleotides representing the mutated sequence
     //
-    let mut mutated_sequence: Vec<Nuc> = Vec::new();
+    let mut mutated_sequence: Vec<u8> = Vec::new();
     let mut i = 0;
     while i < sequence.len() {
         if mutations_to_apply.contains_key(&i) {
             let variant_to_apply = mutations_to_apply.get(&i).unwrap();
             match variant_to_apply.variant_type {
-                VariantType::Indel => {
-                    if variant_to_apply.is_insertion() { // insertion
-                        for base in &variant_to_apply.alternate {
-                            mutated_sequence.push(base.clone());
-                        }
-                        i += 1;
-                    } else { // Deletion
-                        mutated_sequence.push(sequence[i].clone());
-                        i += variant_to_apply.reference.len();
+                VariantType::Insertion => {
+                    for base in &variant_to_apply.alternate {
+                        mutated_sequence.push(base.clone());
                     }
+                    i += 1;
+                },
+                VariantType::Deletion => {
+                    mutated_sequence.push(sequence[i].clone());
+                    i += variant_to_apply.reference.len();
                 },
                 VariantType::SNP => {
                     mutated_sequence.push(variant_to_apply.alternate[0].clone());
@@ -53,30 +51,37 @@ pub fn apply_mutations(
 mod tests {
     use std::collections::VecDeque;
     use super::*;
-    use common::structs::nucleotides::Nuc::*;
 
     #[test]
     fn test_apply_mutations() {
-        let seq1: Vec<Nuc> = vec![Ada, Ada, Cyt, Thy, Thy, Gua, Gua, Cyt, Ada, Thy, Cyt, Cyt, Cyt];
+        let seq1: Vec<u8> = vec![0, 0, 1, 3, 3, 2, 2, 1, 0, 3, 1, 1, 1];
         let mutations = HashMap::from([
             (3, Variant::new(
-                VariantType::SNP, &vec![Thy], &vec![Gua], vec![0, 1]
+                VariantType::SNP,
+                3,
+                &vec![3],
+                &vec![2],
+                &vec![0, 1]
             )),
             (5, Variant::new(
-                VariantType::Indel, &vec![Gua, Gua, Cyt], &vec![Gua], vec![1, 1]
+                VariantType::Deletion,
+                5,
+                &vec![2, 2, 1],
+                &vec![2],
+                &vec![1, 1]
             )),
         ]);
         let mutant = apply_mutations(&seq1, &mutations).unwrap();
         assert_eq!(mutant.len(), seq1.len() - 2);
-        assert_eq!(mutant[3], Gua);
-        assert_eq!(mutant[6], Ada);
+        assert_eq!(mutant[3], 2);
+        assert_eq!(mutant[6], 0);
     }
 
     #[test]
     fn test_output_correct() {
         let mut fasta_map = HashMap::from([
-            ("chr1".to_string(), vec![Ada, Cyt, Cyt, Gua, Thy, Gua, Gua, Cyt, Ada, Gua, Ada]),
-            ("chr2".to_string(), vec![Thy, Thy, Ada, Gua, Cyt, Cyt, Thy, Thy, Ada, Gua, Gua, Thy, Thy, Thy, Ada])
+            ("chr1".to_string(), vec![0, 1, 1, 2, 3, 2, 2, 1, 0, 2, 0]),
+            ("chr2".to_string(), vec![3, 3, 0, 2, 1, 1, 3, 3, 0, 2, 2, 3, 3, 3, 0])
         ]);
         let chrom_order = VecDeque::from(
             ["chr1".to_string(), "chr2".to_string()]
@@ -84,24 +89,39 @@ mod tests {
         let all_variants = HashMap::from([
             ("chr1".to_string(), HashMap::from([
                 (3, Variant::new(
-                    VariantType::SNP, &vec![Gua], &vec![Ada], vec![0, 1]
+                    VariantType::SNP,
+                    3,
+                    &vec![2],
+                    &vec![0],
+                    &vec![0, 1]
                 )),
                 (5, Variant::new(
-                    VariantType::Indel, &vec![Gua, Gua, Cyt], &vec![Gua], vec![1, 1]
+                    VariantType::Deletion, 5,
+                    &vec![2, 2, 1],
+                    &vec![2],
+                    &vec![1, 1]
                 ))
             ])),
             ("chr2".to_string(), HashMap::from([
                  (7, Variant::new(
-                     VariantType::SNP, &vec![Thy], &vec![Gua], vec![0, 1]
+                     VariantType::SNP,
+                     7,
+                     &vec![3],
+                     &vec![2],
+                     &vec![0, 1]
                  )),
                  (11, Variant::new(
-                     VariantType::Indel, &vec![Thy], &vec![Thy, Thy], vec![1, 1]
+                     VariantType::Insertion,
+                     11,
+                     &vec![3],
+                     &vec![3, 3],
+                     &vec![1, 1]
                  ))
             ])),
         ]);
         let output_map = HashMap::from([
-            ("chr1", vec![Ada, Cyt, Cyt, Ada, Thy, Gua, Ada, Gua, Ada]),
-            ("chr2", vec![Thy, Thy, Ada, Gua, Cyt, Cyt, Thy, Gua, Ada, Gua, Gua, Thy, Thy, Thy, Thy, Ada])
+            ("chr1", vec![0, 1, 1, 0, 3, 2, 0, 2, 0]),
+            ("chr2", vec![3, 3, 0, 2, 1, 1, 3, 2, 0, 2, 2, 3, 3, 3, 3, 0])
         ]);
         for contig in chrom_order {
             let contig_variants = all_variants.get(&contig).unwrap().clone();

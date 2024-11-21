@@ -15,39 +15,57 @@ pub struct IndelModel {
     // Based what was in the original NEAT
     insertion_probability: f64,
     ins_lengths: Vec<u32>,
-    ins_weights: Vec<u32>,
+    ins_dist: DiscreteDistribution,
     del_lengths: Vec<u32>,
-    del_weights: Vec<u32>,
+    del_dist: DiscreteDistribution,
 }
 
 impl IndelModel {
-    pub fn new() -> Self {
+    pub fn default() -> Self {
         // Default Indel model from the original NEAT, scaled by the lowest value and rounded.
         let insertion_probability = 0.6;
         let ins_lengths: Vec<u32> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
-        let ins_weights: Vec<u32> = vec![10, 10, 20, 5, 5, 5, 5, 5, 5, 5];
+        let ins_dist: DiscreteDistribution = DiscreteDistribution::new(
+            &vec![1.0, 1.0, 2.0, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
+        );
         let del_lengths: Vec<u32> = vec![1, 2, 3, 4, 5];
-        let del_weights: Vec<u32> = vec![3, 2, 2, 2, 1];
+        let del_dist: DiscreteDistribution = DiscreteDistribution::new(
+            &vec![3.0, 2.0, 2.0, 2.0, 1.0]
+        );
 
         IndelModel {
             insertion_probability,
             ins_lengths,
-            ins_weights,
+            ins_dist,
             del_lengths,
-            del_weights,
+            del_dist,
         }
+    }
+
+    pub fn from(ins_prob: f64, ins_lengths: Vec<u32>, ins_weights: Vec<f64>, del_lengths: Vec<u32>, del_weights: Vec<f64>) -> Self {
+        let ins_dist = DiscreteDistribution::new(&ins_weights);
+        let del_dist = DiscreteDistribution::new(&del_weights);
+        IndelModel {
+            insertion_probability: ins_prob,
+            ins_lengths,
+            ins_dist,
+            del_lengths,
+            del_dist,
+        }
+    }
+
+    pub fn is_insertion(&self, rng: &mut NeatRng) -> bool {
+        rng.random() < self.insertion_probability
     }
 
     pub fn new_insert_length(&self, mut rng: &mut NeatRng) -> u32 {
         // This function uses the insertion weights to choose an insertion length from the list.
-        let dist = DiscreteDistribution::new(&self.ins_weights);
-        self.ins_lengths[dist.sample(&mut rng)]
+        self.ins_lengths[self.ins_dist.sample(&mut rng)]
     }
 
     pub fn new_delete_length(&self, mut rng: &mut NeatRng) -> u32 {
         // This function is the same as above, but uses the deletion lengths instead.
-        let dist = DiscreteDistribution::new(&self.del_weights);
-        self.del_lengths[dist.sample(&mut rng)]
+        self.del_lengths[self.del_dist.sample(&mut rng)]
     }
 }
 
@@ -72,9 +90,9 @@ mod tests {
         let indel_model = IndelModel {
             insertion_probability: 0.75,
             ins_lengths: vec![1, 2],
-            ins_weights: vec![100, 1],
+            ins_dist: DiscreteDistribution::new(&vec![100.0, 1.0]),
             del_lengths: vec![3, 4],
-            del_weights: vec![1, 1000],
+            del_dist: DiscreteDistribution::new(&vec![1.0, 1000.0]),
         };
         let mut rng = NeatRng::new_from_seed(vec![
             "Hello".to_string(),

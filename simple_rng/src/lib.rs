@@ -127,7 +127,7 @@ impl Rng {
         // This is just `2.0.powi(64)`, but written this way because it is not available
         // in `no_std` mode. (from rand 0.8.5 docs). We used u64 max + 1, the equivalent
         let p_int = (frac * (u64::MAX as f64 + 1.0)) as u64;
-        let x = self.rand_int();
+        let x = self.rand_u64();
         x < p_int
     }
 
@@ -146,7 +146,8 @@ impl Rng {
         ((min.clone() as f64) + (self.random() * ((max - min) as f64))) as i64
     }
 
-    pub fn rand_int(&mut self) -> u64 {
+    /// Returns a random `u64`.
+    pub fn rand_u64(&mut self) -> u64 {
         let temp = self.random();
         // Keeping it within range of u32 to prevent overflow
         let ret_num: f64 = temp * (u64::MAX as f64);
@@ -155,7 +156,7 @@ impl Rng {
 
     /// Returns a random `u32`.
     pub fn rand_u32(&mut self) -> u32 {
-        let ret_num = self.rand_int();
+        let ret_num = self.rand_u64();
         (ret_num % (u32::MAX as u64)) as u32
     }
 
@@ -366,14 +367,14 @@ mod tests {
     }
 
     #[test]
-    fn test_rand_int() {
+    fn test_rand_u64() {
         let mut rng = Rng::new_from_seed(vec![
             "hello".to_string(),
             "cruel".to_string(),
             "world".to_string(),
         ]);
-        assert_eq!(rng.rand_int(), 16228467489086898176);
-        assert_eq!(rng.rand_int(), 9226227395537666048);
-        assert_eq!(rng.rand_int(), 11428961760531447808);
+        assert_eq!(rng.rand_u64(), 16228467489086898176);
+        assert_eq!(rng.rand_u64(), 9226227395537666048);
+        assert_eq!(rng.rand_u64(), 11428961760531447808);
     }
 }

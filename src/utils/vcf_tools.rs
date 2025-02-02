@@ -79,7 +79,7 @@ pub fn write_vcf(
                 // Mod a random int by ploidy and add to 1 (since we are modifying at least one
                 // copy). For example, with a ploidy of 2 the right term will produce either
                 // 0 or 1, so we modify either 1 or 2 copies.
-                num_ploids = 1 + rng.rand_int() as usize % ploidy;
+                num_ploids = 1 + rng.rand_u64() as usize % ploidy;
             }
             for _ in 0..num_ploids {
                 // for each ploid that has the mutation, change one random

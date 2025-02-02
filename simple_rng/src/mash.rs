@@ -74,8 +74,8 @@ mod tests {
     #[test]
     fn test_mash() {
         let mut masher = Mash::new();
-        let test = masher.mash(&"hello".chars().collect());
-        assert_eq!(test, 0.7957609200384468);
+        let test1 = masher.mash(&"hello".chars().collect());
+        assert_eq!(test1, 0.7957609200384468);
 
         let test2 = masher.mash(&"cruel".chars().collect());
         assert_eq!(test2, 0.8173183863982558);

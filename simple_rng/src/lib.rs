@@ -64,8 +64,9 @@ impl Rng {
         let mut s1 = masher.mash(&vec![' ']);
         let mut s2 = masher.mash(&vec![' ']);
         let c = 1;
-        let mut seed_vec: Vec::<Vec<char>> = Vec::new();
-        // update seeds
+
+        // Update seeds.
+        let mut seed_vec: Vec<Vec<char>> = Vec::new();
         for seed in seed_list {
             // vectorize the seed and add it to the master list
             let vector_seed = seed.chars().collect::<Vec<char>>();
@@ -132,8 +133,7 @@ impl Rng {
 
     /// Shuffles elements in a sequence in place.
     pub fn shuffle_in_place<T: Clone>(&mut self, a: &mut Vec<T>) {
-        // reverse iterator
-        for i in (0..=(a.len() - 1)).rev() {
+        for i in (0..a.len()).rev() {
             let j = (self.random() * i as f64).floor() as usize;
             let temp = a[i].clone();
             a[i] = a[j].clone();

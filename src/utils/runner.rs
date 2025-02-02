@@ -77,7 +77,7 @@ pub fn run_neat(config: Box<RunConfiguration>, mut rng: &mut Rng) -> Result<(), 
         info!("Shuffling output fastq data");
         let outsets: Box<Vec<&Vec<u8>>> = Box::new(read_sets.iter().collect());
         let mut outsets_order: Vec<usize> = (0..outsets.len()).collect();
-        rng.shuffle_in_place(&mut outsets_order);
+        rng.shuffle(&mut outsets_order);
 
         info!("Writing fastq");
         write_fastq(

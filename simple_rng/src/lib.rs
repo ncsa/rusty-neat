@@ -29,7 +29,7 @@ use statrs::distribution::{ContinuousCDF, Normal};
 ///
 /// // Shuffle a sequence of numbers in place.
 /// let mut nums: Vec<u64> = (1..10).collect();
-/// rng.shuffle_in_place(&mut nums);
+/// rng.shuffle(&mut nums);
 /// ```
 
 // Because of overflow, the numbers are kept within the range of u32, even though they are u64 and
@@ -132,7 +132,7 @@ impl Rng {
     }
 
     /// Shuffles elements in a sequence in place.
-    pub fn shuffle_in_place<T: Clone>(&mut self, a: &mut Vec<T>) {
+    pub fn shuffle<T: Clone>(&mut self, a: &mut Vec<T>) {
         for i in (0..a.len()).rev() {
             let j = (self.random() * i as f64).floor() as usize;
             let temp = a[i].clone();
@@ -337,16 +337,16 @@ mod tests {
     }
 
     #[test]
-    fn test_shuffle_in_place() {
+    fn test_shuffle() {
         let mut my_vec = vec![1, 2, 3, 4, 5, 6, 7, 8, 9];
         let mut rng = Rng::from_seed(vec![
             "hello".to_string(),
             "cruel".to_string(),
             "world".to_string(),
         ]);
-        rng.shuffle_in_place(&mut my_vec);
+        rng.shuffle(&mut my_vec);
         assert_eq!(my_vec, vec![5, 7, 6, 3, 2, 1, 9, 4, 8]);
-        rng.shuffle_in_place(&mut my_vec);
+        rng.shuffle(&mut my_vec);
         assert_eq!(my_vec, vec![4, 9, 1, 8, 3, 7, 2, 6, 5]);
     }
 

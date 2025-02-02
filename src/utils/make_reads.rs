@@ -39,7 +39,7 @@ fn cover_dataset(
         cover_fragment_pool = VecDeque::from([read_length]);
     } else {
         // shuffle the fragment pool
-        rng.shuffle_in_place(&mut fragment_pool);
+        rng.shuffle(&mut fragment_pool);
         cover_fragment_pool = VecDeque::from(fragment_pool)
     }
     // Gap size to keep track of how many uncovered bases we have per layer, to help decide if we

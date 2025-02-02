@@ -155,7 +155,7 @@ mod tests {
     fn test_mutate_sequence() {
         let seq1: Vec<u8> = vec![4, 4, 0, 0, 0, 1, 1, 2, 0, 3, 1, 1, 1];
         let num_positions = 2;
-        let mut rng = Rng::new_from_seed(vec![
+        let mut rng = Rng::from_seed(vec![
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),
@@ -170,10 +170,9 @@ mod tests {
     #[test]
     fn test_mutate_fasta() {
         let seq = vec![4, 4, 0, 0, 0, 1, 1, 2, 0, 3, 1, 1, 1];
-        let file_struct: HashMap<String, Vec<u8>> = HashMap::from([
-                ("chr1".to_string(), seq.clone())
-            ]);
-        let mut rng = Rng::new_from_seed(vec![
+        let file_struct: HashMap<String, Vec<u8>> =
+            HashMap::from([("chr1".to_string(), seq.clone())]);
+        let mut rng = Rng::from_seed(vec![
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),
@@ -199,7 +198,7 @@ mod tests {
             ("chr1".to_string(), seq.clone())
         ]);
         // if a random mutation suddenly pops up in a build, it's probably the seed for this.
-        let mut rng = Rng::new_from_seed(vec![
+        let mut rng = Rng::from_seed(vec![
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),

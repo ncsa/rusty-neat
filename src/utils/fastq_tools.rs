@@ -142,8 +142,8 @@ mod tests {
         let overwrite_output = true;
         let paired_ended = false;
         let seq1 = vec![0, 0, 0, 0, 1, 1, 1, 1];
-        let seq2 = vec![2, 2, 2, 2, 3, 3, 3, 3,];
-        let mut rng = Rng::new_from_seed(vec![
+        let seq2 = vec![2, 2, 2, 2, 3, 3, 3, 3];
+        let mut rng = Rng::from_seed(vec![
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),
@@ -174,8 +174,8 @@ mod tests {
         let overwrite_output = false;
         let paired_ended = true;
         let seq1 = vec![0, 0, 0, 0, 1, 1, 1, 1];
-        let seq2 = vec![2, 2, 2, 2, 3, 3, 3, 3,];
-        let mut rng = Rng::new_from_seed(vec![
+        let seq2 = vec![2, 2, 2, 2, 3, 3, 3, 3];
+        let mut rng = Rng::from_seed(vec![
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),

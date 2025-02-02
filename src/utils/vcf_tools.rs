@@ -124,7 +124,7 @@ mod tests {
         let reference_path = "/fake/path/to/H1N1.fa";
         let overwrite_output = false;
         let output_file_prefix = "test";
-        let mut rng = simple_rng::Rng::new_from_seed(vec![
+        let mut rng = simple_rng::Rng::from_seed(vec![
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),

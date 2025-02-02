@@ -109,7 +109,7 @@ mod tests {
         config.output_dir = PathBuf::from("test");
         fs::create_dir("test").unwrap();
         let config = config.build();
-        let mut rng = Rng::new_from_seed(vec![
+        let mut rng = Rng::from_seed(vec![
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),
@@ -131,7 +131,7 @@ mod tests {
         config.output_dir = PathBuf::from("output");
         fs::create_dir("output").unwrap();
         let config = config.build();
-        let mut rng = Rng::new_from_seed(vec![
+        let mut rng = Rng::from_seed(vec![
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),

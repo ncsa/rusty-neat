@@ -159,7 +159,7 @@ mod tests {
         let read_length = 10;
         let fragment_pool = vec![10];
         let coverage = 1;
-        let mut rng = Rng::new_from_seed(vec![
+        let mut rng = Rng::from_seed(vec![
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),
@@ -181,7 +181,7 @@ mod tests {
         let read_length = 100;
         let fragment_pool = vec![300];
         let coverage = 1;
-        let mut rng = Rng::new_from_seed(vec![
+        let mut rng = Rng::from_seed(vec![
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),
@@ -205,7 +205,7 @@ mod tests {
         let paired_ended = false;
         let mean = None;
         let st_dev = None;
-        let mut rng = Rng::new_from_seed(vec![
+        let mut rng = Rng::from_seed(vec![
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),
@@ -231,7 +231,7 @@ mod tests {
         let paired_ended = false;
         let mean = None;
         let st_dev = None;
-        let mut rng = Rng::new_from_seed(vec![
+        let mut rng = Rng::from_seed(vec![
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),
@@ -267,7 +267,7 @@ mod tests {
         let paired_ended = true;
         let mean = Some(200.0);
         let st_dev = Some(1.0);
-        let mut rng = Rng::new_from_seed(vec![
+        let mut rng = Rng::from_seed(vec![
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),

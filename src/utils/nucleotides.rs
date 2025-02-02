@@ -133,7 +133,7 @@ mod tests {
         let c_weights = vec![20, 0, 1, 1];
         let g_weights = vec![1, 1, 0, 20];
         let t_weights = vec![20, 1, 20, 0];
-        let mut rng = Rng::new_from_seed(vec![
+        let mut rng = Rng::from_seed(vec![
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),

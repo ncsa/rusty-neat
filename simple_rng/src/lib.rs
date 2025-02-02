@@ -94,10 +94,11 @@ impl Rng {
         }
     }
 
+    /// Generates a random value from the range [0, 1].
     pub fn random(&mut self) -> f64 {
         // Not sure where 2091639 comes from, but let's roll with it
         // The other factor is the reciprocal of the max of u32
-        let t = (2091639_f64 * self.s0) + (self.c as f64 * (1.0/(u32::MAX as f64)));
+        let t = (2091639_f64 * self.s0) + (self.c as f64 * (1.0 / (u32::MAX as f64)));
         self.s0 = self.s1;
         self.s1 = self.s2;
         self.c = t.floor() as u32;
@@ -118,7 +119,7 @@ impl Rng {
         // custom RNG
         if !(0.0..1.0).contains(&frac) {
             if frac == 1.0 {
-                return true
+                return true;
             }
             panic!("Invalid frac for gen_bool {} (must be in [0.0, 1.0)", frac)
         }
@@ -165,7 +166,7 @@ impl Rng {
         for i in (0..=(a.len() - 1)).rev() {
             let j = (self.random() * i as f64).floor() as usize;
             if j == 0 {
-                return a[i].clone()
+                return a[i].clone();
             }
         }
         a[0].clone()
@@ -186,7 +187,7 @@ impl NormalDistribution {
     /// If `mean` or `std_dev` are `NaN` or `std_dev <= 0`.
     pub fn new(mean: f64, std_dev: f64) -> Self {
         NormalDistribution {
-            distribution: Normal::new(mean, std_dev).unwrap()
+            distribution: Normal::new(mean, std_dev).unwrap(),
         }
     }
 
@@ -273,13 +274,14 @@ impl DiscreteDistribution {
     }
 }
 
-fn cumulative_sum(a: &mut Vec<f64>) -> Vec<f64> {
+// Calculates cumulative sum.
+fn cumulative_sum(a: &[f64]) -> Vec<f64> {
     let mut acc = 0.0;
     let mut cumvec = Vec::with_capacity(a.len());
     for x in a {
         acc += *x;
         cumvec.push(acc);
-    };
+    }
     cumvec
 }
 

@@ -63,7 +63,7 @@ impl Mash {
         }
         // now update n
         self.n = n_copy.clone() as u64;
-        self.n as f64 * (1.0/(u32::MAX as f64 + 1.0))
+        self.n as f64 * (1.0 / (u32::MAX as f64 + 1.0))
     }
 }
 

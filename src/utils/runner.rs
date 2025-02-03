@@ -77,7 +77,7 @@ pub fn run_neat(config: Box<RunConfiguration>, mut rng: &mut Rng) -> Result<(), 
         info!("Shuffling output fastq data");
         let outsets: Box<Vec<&Vec<u8>>> = Box::new(read_sets.iter().collect());
         let mut outsets_order: Vec<usize> = (0..outsets.len()).collect();
-        rng.shuffle_in_place(&mut outsets_order);
+        rng.shuffle(&mut outsets_order);
 
         info!("Writing fastq");
         write_fastq(
@@ -109,7 +109,7 @@ mod tests {
         config.output_dir = PathBuf::from("test");
         fs::create_dir("test").unwrap();
         let config = config.build();
-        let mut rng = Rng::new_from_seed(vec![
+        let mut rng = Rng::from_seed(vec![
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),
@@ -131,7 +131,7 @@ mod tests {
         config.output_dir = PathBuf::from("output");
         fs::create_dir("output").unwrap();
         let config = config.build();
-        let mut rng = Rng::new_from_seed(vec![
+        let mut rng = Rng::from_seed(vec![
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),

@@ -39,7 +39,7 @@ fn cover_dataset(
         cover_fragment_pool = VecDeque::from([read_length]);
     } else {
         // shuffle the fragment pool
-        rng.shuffle_in_place(&mut fragment_pool);
+        rng.shuffle(&mut fragment_pool);
         cover_fragment_pool = VecDeque::from(fragment_pool)
     }
     // Gap size to keep track of how many uncovered bases we have per layer, to help decide if we
@@ -159,7 +159,7 @@ mod tests {
         let read_length = 10;
         let fragment_pool = vec![10];
         let coverage = 1;
-        let mut rng = Rng::new_from_seed(vec![
+        let mut rng = Rng::from_seed(vec![
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),
@@ -181,7 +181,7 @@ mod tests {
         let read_length = 100;
         let fragment_pool = vec![300];
         let coverage = 1;
-        let mut rng = Rng::new_from_seed(vec![
+        let mut rng = Rng::from_seed(vec![
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),
@@ -205,7 +205,7 @@ mod tests {
         let paired_ended = false;
         let mean = None;
         let st_dev = None;
-        let mut rng = Rng::new_from_seed(vec![
+        let mut rng = Rng::from_seed(vec![
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),
@@ -231,7 +231,7 @@ mod tests {
         let paired_ended = false;
         let mean = None;
         let st_dev = None;
-        let mut rng = Rng::new_from_seed(vec![
+        let mut rng = Rng::from_seed(vec![
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),
@@ -267,7 +267,7 @@ mod tests {
         let paired_ended = true;
         let mean = Some(200.0);
         let st_dev = Some(1.0);
-        let mut rng = Rng::new_from_seed(vec![
+        let mut rng = Rng::from_seed(vec![
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),

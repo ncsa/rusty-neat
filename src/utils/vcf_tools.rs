@@ -79,7 +79,7 @@ pub fn write_vcf(
                 // Mod a random int by ploidy and add to 1 (since we are modifying at least one
                 // copy). For example, with a ploidy of 2 the right term will produce either
                 // 0 or 1, so we modify either 1 or 2 copies.
-                num_ploids = 1 + rng.rand_int() as usize % ploidy;
+                num_ploids = 1 + rng.rand_u64() as usize % ploidy;
             }
             for _ in 0..num_ploids {
                 // for each ploid that has the mutation, change one random
@@ -124,7 +124,7 @@ mod tests {
         let reference_path = "/fake/path/to/H1N1.fa";
         let overwrite_output = false;
         let output_file_prefix = "test";
-        let mut rng = simple_rng::Rng::new_from_seed(vec![
+        let mut rng = simple_rng::Rng::from_seed(vec![
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),

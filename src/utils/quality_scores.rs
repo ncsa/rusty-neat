@@ -317,7 +317,7 @@ mod tests {
     #[test]
     fn test_quality_scores_short() {
         let run_read_length = 100;
-        let mut rng = Rng::new_from_seed(vec![
+        let mut rng = Rng::from_seed(vec![
             "hello".to_string(),
             "cruel".to_string(),
             "world".to_string(),
@@ -332,7 +332,7 @@ mod tests {
     #[test]
     fn test_quality_scores_same() {
         let run_read_length = 150;
-        let mut rng = Rng::new_from_seed(vec![
+        let mut rng = Rng::from_seed(vec![
             "hello".to_string(),
             "cruel".to_string(),
             "world".to_string(),
@@ -347,7 +347,7 @@ mod tests {
     #[test]
     fn test_quality_scores_long() {
         let run_read_length = 200;
-        let mut rng = Rng::new_from_seed(vec![
+        let mut rng = Rng::from_seed(vec![
             "hello".to_string(),
             "cruel".to_string(),
             "world".to_string(),
@@ -362,7 +362,7 @@ mod tests {
     #[test]
     fn test_quality_scores_vast_difference() {
         let run_read_length = 2000;
-        let mut rng = Rng::new_from_seed(vec![
+        let mut rng = Rng::from_seed(vec![
             "hello".to_string(),
             "cruel".to_string(),
             "world".to_string(),

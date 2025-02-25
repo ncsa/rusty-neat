@@ -161,17 +161,10 @@ impl Rng {
         (ret_num % (u32::MAX as u64)) as u32
     }
 
-    /// Picks a element from a sequence at random.
+    /// Picks an element from a sequence at random.
     pub fn choose<T: Clone>(&mut self, a: &[T]) -> T {
-        // Randomly select based on which calculation comes up as 0 first
-        // since i = 0 will force j = 0, this will always return an element
-        for i in (0..=(a.len() - 1)).rev() {
-            let j = (self.random() * i as f64).floor() as usize;
-            if j == 0 {
-                return a[i].clone();
-            }
-        }
-        a[0].clone()
+        let i = (self.random() * (a.len() - 1) as f64).floor() as usize;
+        a[i].clone()
     }
 }
 

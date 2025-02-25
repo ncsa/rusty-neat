@@ -217,26 +217,28 @@ pub struct DiscreteDistribution {
 }
 
 impl DiscreteDistribution {
-    /// Constructs a new discrete distribution.
-    pub fn new<T>(w_vec: &Vec<T>, degenerate: bool) -> Self
+    /// Constructs a new discrete distribution with the probability masses defined by `prob_mass`.
+    pub fn new<T>(prob_mass: &[T], degenerate: bool) -> Self
     where
         f64: From<T>,
         T: Copy,
-        T: Into<f64> + Copy,
     {
-        // let's first convert weights to f64
-        let mut w_vec_64: Vec<f64> = Vec::with_capacity(w_vec.len());
-        for number in w_vec {
-            w_vec_64.push(f64::from(*number).into());
-        }
         let cumulative_probability = if !degenerate {
-            let sum_weights: f64 = w_vec_64.iter().sum();
-            let mut normalized_weights = Vec::with_capacity(w_vec.len());
-            // we no longer need the w_vec_64 after this, so we consume it
-            for weight in w_vec_64 {
-                normalized_weights.push(weight / sum_weights);
-            }
-            cumulative_sum(&mut normalized_weights)
+            // Convert probability masses to floats.
+            let mut prob_mass: Vec<f64> = prob_mass.iter().map(|&w| f64::from(w)).collect();
+
+            // Normalize them.
+            let sum: f64 = prob_mass.iter().sum();
+            prob_mass = prob_mass.iter().map(|&x| x / sum).collect();
+
+            // Calculate the their cumulative sum.
+            prob_mass
+                .iter()
+                .scan(0.0, |acc, &x| {
+                    *acc += x;
+                    Some(*acc)
+                })
+                .collect::<Vec<_>>()
         } else {
             vec![1.0]
         };
@@ -267,17 +269,6 @@ impl DiscreteDistribution {
         }
         lo
     }
-}
-
-// Calculates cumulative sum.
-fn cumulative_sum(a: &[f64]) -> Vec<f64> {
-    let mut acc = 0.0;
-    let mut cumvec = Vec::with_capacity(a.len());
-    for x in a {
-        acc += *x;
-        cumvec.push(acc);
-    }
-    cumvec
 }
 
 #[cfg(test)]

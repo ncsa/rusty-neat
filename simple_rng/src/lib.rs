@@ -107,26 +107,27 @@ impl Rng {
         self.s2
     }
 
-    /// Returns a bool with a probability `frac` of being true.
+    /// Returns a bool with a probability `p` of being true.
     ///
     /// # Panics
     ///
-    /// If `frac` does *not* fall in [0, 1] range.
-    pub fn gen_bool(&mut self, frac: f64) -> bool {
-        // Uses a Bernoulli distribution to generate a fractional probability
-        // Then an input from the RNG to sample
-        //
-        // This method is lifted from rand 0.85, but with restrictions edited so we can use our
-        // custom RNG
-        if !(0.0..1.0).contains(&frac) {
-            if frac == 1.0 {
+    /// If `p` does *not* fall in range [0, 1].
+
+    // This method is lifted from rand 0.85, but with restrictions edited so we can use our
+    // custom RNG
+    pub fn gen_bool(&mut self, p: f64) -> bool {
+        if !(0.0..1.0).contains(&p) {
+            if p == 1.0 {
                 return true;
             }
-            panic!("Invalid frac for gen_bool {} (must be in [0.0, 1.0)", frac)
+            panic!("p={:?} is outside range [0.0, 1.0]", p);
         }
+
         // This is just `2.0.powi(64)`, but written this way because it is not available
-        // in `no_std` mode. (from rand 0.8.5 docs). We used u64 max + 1, the equivalent
-        let p_int = (frac * (u64::MAX as f64 + 1.0)) as u64;
+        // in `no_std` mode. (from rand 0.8.5 docs). We used u64 max + 1, the equivalent.
+        let scale = u64::MAX as f64 + 1.0;
+
+        let p_int = (p * scale) as u64;
         let x = self.rand_u64();
         x < p_int
     }

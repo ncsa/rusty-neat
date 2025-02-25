@@ -107,33 +107,34 @@ impl Rng {
         self.s2
     }
 
-    /// Returns a bool with a probability `frac` of being true.
+    /// Returns a bool with a probability `p` of being true.
     ///
     /// # Panics
     ///
-    /// If `frac` does *not* fall in [0, 1] range.
-    pub fn gen_bool(&mut self, frac: f64) -> bool {
-        // Uses a Bernoulli distribution to generate a fractional probability
-        // Then an input from the RNG to sample
-        //
-        // This method is lifted from rand 0.85, but with restrictions edited so we can use our
-        // custom RNG
-        if !(0.0..1.0).contains(&frac) {
-            if frac == 1.0 {
+    /// If `p` does *not* fall in range [0, 1].
+
+    // This method is lifted from rand 0.85, but with restrictions edited so we can use our
+    // custom RNG
+    pub fn gen_bool(&mut self, p: f64) -> bool {
+        if !(0.0..1.0).contains(&p) {
+            if p == 1.0 {
                 return true;
             }
-            panic!("Invalid frac for gen_bool {} (must be in [0.0, 1.0)", frac)
+            panic!("p={:?} is outside range [0.0, 1.0]", p);
         }
+
         // This is just `2.0.powi(64)`, but written this way because it is not available
-        // in `no_std` mode. (from rand 0.8.5 docs). We used u64 max + 1, the equivalent
-        let p_int = (frac * (u64::MAX as f64 + 1.0)) as u64;
+        // in `no_std` mode. (from rand 0.8.5 docs). We used u64 max + 1, the equivalent.
+        let scale = u64::MAX as f64 + 1.0;
+
+        let p_int = (p * scale) as u64;
         let x = self.rand_u64();
         x < p_int
     }
 
     /// Shuffles elements in a sequence in place.
     pub fn shuffle<T: Clone>(&mut self, a: &mut Vec<T>) {
-        for i in (0..a.len()).rev() {
+        for i in (1..a.len()).rev() {
             let j = (self.random() * i as f64).floor() as usize;
             let temp = a[i].clone();
             a[i] = a[j].clone();
@@ -160,17 +161,10 @@ impl Rng {
         (ret_num % (u32::MAX as u64)) as u32
     }
 
-    /// Picks a element from a sequence at random.
+    /// Picks an element from a sequence at random.
     pub fn choose<T: Clone>(&mut self, a: &[T]) -> T {
-        // Randomly select based on which calculation comes up as 0 first
-        // since i = 0 will force j = 0, this will always return an element
-        for i in (0..=(a.len() - 1)).rev() {
-            let j = (self.random() * i as f64).floor() as usize;
-            if j == 0 {
-                return a[i].clone();
-            }
-        }
-        a[0].clone()
+        let i = (self.random() * (a.len() - 1) as f64).floor() as usize;
+        a[i].clone()
     }
 }
 
@@ -223,26 +217,28 @@ pub struct DiscreteDistribution {
 }
 
 impl DiscreteDistribution {
-    /// Constructs a new discrete distribution.
-    pub fn new<T>(w_vec: &Vec<T>, degenerate: bool) -> Self
+    /// Constructs a new discrete distribution with the probability masses defined by `prob_mass`.
+    pub fn new<T>(prob_mass: &[T], degenerate: bool) -> Self
     where
         f64: From<T>,
         T: Copy,
-        T: Into<f64> + Copy,
     {
-        // let's first convert weights to f64
-        let mut w_vec_64: Vec<f64> = Vec::with_capacity(w_vec.len());
-        for number in w_vec {
-            w_vec_64.push(f64::from(*number).into());
-        }
         let cumulative_probability = if !degenerate {
-            let sum_weights: f64 = w_vec_64.iter().sum();
-            let mut normalized_weights = Vec::with_capacity(w_vec.len());
-            // we no longer need the w_vec_64 after this, so we consume it
-            for weight in w_vec_64 {
-                normalized_weights.push(weight / sum_weights);
-            }
-            cumulative_sum(&mut normalized_weights)
+            // Convert probability masses to floats.
+            let mut prob_mass: Vec<f64> = prob_mass.iter().map(|&w| f64::from(w)).collect();
+
+            // Normalize them.
+            let sum: f64 = prob_mass.iter().sum();
+            prob_mass = prob_mass.iter().map(|&x| x / sum).collect();
+
+            // Calculate the their cumulative sum.
+            prob_mass
+                .iter()
+                .scan(0.0, |acc, &x| {
+                    *acc += x;
+                    Some(*acc)
+                })
+                .collect::<Vec<_>>()
         } else {
             vec![1.0]
         };
@@ -275,37 +271,59 @@ impl DiscreteDistribution {
     }
 }
 
-// Calculates cumulative sum.
-fn cumulative_sum(a: &[f64]) -> Vec<f64> {
-    let mut acc = 0.0;
-    let mut cumvec = Vec::with_capacity(a.len());
-    for x in a {
-        acc += *x;
-        cumvec.push(acc);
-    }
-    cumvec
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
-    fn test_discrete_distribution() {
-        let weights: Vec<f64> = vec![1.1, 2.0, 1.0, 8.0, 0.2, 2.0];
-        let d = DiscreteDistribution::new(&weights, false);
+    fn test_discrete_distribution_sample() {
         let mut rng = Rng::from_seed(vec![
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),
         ]);
-        let x = d.sample(&mut rng);
-        assert_eq!(x, 5);
-        let x = d.sample(&mut rng);
-        assert_eq!(x, 3);
-        let x = d.sample(&mut rng);
-        assert_eq!(x, 3);
-        let x = d.sample(&mut rng);
-        assert_eq!(x, 1);
+        let weights: Vec<f64> = vec![1.1, 2.0, 1.0, 8.0, 0.2, 2.0];
+        let d = DiscreteDistribution::new(&weights, false);
+        assert_eq!(d.sample(&mut rng), 5);
+        assert_eq!(d.sample(&mut rng), 3);
+        assert_eq!(d.sample(&mut rng), 3);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_normal_distribution_panic() {
+        let _n = NormalDistribution::new(0.0, 0.0);
+    }
+
+    #[test]
+    fn test_normal_distribution_inverse_cdf() {
+        let n = NormalDistribution::new(0.0, 1.0);
+        assert_eq!(n.inverse_cdf(0.5), 0.0);
+    }
+
+    #[test]
+    fn test_normal_distribution_sample() {
+        let mut rng = Rng::from_seed(vec![
+            "Hello".to_string(),
+            "Cruel".to_string(),
+            "World".to_string(),
+        ]);
+        let n = NormalDistribution::new(0.0, 1.0);
+        assert_eq!(n.sample(&mut rng), 1.181326790364034);
+        assert_eq!(n.sample(&mut rng), -0.005968986117806898);
+        assert_eq!(n.sample(&mut rng), 0.11272207687563508);
+    }
+
+    #[test]
+    fn test_random() {
+        let mut rng = Rng::from_seed(vec![
+            "hello".to_string(),
+            "cruel".to_string(),
+            "world".to_string(),
+        ]);
+        assert_eq!(rng.random(), 0.8797469853889197);
+        assert_eq!(rng.random(), 0.5001547893043607);
+        assert_eq!(rng.random(), 0.6195652585010976);
     }
 
     #[test]
@@ -322,47 +340,28 @@ mod tests {
     }
 
     #[test]
-    fn test_random() {
-        let mut rng = Rng::from_seed(vec![
-            "hello".to_string(),
-            "cruel".to_string(),
-            "world".to_string(),
-        ]);
-        let test = rng.random();
-        assert_eq!(test, 0.8797469853889197);
-        let test2 = rng.random();
-        assert_eq!(test2, 0.5001547893043607);
-        let test3 = rng.random();
-        assert_eq!(test3, 0.6195652585010976);
-    }
-
-    #[test]
     fn test_shuffle() {
-        let mut my_vec = vec![1, 2, 3, 4, 5, 6, 7, 8, 9];
+        let mut vec = vec![1, 2, 3, 4, 5, 6, 7, 8, 9];
         let mut rng = Rng::from_seed(vec![
             "hello".to_string(),
             "cruel".to_string(),
             "world".to_string(),
         ]);
-        rng.shuffle(&mut my_vec);
-        assert_eq!(my_vec, vec![5, 7, 6, 3, 2, 1, 9, 4, 8]);
-        rng.shuffle(&mut my_vec);
-        assert_eq!(my_vec, vec![4, 9, 1, 8, 3, 7, 2, 6, 5]);
+        rng.shuffle(&mut vec);
+        assert_eq!(vec, vec![5, 7, 6, 3, 2, 1, 9, 4, 8]);
+        rng.shuffle(&mut vec);
+        assert_eq!(vec, vec![8, 1, 4, 9, 7, 3, 6, 5, 2]);
     }
 
     #[test]
-    fn test_range() {
-        let min = 0;
-        let max = 10;
+    fn test_range_i64() {
         let mut rng = Rng::from_seed(vec![
             "hello".to_string(),
             "cruel".to_string(),
             "world".to_string(),
         ]);
-        let num = rng.range_i64(min, max);
-        assert_eq!(num, 8);
-        let num2 = rng.range_i64(min, max);
-        assert_eq!(num2, 5);
+        assert_eq!(rng.range_i64(0, 10), 8);
+        assert_eq!(rng.range_i64(0, 10), 5);
         assert_eq!(rng.range_i64(-3, 5), 1);
     }
 
@@ -376,5 +375,30 @@ mod tests {
         assert_eq!(rng.rand_u64(), 16228467489086898176);
         assert_eq!(rng.rand_u64(), 9226227395537666048);
         assert_eq!(rng.rand_u64(), 11428961760531447808);
+    }
+
+    #[test]
+    fn test_rand_u32() {
+        let mut rng = Rng::from_seed(vec![
+            "hello".to_string(),
+            "cruel".to_string(),
+            "world".to_string(),
+        ]);
+        assert_eq!(rng.rand_u32(), 3778484531);
+        assert_eq!(rng.rand_u32(), 2148148463);
+        assert_eq!(rng.rand_u32(), 2661012523);
+    }
+
+    #[test]
+    fn test_choose() {
+        let mut rng = Rng::from_seed(vec![
+            "hello".to_string(),
+            "cruel".to_string(),
+            "world".to_string(),
+        ]);
+        let vec: Vec<u32> = (0..10).collect();
+        assert_eq!(rng.choose(&vec), 7);
+        assert_eq!(rng.choose(&vec), 4);
+        assert_eq!(rng.choose(&vec), 5);
     }
 }

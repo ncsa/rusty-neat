@@ -8,6 +8,9 @@
 //!
 //! [here]: https://rampantmonkey.com/writing/ts-prng/
 
+// In Rust 0x100000000 (2^32) used by the algorithm below is not a valid u32 so using f64 instead.
+const NORM: f64 = u32::MAX as f64 + 1.0;
+
 pub struct Mash {
     n: u64,
 }
@@ -55,15 +58,10 @@ impl Mash {
             h *= n_copy as f64;
             n_copy = h.floor() as u64;
             h -= n_copy as f64;
-            // maybe just a difference between JS and Rust, but Rust does not allow 0x100000000,
-            // since technically that is not a valid u32. Trying to keep the same constraints but
-            // in a rust-friendly way. It does produce results without the +1, but they don't match
-            // the javascript.
-            n_copy += (h * (u32::MAX as f64 + 1.0)).floor() as u64;
+            n_copy += (h * NORM).floor() as u64;
         }
-        // now update n
         self.n = n_copy.clone() as u64;
-        self.n as f64 * (1.0 / (u32::MAX as f64 + 1.0))
+        self.n as f64 / NORM
     }
 }
 

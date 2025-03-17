@@ -18,7 +18,6 @@ pub struct Mash {
 impl Mash {
     /// Construct a new masher.
     pub fn new() -> Mash {
-        // Unclear where this number comes from.
         Mash { n: 0xefc8249d }
     }
 
@@ -45,13 +44,15 @@ impl Mash {
     //  });
     // };
     // ```
+    //
+    // Note: The origin of the constants like `0xefc8249d` or `0.02519603282416938` is not clear
+    // so we're keeping them "as is".
     pub fn mash(&mut self, input_data: &Vec<char>) -> f64 {
         // It seemed like n was doing all the heavy lifting, so I created n_copy to bear the weight,
         // so we aren't touching the object as much. No idea if this is a good thought.
         let mut n_copy: u64 = self.n.clone();
         for char in input_data {
             n_copy += *char as u64;
-            // Unclear where this number comes from, other than it being in the original
             let mut h: f64 = 0.02519603282416938 * (n_copy as f64);
             n_copy = h.floor() as u64;
             h -= n_copy as f64;

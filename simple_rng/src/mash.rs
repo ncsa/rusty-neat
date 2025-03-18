@@ -48,20 +48,20 @@ impl Mash {
     // Note: The origin of the constants like `0xefc8249d` or `0.02519603282416938` is not clear
     // so we're keeping them "as is".
     pub fn mash(&mut self, input_data: &Vec<char>) -> f64 {
-        // It seemed like n was doing all the heavy lifting, so I created n_copy to bear the weight,
+        // It seemed like n was doing all the heavy lifting, so I created `n` to bear the weight,
         // so we aren't touching the object as much. No idea if this is a good thought.
-        let mut n_copy: u64 = self.n;
+        let mut n: u64 = self.n;
         for char in input_data {
-            n_copy += *char as u64;
-            let mut h: f64 = 0.02519603282416938 * (n_copy as f64);
-            n_copy = h as u64;
-            h -= n_copy as f64;
-            h *= n_copy as f64;
-            n_copy = h as u64;
-            h -= n_copy as f64;
-            n_copy += (h * NORM) as u64;
+            n += *char as u64;
+            let mut h: f64 = 0.02519603282416938 * (n as f64);
+            n = h as u64;
+            h -= n as f64;
+            h *= n as f64;
+            n = h as u64;
+            h -= n as f64;
+            n += (h * NORM) as u64;
         }
-        self.n = n_copy as u64;
+        self.n = n as u64;
         self.n as f64 / NORM
     }
 }

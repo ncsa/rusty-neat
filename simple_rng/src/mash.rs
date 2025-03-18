@@ -73,13 +73,14 @@ mod tests {
     #[test]
     fn test_mash() {
         let mut masher = Mash::new();
-        let test1 = masher.mash(&"hello".chars().collect());
-        assert_eq!(test1, 0.7957609200384468);
-
-        let test2 = masher.mash(&"cruel".chars().collect());
-        assert_eq!(test2, 0.8173183863982558);
-
-        let test3 = masher.mash(&"world".chars().collect());
-        assert_eq!(test3, 0.2441756660118699);
+        let mut result = Vec::new();
+        for seed in ["hello", "cruel", "world"] {
+            let chars = seed.chars().collect();
+            result.push(masher.mash(&chars));
+        }
+        assert_eq!(
+            result,
+            vec![0.7957609200384468, 0.8173183863982558, 0.2441756660118699]
+        );
     }
 }

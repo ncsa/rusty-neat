@@ -14,7 +14,7 @@ pub const DICT_SIZE: usize = 32768usize; // i.e., 32kb
 
 pub fn read_fasta(
     fasta_path: &str,
-    fragment_max: usize,
+    overlap_len: usize,
     temp_dir: &TempDir,
     debug: bool
 ) -> Result<Box<FastaMap>, io::Error> {
@@ -36,8 +36,8 @@ pub fn read_fasta(
     //     7. Incidentally, this will also facilitate multi-threading, which is a long goal.
     //
     // Reads a fasta file and turns it into a HashMap and puts it in the heap
-    if fragment_max >= BUFSIZE {
-        panic!("fragment max {fragment_max} must be less than {BUFSIZE}.");
+    if overlap_len >= BUFSIZE {
+        panic!("fragment max {overlap_len} must be less than {BUFSIZE}.");
     }
     // Contigs are entire sequences in a fasta. This will vector will essentially be a map of the
     // fasta file.
@@ -52,12 +52,12 @@ pub fn read_fasta(
     let mut contig_order: VecDeque<String> = VecDeque::new();
     let mut current_key = String::new();
     let mut buffer = [4_u8; BUFSIZE];
-    let mut tail_buffer = [4_u8; BUFSIZE];
-z
+    let mut tail_buffer = [4_u8; overlap_len];
+
     let lines = read_lines(fasta_path)?;
     // This will help us keep track of where we are in the read
     let mut block_start = 0;
-    let mut local_index = 0;
+    let mut buffer_index = 0;
     let mut block_index = 0;
     // to record the actual padding length
     let mut padding_length = 0;
@@ -70,9 +70,14 @@ z
                 // If this is not the first loop, then this indicates
                 // the end of the previous contig.
                 if l.starts_with(">") {
-                    // If contigs_length == 0, then this is the first loop or we had an empty contig and we skip
+                    // Checking if this is either the first loop or an empty read.
                     // After the first loop, then we need to log the previous contig
-                    if contig_length != 0 {
+                    if contig_length == 0 && current_key.is_emtpy() {
+                        // in this case, this is the first loop
+                    } else if contig_length == 0 && !current_key.is_empty() {
+                        // in this case, we had an empty read
+                        panic!("Read for {name_map[&current_key]} is empty. Please remove from fasta file and try again")
+                    } else {
                         // the total number of valid bases of this buffer
                         let num_bases = contig_length - block_start;
                         // We need to create the temp file and write the sequence to it.
@@ -92,11 +97,11 @@ z
                             file_path.clone(),
                         ).unwrap());
 
-                        // Reset buffers
+                        // Reset buffers TODO!
                         buffer = tail_buffer.clone();
                         tail_buffer = [4_u8; BUFSIZE];
                         // Reset local index to synchronize with new buffer on a new contig
-                        local_index = 0;
+                        buffer_index = 0;
 
                         let contig_map = build_contig_map(&sequence_blocks);
 
@@ -127,14 +132,10 @@ z
                 } else {
                     for char in l.chars() {
                         // If we have filled the buffer, time to write the file and clear the buffer
-                        if local_index >= BUFSIZE {
+                        if buffer_index >= BUFSIZE {
                             // grab the end of the buffer to create an overlap with the next section
-                            tail_buffer = buffer[BUFSIZE-fragment_max..].to_owned();
-                            // overwrite the beginning of the next buffer with the end of this one
-                            // to create an overlap
-                            for i in 0..fragment_max {
-                                tail_buffer[i] = tail[i];
-                            }
+                            tail_buffer = buffer[BUFSIZE-overlap_len..].to_owned();
+
                             let (num_bases, file_path) = write_buffer_to_file(
                                 &buffer,
                                 contig_length,
@@ -143,7 +144,8 @@ z
                                 &current_key,
                                 block_index,
                             )?;
-                            // record sequence block info
+                            
+                            // record sequence block info. This stores the relevant data for retrieval
                             sequence_blocks.push(SequenceBlock::new(
                                 block_start.clone(),
                                 num_bases.clone(),
@@ -151,23 +153,27 @@ z
                             ).unwrap());
 
                             // Set start point for recording next block, offset to account for the overlap
-                            block_start += BUFSIZE-fragment;
-                            // Reset primary buffer
-                            buffer = tail_buffer.clone();
-                            // reset buffer
-                            tail_buffer = [4_u8; BUFSIZE];
-                            // Reset local index to synchronize with new buffer (0) + padding_length
-                            // which starts adding bases from the sequence after the padding
-                            local_index = padding_length;
+                            block_start += BUFSIZE-overlap_len;
+                            // Reset primary buffer and index
+                            buffer = [4_u8; BUFSIZE]
+                            buffer_index = 0
+                            for i in 0..overlap_len {
+                                buffer[i] = tail[i]
+                                // keep the buffer index sync'd with the buffer
+                                buffer_index += 1
+                            }
+                            // reset overlap buffer
+                            tail_buffer = [4_u8; overlap_len];
+                            // Increment block index
                             block_index += 1
                         }
-                        buffer[local_index] = char_to_base(char);
-                        local_index += 1;
+                        buffer[buffer_index] = char_to_base(char);
+                        buffer_index += 1;
                         contig_length += 1;
                     }
                 }
             },
-            _ => { panic!("AAAAAAAA"); },
+            _ => { panic!("Unreadable line in fasta file"); },
         }
     }
     // End of file reached, write the last sequence and finish the final contig,

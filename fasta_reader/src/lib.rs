@@ -15,7 +15,8 @@ pub const DICT_SIZE: usize = 32768usize; // i.e., 32kb
 pub fn read_fasta(
     fasta_path: &str,
     fragment_max: usize,
-    temp_dir: &TempDir
+    temp_dir: &TempDir,
+    debug: bool
 ) -> Result<Box<FastaMap>, io::Error> {
     // Here's the basic idea:
     //     1. Read in 128kb worth of sequence (or the entire sequence)
@@ -36,7 +37,7 @@ pub fn read_fasta(
     //
     // Reads a fasta file and turns it into a HashMap and puts it in the heap
     if fragment_max >= BUFSIZE {
-        panic!("fragment max {fragment_max} must be less than {BUFSIZE}. Possible bug.");
+        panic!("fragment max {fragment_max} must be less than {BUFSIZE}.");
     }
     // Contigs are entire sequences in a fasta. This will vector will essentially be a map of the
     // fasta file.
@@ -51,11 +52,8 @@ pub fn read_fasta(
     let mut contig_order: VecDeque<String> = VecDeque::new();
     let mut current_key = String::new();
     let mut buffer = [4_u8; BUFSIZE];
-    let mut next_buffer = [4_u8; BUFSIZE];
-
-    // Gather stats about the fasta file for sanity checking
-    let stats = GatherStats::process_fasta(fasta_path);
-
+    let mut tail_buffer = [4_u8; BUFSIZE];
+z
     let lines = read_lines(fasta_path)?;
     // This will help us keep track of where we are in the read
     let mut block_start = 0;
@@ -72,12 +70,12 @@ pub fn read_fasta(
                 // If this is not the first loop, then this indicates
                 // the end of the previous contig.
                 if l.starts_with(">") {
-                    // if this is not the first loop, then we need to log the previous contig
-                    if contigs.len() != 0 {
+                    // If contigs_length == 0, then this is the first loop or we had an empty contig and we skip
+                    // After the first loop, then we need to log the previous contig
+                    if contig_length != 0 {
                         // the total number of valid bases of this buffer
                         let num_bases = contig_length - block_start;
-                        // We still need to create the temp file and write the sequence to it.
-                        // we could turn this section down to the for loop into a function
+                        // We need to create the temp file and write the sequence to it.
                         let (num_bases, file_path) = write_buffer_to_file(
                             &buffer,
                             contig_length,
@@ -95,8 +93,8 @@ pub fn read_fasta(
                         ).unwrap());
 
                         // Reset buffers
-                        buffer = next_buffer.clone();
-                        next_buffer = [4_u8; BUFSIZE];
+                        buffer = tail_buffer.clone();
+                        tail_buffer = [4_u8; BUFSIZE];
                         // Reset local index to synchronize with new buffer on a new contig
                         local_index = 0;
 
@@ -118,8 +116,8 @@ pub fn read_fasta(
                         // Fasta files always end on a line break or EOF, so
                         // we do not need to worry about swapping buffers or anything.
                         // Update buffer and next buffer
-                        buffer = next_buffer.clone();
-                        next_buffer = [4_u8; BUFSIZE];
+                        buffer = tail_buffer.clone();
+                        tail_buffer = [4_u8; BUFSIZE];
                     }
                     // grab the name from the string, omitting the initial '>' character
                     let long_name = l[1..].to_string();
@@ -128,14 +126,14 @@ pub fn read_fasta(
                     contig_order.push_back(current_key.clone());
                 } else {
                     for char in l.chars() {
-                        // Catch any potential index out of range problems here
+                        // If we have filled the buffer, time to write the file and clear the buffer
                         if local_index >= BUFSIZE {
-                            let tail = buffer[BUFSIZE-fragment_max..].to_owned();
+                            // grab the end of the buffer to create an overlap with the next section
+                            tail_buffer = buffer[BUFSIZE-fragment_max..].to_owned();
                             // overwrite the beginning of the next buffer with the end of this one
                             // to create an overlap
-                            padding_length = tail.len();
-                            for i in 0..padding_length {
-                                next_buffer[i] = tail[i];
+                            for i in 0..fragment_max {
+                                tail_buffer[i] = tail[i];
                             }
                             let (num_bases, file_path) = write_buffer_to_file(
                                 &buffer,
@@ -152,11 +150,12 @@ pub fn read_fasta(
                                 file_path.clone(),
                             ).unwrap());
 
-                            // Set start point for recording next block
-                            block_start += BUFSIZE-padding_length;
-                            // Reset buffers
-                            buffer = next_buffer.clone();
-                            next_buffer = [4_u8; BUFSIZE];
+                            // Set start point for recording next block, offset to account for the overlap
+                            block_start += BUFSIZE-fragment;
+                            // Reset primary buffer
+                            buffer = tail_buffer.clone();
+                            // reset buffer
+                            tail_buffer = [4_u8; BUFSIZE];
                             // Reset local index to synchronize with new buffer (0) + padding_length
                             // which starts adding bases from the sequence after the padding
                             local_index = padding_length;
@@ -313,44 +312,6 @@ fn write_buffer_to_file(
         .join("");
     writeln!(&mut tmp_file, "{}", bufstr)?;
     Ok((num_bases, sequence_file_path.into_os_string()))
-}
-
-struct GatherStats {
-    // how many sequence lines the file contains
-    line_count: usize,
-    // Number of contigs, to verify
-    number_of_contigs: usize,
-    // Whole number times this genome will fill the buffer
-    approximate_genome_size: usize,
-}
-
-impl GatherStats {
-    fn process_fasta(filename: &str) -> Result<GatherStats, io::Error> {
-        let mut line_count = 0;
-        let mut number_of_contigs = 0;
-        let mut line_width = 0;
-
-        let file = read_lines(filename)?;
-        for line in file {
-            match line {
-                Ok(l) => {
-                    if l.starts_with(">") {
-                        number_of_contigs += 1;
-                    } else if line_width == 0 {
-                        line_width = l.len();
-                    }
-                    line_count += 1
-                },
-                Err(e) => return Err(e),
-            }
-        };
-
-        Ok(GatherStats {
-            line_count,
-            number_of_contigs,
-            approximate_genome_size:(line_width * line_count)/BUFSIZE,
-        })
-    }
 }
 
 #[cfg(test)]

@@ -185,7 +185,7 @@ mod tests {
     #[test]
     fn test_sequence_block() {
         let mut seq_block = SequenceBlock {
-            contig: "chrom 1".to_string(),
+            contig: "chrom1".to_string(),
             ref_start: 0,
             ref_end: 20,
             sequence: vec![0,0,0,0,0,0,0,0,0,0,0,0,4,4,4,0,0,0,4,0],
@@ -216,16 +216,16 @@ mod tests {
             (19, 20, NRegion),
         ]);
         let contig = Contig::new(
-            "chrom 1".to_string(),
+            "chrom1".to_string(),
             20,
             sequences,
             contig_map,
         ).unwrap();
         let name_map = HashMap::from([
-            ("chrom 1".to_string(), ">chrom 1:foo bar\n".to_string())
+            ("chrom1".to_string(), ">chrom1 foo bar\n".to_string())
         ]);
         let contigs = Vec::from([contig]);
-        let contig_order = VecDeque::from(["chrom 1".to_string()]);
+        let contig_order = VecDeque::from(["chrom1".to_string()]);
         let fasta_map = FastaMap::from((
             contigs,
             name_map,
@@ -234,7 +234,7 @@ mod tests {
 
         let expected_output = "FastaMap { \
         contigs: [Contig { \
-            name: \"chrom 1\", \
+            name: \"chrom1\", \
             len: 20, \
             blocks: [\
                 \"chrom1_0000_0020.json\"], \
@@ -244,8 +244,8 @@ mod tests {
                 (15, 18, NRegion), \
                 (18, 19, NonNRegion), \
                 (19, 20, NRegion)] }], \
-            name_map: {\"chrom 1\": \">chrom 1:foo bar\\n\"}, \
-            contig_order: [\"chrom 1\"] }";
+            name_map: {\"chrom1\": \">chrom1 foo bar\\n\"}, \
+            contig_order: [\"chrom1\"] }";
 
         let test_out = format!("{:?}", fasta_map);
 

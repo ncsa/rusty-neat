@@ -57,6 +57,10 @@ pub fn read_fasta(
     let mut block_index = 0;
     // counts up the bases in the contig
     let mut contig_length = 0;
+    // This flag is to account for an edge case where the buffer is filled and the reader then reaches the end of file or
+    // a new contig. In this particular case, the algorithm may write out the overlap buffer, effectively creating an
+    // extra, unneeded file. This flag just confirms something new was written to the buffer so we can avoid that
+    let mut new_data = false;
     for line in lines {
         match line {
             Ok(l) => {
@@ -73,24 +77,24 @@ pub fn read_fasta(
                         let name = name_map[&current_key].clone();
                         panic!("Read for {} is empty. Please remove from fasta file and try again", name)
                     } else {
-                        // the total number of valid bases of this buffer. We subtract our overall contig
-                        // length, which gives us how many actual bases were read, minus the start point
-                        // of this block and that tells us the actual size of the buffer (since the tail
-                        // will be filler, potentially, if the last block didn't fill the buffer)
-                        let buffer_len = contig_length - block_start;
-                        let buffer_to_write = buffer[..buffer_len].to_vec();
+                        if new_data == true {
+                            // Note that we only want to write out the buffer if there was anything added since the last dump
+                            //
+                            // the total number of valid bases of this buffer. We subtract our overall contig
+                            // length, which gives us how many actual bases were read, minus the start point
+                            // of this block and that tells us the actual size of the buffer (since the tail
+                            // will be filler, potentially, if the last block didn't fill the buffer)
+                            let buffer_len = contig_length - block_start;
+                            let buffer_to_write = buffer[..buffer_len].to_vec();
 
-                        let block_file = process_buffer_into_sequenceblock(
-                            &buffer_to_write, &current_key, block_start, contig_length, temp_dir
-                        ).unwrap();
+                            let block_file = process_buffer_into_sequenceblock(
+                                &buffer_to_write, &current_key, block_start, contig_length, temp_dir
+                            ).unwrap();
 
-                        // Store the filename
-                        sequence_blocks.push(block_file);
-
-                        // Reset buffers, no need to save since we're starting a new contig
-                        buffer = [4_u8; BUFSIZE];
-                        buffer_index = 0;
-
+                            // Store the filename
+                            sequence_blocks.push(block_file);
+                        };
+                        // New data was written, adde block to list and reset
                         // Add the contig to the list
                         contigs.push(Contig::new(
                             current_key.clone(),
@@ -99,11 +103,17 @@ pub fn read_fasta(
                             build_contig_map(&sequence_blocks).clone(),
                         ).unwrap());
 
+                        // Reset buffers, no need to save since we're starting a new contig
+                        buffer = [4_u8; BUFSIZE];
+                        new_data = false;
+                        buffer_index = 0;
+
                         // reset variables to start building the next contig and sequence block
                         sequence_blocks = Vec::new();
                         contig_length = 0;
                         block_index = 0;
                         block_start = 0;
+
                     }
                     // grab the name from the string, omitting the initial '>' character
                     let long_name = l[1..].to_string();
@@ -135,11 +145,15 @@ pub fn read_fasta(
                                 buffer[i] = overlap_buffer[i];
                                 // keep the buffer index sync'd with the buffer
                                 buffer_index += 1;
+                                new_data = false;
                             }
                             // Increment block index
                             block_index += 1;
                         }
                         buffer[buffer_index] = char_to_base(char);
+                        if new_data == false {
+                            new_data = true
+                        }
                         buffer_index += 1;
                         contig_length += 1;
                     }
@@ -150,16 +164,20 @@ pub fn read_fasta(
     }
     // End of file reached, write the last sequence and finish the final contig,
     // same as above, but with no need to reset anything.
-    let buffer_len = contig_length - block_start;
-    let buffer_to_write = buffer[..buffer_len].to_vec();
+    if new_data == true {
+        // if we have data to write...
+        let buffer_len = contig_length - block_start;
+        let buffer_to_write = buffer[..buffer_len].to_vec();
 
-    let block_file = process_buffer_into_sequenceblock(
-        &buffer_to_write, &current_key, block_start, contig_length, temp_dir
-    ).unwrap();
+        let block_file = process_buffer_into_sequenceblock(
+            &buffer_to_write, &current_key, block_start, contig_length, temp_dir
+        ).unwrap();
 
-    // Store the filename
-    sequence_blocks.push(block_file);
+        // Store the filename
+        sequence_blocks.push(block_file);
+    }
 
+    // any new data was written, now we add the final block to the contig
     // Add the contig to the list
     contigs.push(Contig::new(
         current_key.clone(),

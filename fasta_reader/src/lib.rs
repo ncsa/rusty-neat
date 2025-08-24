@@ -1,7 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::fs::File;
 use std::io;
-use std::io::Write;
 use tempfile::TempDir;
 use common::file_tools::read_lines;
 use common::structs::fasta_map::{FastaMap, SequenceBlock, Contig, RegionType};
@@ -44,21 +43,18 @@ pub fn read_fasta(
     // including a file where the actual data (encoded as a string of simple u8s) can be retrieved.
     // the start and end points of the block, relative to the reference, and the length of the
     // sequence (usually 131_072, but could be less).
-    let mut sequence_blocks: Vec<SequenceBlock> = Vec::new();
+    let mut sequence_blocks: Vec<String> = Vec::new();
 
     let mut name_map: HashMap<String, String> = HashMap::new();
     let mut contig_order: VecDeque<String> = VecDeque::new();
     let mut current_key = String::new();
     let mut buffer = [4_u8; BUFSIZE];
-    let mut overlap_buffer = Vec::new();
 
     let lines = read_lines(fasta_path)?;
     // This will help us keep track of where we are in the read
     let mut block_start = 0;
     let mut buffer_index = 0;
     let mut block_index = 0;
-    // to record the actual padding length
-    let mut padding_length = 0;
     // counts up the bases in the contig
     let mut contig_length = 0;
     for line in lines {
@@ -75,33 +71,25 @@ pub fn read_fasta(
                     } else if contig_length == 0 && !current_key.is_empty() {
                         // in this case, we had an empty read
                         let name = name_map[&current_key].clone();
-                        panic!("Read for {name} is empty. Please remove from fasta file and try again")
+                        panic!("Read for {} is empty. Please remove from fasta file and try again", name)
                     } else {
-                        // the total number of valid bases of this buffer
-                        let num_bases = contig_length - block_start;
-                        // We need to create the temp file and write the sequence to it.
-                        let (num_bases, file_path) = write_buffer_to_file(
-                            &buffer,
-                            contig_length,
-                            block_start,
-                            &temp_dir,
-                            &current_key,
-                            block_index,
-                        )?;
+                        // the total number of valid bases of this buffer. We subtract our overall contig
+                        // length, which gives us how many actual bases were read, minus the start point
+                        // of this block and that tells us the actual size of the buffer (since the tail
+                        // will be filler, potentially, if the last block didn't fill the buffer)
+                        let buffer_len = contig_length - block_start;
+                        let buffer_to_write = buffer[..buffer_len].to_vec();
 
-                        // record sequence block info
-                        sequence_blocks.push(SequenceBlock::new(
-                            block_start.clone(),
-                            num_bases.clone(),
-                            file_path.clone(),
-                        ).unwrap());
+                        let block_file = process_buffer_into_sequenceblock(
+                            &buffer_to_write, &current_key, block_start, contig_length, temp_dir
+                        ).unwrap();
+
+                        // Store the filename
+                        sequence_blocks.push(block_file);
 
                         // Reset buffers, no need to save since we're starting a new contig
                         buffer = [4_u8; BUFSIZE];
                         buffer_index = 0;
-
-                        // reset overlap buffer
-                        overlap_buffer = Vec::new();
 
                         // Add the contig to the list
                         contigs.push(Contig::new(
@@ -127,23 +115,16 @@ pub fn read_fasta(
                         // If we have filled the buffer, time to write the file and clear the buffer
                         if buffer_index >= BUFSIZE {
                             // grab the end of the buffer to create an overlap with the next section
-                            overlap_buffer = buffer[BUFSIZE-overlap_len..].iter().cloned().collect();
+                            let overlap_buffer: Vec<u8> = buffer[BUFSIZE-overlap_len..].iter().cloned().collect();
+                            // Since our buffer is full, we can just set block end to the full length
+                            let block_end = block_start + buffer.len();
 
-                            let (num_bases, file_path) = write_buffer_to_file(
-                                &buffer,
-                                contig_length,
-                                block_start,
-                                &temp_dir,
-                                &current_key,
-                                block_index,
-                            )?;
+                            let block_file = process_buffer_into_sequenceblock(
+                                &buffer, &current_key, block_start, block_end, temp_dir
+                            ).unwrap();
 
-                            // record sequence block info. This stores the relevant data for retrieval
-                            sequence_blocks.push(SequenceBlock::new(
-                                block_start.clone(),
-                                num_bases.clone(),
-                                file_path.clone(),
-                            ).unwrap());
+                            // record sequence block filename for later retrieval
+                            sequence_blocks.push(block_file);
 
                             // Set start point for recording next block, offset to account for the overlap
                             block_start += BUFSIZE-overlap_len;
@@ -155,8 +136,6 @@ pub fn read_fasta(
                                 // keep the buffer index sync'd with the buffer
                                 buffer_index += 1;
                             }
-                            // reset overlap buffer
-                            overlap_buffer = Vec::new();
                             // Increment block index
                             block_index += 1;
                         }
@@ -171,30 +150,22 @@ pub fn read_fasta(
     }
     // End of file reached, write the last sequence and finish the final contig,
     // same as above, but with no need to reset anything.
-    let (num_bases, file_path) = write_buffer_to_file(
-        &buffer,
-        contig_length,
-        block_start,
-        &temp_dir,
-        &current_key,
-        block_index,
-    )?;
-    println!("{:?}", &file_path);
-    // record sequence block info
-    sequence_blocks.push(SequenceBlock::new(
-        block_start.clone(),
-        num_bases.clone(),
-        file_path.clone(),
-    ).unwrap());
+    let buffer_len = contig_length - block_start;
+    let buffer_to_write = buffer[..buffer_len].to_vec();
 
-    let contig_map = build_contig_map(&sequence_blocks);
+    let block_file = process_buffer_into_sequenceblock(
+        &buffer_to_write, &current_key, block_start, contig_length, temp_dir
+    ).unwrap();
+
+    // Store the filename
+    sequence_blocks.push(block_file);
 
     // Add the contig to the list
     contigs.push(Contig::new(
         current_key.clone(),
         contig_length.clone(),
         sequence_blocks.clone(),
-        contig_map.clone(),
+        build_contig_map(&sequence_blocks).clone(),
     ).unwrap());
 
     // Return box object with final FastaMap object, which will be used for processing
@@ -207,13 +178,13 @@ pub fn read_fasta(
     ))
 }
 
-fn extract_key_name(key: &str) -> String {
+fn extract_key_name(full_name: &str) -> String {
     // Fasta names can have a variety of formats. Attempt to parse the format.
     // may need to add more delimiters, but these are the most common.
     let delimiters = ['|', ' '];
     let mut delim_index = 0;
     let mut flag = false;
-    for (index, char) in key.chars().enumerate() {
+    for (index, char) in full_name.chars().enumerate() {
         if delimiters.contains(&char) {
             delim_index = index;
             flag = true;
@@ -221,14 +192,13 @@ fn extract_key_name(key: &str) -> String {
         }
     };
     if !flag {
-        delim_index = key.len();
+        delim_index = full_name.len();
     };
-    key[..delim_index].to_string()
-
+    full_name[..delim_index].to_string()
 }
 
-fn build_contig_map(sequence_blocks: &Vec<SequenceBlock>) -> Vec<(usize, usize, RegionType)> {
-    // This is a 2D map representing the regions of the string of DNA.
+fn build_contig_map(sequence_blocks: &Vec<String>) -> Vec<(usize, usize, RegionType)> {
+    // This is a 2D vector map representing the regions of the string of DNA.
     // example: If a DNA strand looks like this:
     //     NNNNNNNNAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAANNNNN
     // Then the map would be (0, 10, NRegion), (10, 103, NonNRegion), (103, 110, NRegion)
@@ -242,8 +212,11 @@ fn build_contig_map(sequence_blocks: &Vec<SequenceBlock>) -> Vec<(usize, usize, 
     let mut region_end = 0;
     let mut inside_n_region = false;
 
-    for block in sequence_blocks {
-        let block_sequence = block.retrieve_all().unwrap();
+    for block_filename in sequence_blocks {
+        // This will read the block data from the file
+        let block = SequenceBlock::from(block_filename.to_string());
+        // Now we process the block
+        let block_sequence = block.sequence;
         for base in block_sequence {
             match base {
                 4 => {
@@ -279,88 +252,84 @@ fn build_contig_map(sequence_blocks: &Vec<SequenceBlock>) -> Vec<(usize, usize, 
     map
 }
 
-fn write_buffer_to_file(
-    buffer: &[u8; BUFSIZE],
-    contig_len: usize,
-    start: usize,
-    temp_dir: &TempDir,
-    key: &str,
-    index: usize
-) -> Result<(usize, String), io::Error> {
-    // num_bases covers us if we do not need the entire buffer. This will tell us how much to write
-    let num_bases =
-        if (contig_len - start) > BUFSIZE {
-            BUFSIZE
-        } else {
-            contig_len - start
-        };
+fn process_buffer_into_sequenceblock(
+    buffer: &[u8], // The sequence in u8 format
+    current_key: &str, // The contig short name
+    block_start: usize, // Where, relative to the reference, this block starts
+    block_end: usize, // We take this explicitly in case we have a less than full buffer
+    temp_dir: &TempDir, // where to write files
+) -> io::Result<String> {
+    let mut sequence_block = SequenceBlock {
+        contig: current_key.to_string(),
+        ref_start: block_start,
+        ref_end: block_end,
+        sequence: buffer.to_vec(),
+    };
 
     let sequence_file_path = temp_dir
         .path()
-        .join(format!("{}_{:010}.seq", &key, index));
+        .join(format!("{}_{:010}_{:010}.json", current_key.to_string(), block_start, block_end));
+
     if sequence_file_path.exists() {
-        return Err(io::Error::new(
-            io::ErrorKind::AlreadyExists,
-            "sequence file already exists (Unexpected!)"))
+        panic!("BUG: Sequence file name collision!")
     };
-    let mut tmp_file = File::create(&sequence_file_path)?;
-    let bufstr = buffer[..num_bases]
-        .iter()
-        .map(|x| x.to_string())
-        .collect::<Vec<String>>()
-        .join("");
-    writeln!(&mut tmp_file, "{}", bufstr)?;
-    Ok((num_bases, sequence_file_path.display().to_string()))
+
+    let tmp_file = File::create(&sequence_file_path)?;
+    sequence_block.write_block(tmp_file)?;
+    
+    Ok(sequence_file_path.display().to_string())
 }
 
-pub fn write_fasta(
-    mutated_fasta: &MutatedFasta,
-    overwrite_output: bool,
-    output_file: &str,
-) -> io::Result<()> {
-    // mutated_fasta: the mutated fasta object, storing information about variants and file locations of the sequence
-    // overwrite_output: Boolean that controls whether an existing file is overwritten.
-    // output_file: the prefix for the output file name
-    const LINE_LENGTH: usize = 70; // fasta is usually writes with 70 characters per line
-    let mut output_fasta = format!("{}.fasta", output_file);
-    let mut outfile = open_file(&mut output_fasta, overwrite_output)
-        .expect(&format!("Error opening {}", output_fasta));
-    for contig in fasta_order {
-        let sequence = &mutated_fasta[contig];
-        let contig_length = sequence.len();
-        // Write contig name
-        writeln!(&mut outfile, ">{}", contig)?;
-        // write sequences[ploid] to this_fasta
-        let mut i = 0;
-        while i < contig_length {
-            let mut outlines = String::new();
-            // Generate a few lines before writing
-            'num_lines: for _ in 0..50 {
-                for j in 0..LINE_LENGTH {
+// Not sure I need the code below, but it might be useful later
+// pub fn write_fasta(
+//     mutated_fasta: &FastaMap,
+//     overwrite_output: bool,
+//     output_file: &str,
+// ) -> io::Result<()> {
+//     // mutated_fasta: the mutated fasta object, storing information about variants and file locations of the sequence
+//     // overwrite_output: Boolean that controls whether an existing file is overwritten.
+//     // output_file: the prefix for the output file name
+//     const LINE_LENGTH: usize = 70; // fasta is usually writes with 70 characters per line
+//     let mut output_fasta = format!("{}.fasta", output_file);
+//     let mut outfile = File::open(&mut output_fasta)
+//         .expect(&format!("Error opening {}", output_fasta));
+//     let fasta_order = mutated_fasta.contig_order;
+//     for contig in fasta_order {
+//         let sequence = &mutated_fasta.contigs[contig];
+//         let contig_length = sequence.len();
+//         // Write contig name
+//         writeln!(&mut outfile, ">{}", contig)?;
+//         // write sequences[ploid] to this_fasta
+//         let mut i = 0;
+//         while i < contig_length {
+//             let mut outlines = String::new();
+//             // Generate a few lines before writing
+//             'num_lines: for _ in 0..50 {
+//                 for j in 0..LINE_LENGTH {
     
-                    // Check to make sure we are not out of bounds, which will happen if we
-                    // reach the end and there are not exactly 70 bases left (basically, every time)
-                    if (i + j) >= contig_length {
-                        // append the remaining bases
-                        for base in sequence[i..].iter() {
-                            outlines += &base.to_string();
-                        }
-                        outlines += "\n";
-                        // ensure outer loop breaks after writing final line, break inner loop.
-                        i += j;
-                        // todo this is missing a line break after the last full 70 chars.
-                        break 'num_lines
-                    }
-                    outlines += &sequence[i+j].to_string();
-                    i += 1
-                }
-                outlines += "\n";
-            }
-            writeln!(&mut outfile, "{}", outlines)?;
-        }
-    }
-    Ok(())
-}
+//                     // Check to make sure we are not out of bounds, which will happen if we
+//                     // reach the end and there are not exactly 70 bases left (basically, every time)
+//                     if (i + j) >= contig_length {
+//                         // append the remaining bases
+//                         for base in sequence[i..].iter() {
+//                             outlines += &base.to_string();
+//                         }
+//                         outlines += "\n";
+//                         // ensure outer loop breaks after writing final line, break inner loop.
+//                         i += j;
+//                         // todo this is missing a line break after the last full 70 chars.
+//                         break 'num_lines
+//                     }
+//                     outlines += &sequence[i+j].to_string();
+//                     i += 1
+//                 }
+//                 outlines += "\n";
+//             }
+//             writeln!(&mut outfile, "{}", outlines)?;
+//         }
+//     }
+//     Ok(())
+// }
 
 #[cfg(test)]
 mod tests {
@@ -370,20 +339,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_write_buffer() {
+    fn test_process_buffer_into_sequenceblock() {
         let test = [0_u8; BUFSIZE];
         let temp_dir = tempfile::tempdir().unwrap();
-        let (num_bases, segment_file) = write_buffer_to_file(&test, 200000, 25, &temp_dir, "test", 3).unwrap();
-        assert_eq!(num_bases, BUFSIZE);
-        // below is the decode code from fasta_map
-        let mut result_vec = Vec::with_capacity(BUFSIZE);
-        for line in read_to_string(segment_file).unwrap().lines() {
-            for char in line.chars() {
-                result_vec.push((char as u8) % 4);
-            }
-        };
-        assert_eq!(Vec::from(test), result_vec);
+        let segment_file = process_buffer_into_sequenceblock(
+            &test, "chr_1", 25, 25+BUFSIZE, &temp_dir
+        ).unwrap();
 
+        // below is the decode code from fasta_map
+        let sequence_block = SequenceBlock::from(segment_file);
+        assert_eq!(Vec::from(test), sequence_block.sequence);
     }
 
     #[test]
@@ -426,31 +391,4 @@ mod tests {
         let sequence = "NNNNNNNNAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAANNNNN";
     }
 
-    #[test]
-    fn test_write_fasta() -> Result<(), Box<dyn error::Error>> {
-        let mutated_seq1 = vec![A, G, T, A, C, T, C, A, G, T, G, T, T, C, C, T];
-        let mutated_seq2 = vec![G, C, G, C, G, C, T, T, T, T, G, G, C, A, C, G, T, A, A];
-        let fasta_map = Box::new(HashMap::from([
-            ("chr1".to_string(), mutated_seq1.clone()),
-            ("chr2".to_string(), mutated_seq2.clone()),
-        ]));
-        
-        let fasta_order = VecDeque::from([
-            String::from("chr1"),
-            String::from("chr2"),
-        ]);
-        let output_file = "test";
-        let test_write = write_fasta(
-            &fasta_map,
-            &fasta_order,
-            false,
-            output_file
-        ).unwrap();
-        let file_name = "test.fasta";
-        assert_eq!(test_write, ());
-        let attr = fs::metadata(file_name).unwrap();
-        assert!(attr.len() > 0);
-        fs::remove_file(file_name)?;
-        Ok(())
-    }
 }

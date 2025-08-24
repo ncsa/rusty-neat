@@ -33,10 +33,9 @@ impl From<String> for SequenceBlock {
 
 impl SequenceBlock {
 
-    pub fn write_block(&mut self, mut filename: String) -> std::io::Result<()> {
+    pub fn write_block(&mut self, mut file: File) -> std::io::Result<()> {
         // This will serialize the data to a byte vector and write it to the file
         let data = serde_json::to_vec(&self).unwrap();
-        let mut file = File::create(&mut filename)?;
         file.write_all(&data)?;
         Ok(())
     }
@@ -193,7 +192,8 @@ mod tests {
         };
         let filename = "chrom1_000_020.json".to_string();
         // Test write works
-        seq_block.write_block(filename.clone()).unwrap();
+        let file = File::create(&filename).unwrap();
+        seq_block.write_block(file).unwrap();
         // let's read the file we just made and check the contents
         let seq_block_read = SequenceBlock::from(filename.clone());
         assert_eq!(seq_block.contig, seq_block_read.contig);

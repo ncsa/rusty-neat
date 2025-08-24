@@ -1,5 +1,6 @@
 use crate::utils;
 use crate::data;
+use crate::fasta_reader;
 use common;
 use tempfile;
 
@@ -11,7 +12,8 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use utils::config::RunConfiguration;
-use utils::fasta_tools::{read_fasta, write_fasta};
+use fasta_reader::read_fasta,
+use utils::fasta_tools::write_fasta;
 use utils::fastq_tools::write_fastq;
 use utils::generate_reads::generate_reads;
 use utils::read_models::{read_quality_score_model_file, read_quality_score_raw_data};
@@ -40,7 +42,6 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: NeatRng) -> Result<(), RunN
     // block of Sequence, broken up into chunks in the SequenceBlock objects. It also
     // holds a name_map hashmap that links tho contig name from the Fasta with the shortname
     let fasta_map = read_fasta(&config.reference, 300, ).unwrap();
-
     // Load models that will be used for the runs.
     // For now, we will use the one supplied, pulled directly from NEAT2.0's original model.
     let input_quality_score_model = false;

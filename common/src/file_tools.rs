@@ -11,17 +11,6 @@ pub fn read_lines(filename: &str) -> io::Result<Lines<BufReader<File>>> {
     Ok(BufReader::new(file).lines())
 }
 
-pub fn open_file(mut filename: &mut str, overwrite_file: bool) -> Result<File, Error> {
-    if overwrite_file && Path::new(filename).exists() {
-        File::options().create(true).write(true).open(&mut filename)
-    } else {
-        File::options()
-            .create_new(true)
-            .append(true)
-            .open(&mut filename)
-    }
-}
-
 pub fn check_parent(filename: &str, create: bool) -> io::Result<&Path> {
     // checks that the parent dir exists and then if so creates the Path object open
     // and ready to write

@@ -23,10 +23,9 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json;
-use std::fmt::{Display, Formatter};
+use std::{fmt::{Display, Formatter}, io::Write};
 use simple_rng::{NeatRng, DiscreteDistribution};
-
-use crate::file_tools::open_file;
+use std::fs;
 
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -231,13 +230,15 @@ impl QualityScoreModel {
             indexes
         }
     }
-    #[allow(dead_code)]
-    pub fn write_out_quality_model(&self, filename: &mut str) -> serde_json::Result<()> {
+
+    pub fn write_out_quality_model(&self, filename: &mut str) -> std::io::Result<()> {
         // Uses the serde_json crate to write out the json form of the model. This will help us
         // create base datasets from old neat data, and give us a way to write out models that are
         // generated from user data.
-        let fileout = open_file(filename, false).unwrap();
-        serde_json::to_writer(fileout, self)
+        let mut fileout = fs::File::create(filename)?;
+        let data = serde_json::to_string_pretty(self).unwrap();
+        fileout.write_all(data.as_bytes())?;
+        Ok(())
     }
 }
 

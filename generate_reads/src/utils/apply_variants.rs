@@ -5,8 +5,6 @@ use simple_rng::{NeatRng, DiscreteDistribution};
 pub fn apply_variants(
     raw_sequence: &[u8],
     relevant_variants: HashMap<usize, &Variant>,
-    raw_sequence: &[Nuc],
-    relevant_variants: HashMap<&usize, &Variant>,
     start: usize,
     mut rng: NeatRng,
 ) -> Vec<u8> {

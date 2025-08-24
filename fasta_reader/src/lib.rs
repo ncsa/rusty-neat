@@ -1,5 +1,4 @@
 use std::collections::{HashMap, VecDeque};
-use std::ffi::OsString;
 use std::fs::File;
 use std::io;
 use std::io::Write;
@@ -15,8 +14,7 @@ pub const DICT_SIZE: usize = 32768usize; // i.e., 32kb
 pub fn read_fasta(
     fasta_path: &str,
     overlap_len: usize,
-    temp_dir: &TempDir,
-    debug: bool
+    temp_dir: &TempDir
 ) -> Result<Box<FastaMap>, io::Error> {
     // Here's the basic idea:
     //     1. Read in 128kb worth of sequence (or the entire sequence)
@@ -52,7 +50,7 @@ pub fn read_fasta(
     let mut contig_order: VecDeque<String> = VecDeque::new();
     let mut current_key = String::new();
     let mut buffer = [4_u8; BUFSIZE];
-    let mut tail_buffer = [4_u8; overlap_len];
+    let mut overlap_buffer = Vec::new();
 
     let lines = read_lines(fasta_path)?;
     // This will help us keep track of where we are in the read
@@ -72,11 +70,12 @@ pub fn read_fasta(
                 if l.starts_with(">") {
                     // Checking if this is either the first loop or an empty read.
                     // After the first loop, then we need to log the previous contig
-                    if contig_length == 0 && current_key.is_emtpy() {
-                        // in this case, this is the first loop
+                    if contig_length == 0 && current_key.is_empty() {
+                        // in this case, this is the first loop, skip this section
                     } else if contig_length == 0 && !current_key.is_empty() {
                         // in this case, we had an empty read
-                        panic!("Read for {name_map[&current_key]} is empty. Please remove from fasta file and try again")
+                        let name = name_map[&current_key].clone();
+                        panic!("Read for {name} is empty. Please remove from fasta file and try again")
                     } else {
                         // the total number of valid bases of this buffer
                         let num_bases = contig_length - block_start;
@@ -97,20 +96,19 @@ pub fn read_fasta(
                             file_path.clone(),
                         ).unwrap());
 
-                        // Reset buffers TODO!
-                        buffer = tail_buffer.clone();
-                        tail_buffer = [4_u8; BUFSIZE];
-                        // Reset local index to synchronize with new buffer on a new contig
+                        // Reset buffers, no need to save since we're starting a new contig
+                        buffer = [4_u8; BUFSIZE];
                         buffer_index = 0;
 
-                        let contig_map = build_contig_map(&sequence_blocks);
+                        // reset overlap buffer
+                        overlap_buffer = Vec::new();
 
                         // Add the contig to the list
                         contigs.push(Contig::new(
                             current_key.clone(),
                             contig_length.clone(),
                             sequence_blocks.clone(),
-                            contig_map.clone(),
+                            build_contig_map(&sequence_blocks).clone(),
                         ).unwrap());
 
                         // reset variables to start building the next contig and sequence block
@@ -118,11 +116,6 @@ pub fn read_fasta(
                         contig_length = 0;
                         block_index = 0;
                         block_start = 0;
-                        // Fasta files always end on a line break or EOF, so
-                        // we do not need to worry about swapping buffers or anything.
-                        // Update buffer and next buffer
-                        buffer = tail_buffer.clone();
-                        tail_buffer = [4_u8; BUFSIZE];
                     }
                     // grab the name from the string, omitting the initial '>' character
                     let long_name = l[1..].to_string();
@@ -134,7 +127,7 @@ pub fn read_fasta(
                         // If we have filled the buffer, time to write the file and clear the buffer
                         if buffer_index >= BUFSIZE {
                             // grab the end of the buffer to create an overlap with the next section
-                            tail_buffer = buffer[BUFSIZE-overlap_len..].to_owned();
+                            overlap_buffer = buffer[BUFSIZE-overlap_len..].iter().cloned().collect();
 
                             let (num_bases, file_path) = write_buffer_to_file(
                                 &buffer,
@@ -144,7 +137,7 @@ pub fn read_fasta(
                                 &current_key,
                                 block_index,
                             )?;
-                            
+
                             // record sequence block info. This stores the relevant data for retrieval
                             sequence_blocks.push(SequenceBlock::new(
                                 block_start.clone(),
@@ -155,17 +148,17 @@ pub fn read_fasta(
                             // Set start point for recording next block, offset to account for the overlap
                             block_start += BUFSIZE-overlap_len;
                             // Reset primary buffer and index
-                            buffer = [4_u8; BUFSIZE]
-                            buffer_index = 0
+                            buffer = [4_u8; BUFSIZE];
+                            buffer_index = 0;
                             for i in 0..overlap_len {
-                                buffer[i] = tail[i]
+                                buffer[i] = overlap_buffer[i];
                                 // keep the buffer index sync'd with the buffer
-                                buffer_index += 1
+                                buffer_index += 1;
                             }
                             // reset overlap buffer
-                            tail_buffer = [4_u8; overlap_len];
+                            overlap_buffer = Vec::new();
                             // Increment block index
-                            block_index += 1
+                            block_index += 1;
                         }
                         buffer[buffer_index] = char_to_base(char);
                         buffer_index += 1;
@@ -293,7 +286,7 @@ fn write_buffer_to_file(
     temp_dir: &TempDir,
     key: &str,
     index: usize
-) -> Result<(usize, OsString), io::Error> {
+) -> Result<(usize, String), io::Error> {
     // num_bases covers us if we do not need the entire buffer. This will tell us how much to write
     let num_bases =
         if (contig_len - start) > BUFSIZE {
@@ -317,11 +310,62 @@ fn write_buffer_to_file(
         .collect::<Vec<String>>()
         .join("");
     writeln!(&mut tmp_file, "{}", bufstr)?;
-    Ok((num_bases, sequence_file_path.into_os_string()))
+    Ok((num_bases, sequence_file_path.display().to_string()))
+}
+
+pub fn write_fasta(
+    mutated_fasta: &MutatedFasta,
+    overwrite_output: bool,
+    output_file: &str,
+) -> io::Result<()> {
+    // mutated_fasta: the mutated fasta object, storing information about variants and file locations of the sequence
+    // overwrite_output: Boolean that controls whether an existing file is overwritten.
+    // output_file: the prefix for the output file name
+    const LINE_LENGTH: usize = 70; // fasta is usually writes with 70 characters per line
+    let mut output_fasta = format!("{}.fasta", output_file);
+    let mut outfile = open_file(&mut output_fasta, overwrite_output)
+        .expect(&format!("Error opening {}", output_fasta));
+    for contig in fasta_order {
+        let sequence = &mutated_fasta[contig];
+        let contig_length = sequence.len();
+        // Write contig name
+        writeln!(&mut outfile, ">{}", contig)?;
+        // write sequences[ploid] to this_fasta
+        let mut i = 0;
+        while i < contig_length {
+            let mut outlines = String::new();
+            // Generate a few lines before writing
+            'num_lines: for _ in 0..50 {
+                for j in 0..LINE_LENGTH {
+    
+                    // Check to make sure we are not out of bounds, which will happen if we
+                    // reach the end and there are not exactly 70 bases left (basically, every time)
+                    if (i + j) >= contig_length {
+                        // append the remaining bases
+                        for base in sequence[i..].iter() {
+                            outlines += &base.to_string();
+                        }
+                        outlines += "\n";
+                        // ensure outer loop breaks after writing final line, break inner loop.
+                        i += j;
+                        // todo this is missing a line break after the last full 70 chars.
+                        break 'num_lines
+                    }
+                    outlines += &sequence[i+j].to_string();
+                    i += 1
+                }
+                outlines += "\n";
+            }
+            writeln!(&mut outfile, "{}", outlines)?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
+    extern crate walkdir;
+    use walkdir::WalkDir;
     use std::fs::{read_to_string, File};
     use super::*;
 
@@ -348,6 +392,22 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let test_map = read_fasta(test_fasta, 350, &temp_dir).unwrap();
         assert_eq!(test_map.contig_order[0], "H1N1_HA".to_string());
+        let mut flag = false;
+        let mut contents = String::new();
+        for entry in WalkDir::new(&temp_dir) {
+            match entry {
+                Ok(entry) => {
+                    // if flag == false {
+                    //     contents = read_to_string(entry.path())
+                    //         .expect("Should have been able to read the file");
+                    //     flag = true;
+                    // }
+                    println!("{}", entry.path().display())
+                },
+                Err(e) => eprintln!("Error: {}", e),
+                }
+            }
+        // println!("With text:\n{contents}");
         temp_dir.close().unwrap();
     }
 
@@ -364,5 +424,33 @@ mod tests {
     #[test]
     fn test_build_contig_map() {
         let sequence = "NNNNNNNNAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAANNNNN";
+    }
+
+    #[test]
+    fn test_write_fasta() -> Result<(), Box<dyn error::Error>> {
+        let mutated_seq1 = vec![A, G, T, A, C, T, C, A, G, T, G, T, T, C, C, T];
+        let mutated_seq2 = vec![G, C, G, C, G, C, T, T, T, T, G, G, C, A, C, G, T, A, A];
+        let fasta_map = Box::new(HashMap::from([
+            ("chr1".to_string(), mutated_seq1.clone()),
+            ("chr2".to_string(), mutated_seq2.clone()),
+        ]));
+        
+        let fasta_order = VecDeque::from([
+            String::from("chr1"),
+            String::from("chr2"),
+        ]);
+        let output_file = "test";
+        let test_write = write_fasta(
+            &fasta_map,
+            &fasta_order,
+            false,
+            output_file
+        ).unwrap();
+        let file_name = "test.fasta";
+        assert_eq!(test_write, ());
+        let attr = fs::metadata(file_name).unwrap();
+        assert!(attr.len() > 0);
+        fs::remove_file(file_name)?;
+        Ok(())
     }
 }

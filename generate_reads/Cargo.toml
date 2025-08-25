@@ -8,7 +8,6 @@ edition.workspace = true
 
 [dependencies]
 common = { path = "../common" }
-fasta_reader = { path = "../fasta_reader" }
 simple_rng = { path = "../simple_rng" }
 log = "0.4.21"
 xorshift = "0.1.3"

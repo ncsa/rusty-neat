@@ -5,7 +5,6 @@
 // the mutated fasta file. These will either be read-length fragments or fragment model length
 // fragments.
 use common;
-
 use log::debug;
 use std::collections::VecDeque;
 use simple_rng::{NeatRng, NormalDistribution, DiscreteDistribution};

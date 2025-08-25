@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::string::String;
 use std::{env, fs};
 use utils::cli::Cli;
-use common::file_tools::check_create_dir;
+use common::file_tools::folder_tools::check_create_dir;
 
 #[derive(Debug, Clone)]
 pub struct RunConfiguration {
@@ -63,7 +63,7 @@ impl RunConfiguration {
             reference: String::new(),
             read_len: 151, 
             coverage: 10, 
-            mutation_rate: 0.03, 
+            mutation_rate: 0.001, 
             ploidy: 2, 
             paired_ended: false, 
             fragment_mean: None, 

@@ -2,12 +2,45 @@
 //! Fasta files can be quite large and so this system is meant to speed up retreival when we
 //! go to write output files, while keeping the burden of memory usage low, by writing the actual
 //! sequences to file (encoded as u8) and retreiving them only as needed
-
+//! We need to use the Variants struct to add variants to the contigs, making this a sort of second
+//! level struct
 use std::{collections::{HashMap, VecDeque}, io::{Write, Read}};
 use serde::{Deserialize, Serialize};
 use serde::de::value::Error;
 use serde_json;
 use std::fs::{read_to_string, File};
+use std::path::Path;
+use crate::structs::variants::Variant;
+use log::debug;
+
+pub fn decode_file_name(path_string: &str) -> Result<(usize, usize), Error> {
+    // This function parses the filename according to the established convention in NEAT
+    // contigname_0001100000_0001200000.json
+    // where the 2 groups of numbers are the start and end points of the sequence block
+    // these coordinates are what we are trying to get from the name.
+    let mut underscores: Vec<usize> = Vec::new();
+    let mut index = 0;
+    // We'll extract just the file stem part of the path and convert to string
+    let filename = Path::new(path_string).file_stem().unwrap().display().to_string();
+    for char in filename.chars() {
+        // Find all the underscores
+        match char {
+            '_' => {
+                // Find the underscores
+                underscores.push(index);
+                index += 1; 
+            },
+            _ => index += 1,
+        }
+    }
+    // the last two blocks: _000111000_000112000 contain the range
+    let penultimate_underscore = underscores[underscores.len()-2];
+    let ultimate_underscore = underscores[underscores.len()-1];
+    // This should parse out to a usize position
+    let start: usize = filename[(penultimate_underscore+1)..ultimate_underscore].parse().unwrap();
+    let end: usize = filename[(ultimate_underscore+1)..index].parse().unwrap();
+    Ok((start, end))
+}
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct SequenceBlock {
@@ -25,6 +58,9 @@ pub struct SequenceBlock {
 
 impl From<String> for SequenceBlock {
     fn from(mut filename: String) -> Self {
+        // This is a check that the filename is properly encoded
+        (_, _) = decode_file_name(&filename).unwrap();
+
         let json_data = read_to_string(&mut filename).unwrap();
         let sequence_block: SequenceBlock = serde_json::from_str(&json_data).unwrap();
         sequence_block
@@ -92,7 +128,7 @@ pub struct Contig {
     // Where contigname = the short name of the contig, the first string of digits is the start point of that file and the second block of digits is the end point 
     pub blocks: Vec<String>,
     // This is a map of the contig, giving the overall N-region versus NonN-regions of the contig
-    pub contig_map: Vec<(usize, usize, RegionType)>
+    pub contig_map: Vec<(usize, usize, RegionType)>,
 }
 
 impl Contig {
@@ -102,7 +138,7 @@ impl Contig {
         blocks: Vec<String>,
         map: Vec<(usize, usize, RegionType)>
     ) -> Result<Self, &'static str> {
-
+        
         Ok(Contig {
             name,
             len,
@@ -111,37 +147,47 @@ impl Contig {
         })
     }
 
-    pub fn get_sequence_block(&self, location: usize) -> Result<SequenceBlock, &'static str> {
-        let mut index = 0;
-        let mut underscores = Vec::new();
+    pub fn get_sequence_block(&self, request_start: usize, request_end: usize) -> Result<Vec<String>, &'static str> {
+        // This attempts to find a sequence block matching the first coordinate. Some coordinates may have two
+        // files that have this location.
+        // 
+        // We may need a special case for when the location is in more than one block
+        // Instead of a panic, we return a string error, in case the calling code is not necessarily expecting 
+        // to find a result, it can deal with that itself.
+        let mut found_blocks: Vec<String> = Vec::new();
         for block_name in &self.blocks {
-            for char in block_name.chars() {
-                // Find all the underscores
-                match char {
-                    '_' => {
-                        // Find the underscores
-                        underscores.push(index);
-                        index += 1; 
-                    },
-                    '.' => {
-                        // a period will denote the filename extension for our purposes
-                        break
-                    },
-                    _ => index += 1,
-                }
-            }
-            // the last two blocks: _000111000_000112000 contain the range
-            let penultimate_underscore = underscores[underscores.len()-2];
-            let ultimate_underscore = underscores[underscores.len()-2];
-            // This should parse out to a usize position
-            let start: usize = block_name[(penultimate_underscore+1)..ultimate_underscore].parse().unwrap();
-            let end: usize = block_name[(ultimate_underscore+1)..index].parse().unwrap();
-            if (location >= start) && (location < end) {
-                // block found!
-                return Ok(SequenceBlock::from(block_name.to_owned()));
+            let (start, end) = decode_file_name(block_name).unwrap();
+            if ((request_start >= start) && (request_start < end)) && 
+                ((request_end > start) && (request_end <= end)) {
+                // In an attempt to keep features from spanning more than one sequence block, making
+                // the simulaton more difficult, we're only looking for sequences that entirely contain
+                // the feature. We could potentially improve on this idea in the future.
+                //
+                // block found! Note they may not be univque because of overlaps
+                found_blocks.push(block_name.clone());
             }
         }
-        Err("Block not found")
+        if found_blocks.is_empty(){
+            Err("No blocks found matching range")
+        } else {
+            Ok(found_blocks)
+        }
+    }
+
+    pub fn map_variants(&self, variants_list: Vec<Variant>) -> HashMap<Variant, Vec<String>> {
+        let mut variant_map: HashMap<Variant, Vec<String>> = HashMap::new();
+        for variant in variants_list.clone().iter() {
+            let request_start = variant.location;
+            // Guaranteed to work because a reference vector must have at least 1 element
+            let request_end = request_start + variant.reference.len();
+            let result = self.get_sequence_block(request_start, request_end);
+            match result {
+                Ok(result) => { variant_map.insert(variant.clone(), result); },
+                // This is a little weird, but we'll debug later
+                Err(e) => { debug!("{}", e) }
+            }
+        }
+        variant_map
     }
 }
 
@@ -157,16 +203,15 @@ pub struct FastaMap {
     pub contig_order: VecDeque<String>,
 }
 
-impl From<(Vec<Contig>, HashMap<String, String>, VecDeque<String>)> for FastaMap {
-    fn from(
-        (contigs, name_map, contig_order): 
-        (Vec<Contig>, HashMap<String, String>, VecDeque<String>)
-    ) -> Self {
-        Self { contigs, name_map, contig_order }
-    }
-}
-
 impl FastaMap {
+    pub fn new(
+        contigs: Vec<Contig>, 
+        name_map: HashMap<String, String>, 
+        contig_order: VecDeque<String>
+    ) -> Self {
+        FastaMap { contigs, name_map, contig_order }
+    }
+
     pub fn retrieve_contig(&self, request_name: String) -> Result<Contig, &'static str> {
         for contig in self.contigs.iter() {
             if contig.name == request_name {
@@ -202,11 +247,18 @@ mod tests {
         assert_eq!(seq_block.sequence, seq_block_read.sequence);
         remove_file(filename).unwrap();
     }
+
+    #[test]
+    fn test_filename_decoder() {
+        let filename = "chr1_001000_002000.json".to_string();
+        let (a, b) = decode_file_name(&filename).unwrap();
+        assert_eq!(a, 1000);
+        assert_eq!(b, 2000)
+    }
     
     #[test]
     fn test_basic_map() {
         let filename = "chrom1_0000_0020.json".to_string();
-            
         let sequences = vec![filename];
         let contig_map = Vec::from([
             (0, 12, NRegion),
@@ -226,11 +278,11 @@ mod tests {
         ]);
         let contigs = Vec::from([contig]);
         let contig_order = VecDeque::from(["chrom1".to_string()]);
-        let fasta_map = FastaMap::from((
+        let fasta_map = FastaMap::new(
             contigs,
             name_map,
             contig_order,
-        ));
+        );
 
         let expected_output = "FastaMap { \
         contigs: [Contig { \

@@ -243,13 +243,17 @@ checksum = "5b63caa9aa9397e2d9480a9b13673856c78d8ac123288526c37d7839f2a86990"
 name = "common"
 version = "0.2.0"
 dependencies = [
+ "bincode",
+ "chrono",
  "log",
+ "num-traits",
  "serde",
  "serde_derive",
  "serde_json",
  "serde_yml",
  "simple_rng",
  "tempfile",
+ "walkdir",
 ]
 
 [[package]]
@@ -327,22 +331,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fasta_reader"
-version = "0.2.0"
-dependencies = [
- "bincode",
- "chrono",
- "common",
- "log",
- "num-traits",
- "serde",
- "serde_derive",
- "serde_json",
- "tempfile",
- "walkdir",
-]
-
-[[package]]
 name = "fastrand"
 version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -362,7 +350,6 @@ dependencies = [
  "chrono",
  "clap",
  "common",
- "fasta_reader",
  "itertools",
  "log",
  "rand_chacha 0.9.0",

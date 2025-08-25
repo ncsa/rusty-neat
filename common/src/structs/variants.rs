@@ -1,4 +1,5 @@
-use self::VariantType::*;
+//! These enums and structs help us keep track of variants added to the reference
+//! It stores all the necessary data to write a variant out.
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub enum VariantType {
@@ -7,7 +8,7 @@ pub enum VariantType {
     Deletion,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Hash)]
 pub struct Variant {
     // This is a basic holder for a variant. There are several aspects of the variant that we
     // don't need to store, such as which ploid the variant appears on and the context sequence,
@@ -36,9 +37,14 @@ impl Variant {
         genotype: &Vec<u8>,
     ) -> Self {
         match variant_type {
-            Insertion | Deletion => assert_ne!(reference.len(), alternate.len()),
-            SNP => assert_eq!(reference.len(), alternate.len()),
+            VariantType::Insertion | 
+            VariantType::Deletion => assert_ne!(reference.len(), alternate.len()),
+            VariantType::SNP => assert_eq!(reference.len(), alternate.len()),
         }
+
+        // Enforcing a policy that we assume elsewhere in the code
+        assert!(reference.len() >= 1);
+        assert!(alternate.len() >= 1);
 
         Variant {
             variant_type,

@@ -214,7 +214,7 @@ impl RunConfiguration {
         configuration
     }
 
-    pub fn build_config_from_args(args: Cli) -> RunConfiguration {
+    pub fn from_args(args: Cli) -> RunConfiguration {
         // Takes in a bunch of args from a clap CLI and builds a config based on that. More CLI options
         // will need additional items entered here. To add them to the config, so they can be implemented.
 
@@ -428,7 +428,7 @@ mod tests {
             coverage: 10,
         };
 
-        let test_config = RunConfiguration::build_config_from_args(args);
+        let test_config = RunConfiguration::from_args(args);
         assert_eq!(test_config.reference, "test_data/references/ecoli.fa".to_string());
         fs::remove_dir("data").unwrap();
     }
@@ -464,7 +464,7 @@ mod tests {
             coverage: 10,
         };
 
-        RunConfiguration::build_config_from_args(args);
+        RunConfiguration::from_args(args);
         fs::remove_dir("test_dir").unwrap()
     }
 
@@ -558,7 +558,7 @@ mod tests {
             coverage: 10,
         };
 
-        let config = RunConfiguration::build_config_from_args(args);
+        let config = RunConfiguration::from_args(args);
         assert_eq!(env::current_dir().unwrap().as_path(), config.output_dir);
     }
 
@@ -576,7 +576,7 @@ mod tests {
             coverage: 13,
         };
 
-        let config = RunConfiguration::build_config_from_args(args);
+        let config = RunConfiguration::from_args(args);
         assert_eq!(10, config.minimum_mutations);
         assert_eq!(120, config.read_len);
         assert_eq!(13, config.coverage);

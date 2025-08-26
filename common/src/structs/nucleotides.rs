@@ -1,12 +1,11 @@
-// Representing bases by a simple u8 num
-//     A = 0
-//     C = 1
-//     G = 2
-//     T = 3
-//     N (or other unknown chars) = 4
-// This is intended to make it easier to store them. I think this will be an easier way to read
-// the code, and I'm hoping it does not incur any extra computational burden
-
+//! Representing bases by a simple u8 num
+//!     A = 0
+//!     C = 1
+//!     G = 2
+//!     T = 3
+//!     N (or other unknown chars) = 4
+//! This is intended to make it easier to store them. Note that the bases are always in alphabetical order
+//! with N tacked on at the end.
 const ALLOWED_NUCS: [char; 4] = ['A', 'C', 'G', 'T'];
 
 pub fn base_to_char(b: u8) -> char {

@@ -1,4 +1,23 @@
-use simple_rng::DiscreteDistribution;
+use simple_rng::{DiscreteDistribution, NeatRngError};
+use std::fmt;
+
+#[derive(Debug)]
+pub enum TransitionMatrixError {
+    RngError(NeatRngError),
+    UnequalWeightsError,
+}
+
+impl From<NeatRngError> for TransitionMatrixError {
+    fn from(error: NeatRngError) -> Self {
+        TransitionMatrixError::RngError(error)
+    }
+}
+
+impl fmt::Display for TransitionMatrixError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Weights must be of length 4")
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct TransitionMatrix {
@@ -16,14 +35,14 @@ pub struct TransitionMatrix {
 }
 
 impl TransitionMatrix where {
-    pub fn default() -> Self {
+    pub fn default() -> Result<Self, TransitionMatrixError> {
         // Default transition matrix for mutations from the original NEAT 2.0
-        Self {
-            a_dist: DiscreteDistribution::new(&vec![0.0, 15.0, 70.0, 15.0]),
-            c_dist: DiscreteDistribution::new(&vec![15.0, 0.0, 15.0, 70.0]),
-            g_dist: DiscreteDistribution::new(&vec![70.0, 15.0, 0.0, 15.0]),
-            t_dist: DiscreteDistribution::new(&vec![15.0, 70.0, 15.0, 0.0]),
-        }
+        Ok(Self {
+            a_dist: DiscreteDistribution::new(&vec![0.0, 15.0, 70.0, 15.0])?,
+            c_dist: DiscreteDistribution::new(&vec![15.0, 0.0, 15.0, 70.0])?,
+            g_dist: DiscreteDistribution::new(&vec![70.0, 15.0, 0.0, 15.0])?,
+            t_dist: DiscreteDistribution::new(&vec![15.0, 70.0, 15.0, 0.0])?,
+        })
     }
 
     pub fn from(
@@ -31,21 +50,21 @@ impl TransitionMatrix where {
         c_weights: Vec<f64>,
         g_weights: Vec<f64>,
         t_weights: Vec<f64>
-    ) -> Self {
+    ) -> Result<Self, TransitionMatrixError> {
         let weights_test = vec![
             a_weights.clone(), c_weights.clone(), g_weights.clone(), t_weights.clone()
         ];
         for vector in weights_test.iter() {
             if vector.len() != 4 {
-                panic!("Weights must be of length 4")
+                return Err(TransitionMatrixError::UnequalWeightsError)
             }
         }
-        Self {
-            a_dist: DiscreteDistribution::new(&a_weights),
-            c_dist: DiscreteDistribution::new(&c_weights),
-            g_dist: DiscreteDistribution::new(&g_weights),
-            t_dist: DiscreteDistribution::new(&t_weights),
-        }
+        Ok(Self {
+            a_dist: DiscreteDistribution::new(&a_weights)?,
+            c_dist: DiscreteDistribution::new(&c_weights)?,
+            g_dist: DiscreteDistribution::new(&g_weights)?,
+            t_dist: DiscreteDistribution::new(&t_weights)?,
+        })
     }
 
 }

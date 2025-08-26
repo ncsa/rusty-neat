@@ -1,32 +1,50 @@
-// Walking through Zac Stephens original algorithm, to try to make sure I replicate it correctly.
-//   * For position 1, there is a vector of weights for each score, extracted from data.
-//   * For each position in the read length after that
-//         * For each possible quality score, a distribution is constructed with weights and
-//            scores, as determined by a matrix of weights
-//   * For read length N and # possible quality scores Q, this creates a vector with length N
-//         * first element is a 1-D vector of weights with length Q
-//         * each subsequent element is a vector of length Q,
-//           each element of which is a vector of length N.
-// To generate quality scores, they follow the following procedure:
-//   * Sample the first element (1D vector) for initial quality score.
-//   * For next position, the previous Q score determines which N-length set of weights to use to
-//     determine the next quality score
-// Advantages of this approach:
-//   * Does a fairly effective job of modeling shapes of the quality scores for a set read length
-// Disadvantages of this approach:
-//   * The fact that we're working with a matrix with a different first element is
-//     extremely confusing
-//   * In addition to the difficulty keeping track of indexes, I'm not sure how well this will
-//     translate to Rust. May need a custom data structure. Like seed + subsequent.
-//   * Assumes a fixed read length, meaning you have to extrapolate for longer read lengths.
-//   * In Python, at least, this was slow, although in retrospect it didn't eat up much memory.
-
+//! Walking through Zac Stephens original algorithm, to try to make sure I replicate it correctly.
+//!   * For position 1, there is a vector of weights for each score, extracted from data.
+//!   * For each position in the read length after that
+//!         * For each possible quality score, a distribution is constructed with weights and
+//!            scores, as determined by a matrix of weights
+//!   * For read length N and # possible quality scores Q, this creates a vector with length N
+//!         * first element is a 1-D vector of weights with length Q
+//!         * each subsequent element is a vector of length Q,
+//!           each element of which is a vector of length N.
+//! To generate quality scores, they follow the following procedure:
+//!   * Sample the first element (1D vector) for initial quality score.
+//!   * For next position, the previous Q score determines which N-length set of weights to use to
+//!     determine the next quality score
+//! Advantages of this approach:
+//!   * Does a fairly effective job of modeling shapes of the quality scores for a set read length
+//! Disadvantages of this approach:
+//!   * The fact that we're working with a matrix with a different first element is
+//!     extremely confusing
+//!   * In addition to the difficulty keeping track of indexes, I'm not sure how well this will
+//!     translate to Rust. May need a custom data structure. Like seed + subsequent.
+//!   * Assumes a fixed read length, meaning you have to extrapolate for longer read lengths.
+//!   * In Python, at least, this was slow, although in retrospect it didn't eat up much memory.
 use serde::{Deserialize, Serialize};
 use serde_json;
 use std::{fmt::{Display, Formatter}, io::Write};
-use simple_rng::{NeatRng, DiscreteDistribution};
+use simple_rng::{DiscreteDistribution, NeatRng, NeatRngError};
 use std::fs;
+use std::io;
 
+#[derive(Debug)]
+enum QualityModelError {
+    RngError(NeatRngError),
+    IoError(io::Error),
+}
+
+
+impl From<NeatRngError> for QualityModelError {
+    fn from(error: NeatRngError) -> Self {
+        QualityModelError::RngError(error)
+    }
+}
+
+impl From<std::io::Error> for QualityModelError {
+    fn from(error: std::io::Error) -> Self {
+        QualityModelError::IoError(error)
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct QualityScoreModel {
@@ -53,6 +71,7 @@ pub struct QualityScoreModel {
 impl Display for QualityScoreModel {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         // Just a basic display showing the possible quality scores and read length of the model.
+        // This won't be used by generate_reads, but could be used by a generate quality score model
         write!(
             f,
             "QualityScoreModel: (rl: {})\n\
@@ -65,14 +84,13 @@ impl Display for QualityScoreModel {
 
 impl QualityScoreModel {
     // methods for QualityScoreModel objects
-    pub fn new() -> Self {
-        // We'll construct a base toy model that just favors higher scores for now. We'll work on
-        // parsing out this from real data then we can fill this out better.
+    pub fn default() -> Result<Self, QualityModelError> {
+        // The following was the default model used by the original NEAT genReads.
         let default_quality_scores: Vec<u32> = vec![2, 11, 25, 37];
         let default_seed_weight: Vec<f64> = vec![1.0, 3.0, 5.0, 1.0];
-        let default_seed_dist = DiscreteDistribution::new(&default_seed_weight);
+        let default_seed_dist = DiscreteDistribution::new(&default_seed_weight)?;
         let default_base_weights: Vec<f64> = vec![1.0, 1.0, 2.0, 5.0];
-        let default_base_dist = DiscreteDistribution::new(&default_base_weights);
+        let default_base_dist = DiscreteDistribution::new(&default_base_weights)?;
         let default_read_length: u32 = 150;
         let mut default_score_distros: Vec<Vec<DiscreteDistribution>> = Vec::with_capacity(
             default_read_length as usize
@@ -93,13 +111,13 @@ impl QualityScoreModel {
             default_score_distros.push(row.clone());
         }
         // With the defaults established, create the default quality score model.
-        QualityScoreModel {
+        Ok(QualityScoreModel {
             quality_score_options: default_quality_scores,
             binned_scores: true,
             assumed_read_length: default_read_length,
             seed_dist: default_seed_dist,
             distros_from_one: default_score_distros,
-        }
+        })
     }
 
     pub fn from(
@@ -254,7 +272,7 @@ mod tests {
             "Cruel".to_string(),
             "World".to_string(),
         ]);
-        let model = QualityScoreModel::new();
+        let model = QualityScoreModel::default();
         let scores = model.generate_quality_scores(run_read_length, &mut rng);
         assert!(!scores.is_empty());
         assert_eq!(scores.len(), 100);
@@ -272,7 +290,7 @@ mod tests {
             "Cruel".to_string(),
             "World".to_string(),
         ]);
-        let model = QualityScoreModel::new();
+        let model = QualityScoreModel::default();
         let scores = model.generate_quality_scores(run_read_length, &mut rng);
         assert!(!scores.is_empty());
         assert_eq!(scores.len(), 150);
@@ -290,7 +308,7 @@ mod tests {
             "Cruel".to_string(),
             "World".to_string(),
         ]);
-        let model = QualityScoreModel::new();
+        let model = QualityScoreModel::default();
         let scores = model.generate_quality_scores(run_read_length, &mut rng);
         assert!(!scores.is_empty());
         assert_eq!(scores.len(), 200);
@@ -308,7 +326,7 @@ mod tests {
             "Cruel".to_string(),
             "World".to_string(),
         ]);
-        let model = QualityScoreModel::new();
+        let model = QualityScoreModel::default();
         let scores = model.generate_quality_scores(run_read_length, &mut rng);
         assert!(!scores.is_empty());
         assert_eq!(scores.len(), 2000);

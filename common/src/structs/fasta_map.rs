@@ -4,16 +4,53 @@
 //! sequences to file (encoded as u8) and retreiving them only as needed
 //! We need to use the Variants struct to add variants to the contigs, making this a sort of second
 //! level struct
-use std::{collections::{HashMap, VecDeque}, io::{Write, Read}};
+use std::io;
+use std::num::ParseIntError;
+use std::{collections::{HashMap, VecDeque}, io::Write};
 use serde::{Deserialize, Serialize};
-use serde::de::value::Error;
+use serde;
 use serde_json;
 use std::fs::{read_to_string, File};
 use std::path::Path;
 use crate::structs::variants::Variant;
-use log::debug;
+use log::{debug, error};
 
-pub fn decode_file_name(path_string: &str) -> Result<(usize, usize), Error> {
+#[derive(Debug)]
+pub enum FastaMapError {
+    IoError(io::Error),
+    BadCoordinatesError,
+    OutOfBoundsError,
+    ContigNotFoundError,
+    SerdeValueError(serde::de::value::Error),
+    SerdeJsonError(serde_json::Error),
+    MalformedFilenameError(ParseIntError),
+}
+
+impl From<serde_json::Error> for FastaMapError {
+    fn from(error: serde_json::Error) -> Self {
+        FastaMapError::SerdeJsonError(error)
+    }
+}
+
+impl From<io::Error> for FastaMapError {
+    fn from(error: io::Error) -> Self {
+        FastaMapError::IoError(error)
+    }
+}
+
+impl From<serde::de::value::Error> for FastaMapError {
+    fn from(error: serde::de::value::Error) -> Self {
+        FastaMapError::SerdeValueError(error)
+    }
+}
+
+impl From<ParseIntError> for FastaMapError {
+    fn from(error: ParseIntError) -> Self {
+        FastaMapError::MalformedFilenameError(error)
+    }
+}
+
+pub fn decode_file_name(path_string: &str) -> Result<(usize, usize), FastaMapError> {
     // This function parses the filename according to the established convention in NEAT
     // contigname_0001100000_0001200000.json
     // where the 2 groups of numbers are the start and end points of the sequence block
@@ -37,8 +74,8 @@ pub fn decode_file_name(path_string: &str) -> Result<(usize, usize), Error> {
     let penultimate_underscore = underscores[underscores.len()-2];
     let ultimate_underscore = underscores[underscores.len()-1];
     // This should parse out to a usize position
-    let start: usize = filename[(penultimate_underscore+1)..ultimate_underscore].parse().unwrap();
-    let end: usize = filename[(ultimate_underscore+1)..index].parse().unwrap();
+    let start: usize = filename[(penultimate_underscore+1)..ultimate_underscore].parse()?;
+    let end: usize = filename[(ultimate_underscore+1)..index].parse()?;
     Ok((start, end))
 }
 
@@ -56,18 +93,15 @@ pub struct SequenceBlock {
     pub sequence: Vec<u8>,
 }
 
-impl From<String> for SequenceBlock {
-    fn from(mut filename: String) -> Self {
-        // This is a check that the filename is properly encoded
-        (_, _) = decode_file_name(&filename).unwrap();
-
-        let json_data = read_to_string(&mut filename).unwrap();
-        let sequence_block: SequenceBlock = serde_json::from_str(&json_data).unwrap();
-        sequence_block
-    }
-}
-
 impl SequenceBlock {
+    fn from(mut filename: String) -> Result<Self, FastaMapError> {
+        // This is a check that the filename is properly encoded
+        (_, _) = decode_file_name(&filename)?;
+
+        let json_data = read_to_string(&mut filename)?;
+        let sequence_block: SequenceBlock = serde_json::from_str(&json_data)?;
+        Ok(sequence_block)
+    }
 
     pub fn write_block(&mut self, mut file: File) -> std::io::Result<()> {
         // This will serialize the data to a byte vector and write it to the file
@@ -84,21 +118,21 @@ impl SequenceBlock {
         }
     }
 
-    pub fn get_subseq(&self, request_start: usize, request_end: usize) -> Result<Vec<u8>, Box<Error>> {
+    pub fn get_subseq(&self, request_start: usize, request_end: usize) -> Result<Vec<u8>, FastaMapError> {
 
         if request_start >= request_end {
-            panic!(
-                "Bad coordinates for sequence block retrieval - start: {} >= end: {}", request_start, request_end
-            );
+            error!("Bad coordinates for sequence block retrieval - start: {} >= end: {}", request_start, request_end);
+            return Err(FastaMapError::BadCoordinatesError)
         } else if (request_end <= self.ref_start) || 
                   (request_start > self.ref_end) || 
                   (request_end > self.ref_end) || 
                   (request_start < self.ref_start) {
-            panic!(
-                "Bad requested coordinates in sequence block retrieval -\
-                 start: {}, end: {}, block start: {}, block end: {}",
-                request_start, request_end, self.ref_start, self.ref_end,
+            error!(
+                "Requested coordinates out of bounds of sequence block -
+                    request: ({}, {}), block ({}, {})",
+                    request_start, request_end, self.ref_start, self.ref_end,
             );
+            return Err(FastaMapError::OutOfBoundsError)
         } else {
             // start for this function is expected to be a coordinate from the overall contig,
             // so we modify by the known start and end point of this block to get the final
@@ -137,7 +171,7 @@ impl Contig {
         len: usize,
         blocks: Vec<String>,
         map: Vec<(usize, usize, RegionType)>
-    ) -> Result<Self, &'static str> {
+    ) -> Result<Self, FastaMapError> {
         
         Ok(Contig {
             name,
@@ -156,6 +190,7 @@ impl Contig {
         // to find a result, it can deal with that itself.
         let mut found_blocks: Vec<String> = Vec::new();
         for block_name in &self.blocks {
+            // Unwrapping here because we want a custom return error message
             let (start, end) = decode_file_name(block_name).unwrap();
             if ((request_start >= start) && (request_start < end)) && 
                 ((request_end > start) && (request_end <= end)) {
@@ -174,9 +209,12 @@ impl Contig {
         }
     }
 
-    pub fn map_variants(&self, variants_list: Vec<Variant>) -> HashMap<Variant, Vec<String>> {
+    pub fn map_variants(&self, variants_list: Vec<Variant>) -> Result<HashMap<Variant, Vec<String>>, FastaMapError> {
+        // This returns a hashmap of the variants from the list as the key, with values being sequence blocks that the variant
+        // intersects. This gives a complete map for the entire contig
         let mut variant_map: HashMap<Variant, Vec<String>> = HashMap::new();
-        for variant in variants_list.clone().iter() {
+
+        for variant in variants_list.iter() {
             let request_start = variant.location;
             // Guaranteed to work because a reference vector must have at least 1 element
             let request_end = request_start + variant.reference.len();
@@ -187,7 +225,7 @@ impl Contig {
                 Err(e) => { debug!("{}", e) }
             }
         }
-        variant_map
+        Ok(variant_map)
     }
 }
 
@@ -212,13 +250,14 @@ impl FastaMap {
         FastaMap { contigs, name_map, contig_order }
     }
 
-    pub fn retrieve_contig(&self, request_name: String) -> Result<Contig, &'static str> {
+    pub fn retrieve_contig(&self, request_name: String) -> Result<&Contig, FastaMapError> {
         for contig in self.contigs.iter() {
             if contig.name == request_name {
-                return Ok(contig.clone())
+                return Ok(contig)
             }
         }
-        Err("Contig not found")
+        error!("Contig not found");
+        Err(FastaMapError::ContigNotFoundError)
     }
 }
 
@@ -240,7 +279,7 @@ mod tests {
         let file = File::create(&filename).unwrap();
         seq_block.write_block(file).unwrap();
         // let's read the file we just made and check the contents
-        let seq_block_read = SequenceBlock::from(filename.clone());
+        let seq_block_read = SequenceBlock::from(filename.clone()).unwrap();
         assert_eq!(seq_block.contig, seq_block_read.contig);
         assert_eq!(seq_block.ref_start, seq_block_read.ref_start);
         assert_eq!(seq_block.ref_end, seq_block_read.ref_end);

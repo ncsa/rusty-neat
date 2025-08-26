@@ -1,6 +1,14 @@
 //! These enums and structs help us keep track of variants added to the reference
 //! It stores all the necessary data to write a variant out.
 
+#[derive(Debug)]
+pub enum VariantError {
+    MalformedIndel,
+    MalformedSnp,
+    MalformedRef,
+    MalformedAlt,
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub enum VariantType {
     SNP,
@@ -35,30 +43,45 @@ impl Variant {
         reference: &Vec<u8>,
         alternate: &Vec<u8>,
         genotype: &Vec<u8>,
-    ) -> Self {
+    ) -> Result<Self, VariantError> {
+        // This will generate a variant, storing the reference, alternate, start point relative to the contig, and a genotype
+        // but first a quick sanity check
         match variant_type {
             VariantType::Insertion | 
-            VariantType::Deletion => assert_ne!(reference.len(), alternate.len()),
-            VariantType::SNP => assert_eq!(reference.len(), alternate.len()),
+            VariantType::Deletion => {
+                if (reference.len() == alternate.len()) ||
+                    reference[0] != alternate[0] {
+                    return Err(VariantError::MalformedIndel)
+                }
+            },
+            VariantType::SNP => { 
+                if reference.len() != alternate.len() {
+                    return Err(VariantError::MalformedSnp)
+                }
+            },
         }
 
         // Enforcing a policy that we assume elsewhere in the code
-        assert!(reference.len() >= 1);
-        assert!(alternate.len() >= 1);
+        if reference.len() < 1 {
+            return Err(VariantError::MalformedRef)
+        }
+        if reference.len() < 1 {
+            return Err(VariantError::MalformedAlt)
+        }
 
-        Variant {
+        Ok(Variant {
             variant_type,
             location,
             reference: reference.clone(),
             alternate: alternate.clone(),
             genotype: genotype.clone(),
-        }
+        })
     }
 
-    pub fn is_homozygous(&self) -> bool {
-        // We won't have any 0/0[/0/0...] genotypes in NEAT, so it's sufficient to check that there is a zero
-        // (0/1 or 1/1).
-        if self.genotype.contains(&0) { false } else { true }
+    pub fn is_homozygous(&self) -> Result<bool, VariantError> {
+        // We won't have any 0/0[/0/0...] genotypes in NEAT, so genotype will either be 1/0 or 1/1 (or 1/1/0 v 1/1/1)
+        // if there is a 0 in the genotype, it must be heterozygous (false)
+        if self.genotype.contains(&0) { Ok(false) } else { Ok(true) }
     }
 }
 
@@ -79,7 +102,7 @@ mod tests {
         };
         assert_eq!(variant.variant_type, SNP);
         assert_eq!(variant.variant_type, SNP);
-        assert!(variant.is_homozygous());
+        assert!(variant.is_homozygous().unwrap());
     }
 
     #[test]
@@ -90,8 +113,8 @@ mod tests {
             &vec![0],
             &vec![0, 1, 3, 2],
             &vec![0, 1],
-        );
-        assert!(!variant.is_homozygous())
+        ).unwrap();
+        assert!(!variant.is_homozygous().unwrap())
     }
 
     #[test]
@@ -102,8 +125,8 @@ mod tests {
             &vec![0, 1, 3, 2],
             &vec![0],
             &vec![0, 1],
-        );
-        assert!(!variant.is_homozygous())
+        ).unwrap();
+        assert!(!variant.is_homozygous().unwrap())
     }
 
     #[test]
@@ -116,6 +139,6 @@ mod tests {
             &vec![0, 1, 3, 2],
             &vec![0],
             &vec![1, 1, 1],
-        );
+        ).unwrap();
     }
 }

@@ -1,6 +1,5 @@
 use crate::utils;
 use crate::data;
-use crate::fasta_reader;
 use common;
 use tempfile;
 
@@ -12,12 +11,10 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use utils::config::RunConfiguration;
-use fasta_reader::read_fasta,
-use utils::fasta_tools::write_fasta;
-use utils::fastq_tools::write_fastq;
 use utils::generate_reads::generate_reads;
 use utils::read_models::{read_quality_score_model_file, read_quality_score_raw_data};
 use utils::generate_variants::generate_variants;
+use common::file_tools::{fasta_tools::read_fasta, fastq_tools::write_fastq};
 use common::structs::variants::Variant;
 use common::structs::fasta_map::FastaMap;
 use common::models::mutation_model::MutationModel;
@@ -38,10 +35,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: NeatRng) -> Result<(), RunN
     // Reading the reference file into memory
     info!("Mapping reference fasta file: {}", &config.reference);
     let working_dir = tempfile::tempdir().unwrap();
-    // The FastaMap struct consists of a vector of Contig objects, each describing a
-    // block of Sequence, broken up into chunks in the SequenceBlock objects. It also
-    // holds a name_map hashmap that links tho contig name from the Fasta with the shortname
-    let fasta_map = read_fasta(&config.reference, 300, ).unwrap();
+    
     // Load models that will be used for the runs.
     // For now, we will use the one supplied, pulled directly from NEAT2.0's original model.
     let input_quality_score_model = false;
@@ -61,7 +55,12 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: NeatRng) -> Result<(), RunN
 
     // Todo load all models and set up the run.
     // load mutation model
-    let mutation_model = MutationModel::new();
+    let mutation_model = MutationModel::default();
+
+    // The FastaMap struct consists of a vector of Contig objects, each describing a
+    // block of Sequence, broken up into chunks in the SequenceBlock objects. It also
+    // holds a name_map hashmap that links tho contig name from the Fasta with the shortname
+    let fasta_map = read_fasta(&config.reference, &config., ).unwrap();
 
     // Mutating the reference and recording the variant locations.
     info!("Generating simulated dataset");

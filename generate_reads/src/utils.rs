@@ -2,7 +2,7 @@ pub mod cli;
 pub mod config;
 pub mod generate_reads;
 pub mod read_models;
-pub mod read_old_data;
+// pub mod read_old_data;
 pub mod runner;
 pub mod generate_variants;
 pub mod apply_variants;

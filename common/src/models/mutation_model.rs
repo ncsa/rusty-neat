@@ -37,7 +37,7 @@ const VARIANT_TYPES: [VariantType; 3] = [
 ];
 
 impl MutationModel {
-    pub fn new() -> Self {
+    pub fn default() -> Self {
         // Creating the default model based on the default for the original NEAT.
         let mutation_rate = 0.001;
         let homozygous_frequency = 0.01;

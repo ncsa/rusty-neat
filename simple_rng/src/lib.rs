@@ -12,6 +12,11 @@ use mash::Mash;
 use statrs::distribution::{ContinuousCDF, Normal};
 use serde::{Deserialize, Serialize};
 
+pub enum NeatRngErrors {
+    InputError,
+    SamplingError,
+}
+
 #[derive(Debug, Clone)]
 pub struct NeatRng {
     // This will be a simple seeded random number generator and some associated

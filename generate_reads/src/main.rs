@@ -71,15 +71,15 @@ fn main() {
     // Generate the RNG used for this run. If one was given in the config file, use that, or else
     // use thread_rng to generate a random seed, then seed using a SeedableRng based on StdRng
     let mut seed_vec: Vec<String> = Vec::new();
-    let user_input = (&config.rng_seed).clone();
+    let user_input = &config.rng_seed;
     let seed_vec = match user_input {
-        Some(u) => {
-            // For read it as a string, hopefully
-            let raw_seed = u.to_owned();
-            for seed_term in raw_seed.split_whitespace() {
+        Some(raw_string) => {
+            // Convert the string to a string vec split at the white space.
+            // Seeds can be any whitespace-separated series of strings.
+            for seed_term in raw_string.split_whitespace() {
                 seed_vec.push(seed_term.to_string());
             }
-            info!("Seed string to regenerate these exact results: {}", &raw_seed);
+            info!("Seed string to regenerate these exact results: {}", &raw_string);
             seed_vec
         },
         _ => {
@@ -97,6 +97,6 @@ fn main() {
     };
     let rng: NeatRng = NeatRng::new_from_seed(seed_vec);
     // run the generate reads main script
-    run_neat(&config, rng)
+    run_neat(&Box::new(config), rng)
         .unwrap_or_else(|error| panic!("Neat encountered a problem: {:?}", error))
 }

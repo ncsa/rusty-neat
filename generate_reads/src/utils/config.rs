@@ -278,13 +278,10 @@ impl RunConfiguration {
         let output_path = &self.output_dir;
         // This check may be overkill, but here it is. Let's make sure we ended up with something
         if !output_path.as_path().is_dir() {
-            info!(
-                "Creating output directory: {:?}",
-                self.output_dir.display()
-            );
+            info!("Creating output directory: {:?}", self.output_dir);
             check_create_dir(output_path);
         }
-        let file_prefix = format!("{}/{}", self.output_dir.display(), self.output_prefix);
+        let file_prefix = format!("{:?}/{}", self.output_dir, self.output_prefix);
 
         // No point in running if we aren't producing files
         if !(self.produce_fastq | self.produce_fasta | self.produce_vcf | self.produce_bam) {

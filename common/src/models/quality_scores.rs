@@ -27,8 +27,10 @@ use simple_rng::{DiscreteDistribution, NeatRng, NeatRngError};
 use std::fs;
 use std::io;
 
+use crate::models::sequencing_error_model::SeqModelError;
+
 #[derive(Debug)]
-enum QualityModelError {
+pub enum QualityModelError {
     RngError(NeatRngError),
     IoError(io::Error),
 }
@@ -138,6 +140,7 @@ impl QualityScoreModel {
     }
     #[allow(dead_code)]
     pub fn display(&self) -> String {
+        // Some detailed formats. I thing these will be useful for quality model generation debugging.
         format!(
             "QualityScoreModel: (rl: {})\n\
             \tscores: {:?}\n\
@@ -166,11 +169,12 @@ impl QualityScoreModel {
             self.distros_from_one,
         )
     }
+
     pub fn generate_quality_scores(
         &self,
         run_read_length: u32,
         mut rng: &mut NeatRng,
-    ) -> Vec<u32> {
+    ) -> Result<Vec<u32>, SeqModelError> {
         // Generates a list of quality scores of length run_read_length using the model. If the
         // input read length differs, we do some index magic to extrapolate the model
         // run_read_length: The desired read length for the model to generate.
@@ -180,7 +184,7 @@ impl QualityScoreModel {
         let mut score_list: Vec<u32> = Vec::with_capacity(run_read_length as usize);
         // sample the scores list with the seed weights applied to generate the first score.
         // Samples an index based on the weights, which then selects the quality score.
-        let seed_score = self.quality_score_options[self.seed_dist.sample(&mut rng)];
+        let seed_score = self.quality_score_options[self.seed_dist.sample(&mut rng)?];
         // Adding the seed score to the list.
         score_list.push(seed_score);
         // To map from one length to another, we use the algorithm found in the original NEAT 2.0,
@@ -205,12 +209,12 @@ impl QualityScoreModel {
                 .unwrap();
             // Now we have an index (in the default case 0..<4) of a vector for the position, based
             // on the previous score.
-            let index = self.distros_from_one[i][score_position].sample(&mut rng);
+            let index = self.distros_from_one[i][score_position].sample(&mut rng)?;
             let score = self.quality_score_options[index];
             score_list.push(score);
             current_index += 1;
         }
-        score_list
+        Ok(score_list)
     }
     fn quality_index_remap(&self, run_read_length: usize) -> Vec<usize> {
         // Basically, this function does integer division (truncation) to fill positions
@@ -271,9 +275,9 @@ mod tests {
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),
-        ]);
-        let model = QualityScoreModel::default();
-        let scores = model.generate_quality_scores(run_read_length, &mut rng);
+        ]).unwrap();
+        let model = QualityScoreModel::default().unwrap();
+        let scores = model.generate_quality_scores(run_read_length, &mut rng).unwrap();
         assert!(!scores.is_empty());
         assert_eq!(scores.len(), 100);
         scores
@@ -289,9 +293,9 @@ mod tests {
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),
-        ]);
-        let model = QualityScoreModel::default();
-        let scores = model.generate_quality_scores(run_read_length, &mut rng);
+        ]).unwrap();
+        let model = QualityScoreModel::default().unwrap();
+        let scores = model.generate_quality_scores(run_read_length, &mut rng).unwrap();
         assert!(!scores.is_empty());
         assert_eq!(scores.len(), 150);
         scores
@@ -307,9 +311,9 @@ mod tests {
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),
-        ]);
-        let model = QualityScoreModel::default();
-        let scores = model.generate_quality_scores(run_read_length, &mut rng);
+        ]).unwrap();
+        let model = QualityScoreModel::default().unwrap();
+        let scores = model.generate_quality_scores(run_read_length, &mut rng).unwrap();
         assert!(!scores.is_empty());
         assert_eq!(scores.len(), 200);
         scores
@@ -325,9 +329,9 @@ mod tests {
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),
-        ]);
-        let model = QualityScoreModel::default();
-        let scores = model.generate_quality_scores(run_read_length, &mut rng);
+        ]).unwrap();
+        let model = QualityScoreModel::default().unwrap();
+        let scores = model.generate_quality_scores(run_read_length, &mut rng).unwrap();
         assert!(!scores.is_empty());
         assert_eq!(scores.len(), 2000);
         scores

@@ -1,17 +1,61 @@
 use std;
+use log::error;
 use simple_rng::{DiscreteDistribution, NeatRng, NeatRngError};
-use crate::structs::transition_matrix::TransitionMatrix;
-use crate::structs::variants::{Variant, VariantType};
-use crate::models::indel_model::{IndelModel, generate_random_insertion};
-use crate::models::quality_scores::QualityScoreModel;
-use crate::models::sequencing_error_model::SequencingErrorModel;
-use crate::models::snp_trinuc_model::SnpModel;
+use crate::structs::transition_matrix::{TransitionMatrix, TransitionMatrixError};
+use crate::structs::variants::{Variant, VariantError, VariantType};
+use crate::models::indel_model::{IndelModel, generate_random_insertion, IndelModelError};
+use crate::models::quality_scores::{QualityModelError, QualityScoreModel};
+use crate::models::sequencing_error_model::{SeqModelError, SequencingErrorModel};
+use crate::models::snp_trinuc_model::{SnpTrinucModel, SnpTrinucError};
 
 #[derive(Debug)]
-enum MutationModelError {
+pub enum MutationModelError {
     RngError(NeatRngError),
     ReferenceRetrievalError,
     IoError(std::io::Error),
+    GenerateMutationError,
+    VariantCreationError(VariantError),
+    SnpeGnerationError(SnpTrinucError),
+    TransMatrixCreationError(TransitionMatrixError),
+    IndelModelCreationError(IndelModelError),
+    QualityModelCreationError(QualityModelError),
+    SeqErrModelError(SeqModelError)
+}
+
+impl From<QualityModelError> for MutationModelError {
+    fn from(error: QualityModelError) -> Self {
+        MutationModelError::QualityModelCreationError(error)
+    }
+}
+
+impl From<IndelModelError> for MutationModelError {
+    fn from(error: IndelModelError) -> Self {
+        MutationModelError::IndelModelCreationError(error)
+    }
+}
+
+impl From<TransitionMatrixError> for MutationModelError {
+    fn from(error: TransitionMatrixError) -> Self {
+        MutationModelError::TransMatrixCreationError(error)
+    }
+}
+
+impl From<SeqModelError> for MutationModelError {
+    fn from(error: SeqModelError) -> Self {
+        MutationModelError::SeqErrModelError(error)
+    }
+}
+
+impl From<SnpTrinucError> for MutationModelError {
+    fn from(error: SnpTrinucError) -> Self {
+        MutationModelError::SnpeGnerationError(error)
+    }
+}
+
+impl From<VariantError> for MutationModelError {
+    fn from(error: VariantError) -> Self {
+        MutationModelError::VariantCreationError(error)
+    }
 }
 
 impl From<NeatRngError> for MutationModelError {
@@ -133,7 +177,8 @@ impl MutationModel {
         // Select a type of mutation.
         let index = self.variant_dist.sample(&mut rng)?;
         let variant_type = if index > VARIANT_TYPES.len() {
-            panic!("Weird result from sampling variant type: {}", index)
+            error!("Weird result from sampling variant type: {}", index);
+            return Err(MutationModelError::GenerateMutationError)
         } else {
             VARIANT_TYPES[index]
         };
@@ -150,7 +195,7 @@ impl MutationModel {
                 let alternate_base = self.statistical_models.snp_model.generate_snp(
                     &trinuc_reference,
                     &mut rng,
-                );
+                )?;
 
                 let reference = vec![trinuc_reference[1]];
                 let alternate = vec![alternate_base];
@@ -188,7 +233,7 @@ impl MutationModel {
             &reference,
             &alternate,
             &genotype,
-        ))
+        )?)
     }
 }
 
@@ -201,17 +246,17 @@ struct StatisticalModels {
     quality_score_model: QualityScoreModel,
     sequencing_error_model: SequencingErrorModel,
     indel_model: IndelModel,
-    snp_model: SnpModel,
+    snp_model: SnpTrinucModel,
 }
 
 impl StatisticalModels {
     pub fn new() -> Result<Self, MutationModelError> {
         // use the default transition matrix, snp model and indel model
-        let transition_matrix = TransitionMatrix::default();
-        let snp_model = SnpModel::default();
-        let indel_model = IndelModel::default().unwrap();
-        let quality_score_model = QualityScoreModel::default();
-        let sequencing_error_model = SequencingErrorModel::new();
+        let transition_matrix = TransitionMatrix::default()?;
+        let snp_model = SnpTrinucModel::default()?;
+        let indel_model = IndelModel::default()?;
+        let quality_score_model = QualityScoreModel::default()?;
+        let sequencing_error_model = SequencingErrorModel::default()?;
 
         Ok(StatisticalModels {
             transition_matrix,

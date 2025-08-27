@@ -94,7 +94,7 @@ pub struct SequenceBlock {
 }
 
 impl SequenceBlock {
-    fn from(mut filename: String) -> Result<Self, FastaMapError> {
+    pub fn from(mut filename: &str) -> Result<Self, FastaMapError> {
         // This is a check that the filename is properly encoded
         (_, _) = decode_file_name(&filename)?;
 
@@ -279,7 +279,7 @@ mod tests {
         let file = File::create(&filename).unwrap();
         seq_block.write_block(file).unwrap();
         // let's read the file we just made and check the contents
-        let seq_block_read = SequenceBlock::from(filename.clone()).unwrap();
+        let seq_block_read = SequenceBlock::from(&filename).unwrap();
         assert_eq!(seq_block.contig, seq_block_read.contig);
         assert_eq!(seq_block.ref_start, seq_block_read.ref_start);
         assert_eq!(seq_block.ref_end, seq_block_read.ref_end);

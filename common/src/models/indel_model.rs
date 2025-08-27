@@ -10,7 +10,7 @@
 use simple_rng::{DiscreteDistribution, NeatRng, NeatRngError};
 
 #[derive(Debug)]
-enum IndelModelError {
+pub enum IndelModelError {
     RngError(NeatRngError),
 }
 

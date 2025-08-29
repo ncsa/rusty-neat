@@ -8,6 +8,9 @@ edition.workspace = true
 
 [dependencies]
 simple_rng = { path = "../simple_rng" }
+# trying to get gzp to compile correctly.
+libz-sys = { version = "1.1.8", optional = false, default-features = true }
+libz-ng-sys = { version = "1.1.8", optional = false }
 serde = { version = "1.0.197", features = ["derive"] }
 serde_yml = "0.0.12"
 serde_json = "1.0.115"
@@ -18,3 +21,5 @@ num-traits=">=0.2"
 chrono = "0.4.38"
 bincode = "2.0.0-rc.3"
 walkdir = "2"
+gzp = "1.0.1"
+thiserror = "2.0.16"

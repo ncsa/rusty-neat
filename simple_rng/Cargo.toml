@@ -8,5 +8,7 @@ edition.workspace = true
 
 [dependencies]
 chrono = "0.4.38"
-statrs = "0.17.1"
+# statrs = "0.17.1"
+statrs = "0.18.0"
 serde = { version = "1.0.215", features = ["derive"] }
+thiserror = "2.0.16"

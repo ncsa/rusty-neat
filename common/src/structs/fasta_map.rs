@@ -5,6 +5,7 @@
 //! We need to use the Variants struct to add variants to the contigs, making this a sort of second
 //! level struct
 use std::io;
+use thiserror::Error;
 use std::num::ParseIntError;
 use std::{collections::{HashMap, VecDeque}, io::Write};
 use serde::{Deserialize, Serialize};
@@ -15,26 +16,27 @@ use std::path::Path;
 use crate::structs::variants::Variant;
 use log::{debug, error};
 
-#[derive(Debug)]
+#[derive(Error, Debug)]
 pub enum FastaMapError {
-    IoError(io::Error),
+    #[error("FastaMap reported an IO Error: {0}")]
+    IoError(#[from] io::Error),
+    #[error("FastaMap reported bad coordinates.")]
     BadCoordinatesError,
+    #[error("FastaMap reported an out of bounds error.")]
     OutOfBoundsError,
-    ContigNotFoundError,
+    #[error("FastaMap reported a ContigNotFoundError")]
+    ContigNotFoundError(&'static str),
+    #[error("FastaMap reported a serde error: {0}")]
     SerdeValueError(serde::de::value::Error),
+    #[error("FastaMap reported an error from serde_json: {0}")]
     SerdeJsonError(serde_json::Error),
+    #[error("FastaMap reported a malformed filename error: {0}")]
     MalformedFilenameError(ParseIntError),
 }
 
 impl From<serde_json::Error> for FastaMapError {
     fn from(error: serde_json::Error) -> Self {
         FastaMapError::SerdeJsonError(error)
-    }
-}
-
-impl From<io::Error> for FastaMapError {
-    fn from(error: io::Error) -> Self {
-        FastaMapError::IoError(error)
     }
 }
 
@@ -79,7 +81,7 @@ pub fn decode_file_name(path_string: &str) -> Result<(usize, usize), FastaMapErr
     Ok((start, end))
 }
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct SequenceBlock {
     // This struct is for accessing the data stored in the sequence block file, a yaml file
     // The data file contains the following data:
@@ -256,8 +258,7 @@ impl FastaMap {
                 return Ok(contig)
             }
         }
-        error!("Contig not found");
-        Err(FastaMapError::ContigNotFoundError)
+        Err(FastaMapError::ContigNotFoundError("Contig not found: {contig}"))
     }
 }
 

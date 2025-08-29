@@ -51,6 +51,7 @@ pub struct RunConfiguration {
     pub produce_vcf: bool,
     pub produce_bam: bool,
     pub rng_seed: Option<String>,
+    pub seed_vec: Vec<String>,
     pub overwrite_output: bool,
     pub minimum_mutations: usize,
     pub output_dir: PathBuf,
@@ -72,7 +73,8 @@ impl RunConfiguration {
             produce_fasta: false, 
             produce_vcf: false, 
             produce_bam: false, 
-            rng_seed: None, 
+            rng_seed: None,
+            seed_vec: Vec::new(),
             overwrite_output: false, 
             minimum_mutations: 0,
             output_dir: env::current_dir().unwrap(), 
@@ -318,8 +320,33 @@ impl RunConfiguration {
         if self.produce_bam {
             info!("Produce bam file: {}.bam", file_prefix)
         }
-    }
 
+        match self.rng_seed {
+            Some(seed) => {
+                // User supplied seed
+                // Convert the string to a string vec split at the white space.
+                // Seeds can be any whitespace-separated series of strings.
+                for seed_term in raw_string.split_whitespace() {
+                    seed_vec.push(seed_term.to_string());
+                }
+                info!("Seed string to regenerate these exact results: {}", &raw_string);
+                self.seed_vec = seed_vec 
+            },
+
+            None => {
+                // Since no seed was provided, we'll use a datetime stamp with nanoseconds
+                // The seed can be any space separated or tab separated series of strings
+                // e.g., "Every good boy does Fine"
+                // seeds are case-sensitive
+                let raw_string = Utc::now().format("%Y %m %d %H %M %S %f").to_string();
+                for item in raw_string.split_whitespace() {
+                    seed_vec.push(item.to_string());
+                }
+                info!("Seed string to regenerate these exact results: {}", &raw_string);
+                self.seed_vec = seed_vec
+            },
+        }
+    }
 }
 
 fn generate_error(key: &str, key_type: &str, value: &Value) -> String {
@@ -349,6 +376,7 @@ mod tests {
             produce_fasta: true,
             produce_vcf: true,
             rng_seed: None,
+            seed_vec: Vec::new(),
             overwrite_output: true,
             minimum_mutations: 0,
             output_dir: PathBuf::from("/my/my"),

@@ -1,11 +1,16 @@
 //! These enums and structs help us keep track of variants added to the reference
 //! It stores all the necessary data to write a variant out.
+use thiserror::Error;
 
-#[derive(Debug)]
+#[derive(Error, Debug)]
 pub enum VariantError {
+    #[error("ERROR: Malformed indel variant!")]
     MalformedIndel,
+    #[error("ERROR: Malformed SNP variant!")]
     MalformedSnp,
+    #[error("ERROR: Malformed variant ref!")]
     MalformedRef,
+    #[error("ERROR: Malformed variant alt!")]
     MalformedAlt,
 }
 

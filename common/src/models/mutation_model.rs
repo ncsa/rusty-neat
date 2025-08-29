@@ -1,5 +1,5 @@
 use std;
-use log::error;
+use thiserror::Error;
 use simple_rng::{DiscreteDistribution, NeatRng, NeatRngError};
 use crate::structs::transition_matrix::{TransitionMatrix, TransitionMatrixError};
 use crate::structs::variants::{Variant, VariantError, VariantType};
@@ -8,35 +8,45 @@ use crate::models::quality_scores::{QualityModelError, QualityScoreModel};
 use crate::models::sequencing_error_model::{SeqModelError, SequencingErrorModel};
 use crate::models::snp_trinuc_model::{SnpTrinucModel, SnpTrinucError};
 
-#[derive(Debug)]
+#[derive(Error, Debug)]
 pub enum MutationModelError {
+    #[error("Mutation model returned Error: {0}")]
     RngError(NeatRngError),
+    #[error("Error retrieving reference sequence block")]
     ReferenceRetrievalError,
+    #[error("Mutation model IO Error: {0}")]
     IoError(std::io::Error),
+    #[error("Error Generating mutations")]
     GenerateMutationError,
-    VariantCreationError(VariantError),
+    #[error("Mutation model returned an error during variant creation: {0}")]
+    VariantInitationError(VariantError),
+    #[error("Mutation model returned an error during SNP initation: {0}")]
     SnpeGnerationError(SnpTrinucError),
-    TransMatrixCreationError(TransitionMatrixError),
-    IndelModelCreationError(IndelModelError),
-    QualityModelCreationError(QualityModelError),
+    #[error("Mutation model returned error during transition matrix initation: {0}")]
+    TransMatrixInitationError(TransitionMatrixError),
+    #[error("Mutation model returned error during indel model initation: {0}")]
+    IndelModelInitationError(IndelModelError),
+    #[error("Mutation model returned error during quality model initiation: {0}")]
+    QualityModelInitationError(QualityModelError),
+    #[error("Mutation model returned error during sequence error model initation: {0}")]
     SeqErrModelError(SeqModelError)
 }
 
 impl From<QualityModelError> for MutationModelError {
     fn from(error: QualityModelError) -> Self {
-        MutationModelError::QualityModelCreationError(error)
+        MutationModelError::QualityModelInitationError(error)
     }
 }
 
 impl From<IndelModelError> for MutationModelError {
     fn from(error: IndelModelError) -> Self {
-        MutationModelError::IndelModelCreationError(error)
+        MutationModelError::IndelModelInitationError(error)
     }
 }
 
 impl From<TransitionMatrixError> for MutationModelError {
     fn from(error: TransitionMatrixError) -> Self {
-        MutationModelError::TransMatrixCreationError(error)
+        MutationModelError::TransMatrixInitationError(error)
     }
 }
 
@@ -54,7 +64,7 @@ impl From<SnpTrinucError> for MutationModelError {
 
 impl From<VariantError> for MutationModelError {
     fn from(error: VariantError) -> Self {
-        MutationModelError::VariantCreationError(error)
+        MutationModelError::VariantInitationError(error)
     }
 }
 
@@ -91,6 +101,8 @@ pub struct MutationModel {
     pub variant_dist: DiscreteDistribution,
     // These hold all the statistical model data we need to apply the mutations with this model
     statistical_models: StatisticalModels,
+    // Store a reference to the NeatRng for this run
+    rng: Option<&mut NeatRng>,
 }
 
 const VARIANT_TYPES: [VariantType; 3] = [
@@ -100,7 +112,7 @@ const VARIANT_TYPES: [VariantType; 3] = [
 ];
 
 impl MutationModel {
-    pub fn default() -> Result<Self, MutationModelError> {
+    pub fn default(rng: &mut NeatRng) -> Result<Self, MutationModelError> {
         // Creating the default model based on the default for the original NEAT.
         let mutation_rate = 0.001;
         let homozygous_frequency = 0.01;
@@ -124,13 +136,15 @@ impl MutationModel {
             homozygous_frequency,
             variant_dist,
             statistical_models,
+            rng: Some(rng),
         })
     }
 
     pub fn new(
         mutation_rate: f64, 
         homozygous_frequency: f64, 
-        variant_weights: Vec<f64>
+        variant_weights: Vec<f64>,
+        rng: &mut NeatRng,
     ) -> Result<Self, MutationModelError> {
         let variant_dist = DiscreteDistribution::new(&Vec::from(variant_weights))?;
         let statistical_models = StatisticalModels::new()?;
@@ -140,10 +154,11 @@ impl MutationModel {
             homozygous_frequency,
             variant_dist,
             statistical_models,
+            rng: Some(rng),
         })
     }
 
-    pub fn from_file(filename: &str) -> Result<Self, MutationModelError> {
+    pub fn from_file(filename: &str, rng: &mut NeatRng) -> Result<Self, MutationModelError> {
         todo!()
         // Might want to store this data in a json or something for later use, 
         // probably using serde_json.
@@ -153,10 +168,10 @@ impl MutationModel {
         todo!()
     }
 
-    fn generate_genotype(&mut self, ploidy: usize, rng: &mut NeatRng) -> Result<Vec<u8>, MutationModelError> {
+    fn generate_genotype(&mut self, ploidy: usize) -> Result<Vec<u8>, MutationModelError> {
         // "Homozygous" is ambiguous for polyploid organisms, so we'll just take "heterozygous" to
         // mean roughly half the reads will have the variant, to keep it simple
-        let is_homozygous = rng.gen_bool(self.homozygous_frequency)?;
+        let is_homozygous = self.rng.gen_bool(self.homozygous_frequency)?;
         if is_homozygous {
             Ok(vec![1; ploidy])
         } else {
@@ -170,12 +185,11 @@ impl MutationModel {
         reference_sequence: &Vec<u8>,
         variant_location: usize,
         ploidy: usize,
-        mut rng: &mut NeatRng,
     ) -> Result<Variant, MutationModelError> {
         // Select a genotype for the variant
-        let genotype= self.generate_genotype(ploidy, &mut rng)?;
+        let genotype= self.generate_genotype(ploidy)?;
         // Select a type of mutation.
-        let index = self.variant_dist.sample(&mut rng)?;
+        let index = self.variant_dist.sample(self.rng)?;
         let variant_type = if index > VARIANT_TYPES.len() {
             error!("Weird result from sampling variant type: {}", index);
             return Err(MutationModelError::GenerateMutationError)
@@ -192,10 +206,7 @@ impl MutationModel {
                     reference_sequence[variant_location],
                     reference_sequence[variant_location+1],
                 ];
-                let alternate_base = self.statistical_models.snp_model.generate_snp(
-                    &trinuc_reference,
-                    &mut rng,
-                )?;
+                let alternate_base = self.statistical_models.snp_model.generate_snp(&trinuc_reference)?;
 
                 let reference = vec![trinuc_reference[1]];
                 let alternate = vec![alternate_base];
@@ -203,17 +214,17 @@ impl MutationModel {
                 (reference, alternate)
             },
             VariantType::Insertion => {
-                let length = self.statistical_models.indel_model.new_insert_length(&mut rng).unwrap();
-                let insertion_vec = generate_random_insertion(length, &mut rng).unwrap();
+                let length = self.statistical_models.indel_model.new_insert_length()?;
+                let insertion_vec = generate_random_insertion(length)?;
                 let reference = vec![
-                    reference_sequence.get(variant_location).unwrap().clone()
+                    reference_sequence.get(variant_location)?.clone()
                 ];
                 let alternate = [reference.clone(), insertion_vec.clone()].concat();
                 (reference, alternate)
             },
             VariantType::Deletion => {
                 // todo Deletions are a bitch. I need to think about them.
-                let length = self.statistical_models.indel_model.new_delete_length(&mut rng).unwrap();
+                let length = self.statistical_models.indel_model.new_delete_length()?;
                 // +1 is so that we grab a base for the reference in the VCF. This is similar
                 // to how we appended bases to the reference in the insertion model.
                 let reference: Vec<u8> = reference_sequence
@@ -253,10 +264,10 @@ impl StatisticalModels {
     pub fn new() -> Result<Self, MutationModelError> {
         // use the default transition matrix, snp model and indel model
         let transition_matrix = TransitionMatrix::default()?;
-        let snp_model = SnpTrinucModel::default()?;
-        let indel_model = IndelModel::default()?;
-        let quality_score_model = QualityScoreModel::default()?;
-        let sequencing_error_model = SequencingErrorModel::default()?;
+        let snp_model = SnpTrinucModel::default(self.rng)?;
+        let indel_model = IndelModel::default(self.rng)?;
+        let quality_score_model = QualityScoreModel::default(self.rng)?;
+        let sequencing_error_model = SequencingErrorModel::default(self.rng)?;
 
         Ok(StatisticalModels {
             transition_matrix,

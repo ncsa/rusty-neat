@@ -20,6 +20,7 @@
 // Unclear how all this will translate to rust
 // Note that this was located here: https://rampantmonkey.com/writing/ts-prng/ as of 11/9/2024
 
+#[derive(Clone)]
 pub struct Mash {
     n: u64,
 }

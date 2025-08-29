@@ -28,10 +28,11 @@ pub struct IndelModel {
     ins_dist: DiscreteDistribution,
     del_lengths: Vec<u32>,
     del_dist: DiscreteDistribution,
+    rng: &mut NeatRng,
 }
 
 impl IndelModel {
-    pub fn default() -> Result<Self, IndelModelError> {
+    pub fn default(rng: &mut NeatRng) -> Result<Self, IndelModelError> {
         // Default Indel model from the original NEAT, scaled by the lowest value and rounded.
         let insertion_probability = 0.6;
         let ins_lengths: Vec<u32> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
@@ -49,6 +50,7 @@ impl IndelModel {
             ins_dist,
             del_lengths,
             del_dist,
+            rng: Some(rng)
         })
     }
 
@@ -57,7 +59,8 @@ impl IndelModel {
         ins_lengths: Vec<u32>, 
         ins_weights: Vec<f64>, 
         del_lengths: Vec<u32>, 
-        del_weights: Vec<f64>
+        del_weights: Vec<f64>,
+        rng: &mut NeatRng,
     ) -> Result<Self, IndelModelError> {
         let ins_dist = DiscreteDistribution::new(&ins_weights)?;
         let del_dist = DiscreteDistribution::new(&del_weights)?;
@@ -67,35 +70,37 @@ impl IndelModel {
             ins_dist,
             del_lengths,
             del_dist,
+            rng: Some(rng)
         })
     }
 
-    pub fn is_insertion(&self, rng: &mut NeatRng) -> Result<bool, IndelModelError> {
-        Ok(rng.random()? < self.insertion_probability)
+    pub fn is_insertion(&self) -> Result<bool, IndelModelError> {
+        Ok(self.rng.random()? < self.insertion_probability)
     }
 
-    pub fn new_insert_length(&self, mut rng: &mut NeatRng) -> Result<u32, IndelModelError> {
+    pub fn new_insert_length(&self) -> Result<u32, IndelModelError> {
         // This function uses the insertion weights to choose an insertion length from the list.
-        Ok(self.ins_lengths[self.ins_dist.sample(&mut rng)?])
+        Ok(self.ins_lengths[self.ins_dist.sample(self.rng)?])
     }
 
-    pub fn new_delete_length(&self, mut rng: &mut NeatRng) -> Result<u32, IndelModelError> {
+    pub fn new_delete_length(&self) -> Result<u32, IndelModelError> {
         // This function is the same as above, but uses the deletion lengths instead.
-        Ok(self.del_lengths[self.del_dist.sample(&mut rng)?])
+        Ok(self.del_lengths[self.del_dist.sample(self.rng)?])
     }
-}
-
-pub fn generate_random_insertion(length: u32, rng: &mut NeatRng) -> Result<Vec<u8>, IndelModelError> {
+    
+    pub fn generate_random_insertion(&self, length: u32) -> Result<Vec<u8>, IndelModelError> {
     // We could refine this with a nucleotide bias matrix. Maybe it would make a difference,
     // but probably not, since the presence of the insertion is more important than it's content,
     // for this use. If there was a call for it, maybe.
     let mut insertion_vec = Vec::new();
     for _ in 0..length {
         // since our range is restricted, we are covered
-        insertion_vec.push(rng.range_i64(0, 4).unwrap() as u8)
+        insertion_vec.push(self.rng.range_i64(0, 4).unwrap() as u8)
     }
     Ok(insertion_vec)
 }
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -103,19 +108,22 @@ mod tests {
 
     #[test]
     fn test_indel_model() {
+        let mut rng = NeatRng::new_from_seed(vec![
+            "Hello".to_string(),
+            "Cruel".to_string(),
+            "World".to_string(),
+        ]).unwrap();
+
         let indel_model = IndelModel {
             insertion_probability: 0.75,
             ins_lengths: vec![1, 2],
             ins_dist: DiscreteDistribution::new(&vec![100.0, 1.0]).unwrap(),
             del_lengths: vec![3, 4],
             del_dist: DiscreteDistribution::new(&vec![1.0, 1000.0]).unwrap(),
+            rng: Some(rng),
         };
-        let mut rng = NeatRng::new_from_seed(vec![
-            "Hello".to_string(),
-            "Cruel".to_string(),
-            "World".to_string(),
-        ]).unwrap();
-        let length = indel_model.new_insert_length(&mut rng).unwrap();
+
+        let length = indel_model.new_insert_length().unwrap();
         if length > 0 {
             assert!((length == 1) || (length == 2));
         }
@@ -129,11 +137,20 @@ mod tests {
             "World".to_string(),
         ]).unwrap();
 
-        let insertion = generate_random_insertion(10, &mut rng).unwrap();
+        let indel_model = IndelModel {
+            insertion_probability: 0.75,
+            ins_lengths: vec![1, 2],
+            ins_dist: DiscreteDistribution::new(&vec![100.0, 1.0]).unwrap(),
+            del_lengths: vec![3, 4],
+            del_dist: DiscreteDistribution::new(&vec![1.0, 1000.0]).unwrap(),
+            rng: Some(rng),
+        };
+
+        let insertion = generate_random_insertion(10).unwrap();
         assert_eq!(insertion.len(), 10);
         assert!(!insertion.contains(&4));
 
-        let insertion2 = generate_random_insertion(12, &mut rng).unwrap();
+        let insertion2 = generate_random_insertion(12).unwrap();
         assert_eq!(insertion2.len(), 12);
         assert!(!insertion2.contains(&4));
 

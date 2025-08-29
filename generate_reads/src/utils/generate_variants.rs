@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use itertools::Itertools;
+// use itertools::Itertools;
 use simple_rng::{DiscreteDistribution, NeatRng};
 use common::models::mutation_model::MutationModel;
 use common::structs::variants::{Variant, VariantType};

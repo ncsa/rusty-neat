@@ -7,19 +7,22 @@
 /// outputs. I'm hoping the simplicity of this overall makes it very fast for NEAT
 
 mod mash;
-
+use thiserror::Error;
 use mash::Mash;
 use statrs::{distribution::{ContinuousCDF, Normal}, statistics::Distribution};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug)]
+#[derive(Error, Debug)]
 pub enum NeatRngError {
+    #[error("Neat RNG suffered an input error")]
     InputError,
+    #[error("Neat RNG sufferd an output error")]
     OutputError,
-    SamplingError,
+    #[error("Neat RNG suffered a sampling error {0}")]
+    SamplingError(&'static str),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct NeatRng {
     // This will be a simple seeded random number generator and some associated
     // functions. The other RNGs I have tried were too complicated and designed
@@ -28,7 +31,6 @@ pub struct NeatRng {
     // 2 calculations, and these are the intermediate factors. s2 is the current random number,
     // and it becomes s1 for the next iteration. c is a placeholder for a u32 that is preserved
     // over each iteration.
-    pub seed_vec: Vec<Vec<char>>,
     s0: f64,
     s1: f64,
     s2: f64,
@@ -70,7 +72,6 @@ impl NeatRng {
         }
 
         Ok(NeatRng {
-            seed_vec,
             s0,
             s1,
             s2,
@@ -144,7 +145,7 @@ impl NeatRng {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct NormalDistribution {
     distribution: Normal,
 }
@@ -198,7 +199,8 @@ impl NormalDistribution {
 /// as well, as I think it does the same thing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiscreteDistribution {
-    cumulative_probability: Vec<f64>,
+    values: Option<Vec<usize>>,
+    weights: Vec<f64>,
 }
 
 impl DiscreteDistribution {
@@ -211,10 +213,28 @@ impl DiscreteDistribution {
                 normalized_weights.push(weight / sum_weights);
             }
             cumulative_sum(&mut normalized_weights)
-        }.unwrap();
+        }?;
 
         Ok(DiscreteDistribution {
-            cumulative_probability,
+            values: None,
+            weights: cumulative_probability,
+        })
+    }
+
+    pub fn new_with_values(w_vec: &Vec<f64>, l_vec: &Vec<usize>) -> Result<Self, NeatRngError> {
+        let cumulative_probability = {
+            let sum_weights: f64 = w_vec.iter().sum();
+            let mut normalized_weights = Vec::with_capacity(w_vec.len());
+            // we no longer need the w_vec_64 after this, so we consume it
+            for weight in w_vec{
+                normalized_weights.push(weight / sum_weights);
+            }
+            cumulative_sum(&mut normalized_weights)
+        }?;
+
+        Ok(DiscreteDistribution {
+            values: Some(l_vec.clone()),
+            weights: cumulative_probability,
         })
     }
 
@@ -222,18 +242,39 @@ impl DiscreteDistribution {
         // returns a random index for the distribution, based on cumulative probability
         // This is basically an icdf for a discrete distribution
         let mut lo: usize = 0;
-        let mut hi: usize = self.cumulative_probability.len();
+        let mut hi: usize = self.weights.len();
         // bisect left
-        let r = rng.random().unwrap();
+        let r = rng.random()?;
         while lo < hi {
             let mid = (lo + hi) / 2;
-            if r > self.cumulative_probability[mid] {
+            if r > self.weights[mid] {
                 lo = mid + 1;
             } else {
                 hi = mid;
             }
         }
         Ok(lo)
+    }
+
+    pub fn sample_values(&self, rng: &mut NeatRng) -> Result<usize, NeatRngError> {
+        // returns a random value for the distribution, based on cumulative probability
+        // This is basically an icdf for a discrete distribution
+        let mut lo: usize = 0;
+        let mut hi: usize = self.weights.len();
+        // bisect left
+        let r = rng.random()?;
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if r > self.weights[mid] {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        match &self.values {
+            Some(v) => Ok(v[lo]),
+            None => Err(NeatRngError::SamplingError("DiscreteDistribution tried to sample a value from an instance with no values. Use the sample method instead."))
+        }
     }
 }
 
@@ -254,6 +295,26 @@ mod tests {
     fn test_discrete_distribution() {
         let weights: Vec<f64> = vec![1.1, 2.0, 1.0, 8.0, 0.2, 2.0];
         let d = DiscreteDistribution::new(&weights).unwrap();
+        let mut rng = NeatRng::new_from_seed(vec![
+            "Hello".to_string(),
+            "Cruel".to_string(),
+            "World".to_string(),
+        ]).unwrap();
+        let x = d.sample(&mut rng).unwrap();
+        assert_eq!(x, 5);
+        let x = d.sample(&mut rng).unwrap();
+        assert_eq!(x, 3);
+        let x = d.sample(&mut rng).unwrap();
+        assert_eq!(x, 3);
+        let x = d.sample(&mut rng).unwrap();
+        assert_eq!(x, 1);
+    }
+
+    #[test]
+    fn test_discrete_distribution_with_values() {
+        let weights: Vec<f64> = vec![1.1, 2.0, 1.0, 8.0, 0.2, 2.0];
+        let values: Vec<usize> = vec![2, 3, 7, 8, 9, 11];
+        let d = DiscreteDistribution::new_with_values(&weights, &values).unwrap();
         let mut rng = NeatRng::new_from_seed(vec![
             "Hello".to_string(),
             "Cruel".to_string(),

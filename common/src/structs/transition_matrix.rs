@@ -1,25 +1,22 @@
-use simple_rng::{DiscreteDistribution, NeatRngError};
-use std::fmt;
+use crate::structs::distributions::{DiscreteDistribution, DistributionErrors};
+use thiserror::Error;
+use serde::{Serialize, Deserialize};
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum TransitionMatrixError {
-    RngError(NeatRngError),
+    #[error("Transition matrix reported a distribution error: {0}")]
+    DistributionError(DistributionErrors),
+    #[error("Input weights and lengths were of unequal length")]
     UnequalWeightsError,
 }
 
-impl From<NeatRngError> for TransitionMatrixError {
-    fn from(error: NeatRngError) -> Self {
-        TransitionMatrixError::RngError(error)
+impl From<DistributionErrors> for TransitionMatrixError {
+    fn from(error: DistributionErrors) -> Self {
+        TransitionMatrixError::DistributionError(error)
     }
 }
 
-impl fmt::Display for TransitionMatrixError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Weights must be of length 4")
-    }
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransitionMatrix {
     // Nucleotide transition matrix. Rows represent the base we are mutating and the weights are
     // in the standard nucleotide order (in the same a, c, g, t order). This structure is

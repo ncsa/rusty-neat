@@ -39,6 +39,7 @@ pub fn char_to_base(c: char) -> u8 {
         'C' | 'c' => 1,
         'G' | 'g' => 2,
         'T' | 't' => 3,
+        'U' | 'u' => 5, // Note this is prep work, not implemented
         _ => 4,
     }
 }

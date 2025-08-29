@@ -22,21 +22,32 @@
 //!   * In Python, at least, this was slow, although in retrospect it didn't eat up much memory.
 use serde::{Deserialize, Serialize};
 use serde_json;
-use std::{fmt::{Display, Formatter}, io::Write};
-use simple_rng::{DiscreteDistribution, NeatRng, NeatRngError};
-use std::fs;
+use std::{fmt::{Display, Formatter}};
+use simple_rng::{NeatRng, NeatRngError};
 use std::io;
+use thiserror::Error;
 
+use crate::structs::distributions::{DiscreteDistribution, DistributionErrors};
 use crate::models::sequencing_error_model::SeqModelError;
+use crate::models::lib::{model_writer, model_reader};
 
 pub const QUALITY_OFFSET: usize = 33;
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum QualityModelError {
+    #[error("Quality model initiation returned a distribution error: {0}")]
+    DistributionError(DistributionErrors),
+    #[error("Quality score creation reported an RNG Error: {0}")]
     RngError(NeatRngError),
+    #[error("Quality model return an IO error: {0}")]
     IoError(io::Error),
 }
 
+impl From<DistributionErrors> for QualityModelError {
+    fn from(error: DistributionErrors) -> Self {
+        QualityModelError::DistributionError(error)
+    }
+}
 
 impl From<NeatRngError> for QualityModelError {
     fn from(error: NeatRngError) -> Self {
@@ -50,7 +61,7 @@ impl From<std::io::Error> for QualityModelError {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct QualityScoreModel {
     // This is the vector of the quality scores possible in this dataset. This could be a list
     // of numbers from 1-42, for example, or bins of scores, [2, 13, 27, 33] or whatever the
@@ -70,8 +81,6 @@ pub struct QualityScoreModel {
     // the original design in NEAT. Previous attempts to simplify this have not been able to
     // successfully reproduce quality scores.
     pub distros_from_one: Vec<Vec<DiscreteDistribution>>,
-    // Build the models with a mutable reference to a simple_rng 
-    rng: NeatRng,
 }
 
 impl Display for QualityScoreModel {
@@ -90,7 +99,7 @@ impl Display for QualityScoreModel {
 
 impl QualityScoreModel {
     // methods for QualityScoreModel objects
-    pub fn default(rng: &mut NeatRng) -> Result<Self, QualityModelError> {
+    pub fn default() -> Result<Self, QualityModelError> {
         // The following was the default model used by the original NEAT genReads.
         let default_quality_scores: Vec<u32> = vec![2, 11, 25, 37];
         let default_seed_weight: Vec<f64> = vec![1.0, 3.0, 5.0, 1.0];
@@ -123,7 +132,6 @@ impl QualityScoreModel {
             assumed_read_length: default_read_length,
             seed_dist: default_seed_dist,
             distros_from_one: default_score_distros,
-            rng: rng.clone(),
         })
     }
 
@@ -133,7 +141,6 @@ impl QualityScoreModel {
         assumed_read_length: u32,
         seed_dist: DiscreteDistribution,
         distros_from_one: Vec<Vec<DiscreteDistribution>>,
-        rng: &mut NeatRng
     ) -> Self {
 
         QualityScoreModel {
@@ -142,7 +149,6 @@ impl QualityScoreModel {
             assumed_read_length,
             seed_dist,
             distros_from_one,
-            rng: rng.clone(),
         }
     }
     #[allow(dead_code)]
@@ -180,6 +186,7 @@ impl QualityScoreModel {
     pub fn generate_quality_scores(
         &self,
         run_read_length: u32,
+        rng: &mut NeatRng,
     ) -> Result<Vec<u32>, SeqModelError> {
         // Generates a list of quality scores of length run_read_length using the model. If the
         // input read length differs, we do some index magic to extrapolate the model
@@ -189,7 +196,7 @@ impl QualityScoreModel {
         let mut score_list: Vec<u32> = Vec::with_capacity(run_read_length as usize);
         // sample the scores list with the seed weights applied to generate the first score.
         // Samples an index based on the weights, which then selects the quality score.
-        let seed_score = self.quality_score_options[self.seed_dist.sample(self.rng)?];
+        let seed_score = self.quality_score_options[self.seed_dist.sample(rng.random()?)?];
         // Adding the seed score to the list.
         score_list.push(seed_score);
         // To map from one length to another, we use the algorithm found in the original NEAT 2.0,
@@ -214,7 +221,8 @@ impl QualityScoreModel {
                 .unwrap();
             // Now we have an index (in the default case 0..<4) of a vector for the position, based
             // on the previous score.
-            let index = self.distros_from_one[i][score_position].sample(self.rng)?;
+            let index = self.distros_from_one[i][score_position]
+                .sample(rng.random()?)?;
             let score = self.quality_score_options[index];
             score_list.push(score);
             current_index += 1;
@@ -259,47 +267,21 @@ impl QualityScoreModel {
         }
     }
 
-    pub fn write_model(&self, filename: &str) -> std::io::Result<()> {
-        // Create a loader based on our model
-        let loader = QualityScoreModelLoader {
-            quality_score_options: self.quality_score_options.clone(),
-            binned_scores: self.binned_scores,
-            assumed_read_length: self.assumed_read_length,
-            seed_dist: self.seed_dist.clone(),
-            distros_from_one: self.distros_from_one.clone(),
-        };
-        loader.write_out_quality_model(filename)   
-    }
-
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct QualityScoreModelLoader {
-    // Identical to the above, minus the RNG, so that we can export this
-    pub quality_score_options: Vec<u32>,
-    pub binned_scores: bool,
-    pub assumed_read_length: u32,
-    pub seed_dist: DiscreteDistribution,
-    pub distros_from_one: Vec<Vec<DiscreteDistribution>>,
-}
-
-impl QualityScoreModelLoader {
-
     fn write_out_quality_model(&self, filename: &str) -> std::io::Result<()> {
         // Uses the serde_json crate to write out the json form of the model. This will help us
         // create base datasets from old neat data, and give us a way to write out models that are
         // generated from user data.
-        let mut fileout = fs::File::create(filename)?;
         let data = serde_json::to_string_pretty(self).unwrap();
-        fileout.write_all(data.as_bytes())?;
+        model_writer(data, filename)?;
         Ok(())
     }
 
     fn read_in_quality_model(&self, filename: &str) -> Result<Self, QualityModelError> {
         // Uses the serde_json crate to read a quality model from file
-        
-        todo!()
+        let data: QualityScoreModel = model_reader(filename).unwrap();
+        Ok(data)
     }
+
 }
 
 #[cfg(test)]
@@ -314,8 +296,8 @@ mod tests {
             "Cruel".to_string(),
             "World".to_string(),
         ]).unwrap();
-        let model = QualityScoreModel::default(&mut rng).unwrap();
-        let scores = model.generate_quality_scores(run_read_length).unwrap();
+        let model = QualityScoreModel::default().unwrap();
+        let scores = model.generate_quality_scores(run_read_length, &mut rng).unwrap();
         assert!(!scores.is_empty());
         assert_eq!(scores.len(), 100);
         scores
@@ -332,8 +314,8 @@ mod tests {
             "Cruel".to_string(),
             "World".to_string(),
         ]).unwrap();
-        let model = QualityScoreModel::default(&mut rng).unwrap();
-        let scores = model.generate_quality_scores(run_read_length).unwrap();
+        let model = QualityScoreModel::default().unwrap();
+        let scores = model.generate_quality_scores(run_read_length, &mut rng).unwrap();
         assert!(!scores.is_empty());
         assert_eq!(scores.len(), 150);
         scores
@@ -350,8 +332,8 @@ mod tests {
             "Cruel".to_string(),
             "World".to_string(),
         ]).unwrap();
-        let model = QualityScoreModel::default(&mut rng).unwrap();
-        let scores = model.generate_quality_scores(run_read_length).unwrap();
+        let model = QualityScoreModel::default().unwrap();
+        let scores = model.generate_quality_scores(run_read_length, &mut rng).unwrap();
         assert!(!scores.is_empty());
         assert_eq!(scores.len(), 200);
         scores
@@ -368,8 +350,8 @@ mod tests {
             "Cruel".to_string(),
             "World".to_string(),
         ]).unwrap();
-        let model = QualityScoreModel::default(&mut rng).unwrap();
-        let scores = model.generate_quality_scores(run_read_length).unwrap();
+        let model = QualityScoreModel::default().unwrap();
+        let scores = model.generate_quality_scores(run_read_length, &mut rng).unwrap();
         assert!(!scores.is_empty());
         assert_eq!(scores.len(), 2000);
         scores

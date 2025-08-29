@@ -4,7 +4,6 @@
 //! most of the models in NEAT. Storing these in a common library will help us create other utilities
 //! that will generate the data that generate-reads can then use to run simulations.
 pub mod nucleotides;
-pub mod sequencing_errors;
 pub mod transition_matrix;
 pub mod variants;
 pub mod fasta_map;

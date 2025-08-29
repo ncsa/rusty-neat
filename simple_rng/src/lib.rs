@@ -18,7 +18,9 @@ pub enum NeatRngError {
     #[error("Neat RNG suffered a sampling error {0}")]
     SamplingError(String),
     #[error("Neat RNG suffered an invalid range error")]
-    InvalidRangeError(String)
+    InvalidRangeError(String),
+    #[error("Rand reported an error!")]
+    RandRetrievalError,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -92,15 +94,6 @@ impl NeatRng {
     pub fn gen_bool(&mut self, frac: f64) -> Result<bool, NeatRngError> {
         // Checks if a random number is less than the requested frac, which is taken as the
         // percent chance of true.
-        if !(0.0..1.0).contains(&frac) {
-            if frac == 1.0 {
-                return Ok(true)
-            }
-            return Err(NeatRngError::InvalidRangeError(
-                format!("Invalid proportion for gen_bool {frac} (must be in [0.0, 1.0))")
-            ))
-        }
-
         Ok(self.random().unwrap() < frac)
     }
 

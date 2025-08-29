@@ -1,12 +1,16 @@
+//! The mutation model
 use std;
 use thiserror::Error;
-use simple_rng::{DiscreteDistribution, NeatRng, NeatRngError};
+use simple_rng::{NeatRng, NeatRngError};
+use log::error;
 use crate::structs::transition_matrix::{TransitionMatrix, TransitionMatrixError};
 use crate::structs::variants::{Variant, VariantError, VariantType};
-use crate::models::indel_model::{IndelModel, generate_random_insertion, IndelModelError};
+use crate::structs::distributions::DiscreteDistribution;
+use crate::models::indel_model::{IndelModel, IndelModelError};
 use crate::models::quality_scores::{QualityModelError, QualityScoreModel};
 use crate::models::sequencing_error_model::{SeqModelError, SequencingErrorModel};
 use crate::models::snp_trinuc_model::{SnpTrinucModel, SnpTrinucError};
+
 
 #[derive(Error, Debug)]
 pub enum MutationModelError {
@@ -102,7 +106,6 @@ pub struct MutationModel {
     // These hold all the statistical model data we need to apply the mutations with this model
     statistical_models: StatisticalModels,
     // Store a reference to the NeatRng for this run
-    rng: Option<&mut NeatRng>,
 }
 
 const VARIANT_TYPES: [VariantType; 3] = [
@@ -112,7 +115,7 @@ const VARIANT_TYPES: [VariantType; 3] = [
 ];
 
 impl MutationModel {
-    pub fn default(rng: &mut NeatRng) -> Result<Self, MutationModelError> {
+    pub fn default() -> Result<Self, MutationModelError> {
         // Creating the default model based on the default for the original NEAT.
         let mutation_rate = 0.001;
         let homozygous_frequency = 0.01;
@@ -136,7 +139,6 @@ impl MutationModel {
             homozygous_frequency,
             variant_dist,
             statistical_models,
-            rng: Some(rng),
         })
     }
 
@@ -144,7 +146,6 @@ impl MutationModel {
         mutation_rate: f64, 
         homozygous_frequency: f64, 
         variant_weights: Vec<f64>,
-        rng: &mut NeatRng,
     ) -> Result<Self, MutationModelError> {
         let variant_dist = DiscreteDistribution::new(&Vec::from(variant_weights))?;
         let statistical_models = StatisticalModels::new()?;
@@ -154,7 +155,6 @@ impl MutationModel {
             homozygous_frequency,
             variant_dist,
             statistical_models,
-            rng: Some(rng),
         })
     }
 
@@ -168,10 +168,10 @@ impl MutationModel {
         todo!()
     }
 
-    fn generate_genotype(&mut self, ploidy: usize) -> Result<Vec<u8>, MutationModelError> {
+    fn generate_genotype(&mut self, ploidy: usize, is_homozygous: bool) -> Result<Vec<u8>, MutationModelError> {
         // "Homozygous" is ambiguous for polyploid organisms, so we'll just take "heterozygous" to
         // mean roughly half the reads will have the variant, to keep it simple
-        let is_homozygous = self.rng.gen_bool(self.homozygous_frequency)?;
+        // The is_homozygous flag is expected to be randomly determined in practice
         if is_homozygous {
             Ok(vec![1; ploidy])
         } else {
@@ -185,11 +185,12 @@ impl MutationModel {
         reference_sequence: &Vec<u8>,
         variant_location: usize,
         ploidy: usize,
+        rng: &mut NeatRng,
     ) -> Result<Variant, MutationModelError> {
         // Select a genotype for the variant
-        let genotype= self.generate_genotype(ploidy)?;
+        let genotype= self.generate_genotype(ploidy, rng.gen_bool(self.homozygous_frequency)?)?;
         // Select a type of mutation.
-        let index = self.variant_dist.sample(self.rng)?;
+        let index = self.variant_dist.sample(rng.random()?)?;
         let variant_type = if index > VARIANT_TYPES.len() {
             error!("Weird result from sampling variant type: {}", index);
             return Err(MutationModelError::GenerateMutationError)
@@ -206,7 +207,7 @@ impl MutationModel {
                     reference_sequence[variant_location],
                     reference_sequence[variant_location+1],
                 ];
-                let alternate_base = self.statistical_models.snp_model.generate_snp(&trinuc_reference)?;
+                let alternate_base = self.statistical_models.snp_model.generate_snp(rng.random()?, &trinuc_reference)?;
 
                 let reference = vec![trinuc_reference[1]];
                 let alternate = vec![alternate_base];

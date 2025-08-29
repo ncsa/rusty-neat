@@ -9,3 +9,4 @@ pub mod transition_matrix;
 pub mod variants;
 pub mod fasta_map;
 pub mod contig_variants;
+pub mod distributions;

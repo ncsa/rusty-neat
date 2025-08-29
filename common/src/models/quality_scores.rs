@@ -1,4 +1,4 @@
-///! Walking through Zac Stephens original algorithm, to try to make sure I replicate it correctly.
+//! Walking through Zac Stephens original algorithm, to try to make sure I replicate it correctly.
 //!   * For position 1, there is a vector of weights for each score, extracted from data.
 //!   * For each position in the read length after that
 //!         * For each possible quality score, a distribution is constructed with weights and
@@ -50,7 +50,7 @@ impl From<std::io::Error> for QualityModelError {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct QualityScoreModel {
     // This is the vector of the quality scores possible in this dataset. This could be a list
     // of numbers from 1-42, for example, or bins of scores, [2, 13, 27, 33] or whatever the
@@ -71,7 +71,7 @@ pub struct QualityScoreModel {
     // successfully reproduce quality scores.
     pub distros_from_one: Vec<Vec<DiscreteDistribution>>,
     // Build the models with a mutable reference to a simple_rng 
-    rng: Option<&mut NeatRng>,
+    rng: NeatRng,
 }
 
 impl Display for QualityScoreModel {
@@ -123,7 +123,7 @@ impl QualityScoreModel {
             assumed_read_length: default_read_length,
             seed_dist: default_seed_dist,
             distros_from_one: default_score_distros,
-            rng: Some(rng),
+            rng: rng.clone(),
         })
     }
 
@@ -142,7 +142,7 @@ impl QualityScoreModel {
             assumed_read_length,
             seed_dist,
             distros_from_one,
-            rng: Some(rng),
+            rng: rng.clone(),
         }
     }
     #[allow(dead_code)]
@@ -259,7 +259,33 @@ impl QualityScoreModel {
         }
     }
 
-    pub fn write_out_quality_model(&self, filename: &mut str) -> std::io::Result<()> {
+    pub fn write_model(&self, filename: &str) -> std::io::Result<()> {
+        // Create a loader based on our model
+        let loader = QualityScoreModelLoader {
+            quality_score_options: self.quality_score_options.clone(),
+            binned_scores: self.binned_scores,
+            assumed_read_length: self.assumed_read_length,
+            seed_dist: self.seed_dist.clone(),
+            distros_from_one: self.distros_from_one.clone(),
+        };
+        loader.write_out_quality_model(filename)   
+    }
+
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct QualityScoreModelLoader {
+    // Identical to the above, minus the RNG, so that we can export this
+    pub quality_score_options: Vec<u32>,
+    pub binned_scores: bool,
+    pub assumed_read_length: u32,
+    pub seed_dist: DiscreteDistribution,
+    pub distros_from_one: Vec<Vec<DiscreteDistribution>>,
+}
+
+impl QualityScoreModelLoader {
+
+    fn write_out_quality_model(&self, filename: &str) -> std::io::Result<()> {
         // Uses the serde_json crate to write out the json form of the model. This will help us
         // create base datasets from old neat data, and give us a way to write out models that are
         // generated from user data.
@@ -267,6 +293,12 @@ impl QualityScoreModel {
         let data = serde_json::to_string_pretty(self).unwrap();
         fileout.write_all(data.as_bytes())?;
         Ok(())
+    }
+
+    fn read_in_quality_model(&self, filename: &str) -> Result<Self, QualityModelError> {
+        // Uses the serde_json crate to read a quality model from file
+        
+        todo!()
     }
 }
 

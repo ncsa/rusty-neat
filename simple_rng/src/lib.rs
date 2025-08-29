@@ -1,16 +1,13 @@
-/// This RNG is based on Alea (https://github.com/nquinlan/better-random-numbers-for-javascript-mirror/
-/// by Johannes Baagøe. This is a rust implementation. Some of the behavior of javascript I had
-/// to guess at a little bit. I got the mash function to reproduce the results of the
-/// javascript one (as tested in a browser runner online) and I used the TypeScript version
-/// (https://rampantmonkey.com/writing/ts-prng/) to help me figure out some of the typing. Because
-/// of overflow, I kept the numbers to within the range of u32, even though they are u64 and f64
-/// outputs. I'm hoping the simplicity of this overall makes it very fast for NEAT
-
+//! This RNG is based on Alea (https://github.com/nquinlan/better-random-numbers-for-javascript-mirror/
+//! by Johannes Baagøe. This is a rust implementation. Some of the behavior of javascript I had
+//! to guess at a little bit. I got the mash function to reproduce the results of the
+//! javascript one (as tested in a browser runner online) and I used the TypeScript version
+//! (https://rampantmonkey.com/writing/ts-prng/) to help me figure out some of the typing. Because
+//! of overflow, I kept the numbers to within the range of u32, even though they are u64 and f64
+//! outputs. I'm hoping the simplicity of this overall makes it very fast for NEAT
 mod mash;
 use thiserror::Error;
 use mash::Mash;
-use statrs::{distribution::{ContinuousCDF, Normal}, statistics::Distribution};
-use serde::{Deserialize, Serialize};
 
 #[derive(Error, Debug)]
 pub enum NeatRngError {
@@ -19,7 +16,9 @@ pub enum NeatRngError {
     #[error("Neat RNG sufferd an output error")]
     OutputError,
     #[error("Neat RNG suffered a sampling error {0}")]
-    SamplingError(&'static str),
+    SamplingError(String),
+    #[error("Neat RNG suffered an invalid range error")]
+    InvalidRangeError(String)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -97,7 +96,9 @@ impl NeatRng {
             if frac == 1.0 {
                 return Ok(true)
             }
-            panic!("Invalid proportion for gen_bool {} (must be in [0.0, 1.0))", frac)
+            return Err(NeatRngError::InvalidRangeError(
+                format!("Invalid proportion for gen_bool {frac} (must be in [0.0, 1.0))")
+            ))
         }
 
         Ok(self.random().unwrap() < frac)
@@ -145,190 +146,9 @@ impl NeatRng {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct NormalDistribution {
-    distribution: Normal,
-}
-
-impl NormalDistribution {
-    // This is little more than a wrapper for the statrs normal distribution. Other distributions
-    // may be more complicated, as needed. I would copy in the code for custom tailoring, but the
-    // inverse function requires tons of hardcoded coefficient tables
-    // and no one has time for all that
-    pub fn new(mean: f64, std_dev: f64) -> Self {
-        NormalDistribution {
-            distribution: Normal::new(mean, std_dev).unwrap()
-        }
-    }
-
-    pub fn mean(&self) -> Result<f64, NeatRngError> {
-        // Used to access the mean function from statrs
-        let mean_result = self.distribution.mean();
-        match mean_result {
-            Some(num) => Ok(num),
-            None => Err(NeatRngError::OutputError),
-        }
-    }
-
-    pub fn std_dev(&self) -> Result<f64, NeatRngError> {
-        // Used to accest the std_dev function from statrs
-        let std_result = self.distribution.std_dev();
-        match std_result {
-            Some(num) => Ok(num),
-            None => Err(NeatRngError::OutputError),
-        }
-    }
-
-    pub fn inverse_cdf(&self, x: f64) -> Result<f64, NeatRngError> {
-        Ok(self.distribution.inverse_cdf(x))
-    }
-
-    pub fn sample(&self, rng: &mut NeatRng) -> Result<f64, NeatRngError> {
-        // Takes a statrs NormalDistribution object, uses the ICDF to start with a probability (our
-        // RNG, which generates numbers between 0 and 1 with approximately normal distribution) and
-        // generate the corresponding Y value from the PDF. Very handy!
-        let x = rng.random().unwrap();
-        Ok(self.distribution.inverse_cdf(x))
-    }
-}
-
-
-/// This DiscreteDistribution is an implementation of Zach Stephen's original neat-genReads code
-/// from the py/probability.py file in tag 2.1 of github.com/ncsa/neat
-/// (see also github.com/zstephens/neat-genreads). We may try the statrs Categorical distribution
-/// as well, as I think it does the same thing.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DiscreteDistribution {
-    values: Option<Vec<usize>>,
-    weights: Vec<f64>,
-}
-
-impl DiscreteDistribution {
-    pub fn new(w_vec: &Vec<f64>) -> Result<Self, NeatRngError> {
-        let cumulative_probability = {
-            let sum_weights: f64 = w_vec.iter().sum();
-            let mut normalized_weights = Vec::with_capacity(w_vec.len());
-            // we no longer need the w_vec_64 after this, so we consume it
-            for weight in w_vec{
-                normalized_weights.push(weight / sum_weights);
-            }
-            cumulative_sum(&mut normalized_weights)
-        }?;
-
-        Ok(DiscreteDistribution {
-            values: None,
-            weights: cumulative_probability,
-        })
-    }
-
-    pub fn new_with_values(w_vec: &Vec<f64>, l_vec: &Vec<usize>) -> Result<Self, NeatRngError> {
-        let cumulative_probability = {
-            let sum_weights: f64 = w_vec.iter().sum();
-            let mut normalized_weights = Vec::with_capacity(w_vec.len());
-            // we no longer need the w_vec_64 after this, so we consume it
-            for weight in w_vec{
-                normalized_weights.push(weight / sum_weights);
-            }
-            cumulative_sum(&mut normalized_weights)
-        }?;
-
-        Ok(DiscreteDistribution {
-            values: Some(l_vec.clone()),
-            weights: cumulative_probability,
-        })
-    }
-
-    pub fn sample(&self, rng: &mut NeatRng) -> Result<usize, NeatRngError> {
-        // returns a random index for the distribution, based on cumulative probability
-        // This is basically an icdf for a discrete distribution
-        let mut lo: usize = 0;
-        let mut hi: usize = self.weights.len();
-        // bisect left
-        let r = rng.random()?;
-        while lo < hi {
-            let mid = (lo + hi) / 2;
-            if r > self.weights[mid] {
-                lo = mid + 1;
-            } else {
-                hi = mid;
-            }
-        }
-        Ok(lo)
-    }
-
-    pub fn sample_values(&self, rng: &mut NeatRng) -> Result<usize, NeatRngError> {
-        // returns a random value for the distribution, based on cumulative probability
-        // This is basically an icdf for a discrete distribution
-        let mut lo: usize = 0;
-        let mut hi: usize = self.weights.len();
-        // bisect left
-        let r = rng.random()?;
-        while lo < hi {
-            let mid = (lo + hi) / 2;
-            if r > self.weights[mid] {
-                lo = mid + 1;
-            } else {
-                hi = mid;
-            }
-        }
-        match &self.values {
-            Some(v) => Ok(v[lo]),
-            None => Err(NeatRngError::SamplingError("DiscreteDistribution tried to sample a value from an instance with no values. Use the sample method instead."))
-        }
-    }
-}
-
-fn cumulative_sum(a: &mut Vec<f64>) -> Result<Vec<f64>, NeatRngError> {
-    let mut acc = 0.0;
-    let mut cumvec = Vec::with_capacity(a.len());
-    for x in a {
-        acc += *x;
-        cumvec.push(acc);
-    };
-    Ok(cumvec)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
-    #[test]
-    fn test_discrete_distribution() {
-        let weights: Vec<f64> = vec![1.1, 2.0, 1.0, 8.0, 0.2, 2.0];
-        let d = DiscreteDistribution::new(&weights).unwrap();
-        let mut rng = NeatRng::new_from_seed(vec![
-            "Hello".to_string(),
-            "Cruel".to_string(),
-            "World".to_string(),
-        ]).unwrap();
-        let x = d.sample(&mut rng).unwrap();
-        assert_eq!(x, 5);
-        let x = d.sample(&mut rng).unwrap();
-        assert_eq!(x, 3);
-        let x = d.sample(&mut rng).unwrap();
-        assert_eq!(x, 3);
-        let x = d.sample(&mut rng).unwrap();
-        assert_eq!(x, 1);
-    }
-
-    #[test]
-    fn test_discrete_distribution_with_values() {
-        let weights: Vec<f64> = vec![1.1, 2.0, 1.0, 8.0, 0.2, 2.0];
-        let values: Vec<usize> = vec![2, 3, 7, 8, 9, 11];
-        let d = DiscreteDistribution::new_with_values(&weights, &values).unwrap();
-        let mut rng = NeatRng::new_from_seed(vec![
-            "Hello".to_string(),
-            "Cruel".to_string(),
-            "World".to_string(),
-        ]).unwrap();
-        let x = d.sample(&mut rng).unwrap();
-        assert_eq!(x, 5);
-        let x = d.sample(&mut rng).unwrap();
-        assert_eq!(x, 3);
-        let x = d.sample(&mut rng).unwrap();
-        assert_eq!(x, 3);
-        let x = d.sample(&mut rng).unwrap();
-        assert_eq!(x, 1);
-    }
+    use super::*;    
 
     #[test]
     fn test_gen_bool() {

@@ -1,13 +1,18 @@
 use log::debug;
-
+use thiserror::Error;
 use crate::structs::transition_matrix::{TransitionMatrix, TransitionMatrixError};
 use simple_rng::{DiscreteDistribution, NeatRng, NeatRngError};
 
-#[derive(Debug)]
+#[derive(Error, Debug)]
 pub enum SeqModelError{
+    #[error("Error creating sequencing error model")]
     ModelCreationError,
+    #[error("Error creating transition matrix: {0}")]
     TransMatrixError(TransitionMatrixError),
-    DistributionError(NeatRngError)
+    #[error("Error sampling rng distribution: {0}")]
+    DistributionError(NeatRngError),
+    #[error("No RNG supplied for this model.")]
+    MissingRngError,
 }
 
 impl From<NeatRngError> for SeqModelError {
@@ -23,9 +28,9 @@ impl From<TransitionMatrixError> for SeqModelError {
 }
 
 pub enum SequencingErrorType {
-    SnpError,
-    InsertionError,
-    DeletionError,
+    SnpError(u8),
+    InsertionError(Vec<u8>),
+    DeletionError(i8),
 }
 
 #[derive(Clone)]
@@ -38,11 +43,11 @@ pub struct SequencingErrorModel {
     indel_probability: f64,
     insertion_bias: DiscreteDistribution,
     transition_distros: TransitionMatrix,
-    rng: Option<&mut NeatRng>,
+    rng: Option<NeatRng>,
 }
 
 impl SequencingErrorModel {
-    pub fn default(rng: &mut NeatRng) -> Result<Self, SeqModelError> {
+    pub fn default(rng: NeatRng) -> Result<Self, SeqModelError> {
         // This is the default sequencing error model employed by NEAT2
         let default_transition_distros = TransitionMatrix::from(
             vec![0.0, 0.4918, 0.3377, 0.1705],
@@ -69,7 +74,14 @@ impl SequencingErrorModel {
     }
 
     pub fn is_error(&self, score: usize) -> Result<bool, SeqModelError> {
-        todo!()
+        // Takes a quality score, converts it to a probability of error, and returns bool
+        // true = this base is an error
+        // false = this base is the same as reference
+        let score = score as f64;
+        match self.rng {
+            Some(mut r) => Ok((&mut r).gen_bool(10.0_f64.powf(-score/10.0))?),
+            None => return Err(SeqModelError::MissingRngError),
+        }
     }
 
     pub fn generate_snp_error(&self, reference: u8) -> Result<u8, SeqModelError> {
@@ -87,38 +99,46 @@ impl SequencingErrorModel {
         // Now we create a distribution from the weights and sample our choices.
         // We have constructed things such that this will return a valid u8. But 
         // to be extra safe, we could mod by 4 and then convert
-        Ok(weights.sample(self.rng)? as u8)
-
+        match self.rng {
+            Some(mut r) => Ok(weights.sample(&mut r)? as u8),
+            None => return Err(SeqModelError::MissingRngError),
+        }
     }
 
-    pub fn generate_indel_error(&self) -> Result<Vec<u8>, i8> {
+    pub fn generate_indel_error(&self) -> Result<SequencingErrorType, SeqModelError> {
         // Returns either an insertion (option 1) or a deletion (option 2) depending on a random selection from a list of potential
         // error lengths (-2..2). This makes an insertion of up to 2 bases as likely as a random deletion of up to 2 bases.
-        let length = self.lengths[self.length_distr.sample(self.rng).unwrap()];
-        match length {
-            1.. => {
-                // insertion
-                let mut sequence = Vec::new();
-                for _ in 0..length {
-                    // We could mod this value by 4 to ensure it is a valid base. Or create a data structure.
-                    sequence.push(self.insertion_bias.sample(self.rng).unwrap() as u8)
-                }
-                // Insertion of sequence
-                Ok(sequence)
-            }
+        match self.rng {
+            Some(mut r) => {
+                let index = self.length_distr.sample(&mut r)?;
+                let length = self.lengths[index];
+                match length {
+                    1.. => {
+                        // insertion
+                        let mut sequence = Vec::new();
+                        for _ in 0..length {
+                            // We could mod this value by 4 to ensure it is a valid base. Or create a data structure.
+                            sequence.push(self.insertion_bias.sample(&mut r)? as u8)
+                        }
+                        // Insertion of sequence
+                        Ok(SequencingErrorType::InsertionError(sequence))
+                    }
 
-            _ => {
-                // Deletion of length bases
-                // We'll return this as an error, and let the read generator interpret
-                Err(length)
-            }
+                    _ => {
+                        // Deletion of length bases
+                        // We'll return this as an error, and let the read generator interpret
+                        Ok(SequencingErrorType::DeletionError(length))
+                    }
+                }
+            },
+            None => return Err(SeqModelError::MissingRngError),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+
     #[test]
     fn test_sequencing_error_model() {
         // todo needs tests

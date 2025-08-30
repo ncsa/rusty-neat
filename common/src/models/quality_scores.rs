@@ -103,9 +103,9 @@ impl QualityScoreModel {
         // The following was the default model used by the original NEAT genReads.
         let default_quality_scores: Vec<u32> = vec![2, 11, 25, 37];
         let default_seed_weight: Vec<f64> = vec![1.0, 3.0, 5.0, 1.0];
-        let default_seed_dist = DiscreteDistribution::new(&default_seed_weight)?;
+        let default_seed_dist = DiscreteDistribution::new_index_only(&default_seed_weight)?;
         let default_base_weights: Vec<f64> = vec![1.0, 1.0, 2.0, 5.0];
-        let default_base_dist = DiscreteDistribution::new(&default_base_weights)?;
+        let default_base_dist = DiscreteDistribution::new_index_only(&default_base_weights)?;
         let default_read_length: u32 = 150;
         let mut default_score_distros: Vec<Vec<DiscreteDistribution>> = Vec::with_capacity(
             default_read_length as usize
@@ -196,7 +196,7 @@ impl QualityScoreModel {
         let mut score_list: Vec<u32> = Vec::with_capacity(run_read_length as usize);
         // sample the scores list with the seed weights applied to generate the first score.
         // Samples an index based on the weights, which then selects the quality score.
-        let seed_score = self.quality_score_options[self.seed_dist.sample(rng.random()?)?];
+        let seed_score = self.quality_score_options[self.seed_dist.sample_index(rng.random()?)?];
         // Adding the seed score to the list.
         score_list.push(seed_score);
         // To map from one length to another, we use the algorithm found in the original NEAT 2.0,
@@ -222,7 +222,7 @@ impl QualityScoreModel {
             // Now we have an index (in the default case 0..<4) of a vector for the position, based
             // on the previous score.
             let index = self.distros_from_one[i][score_position]
-                .sample(rng.random()?)?;
+                .sample_index(rng.random()?)?;
             let score = self.quality_score_options[index];
             score_list.push(score);
             current_index += 1;

@@ -8,16 +8,26 @@
 //! We have the variants separated out in the variants struct, into Insertion and Deletion, but they
 //! will share this model to avoid duplicating code, since code-wise they are closely linked.
 use simple_rng::{NeatRng, NeatRngError};
-use crate::structs::distributions::DiscreteDistribution;
+use thiserror::Error;
+use crate::structs::distributions::{DiscreteDistribution, DistributionErrors};
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum IndelModelError {
+    #[error("Indel Model returned an Rng Error: {0}")]
     RngError(NeatRngError),
+    #[error("Indel model returnd an error while initializng distributions.")]
+    DistributionInitializationError(DistributionErrors),
 }
 
 impl From<NeatRngError> for IndelModelError {
     fn from(error: NeatRngError) -> Self {
         IndelModelError::RngError(error)
+    }
+}
+
+impl From<DistributionErrors> for IndelModelError {
+    fn from(error: DistributionErrors) -> Self {
+        IndelModelError::DistributionInitializationError(error)
     }
 }
 
@@ -36,11 +46,11 @@ impl IndelModel {
         // Default Indel model from the original NEAT, scaled by the lowest value and rounded.
         let insertion_probability = 0.6;
         let ins_lengths: Vec<u32> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
-        let ins_dist: DiscreteDistribution = DiscreteDistribution::new(
+        let ins_dist: DiscreteDistribution = DiscreteDistribution::new_index_only(
             &vec![1.0, 1.0, 2.0, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
         )?;
         let del_lengths: Vec<u32> = vec![1, 2, 3, 4, 5];
-        let del_dist: DiscreteDistribution = DiscreteDistribution::new(
+        let del_dist: DiscreteDistribution = DiscreteDistribution::new_index_only(
             &vec![3.0, 2.0, 2.0, 2.0, 1.0]
         )?;
 
@@ -60,8 +70,8 @@ impl IndelModel {
         del_lengths: Vec<u32>, 
         del_weights: Vec<f64>,
     ) -> Result<Self, IndelModelError> {
-        let ins_dist = DiscreteDistribution::new(&ins_weights)?;
-        let del_dist = DiscreteDistribution::new(&del_weights)?;
+        let ins_dist = DiscreteDistribution::new_index_only(&ins_weights)?;
+        let del_dist = DiscreteDistribution::new_index_only(&del_weights)?;
         Ok(IndelModel {
             insertion_probability: ins_prob,
             ins_lengths,
@@ -77,12 +87,12 @@ impl IndelModel {
 
     pub fn new_insert_length(&self, rand: f64) -> Result<u32, IndelModelError> {
         // This function uses the insertion weights to choose an insertion length from the list.
-        Ok(self.ins_lengths[self.ins_dist.sample(rand)?])
+        Ok(self.ins_lengths[self.ins_dist.sample_index(rand)?])
     }
 
     pub fn new_delete_length(&self, rand: f64) -> Result<u32, IndelModelError> {
         // This function is the same as above, but uses the deletion lengths instead.
-        Ok(self.del_lengths[self.del_dist.sample(rand)?])
+        Ok(self.del_lengths[self.del_dist.sample_index(rand)?])
     }
     
     pub fn generate_random_insertion(&self, length: u32, rng: &mut NeatRng) -> Result<Vec<u8>, IndelModelError> {
@@ -114,13 +124,12 @@ mod tests {
         let indel_model = IndelModel {
             insertion_probability: 0.75,
             ins_lengths: vec![1, 2],
-            ins_dist: DiscreteDistribution::new(&vec![100.0, 1.0]).unwrap(),
+            ins_dist: DiscreteDistribution::new_index_only(&vec![100.0, 1.0]).unwrap(),
             del_lengths: vec![3, 4],
-            del_dist: DiscreteDistribution::new(&vec![1.0, 1000.0]).unwrap(),
-            rng: Some(rng),
+            del_dist: DiscreteDistribution::new_index_only(&vec![1.0, 1000.0]).unwrap(),
         };
 
-        let length = indel_model.new_insert_length().unwrap();
+        let length = indel_model.new_insert_length(rng.random().unwrap()).unwrap();
         if length > 0 {
             assert!((length == 1) || (length == 2));
         }
@@ -137,17 +146,16 @@ mod tests {
         let indel_model = IndelModel {
             insertion_probability: 0.75,
             ins_lengths: vec![1, 2],
-            ins_dist: DiscreteDistribution::new(&vec![100.0, 1.0]).unwrap(),
+            ins_dist: DiscreteDistribution::new_index_only(&vec![100.0, 1.0]).unwrap(),
             del_lengths: vec![3, 4],
-            del_dist: DiscreteDistribution::new(&vec![1.0, 1000.0]).unwrap(),
-            rng: Some(rng),
+            del_dist: DiscreteDistribution::new_index_only(&vec![1.0, 1000.0]).unwrap(),
         };
 
-        let insertion = generate_random_insertion(10).unwrap();
+        let insertion = indel_model.generate_random_insertion(10, &mut rng).unwrap();
         assert_eq!(insertion.len(), 10);
         assert!(!insertion.contains(&4));
 
-        let insertion2 = generate_random_insertion(12).unwrap();
+        let insertion2 = indel_model.generate_random_insertion(12, &mut rng).unwrap();
         assert_eq!(insertion2.len(), 12);
         assert!(!insertion2.contains(&4));
 

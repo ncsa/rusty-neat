@@ -5,7 +5,7 @@ use simple_rng::{NeatRng, NeatRngError};
 use log::error;
 use crate::structs::transition_matrix::{TransitionMatrix, TransitionMatrixError};
 use crate::structs::variants::{Variant, VariantError, VariantType};
-use crate::structs::distributions::DiscreteDistribution;
+use crate::structs::distributions::{DiscreteDistribution, DistributionErrors};
 use crate::models::indel_model::{IndelModel, IndelModelError};
 use crate::models::quality_scores::{QualityModelError, QualityScoreModel};
 use crate::models::sequencing_error_model::{SeqModelError, SequencingErrorModel};
@@ -33,7 +33,15 @@ pub enum MutationModelError {
     #[error("Mutation model returned error during quality model initiation: {0}")]
     QualityModelInitationError(QualityModelError),
     #[error("Mutation model returned error during sequence error model initation: {0}")]
-    SeqErrModelError(SeqModelError)
+    SeqErrModelError(SeqModelError),
+    #[error("Mutation model returned an error with a distribution model: {0}")]
+    DistributionError(DistributionErrors),
+}
+
+impl From<DistributionErrors> for MutationModelError {
+    fn from(error: DistributionErrors) -> Self {
+        MutationModelError::DistributionError(error)
+    }
 }
 
 impl From<QualityModelError> for MutationModelError {
@@ -131,7 +139,9 @@ impl MutationModel {
             0.03, // insertion
             0.02, //deletion
         ];
-        let variant_dist = DiscreteDistribution::new(&Vec::from(variant_weights))?;
+        let variant_dist = DiscreteDistribution::new_index_only(
+            &Vec::from(variant_weights)
+        )?;
         let statistical_models = StatisticalModels::new()?;
 
         Ok(MutationModel {
@@ -147,7 +157,7 @@ impl MutationModel {
         homozygous_frequency: f64, 
         variant_weights: Vec<f64>,
     ) -> Result<Self, MutationModelError> {
-        let variant_dist = DiscreteDistribution::new(&Vec::from(variant_weights))?;
+        let variant_dist = DiscreteDistribution::new_index_only(&Vec::from(variant_weights))?;
         let statistical_models = StatisticalModels::new()?;
 
         Ok(MutationModel {
@@ -182,15 +192,19 @@ impl MutationModel {
 
     pub fn generate_mutation(
         &mut self,
+        // A pointer to the reference sequence to be mutated
         reference_sequence: &Vec<u8>,
+        // This is the start position of the variant, the POS field of a VCF
         variant_location: usize,
+        // The ploidy of this organism. We'll make determinations about heterzygous v homozygous based on this
         ploidy: usize,
+        // The run's rng. Needed to determine type then generate the mutation
         rng: &mut NeatRng,
     ) -> Result<Variant, MutationModelError> {
         // Select a genotype for the variant
         let genotype= self.generate_genotype(ploidy, rng.gen_bool(self.homozygous_frequency)?)?;
         // Select a type of mutation.
-        let index = self.variant_dist.sample(rng.random()?)?;
+        let index = self.variant_dist.sample_index(rng.random()?)?;
         let variant_type = if index > VARIANT_TYPES.len() {
             error!("Weird result from sampling variant type: {}", index);
             return Err(MutationModelError::GenerateMutationError)
@@ -215,17 +229,17 @@ impl MutationModel {
                 (reference, alternate)
             },
             VariantType::Insertion => {
-                let length = self.statistical_models.indel_model.new_insert_length()?;
-                let insertion_vec = generate_random_insertion(length)?;
+                let length = self.statistical_models.indel_model.new_insert_length(rng.random()?)?;
+                let insertion_vec = self.statistical_models.indel_model.generate_random_insertion(length, rng)?;
                 let reference = vec![
-                    reference_sequence.get(variant_location)?.clone()
+                    reference_sequence[variant_location].clone()
                 ];
                 let alternate = [reference.clone(), insertion_vec.clone()].concat();
                 (reference, alternate)
             },
             VariantType::Deletion => {
                 // todo Deletions are a bitch. I need to think about them.
-                let length = self.statistical_models.indel_model.new_delete_length()?;
+                let length = self.statistical_models.indel_model.new_delete_length(rng.random()?)?;
                 // +1 is so that we grab a base for the reference in the VCF. This is similar
                 // to how we appended bases to the reference in the insertion model.
                 let reference: Vec<u8> = reference_sequence
@@ -265,10 +279,10 @@ impl StatisticalModels {
     pub fn new() -> Result<Self, MutationModelError> {
         // use the default transition matrix, snp model and indel model
         let transition_matrix = TransitionMatrix::default()?;
-        let snp_model = SnpTrinucModel::default(self.rng)?;
-        let indel_model = IndelModel::default(self.rng)?;
-        let quality_score_model = QualityScoreModel::default(self.rng)?;
-        let sequencing_error_model = SequencingErrorModel::default(self.rng)?;
+        let snp_model = SnpTrinucModel::default()?;
+        let indel_model = IndelModel::default()?;
+        let quality_score_model = QualityScoreModel::default()?;
+        let sequencing_error_model = SequencingErrorModel::default()?;
 
         Ok(StatisticalModels {
             transition_matrix,

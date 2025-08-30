@@ -35,10 +35,10 @@ impl TransitionMatrix where {
     pub fn default() -> Result<Self, TransitionMatrixError> {
         // Default transition matrix for mutations from the original NEAT 2.0
         Ok(Self {
-            a_dist: DiscreteDistribution::new(&vec![0.0, 15.0, 70.0, 15.0])?,
-            c_dist: DiscreteDistribution::new(&vec![15.0, 0.0, 15.0, 70.0])?,
-            g_dist: DiscreteDistribution::new(&vec![70.0, 15.0, 0.0, 15.0])?,
-            t_dist: DiscreteDistribution::new(&vec![15.0, 70.0, 15.0, 0.0])?,
+            a_dist: DiscreteDistribution::new_index_only(&vec![0.0, 15.0, 70.0, 15.0])?,
+            c_dist: DiscreteDistribution::new_index_only(&vec![15.0, 0.0, 15.0, 70.0])?,
+            g_dist: DiscreteDistribution::new_index_only(&vec![70.0, 15.0, 0.0, 15.0])?,
+            t_dist: DiscreteDistribution::new_index_only(&vec![15.0, 70.0, 15.0, 0.0])?,
         })
     }
 
@@ -57,10 +57,10 @@ impl TransitionMatrix where {
             }
         }
         Ok(Self {
-            a_dist: DiscreteDistribution::new(&a_weights)?,
-            c_dist: DiscreteDistribution::new(&c_weights)?,
-            g_dist: DiscreteDistribution::new(&g_weights)?,
-            t_dist: DiscreteDistribution::new(&t_weights)?,
+            a_dist: DiscreteDistribution::new_index_only(&a_weights)?,
+            c_dist: DiscreteDistribution::new_index_only(&c_weights)?,
+            g_dist: DiscreteDistribution::new_index_only(&g_weights)?,
+            t_dist: DiscreteDistribution::new_index_only(&t_weights)?,
         })
     }
 

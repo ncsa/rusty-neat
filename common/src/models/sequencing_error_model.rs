@@ -64,10 +64,10 @@ impl SequencingErrorModel {
         )?;
         let default_error_rate = 0.006638164688495656;
         let default_lengths = [-2, -1, 1, 2];
-        let default_length_distr = DiscreteDistribution::new(&vec![0.001, 0.999, 0.999, 0.001])?;
+        let default_length_distr = DiscreteDistribution::new_index_only(&vec![0.001, 0.999, 0.999, 0.001])?;
         let default_indel_probability = 0.4;
         // default is no bias
-        let default_insertion_bias = DiscreteDistribution::new(&vec![1.0, 1.0, 1.0, 1.0])?;
+        let default_insertion_bias = DiscreteDistribution::new_index_only(&vec![1.0, 1.0, 1.0, 1.0])?;
 
         Ok(SequencingErrorModel {
             error_rate: default_error_rate,
@@ -100,13 +100,13 @@ impl SequencingErrorModel {
         // Now we create a distribution from the weights and sample our choices.
         // We have constructed things such that this will return a valid u8. But 
         // to be extra safe, we could mod by 4 and then convert
-        Ok(weights.sample(rand)? as u8)
+        Ok(weights.sample_index(rand)? as u8)
     }
 
     pub fn generate_indel_error(&self, rng: &mut NeatRng) -> Result<SequencingErrorType, SeqModelError> {
         // Returns either an insertion (option 1) or a deletion (option 2) depending on a random selection from a list of potential
         // error lengths (-2..2). This makes an insertion of up to 2 bases as likely as a random deletion of up to 2 bases.
-        let index = self.length_distr.sample(rng.random()?)?;
+        let index = self.length_distr.sample_index(rng.random()?)?;
         let length = self.lengths[index];
         match length {
             1.. => {
@@ -114,7 +114,7 @@ impl SequencingErrorModel {
                 let mut sequence = Vec::new();
                 for _ in 0..length {
                     // We could mod this value by 4 to ensure it is a valid base. Or create a data structure.
-                    sequence.push(self.insertion_bias.sample(rng.random().unwrap())? as u8)
+                    sequence.push(self.insertion_bias.sample_index(rng.random().unwrap())? as u8)
                 }
                 // Insertion of sequence
                 Ok(SequencingErrorType::InsertionError(sequence))

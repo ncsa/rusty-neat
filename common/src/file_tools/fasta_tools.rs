@@ -17,8 +17,8 @@ use tempfile::TempDir;
 use crate::file_tools::file_io::read_lines;
 use crate::structs::fasta_map::{Contig, FastaMap, FastaMapError, RegionType, SequenceBlock};
 use crate::structs::fasta_map::RegionType::{NRegion, NonNRegion};
-use crate::structs::nucleotides::char_to_base;
-use log::{error, info};
+use crate::structs::nucleotides::encode_base;
+use log::error;
 
 pub const BUFSIZE: usize = 131_072usize; // i.e., 128kb
 pub const DICT_SIZE: usize = 32768usize; // i.e., 32kb
@@ -182,7 +182,7 @@ pub fn read_fasta(
                             }
 
                         }
-                        buffer[buffer_index] = char_to_base(char);
+                        buffer[buffer_index] = encode_base(char);
                         if new_data == false {
                             new_data = true
                         }
@@ -408,23 +408,21 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let test_map = read_fasta(test_fasta, 350, &temp_dir).unwrap();
         assert_eq!(test_map.contig_order[0], "H1N1_HA".to_string());
-        let mut flag = false;
-        let mut contents = String::new();
-        for entry in WalkDir::new(&temp_dir) {
-            match entry {
-                Ok(entry) => {
-                    // if flag == false {
-                    //     contents = read_to_string(entry.path())
-                    //         .expect("Should have been able to read the file");
-                    //     flag = true;
-                    // }
-                    println!("{}", entry.path().display())
-                },
-                Err(e) => eprintln!("Error: {}", e),
-                }
+        let dir_list: Vec<String> = WalkDir::new(&temp_dir)
+            .into_iter()
+            .map(|s| s.unwrap().path().display().to_string())
+            .collect();
+        let mut contains_ha = false;
+        let mut contains_np = false;
+        for item in dir_list {
+            if item.contains(&"H1N1_HA".to_string()) {
+                contains_ha = true
+            } else if item.contains(&"H1N1_NP".to_string()) {
+                contains_np = true
             }
-        // println!("With text:\n{contents}");
-        temp_dir.close().unwrap();
+        }
+        assert!(contains_ha);
+        assert!(contains_np);
     }
 
     #[test]
@@ -440,6 +438,8 @@ mod tests {
     #[test]
     fn test_build_contig_map() {
         let sequence = "NNNNNNNNAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAANNNNN";
+        assert!(!sequence.is_empty());
+        todo!()
     }
 
 }

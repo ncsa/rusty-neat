@@ -8,7 +8,7 @@
 //! with N tacked on at the end.
 const ALLOWED_NUCS: [char; 4] = ['A', 'C', 'G', 'T'];
 
-pub fn base_to_char(b: u8) -> char {
+pub fn decode_base(b: u8) -> char {
     match b {
         0 => 'A',
         1 => 'C',
@@ -30,7 +30,7 @@ pub fn complement(base: u8) -> u8 {
 }
 
 
-pub fn char_to_base(c: char) -> u8 {
+pub fn encode_base(c: char) -> u8 {
     // This defines the relationship between the 4 possible nucleotides in DNA and
     // the character from an input sequence. Everything that isn't a recognized base is
     // considered an N for Neat. Note that NEAT ignores soft masking.
@@ -44,11 +44,68 @@ pub fn char_to_base(c: char) -> u8 {
     }
 }
 
+#[allow(unused)]
+pub fn encode_aa(c: char) -> u8 {
+    // The purpose of this function is to encode standard amino acids as a u8
+    match c {
+        'A' => 255,
+        'R' => 254,
+        'N' => 253,
+        'D' => 252,
+        'C' => 251,
+        'E' => 250,
+        'Q' => 249,
+        'G' => 248,
+        'H' => 247,
+        'I' => 246,
+        'L' => 245,
+        'K' => 244,
+        'M' => 243,
+        'F' => 242,
+        'P' => 241,
+        'S' => 240,
+        'T' => 239,
+        'W' => 238,
+        'Y' => 237,
+        'V' => 236,
+        'X' => 235, // stop codon
+        _ => panic!("Attempted to encode unknown amino acid: {c}")
+    }
+}
+
+#[allow(unused)]
+pub fn interpret_aa(name: &str) -> char {
+    // Translates string representations of the amino acids into char
+    match name.to_lowercase().as_str() {
+        "alanine"       | "ala" => 'A',
+        "arginine"      | "arg" => 'R',
+        "asparagine"    | "asn" => 'N',
+        "aspartic acid" | "asp" => 'D',
+        "cysteine"      | "cys" => 'C',
+        "glutamic acid" | "glu" => 'E',
+        "glutamine"     | "gln" => 'Q',
+        "glycine"       | "gly" => 'G',
+        "histidine"     | "his" => 'H',        
+        "isoleucine"    | "ile" => 'I',
+        "leucine"       | "leu" => 'L',
+        "lysine"        | "lys" => 'K',
+        "methionine"    | "met" => 'M',
+        "phenylaline"   | "phe" => 'F',
+        "proline"       | "pro" => 'P',
+        "serine"        | "ser" => 'S',
+        "threonine"     | "thr" => 'T',
+        "tryptophan"    | "trp" => 'W',
+        "tyrosine"      | "tyr" => 'Y',
+        "valine"        | "val" => 'V',
+        _ => panic!("Unknown amino acid: {}", name),
+    }
+}
+
 pub fn sequence_array_to_string(input_array: &Vec<u8>) -> String {
     // Converts a sequence vector into a string representing the DNA sequence
     let mut return_string = String::with_capacity(input_array.len());
     for nuc in input_array {
-        return_string.push(base_to_char(*nuc));
+        return_string.push(decode_base(*nuc));
     }
     return_string
 }
@@ -60,13 +117,13 @@ mod tests {
     #[test]
     fn test_base_to_nuc() {
         let test_nuc = 'A';
-        assert_eq!(char_to_base(test_nuc), 0);
+        assert_eq!(encode_base(test_nuc), 0);
     }
 
     #[test]
     fn cast_type() {
         let num1: u8 = 0;
-        assert_eq!(base_to_char(num1), 'A')
+        assert_eq!(decode_base(num1), 'A')
     }
 
     #[test]

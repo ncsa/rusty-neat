@@ -1,11 +1,10 @@
 //! This library contains some data and functions that are useful in the other models
 //! 
-use std::{self, io::Read};
+use std;
 use std::fs::File;
 use std::io::{BufReader, Write};
-use gzp::{bgzf, BgzfSyncReader, Compression};
+use gzp::{bgzf, Compression};
 use serde::Deserialize;
-use serde_json::Value;
 use crate::file_tools::file_io::create_output_file;
 
 pub fn model_writer(data: String, filename: &str) -> std::io::Result<()> {

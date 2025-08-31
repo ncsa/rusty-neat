@@ -88,7 +88,8 @@ pub struct SequenceBlock {
     //   - contig: the key name from the contig list. This is the contig which this sequence is a part of
     //   - ref_start: the start point of this sequence relative to the full contig
     //   - ref_end: the end point of this sequence relative to the full contig
-    //   - sequence: a list of u8 data that encodes the sequence
+    //   - sequence: a list of u8 data that encodes the sequence according to the pattern
+    //         in the nucleotides package
     pub contig: String,
     pub ref_start: usize,
     pub ref_end: usize,
@@ -118,6 +119,10 @@ impl SequenceBlock {
         } else {
             self.ref_end - self.ref_start
         }
+    }
+
+    pub fn get_seq_clone(&self) -> Result<Vec<u8>, FastaMapError> {
+        Ok(self.sequence.clone())
     }
 
     pub fn get_subseq(&self, request_start: usize, request_end: usize) -> Result<Vec<u8>, FastaMapError> {

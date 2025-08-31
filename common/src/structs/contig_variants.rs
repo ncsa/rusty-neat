@@ -83,8 +83,8 @@ mod tests {
         let location = 55;
         let reference: Vec<u8> = vec![1];
         let alternate: Vec<u8> = vec![3];
-        let genotype: Vec<u8> = vec![1,0];
-        let variant = Variant::new(variant_type, location, &reference, &alternate, &genotype).unwrap();
+        let mut genotype: Vec<u8> = vec![1,0];
+        let variant = Variant::new(variant_type, location, &reference, &alternate, &mut genotype).unwrap();
         let variants_list = vec![variant];
         // Now create the contig variant
         let cv = ContigVariants::new_unmapped(contig, variants_list.to_owned()).unwrap();

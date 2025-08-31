@@ -1,8 +1,10 @@
 //! The mutation model
 use std;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use simple_rng::{NeatRng, NeatRngError};
 use log::error;
+use crate::models::lib::{model_reader, model_writer};
 use crate::structs::transition_matrix::{TransitionMatrix, TransitionMatrixError};
 use crate::structs::variants::{Variant, VariantError, VariantType};
 use crate::structs::distributions::{DiscreteDistribution, DistributionErrors};
@@ -92,7 +94,13 @@ impl From<std::io::Error> for MutationModelError {
     }
 }
 
-#[derive(Clone)]
+const VARIANT_TYPES: [VariantType; 3] = [
+    VariantType::SNP,       // 1
+    VariantType::Insertion, // 2
+    VariantType::Deletion,  // 3
+];
+
+#[derive(Clone, Serialize, Deserialize)]
 pub struct MutationModel {
     // This is the model for mutations, the same construct used by the python version, basically.
     // The idea is to store all the data we need to create mutations in one construct.
@@ -115,12 +123,6 @@ pub struct MutationModel {
     statistical_models: StatisticalModels,
     // Store a reference to the NeatRng for this run
 }
-
-const VARIANT_TYPES: [VariantType; 3] = [
-    VariantType::SNP,       // 1
-    VariantType::Insertion, // 2
-    VariantType::Deletion,  // 3
-];
 
 impl MutationModel {
     pub fn default() -> Result<Self, MutationModelError> {
@@ -168,14 +170,15 @@ impl MutationModel {
         })
     }
 
-    pub fn from_file(filename: &str, rng: &mut NeatRng) -> Result<Self, MutationModelError> {
-        todo!()
-        // Might want to store this data in a json or something for later use, 
-        // probably using serde_json.
+    pub fn from_file(filename: &str) -> Result<Self, MutationModelError> {
+        let data: MutationModel = model_reader(filename).unwrap();
+        Ok(data)
     }
 
     pub fn write_file(&self, filename: &str) -> Result<(), MutationModelError> {
-        todo!()
+        let data = serde_json::to_string(self).unwrap();
+        model_writer(data, filename)?;
+        Ok(())
     }
 
     fn generate_genotype(&mut self, ploidy: usize, is_homozygous: bool) -> Result<Vec<u8>, MutationModelError> {
@@ -202,7 +205,9 @@ impl MutationModel {
         rng: &mut NeatRng,
     ) -> Result<Variant, MutationModelError> {
         // Select a genotype for the variant
-        let genotype= self.generate_genotype(ploidy, rng.gen_bool(self.homozygous_frequency)?)?;
+        let mut genotype= self.generate_genotype(
+            ploidy, rng.gen_bool(self.homozygous_frequency)?
+        )?;
         // Select a type of mutation.
         let index = self.variant_dist.sample_index(rng.random()?)?;
         let variant_type = if index > VARIANT_TYPES.len() {
@@ -258,12 +263,12 @@ impl MutationModel {
             variant_location,
             &reference,
             &alternate,
-            &genotype,
+            &mut genotype,
         )?)
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 struct StatisticalModels {
     // This struct links the Mutation model to the other statistical models for modeling different
     // variant types. If new variant types are added, then we will need to expand this struct to
@@ -304,7 +309,7 @@ mod tests {
         let c_weights = vec![20.0, 0.0, 1.0, 1.0];
         let g_weights = vec![1.0, 1.0, 0.0, 20.0];
         let t_weights = vec![20.0, 1.0, 20.0, 0.0];
-        TransitionMatrix::from(a_weights, c_weights, g_weights, t_weights);
+        TransitionMatrix::from(a_weights, c_weights, g_weights, t_weights).unwrap();
         // It actually mutates the base
         // assert_ne!(test_model.generate_mutation
         // (

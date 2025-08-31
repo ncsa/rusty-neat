@@ -7,6 +7,7 @@
 //!
 //! We have the variants separated out in the variants struct, into Insertion and Deletion, but they
 //! will share this model to avoid duplicating code, since code-wise they are closely linked.
+use serde::{Deserialize, Serialize};
 use simple_rng::{NeatRng, NeatRngError};
 use thiserror::Error;
 use crate::structs::distributions::{DiscreteDistribution, DistributionErrors};
@@ -31,7 +32,7 @@ impl From<DistributionErrors> for IndelModelError {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndelModel {
     // Based what was in the original NEAT
     insertion_probability: f64,

@@ -14,6 +14,12 @@ pub enum VariantError {
     MalformedAlt,
 }
 
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Genotypes {
+    Heterozygous,
+    Homozygous,
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub enum VariantType {
     SNP,
@@ -37,8 +43,10 @@ pub struct Variant {
     pub reference: Vec<u8>,
     // The alternate allele of interest. This is either one base or several bases for an insertion.
     pub alternate: Vec<u8>,
-    // the genotype will tell us if it is heterozygous or homozygous.
-    pub genotype: Vec<u8>,
+    // the genotype string is for writing in the vcf. 
+    pub genotype_str: String,
+    // The genotype is either heterozygous (not on all alleles) or homozygous (on all alleles)
+    pub genotype: Genotypes,
 }
 
 impl Variant {
@@ -47,7 +55,7 @@ impl Variant {
         location: usize,
         reference: &Vec<u8>,
         alternate: &Vec<u8>,
-        genotype: &Vec<u8>,
+        genotype: &mut Vec<u8>,
     ) -> Result<Self, VariantError> {
         // This will generate a variant, storing the reference, alternate, start point relative to the contig, and a genotype
         // but first a quick sanity check
@@ -74,20 +82,36 @@ impl Variant {
             return Err(VariantError::MalformedAlt)
         }
 
+        let mut genotype_label = Genotypes::Homozygous;
+        // Homozygous would mean all alleles have the variant, so all are 1's
+        // the presence of a single 0 indicates heterozygous.
+        // This is a little shakey biologically, but we're going with this.
+        if genotype.contains(&0) {
+            genotype_label = Genotypes::Heterozygous;
+        }
+        
         Ok(Variant {
             variant_type,
             location,
             reference: reference.clone(),
             alternate: alternate.clone(),
-            genotype: genotype.clone(),
+            genotype_str: genotype_to_string(genotype),
+            genotype: genotype_label,
         })
     }
+}
 
-    pub fn is_homozygous(&self) -> Result<bool, VariantError> {
-        // We won't have any 0/0[/0/0...] genotypes in NEAT, so genotype will either be 1/0 or 1/1 (or 1/1/0 v 1/1/1)
-        // if there is a 0 in the genotype, it must be heterozygous (false)
-        if self.genotype.contains(&0) { Ok(false) } else { Ok(true) }
-    }
+fn genotype_to_string(genotype: &mut Vec<u8>) -> String {
+    // Converts a vector of 0s and 1s representing genotype to a standard
+    // vcf genotype string.
+    //
+    // In order to make the vcf look a little more realistic, we shuffle the genotypes, that way
+    // it doesn't look like one ploid got all the mutations. I actually don't know if this is
+    // realistic or not, but that's what we're doing.
+    let geno_str = genotype.iter().map(|x| x.to_string() + "/").collect::<String>();
+    geno_str.strip_suffix("/").expect(
+        &format!("Problem with genotype string: {:?}", genotype)
+    ).to_string()
 }
 
 #[cfg(test)]
@@ -103,11 +127,12 @@ mod tests {
             location: 222,
             reference: vec![0, 1, 3, 2],
             alternate: vec![0],
-            genotype: vec![1, 1, 1],
+            genotype_str: "1/1/1".to_string(),
+            genotype: Genotypes::Homozygous,
         };
         assert_eq!(variant.variant_type, SNP);
-        assert_eq!(variant.variant_type, SNP);
-        assert!(variant.is_homozygous().unwrap());
+        assert_eq!(variant.reference, vec![0, 1, 3, 2]);
+        assert_eq!(variant.genotype, Genotypes::Homozygous);
     }
 
     #[test]
@@ -117,9 +142,9 @@ mod tests {
             10,
             &vec![0],
             &vec![0, 1, 3, 2],
-            &vec![0, 1],
+            &mut vec![0, 1],
         ).unwrap();
-        assert!(!variant.is_homozygous().unwrap())
+        assert_eq!(variant.genotype, Genotypes::Heterozygous)
     }
 
     #[test]
@@ -129,9 +154,9 @@ mod tests {
             22,
             &vec![0, 1, 3, 2],
             &vec![0],
-            &vec![0, 1],
+            &mut vec![1, 1],
         ).unwrap();
-        assert!(!variant.is_homozygous().unwrap())
+        assert_eq!(variant.genotype, Genotypes::Heterozygous)
     }
 
     #[test]
@@ -143,7 +168,13 @@ mod tests {
             22,
             &vec![0, 1, 3, 2],
             &vec![0],
-            &vec![1, 1, 1],
+            &mut vec![1, 1, 1],
         ).unwrap();
+    }
+
+    #[test]
+    fn test_genotype_to_string() {
+        let mut genotype = vec![0, 1, 0];
+        assert_eq!(String::from("0/1/0"), genotype_to_string(&mut genotype));
     }
 }

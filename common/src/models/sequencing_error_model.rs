@@ -1,4 +1,5 @@
 use log::debug;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use crate::structs::{distributions::{DiscreteDistribution, DistributionErrors}, transition_matrix::{TransitionMatrix, TransitionMatrixError}};
 use simple_rng::{NeatRng, NeatRngError};
@@ -38,10 +39,10 @@ impl From<TransitionMatrixError> for SeqModelError {
 pub enum SequencingErrorType {
     SnpError(u8),
     InsertionError(Vec<u8>),
-    DeletionError(i8),
+    DeletionError(usize),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct SequencingErrorModel {
     // Neat only dealt with 2 types of sequencing errors: snps and small indels.
     // We will retain that idea and assume it is accurate.
@@ -79,13 +80,25 @@ impl SequencingErrorModel {
         })
     }
 
+    pub fn generate_sequencing_error(&self, reference: u8, rng: &mut NeatRng) -> Result<SequencingErrorType, SeqModelError> {
+        // This method picks an error type and determines any additional data needed
+        // for the current error, based on the statistical model
+        if rng.random()? < self.indel_probability {
+            // Indel error
+            Ok(self.generate_indel_error(rng)?)
+        } else {
+            // SNP error
+            Ok(SequencingErrorType::SnpError(self.generate_snp_error(reference, rng.random()?)?))
+        }
+    }
+
     pub fn convert_score(&self, score: usize) -> Result<f64, SeqModelError> {
         // Takes a quality score, converts it to a probability of error, and returns the result
         let score = score as f64;
         Ok(10.0_f64.powf(-score/10.0))
     }
 
-    pub fn generate_snp_error(&self, reference: u8, rand: f64) -> Result<u8, SeqModelError> {
+    fn generate_snp_error(&self, reference: u8, rand: f64) -> Result<u8, SeqModelError> {
         // This is a basic mutation function for starting us off
         // Pick the weights list for the base that was input
         // We will use this simple model for sequence errors ultimately.
@@ -103,7 +116,7 @@ impl SequencingErrorModel {
         Ok(weights.sample_index(rand)? as u8)
     }
 
-    pub fn generate_indel_error(&self, rng: &mut NeatRng) -> Result<SequencingErrorType, SeqModelError> {
+    fn generate_indel_error(&self, rng: &mut NeatRng) -> Result<SequencingErrorType, SeqModelError> {
         // Returns either an insertion (option 1) or a deletion (option 2) depending on a random selection from a list of potential
         // error lengths (-2..2). This makes an insertion of up to 2 bases as likely as a random deletion of up to 2 bases.
         let index = self.length_distr.sample_index(rng.random()?)?;
@@ -122,8 +135,7 @@ impl SequencingErrorModel {
 
             _ => {
                 // Deletion of length bases
-                // We'll return this as an error, and let the read generator interpret
-                Ok(SequencingErrorType::DeletionError(length))
+                Ok(SequencingErrorType::DeletionError(length.abs() as usize))
             }
         }
     }

@@ -66,12 +66,12 @@ pub struct QualityScoreModel {
     // This is the vector of the quality scores possible in this dataset. This could be a list
     // of numbers from 1-42, for example, or bins of scores, [2, 13, 27, 33] or whatever the
     // dataset uses. This list is expected to be sorted.
-    pub quality_score_options: Vec<u32>,
+    pub quality_score_options: Vec<u8>,
     // True for binned scores, false for continuous
     pub binned_scores: bool,
     // The assumed read length of this dataset. The model will assume this read length and adjust
     // on a per-run basis in a deterministic way (doubling positional weight arrays)
-    pub assumed_read_length: u32,
+    pub assumed_read_length: usize,
     // Weights for the first position in the read length.
     pub seed_dist: DiscreteDistribution,
     // A matrix for each subsequent position along the read length after the first. Each row is a
@@ -101,14 +101,14 @@ impl QualityScoreModel {
     // methods for QualityScoreModel objects
     pub fn default() -> Result<Self, QualityModelError> {
         // The following was the default model used by the original NEAT genReads.
-        let default_quality_scores: Vec<u32> = vec![2, 11, 25, 37];
+        let default_quality_scores: Vec<u8> = vec![2, 11, 25, 37];
         let default_seed_weight: Vec<f64> = vec![1.0, 3.0, 5.0, 1.0];
         let default_seed_dist = DiscreteDistribution::new_index_only(&default_seed_weight)?;
         let default_base_weights: Vec<f64> = vec![1.0, 1.0, 2.0, 5.0];
         let default_base_dist = DiscreteDistribution::new_index_only(&default_base_weights)?;
-        let default_read_length: u32 = 150;
+        let default_read_length: usize = 150;
         let mut default_score_distros: Vec<Vec<DiscreteDistribution>> = Vec::with_capacity(
-            default_read_length as usize
+            default_read_length
         );
         // The first position (0) will always be an empty vector. Since position 0 never has a
         // previous read, there will never need to be anything in the first vector.
@@ -136,9 +136,9 @@ impl QualityScoreModel {
     }
 
     pub fn from(
-        quality_score_options: Vec<u32>,
+        quality_score_options: Vec<u8>,
         binned_scores: bool,
-        assumed_read_length: u32,
+        assumed_read_length: usize,
         seed_dist: DiscreteDistribution,
         distros_from_one: Vec<Vec<DiscreteDistribution>>,
     ) -> Self {
@@ -185,15 +185,15 @@ impl QualityScoreModel {
 
     pub fn generate_quality_scores(
         &self,
-        run_read_length: u32,
+        run_read_length: usize,
         rng: &mut NeatRng,
-    ) -> Result<Vec<u32>, SeqModelError> {
+    ) -> Result<Vec<u8>, SeqModelError> {
         // Generates a list of quality scores of length run_read_length using the model. If the
         // input read length differs, we do some index magic to extrapolate the model
         // run_read_length: The desired read length for the model to generate.
 
         // This will be the list of scores generated. We already know it is run_read_length long
-        let mut score_list: Vec<u32> = Vec::with_capacity(run_read_length as usize);
+        let mut score_list: Vec<u8> = Vec::with_capacity(run_read_length);
         // sample the scores list with the seed weights applied to generate the first score.
         // Samples an index based on the weights, which then selects the quality score.
         let seed_score = self.quality_score_options[self.seed_dist.sample_index(rng.random()?)?];
@@ -267,15 +267,19 @@ impl QualityScoreModel {
         }
     }
 
+    #[allow(unused)]
+    /// we will write subutilities that use these features, eventually
     fn write_out_quality_model(&self, filename: &str) -> std::io::Result<()> {
         // Uses the serde_json crate to write out the json form of the model. This will help us
         // create base datasets from old neat data, and give us a way to write out models that are
         // generated from user data.
-        let data = serde_json::to_string_pretty(self).unwrap();
+        let data = serde_json::to_string(self).unwrap();
         model_writer(data, filename)?;
         Ok(())
     }
 
+    #[allow(unused)]
+    /// we will write subutilities that use these features, eventually
     fn read_in_quality_model(&self, filename: &str) -> Result<Self, QualityModelError> {
         // Uses the serde_json crate to read a quality model from file
         let data: QualityScoreModel = model_reader(filename).unwrap();

@@ -3,7 +3,6 @@ extern crate itertools;
 extern crate log;
 extern crate serde;
 extern crate serde_json;
-extern crate serde_yaml;
 extern crate simplelog;
 extern crate simple_rng;
 
@@ -11,7 +10,6 @@ use common;
 pub mod utils;
 mod data;
 
-use chrono::Utc;
 use clap::Parser;
 use log::*;
 use simplelog::*;

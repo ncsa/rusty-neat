@@ -111,11 +111,17 @@ impl SnpTrinucModel {
             trinuc_distros,
         })
     }
-    fn generate_bias(&self, _input_sequence: &Vec<u8>) -> Vec<usize> {
+
+    #[allow(unused)]
+    /// need to think about the gc bias model of Neat2
+    fn generate_gc_bias(&self, _input_sequence: &Vec<u8>) -> Vec<usize> {
         todo!()
-        // We need some way to use this model to GC bias positions of SNPs, but it's not clear yet how.
+        // We need some way to use this model to GC bias positions of SNPs, 
+        // but it's not clear yet how.
     }
 
+    #[allow(unused)]
+    /// we will write utilities to use this, eventually
     fn write_out_quality_model(&self, filename: &str) -> std::io::Result<()> {
         // Uses the serde_json crate to write out the json form of the model. This will help us
         // create base datasets from old neat data, and give us a way to write out models that are
@@ -125,6 +131,8 @@ impl SnpTrinucModel {
         Ok(())
     }
 
+    #[allow(unused)]
+    /// we will write utilities to use this, eventually
     fn read_in_quality_model(&self, filename: &str) -> Result<Self, SnpTrinucError> {
         // Uses the serde_json crate to read a quality model from file
         let data: SnpTrinucModel = model_reader(filename).unwrap();

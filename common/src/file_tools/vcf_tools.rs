@@ -8,19 +8,6 @@ use crate::file_tools::file_io::create_output_file;
 use crate::structs::nucleotides::sequence_array_to_string;
 use crate::structs::variants::Variant;
 
-fn genotype_to_string(genotype: &mut Vec<u8>) -> String {
-    // Converts a vector of 0s and 1s representing genotype to a standard
-    // vcf genotype string.
-    //
-    // In order to make the vcf look a little more realistic, we shuffle the genotypes, that way
-    // it doesn't look like one ploid got all the mutations. I actually don't know if this is
-    // realistic or not, but that's what we're doing.
-    let geno_str = genotype.iter().map(|x| x.to_string() + "/").collect::<String>();
-    geno_str.strip_suffix("/").expect(
-        &format!("Problem with genotype string: {:?}", genotype)
-    ).to_string()
-}
-
 pub fn write_vcf(
     variant_locations: &mut Box<HashMap<String, HashMap<usize, Variant>>>,
     fasta_order: &VecDeque<String>,
@@ -111,7 +98,7 @@ pub fn write_vcf(
                 position + 1,
                 sequence_array_to_string(&mutation.reference),
                 sequence_array_to_string(&mutation.alternate),
-                genotype_to_string(&mut mutation.genotype),
+                mutation.genotype_str,
             );
             writeln!(&mut outfile, "{}", line)?;
         }
@@ -121,17 +108,6 @@ pub fn write_vcf(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use std::fs;
-    use std::path::Path;
-    use simple_rng::NeatRng;
-    use crate::structs::variants::{Variant, VariantType};
-
-    #[test]
-    fn test_genotype_to_string() {
-        let mut genotype = vec![0, 1, 0];
-        assert_eq!(String::from("0/1/0"), genotype_to_string(&mut genotype));
-    }
 
     #[test]
     pub fn test_write_vcf() {

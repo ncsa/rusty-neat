@@ -96,6 +96,6 @@ mod tests {
         let c_weights = vec![20.0, 0.0, 1.0, 1.0];
         let g_weights = vec![1.0, 1.0, 0.0, 20.0];
         let t_weights = vec![20.0, 1.0, 20.0, 0.0];
-        TransitionMatrix::from(a_weights, c_weights, g_weights, t_weights);
+        TransitionMatrix::from(a_weights, c_weights, g_weights, t_weights).unwrap();
     }
 }

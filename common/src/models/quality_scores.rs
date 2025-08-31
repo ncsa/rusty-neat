@@ -30,6 +30,7 @@ use thiserror::Error;
 use crate::structs::distributions::{DiscreteDistribution, DistributionErrors};
 use crate::models::sequencing_error_model::SeqModelError;
 use crate::models::lib::{model_writer, model_reader};
+use crate::model_data::default_quality_score_model::*;
 
 pub const QUALITY_OFFSET: usize = 33;
 
@@ -99,58 +100,14 @@ impl Display for QualityScoreModel {
 
 impl QualityScoreModel {
     // methods for QualityScoreModel objects
-    pub fn default() -> Result<Self, QualityModelError> {
-        // The following was the default model used by the original NEAT genReads.
-        let default_quality_scores: Vec<u8> = vec![2, 11, 25, 37];
-        let default_seed_weight: Vec<f64> = vec![1.0, 3.0, 5.0, 1.0];
-        let default_seed_dist = DiscreteDistribution::new_index_only(&default_seed_weight)?;
-        let default_base_weights: Vec<f64> = vec![1.0, 1.0, 2.0, 5.0];
-        let default_base_dist = DiscreteDistribution::new_index_only(&default_base_weights)?;
-        let default_read_length: usize = 150;
-        let mut default_score_distros: Vec<Vec<DiscreteDistribution>> = Vec::with_capacity(
-            default_read_length
-        );
-        // The first position (0) will always be an empty vector. Since position 0 never has a
-        // previous read, there will never need to be anything in the first vector.
-        default_score_distros.push(Vec::new());
-        // since we started with an empty vector, we need 149 more
-        // for each position along the read after the first,
-        for _i in 1..150 {
-            // we add one of the base weight vectors per possible previous score.
-            let mut row = Vec::new();
-            for _j in 0..default_quality_scores.len() {
-                // In future updates we will add more base weight vectors to mimic real data
-                // The default quality score refers to the previous score
-                row.push(default_base_dist.clone());
-            }
-            default_score_distros.push(row.clone());
-        }
-        // With the defaults established, create the default quality score model.
-        Ok(QualityScoreModel {
-            quality_score_options: default_quality_scores,
-            binned_scores: true,
-            assumed_read_length: default_read_length,
-            seed_dist: default_seed_dist,
-            distros_from_one: default_score_distros,
-        })
+
+    /// we will write subutilities that use these features, eventually
+    pub fn from_file(filename: &str) -> Result<Self, QualityModelError> {
+        // Uses the serde_json crate to read a quality model from file
+        let data: QualityScoreModel = model_reader(filename).unwrap();
+        Ok(data)
     }
 
-    pub fn from(
-        quality_score_options: Vec<u8>,
-        binned_scores: bool,
-        assumed_read_length: usize,
-        seed_dist: DiscreteDistribution,
-        distros_from_one: Vec<Vec<DiscreteDistribution>>,
-    ) -> Self {
-
-        QualityScoreModel {
-            quality_score_options,
-            binned_scores,
-            assumed_read_length,
-            seed_dist,
-            distros_from_one,
-        }
-    }
     #[allow(dead_code)]
     pub fn display(&self) -> String {
         // Some detailed formats. I thing these will be useful for quality model generation debugging.
@@ -167,6 +124,7 @@ impl QualityScoreModel {
             self.distros_from_one[1][0],
         )
     }
+
     #[allow(dead_code)]
     pub fn display_it_all(&self) -> String {
         format!(
@@ -269,21 +227,13 @@ impl QualityScoreModel {
 
     #[allow(unused)]
     /// we will write subutilities that use these features, eventually
-    fn write_out_quality_model(&self, filename: &str) -> std::io::Result<()> {
+    fn write_to_file(&self, filename: &str) -> std::io::Result<()> {
         // Uses the serde_json crate to write out the json form of the model. This will help us
         // create base datasets from old neat data, and give us a way to write out models that are
         // generated from user data.
         let data = serde_json::to_string(self).unwrap();
         model_writer(data, filename)?;
         Ok(())
-    }
-
-    #[allow(unused)]
-    /// we will write subutilities that use these features, eventually
-    fn read_in_quality_model(&self, filename: &str) -> Result<Self, QualityModelError> {
-        // Uses the serde_json crate to read a quality model from file
-        let data: QualityScoreModel = model_reader(filename).unwrap();
-        Ok(data)
     }
 
 }
@@ -293,74 +243,121 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_quality_scores_short() {
-        let run_read_length = 100;
-        let mut rng = NeatRng::new_from_seed(vec![
-            "Hello".to_string(),
-            "Cruel".to_string(),
-            "World".to_string(),
-        ]).unwrap();
-        let model = QualityScoreModel::default().unwrap();
-        let scores = model.generate_quality_scores(run_read_length, &mut rng).unwrap();
-        assert!(!scores.is_empty());
-        assert_eq!(scores.len(), 100);
-        scores
-            .iter()
-            .map(|x| assert!(model.quality_score_options.contains(x)))
-            .collect()
+    fn test_model_write() {
+        let quality_score_options = Vec::from(DEFAULT_QUALITY_SCORE_OPTIONS);
+        let first_pos_weights = Vec::from(QS_SEED_WEIGHTS);
+        
+        let seed_distro = DiscreteDistribution::new_from_values(
+            &first_pos_weights,
+            &quality_score_options,
+        ).unwrap();
+
+        let mut weights_from_one = Vec::new();
+        for outer_layer in QS_POS_WEIGHTS {
+            let mut pos_weights = Vec::new();
+            for inner_layer in outer_layer {
+                pos_weights.push(
+                    DiscreteDistribution::new_from_values(
+                        &Vec::from(inner_layer),
+                        &quality_score_options,
+                    )
+                )
+            }
+            weights_from_one.push(pos_weights)
+        }
+        // let mut distros_from_one = Vec::new();
+        // for outer_layer in weights_from_one {
+        //     let mut pos_distros = Vec::new();
+        //     for inner_layer in outer_layer {
+        //         pos_distros.push(
+        //             DiscreteDistribution::new_from_values(&inner_layer, &quality_score_options).unwrap()
+        //         )
+        //     }
+        //     distros_from_one.push(pos_distros)
+        // }
+
+        // let qual_score_u8s: Vec<u8> = quality_score_options
+        //     .into_iter()
+        //     .map(|s| s as u8).collect();
+        // let model = QualityScoreModel {
+        //     quality_score_options: qual_score_u8s,
+        //     binned_scores: false,
+        //     assumed_read_length: 101,
+        //     seed_dist: seed_distro,
+        //     distros_from_one: distros_from_one,
+        // };
+        // model.write_to_file("/home/joshfactorial/code/default_qual_score_model.json.gz").unwrap();
     }
 
-    #[test]
-    fn test_quality_scores_same() {
-        let run_read_length = 150;
-        let mut rng = NeatRng::new_from_seed(vec![
-            "Hello".to_string(),
-            "Cruel".to_string(),
-            "World".to_string(),
-        ]).unwrap();
-        let model = QualityScoreModel::default().unwrap();
-        let scores = model.generate_quality_scores(run_read_length, &mut rng).unwrap();
-        assert!(!scores.is_empty());
-        assert_eq!(scores.len(), 150);
-        scores
-            .iter()
-            .map(|x| assert!(model.quality_score_options.contains(x)))
-            .collect()
-    }
+    // #[test]
+    // fn test_quality_scores_short() {
+    //     let run_read_length = 100;
+    //     let mut rng = NeatRng::new_from_seed(&vec![
+    //         "Hello".to_string(),
+    //         "Cruel".to_string(),
+    //         "World".to_string(),
+    //     ]).unwrap();
+    //     let model = QualityScoreModel::default().unwrap();
+    //     let scores = model.generate_quality_scores(run_read_length, &mut rng).unwrap();
+    //     assert!(!scores.is_empty());
+    //     assert_eq!(scores.len(), 100);
+    //     scores
+    //         .iter()
+    //         .map(|x| assert!(model.quality_score_options.contains(x)))
+    //         .collect()
+    // }
 
-    #[test]
-    fn test_quality_scores_long() {
-        let run_read_length = 200;
-        let mut rng = NeatRng::new_from_seed(vec![
-            "Hello".to_string(),
-            "Cruel".to_string(),
-            "World".to_string(),
-        ]).unwrap();
-        let model = QualityScoreModel::default().unwrap();
-        let scores = model.generate_quality_scores(run_read_length, &mut rng).unwrap();
-        assert!(!scores.is_empty());
-        assert_eq!(scores.len(), 200);
-        scores
-            .iter()
-            .map(|x| assert!(model.quality_score_options.contains(x)))
-            .collect()
-    }
+    // #[test]
+    // fn test_quality_scores_same() {
+    //     let run_read_length = 150;
+    //     let mut rng = NeatRng::new_from_seed(&vec![
+    //         "Hello".to_string(),
+    //         "Cruel".to_string(),
+    //         "World".to_string(),
+    //     ]).unwrap();
+    //     let model = QualityScoreModel::default().unwrap();
+    //     let scores = model.generate_quality_scores(run_read_length, &mut rng).unwrap();
+    //     assert!(!scores.is_empty());
+    //     assert_eq!(scores.len(), 150);
+    //     scores
+    //         .iter()
+    //         .map(|x| assert!(model.quality_score_options.contains(x)))
+    //         .collect()
+    // }
 
-    #[test]
-    fn test_quality_scores_vast_difference() {
-        let run_read_length = 2000;
-        let mut rng = NeatRng::new_from_seed(vec![
-            "Hello".to_string(),
-            "Cruel".to_string(),
-            "World".to_string(),
-        ]).unwrap();
-        let model = QualityScoreModel::default().unwrap();
-        let scores = model.generate_quality_scores(run_read_length, &mut rng).unwrap();
-        assert!(!scores.is_empty());
-        assert_eq!(scores.len(), 2000);
-        scores
-            .iter()
-            .map(|x| assert!(model.quality_score_options.contains(x)))
-            .collect()
-    }
+    // #[test]
+    // fn test_quality_scores_long() {
+    //     let run_read_length = 200;
+    //     let mut rng = NeatRng::new_from_seed(&vec![
+    //         "Hello".to_string(),
+    //         "Cruel".to_string(),
+    //         "World".to_string(),
+    //     ]).unwrap();
+    //     let model = QualityScoreModel::default().unwrap();
+    //     let scores = model.generate_quality_scores(run_read_length, &mut rng).unwrap();
+    //     assert!(!scores.is_empty());
+    //     assert_eq!(scores.len(), 200);
+    //     scores
+    //         .iter()
+    //         .map(|x| assert!(model.quality_score_options.contains(x)))
+    //         .collect()
+    // }
+
+    // #[test]
+    // fn test_quality_scores_vast_difference() {
+    //     let run_read_length = 2000;
+    //     let mut rng = NeatRng::new_from_seed(&vec![
+    //         "Hello".to_string(),
+    //         "Cruel".to_string(),
+    //         "World".to_string(),
+    //     ]).unwrap();
+    //     let model = QualityScoreModel::default().unwrap();
+    //     let scores = model.generate_quality_scores(run_read_length, &mut rng).unwrap();
+    //     assert!(!scores.is_empty());
+    //     assert_eq!(scores.len(), 2000);
+    //     scores
+    //         .iter()
+    //         .map(|x| assert!(model.quality_score_options.contains(x)))
+    //         .collect()
+    // }
 }

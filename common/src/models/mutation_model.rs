@@ -144,7 +144,7 @@ impl MutationModel {
         let variant_dist = DiscreteDistribution::new_index_only(
             &Vec::from(variant_weights)
         )?;
-        let statistical_models = StatisticalModels::new()?;
+        let statistical_models = StatisticalModels::default()?;
 
         Ok(MutationModel {
             mutation_rate,
@@ -160,7 +160,7 @@ impl MutationModel {
         variant_weights: Vec<f64>,
     ) -> Result<Self, MutationModelError> {
         let variant_dist = DiscreteDistribution::new_index_only(&Vec::from(variant_weights))?;
-        let statistical_models = StatisticalModels::new()?;
+        let statistical_models = StatisticalModels::default()?;
 
         Ok(MutationModel {
             mutation_rate,
@@ -175,7 +175,7 @@ impl MutationModel {
         Ok(data)
     }
 
-    pub fn write_file(&self, filename: &str) -> Result<(), MutationModelError> {
+    pub fn write_to_file(&self, filename: &str) -> Result<(), MutationModelError> {
         let data = serde_json::to_string(self).unwrap();
         model_writer(data, filename)?;
         Ok(())
@@ -281,12 +281,13 @@ struct StatisticalModels {
 }
 
 impl StatisticalModels {
-    pub fn new() -> Result<Self, MutationModelError> {
+    pub fn default() -> Result<Self, MutationModelError> {
         // use the default transition matrix, snp model and indel model
         let transition_matrix = TransitionMatrix::default()?;
         let snp_model = SnpTrinucModel::default()?;
         let indel_model = IndelModel::default()?;
-        let quality_score_model = QualityScoreModel::default()?;
+        // todo update this line:
+        let quality_score_model = QualityScoreModel::from_file("test")?;
         let sequencing_error_model = SequencingErrorModel::default()?;
 
         Ok(StatisticalModels {

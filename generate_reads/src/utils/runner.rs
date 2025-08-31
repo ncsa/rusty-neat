@@ -1,6 +1,10 @@
 use crate::utils;
 use crate::data;
 use common;
+use common::models::fragment_length::DiscreteFragmentLengthModel;
+use common::models::fragment_length::FragmentLengthModel;
+use common::models::fragment_length::NormalFragmentLengthModel;
+use common::models::quality_scores::QualityScoreModel;
 use tempfile;
 
 use std::thread;
@@ -14,7 +18,7 @@ use utils::config::RunConfiguration;
 use utils::generate_reads::generate_reads;
 use utils::read_models::{read_quality_score_model_file, read_quality_score_raw_data};
 use utils::generate_variants::generate_variants;
-use common::file_tools::{fasta_tools::read_fasta, fastq_tools::write_fastq};
+use common::file_tools::fasta_tools::read_fasta;
 use common::structs::variants::Variant;
 use common::structs::fasta_map::FastaMap;
 use common::models::mutation_model::MutationModel;
@@ -37,30 +41,89 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: NeatRng) -> Result<(), RunN
     let working_dir = tempfile::tempdir().unwrap();
     
     // Load models that will be used for the runs.
-    // For now, we will use the one supplied, pulled directly from NEAT2.0's original model.
-    let input_quality_score_model = false;
-    let input_quality_model = String::new();
 
+    // Quality score model
     let quality_score_model = {
-        if input_quality_score_model {
-            read_quality_score_model_file(
-                &input_quality_model
-            )
-        } else {
-            read_quality_score_raw_data(
-                RawQualityScoreData::new()
-            )
+        match config.quality_score_data {
+            Some(filename) => {
+                 QualityScoreModel::from_file(&filename,)
+                    .expect(
+                        "Error reading quality score model!"
+                    )
+            },
+            None => {
+                QualityScoreModel::default().expect(
+                    "Error creating default quality score model!"
+                )
+            }
         }
     };
 
-    // Todo load all models and set up the run.
     // load mutation model
-    let mutation_model = MutationModel::default();
+    let mutation_model = {
+        match config.mutation_model_data {
+            Some(filename) => {
+                MutationModel::from_file(&filename)
+                    .expect(
+                        "Error creating mutation model from data"
+                    )
+            },
+            None => {
+                MutationModel::default()
+                    .expect(
+                        "Error creating default quality score model!"
+                    )
+            }
+        }
+    };
+
+    // Fragment Length Model
+    let fragment_length_model: FragmentLengthModel = {
+        match config.fragment_model_data {
+            Some(filename) => {
+                FragmentLengthModel::Discrete(
+                    DiscreteFragmentLengthModel::discrete_from_file(&filename)
+                        .expect("Error loading discrete fragment model")
+                )
+            },
+            None => {
+                match config.fragment_mean {
+                    Some(mean) => {
+                        FragmentLengthModel::Normal(
+                            NormalFragmentLengthModel::new_from_mean(
+                                mean,
+                                // Config should already have caught issues with missing data
+                                config.fragment_st_dev.unwrap()
+                            ).expect (
+                                "Error creating Normal fragment length model from mean/st dev"
+                            )
+                        )   
+                    },
+                    None => {
+                        FragmentLengthModel::Normal(
+                            NormalFragmentLengthModel::default().expect(
+                                "Error creating default Normal fragment length model"
+                            )
+                        )
+                    },
+                }
+            }
+        }
+    };
+
+    // Load Indel model
+    let indel_model = {
+        match config
+    }
 
     // The FastaMap struct consists of a vector of Contig objects, each describing a
     // block of Sequence, broken up into chunks in the SequenceBlock objects. It also
     // holds a name_map hashmap that links tho contig name from the Fasta with the shortname
-    let fasta_map = read_fasta(&config.reference, &config., ).unwrap();
+    let fasta_map = read_fasta(
+        &config.reference,
+        config.read_len,
+        &working_dir,
+    ).unwrap();
 
     // Mutating the reference and recording the variant locations.
     info!("Generating simulated dataset");

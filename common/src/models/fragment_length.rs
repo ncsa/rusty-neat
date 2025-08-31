@@ -19,7 +19,7 @@ pub enum FragmentModelError {
     #[error("Fragment model returned an IO error: {0}")]
     IoError(io::Error),
     #[error("Fragment Model attempted to load a file that it could not find: {0}")]
-    FileNotFound(&'static str),
+    FileNotFound(String),
     #[error("Fragment model reported a distribution initiation error: {0}")]
     DistributionInitError(DistributionErrors)
 }
@@ -42,6 +42,12 @@ impl From<io::Error> for FragmentModelError {
     }
 }
 
+#[derive(Debug)]
+pub enum FragmentLengthModel {
+    Discrete(DiscreteFragmentLengthModel),
+    Normal(NormalFragmentLengthModel),
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DiscreteFragmentLengthModel {
     // The mean length of a fragment for this simulation
@@ -61,7 +67,7 @@ impl DiscreteFragmentLengthModel {
         })
     }
 
-    pub fn discrete_from_file(filename: &'static str) -> Result<Self, FragmentModelError> {
+    pub fn discrete_from_file(filename: &str) -> Result<Self, FragmentModelError> {
         // The baseline model is really just a mathematical equation and can be reconstructed by the two input parameters
         // But reading from data, it may be better to use the discrete distribution to maintain outliers. This will load such
         // a model from a json file. The file must be of the format:
@@ -70,9 +76,9 @@ impl DiscreteFragmentLengthModel {
         //   "fragment_weights": [ ... ]
         // }
         // Where fragment lengths are of type usize and fragment weights are of (or can be cast as) type f64.
-        let path = Path::new(filename);
+        let path = Path::new(&filename);
         match path.exists() {
-            false => return Err(FragmentModelError::FileNotFound(filename)),
+            false => return Err(FragmentModelError::FileNotFound(filename.to_string())),
             _ => {},
         }
 

@@ -57,6 +57,10 @@ pub struct RunConfiguration {
     pub minimum_mutations: usize,
     pub output_dir: PathBuf,
     pub output_prefix: String,
+    // model input
+    pub quality_score_data: Option<String>,
+    pub mutation_model_data: Option<String>,
+    pub fragment_model_data: Option<String>
 }
 
 impl RunConfiguration {

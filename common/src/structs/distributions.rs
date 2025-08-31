@@ -172,7 +172,7 @@ mod test {
     fn test_discrete_distribution() {
         let weights: Vec<f64> = vec![1.1, 2.0, 1.0, 8.0, 0.2, 2.0];
         let d = DiscreteDistribution::new_index_only(&weights).unwrap();
-        let mut rng = NeatRng::new_from_seed(vec![
+        let mut rng = NeatRng::new_from_seed(&vec![
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),
@@ -196,7 +196,7 @@ mod test {
         let weights: Vec<f64> = vec![1.1, 2.0, 1.0, 8.0, 0.2, 2.0];
         let values: Vec<usize> = vec![2, 3, 7, 8, 9, 11];
         let d = DiscreteDistribution::new_from_values(&weights, &values).unwrap();
-        let mut rng = NeatRng::new_from_seed(vec![
+        let mut rng = NeatRng::new_from_seed(&vec![
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),

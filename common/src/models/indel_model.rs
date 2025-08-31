@@ -116,7 +116,7 @@ mod tests {
 
     #[test]
     fn test_indel_model() {
-        let mut rng = NeatRng::new_from_seed(vec![
+        let mut rng = NeatRng::new_from_seed(&vec![
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),
@@ -138,7 +138,7 @@ mod tests {
 
     #[test]
     fn test_generate_insertion () {
-        let mut rng = NeatRng::new_from_seed(vec![
+        let mut rng = NeatRng::new_from_seed(&vec![
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),

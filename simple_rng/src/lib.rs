@@ -40,7 +40,7 @@ pub struct NeatRng {
 
 
 impl NeatRng {
-    pub fn new_from_seed(seed_list: Vec<String>) -> Result<NeatRng, NeatRngError> {
+    pub fn new_from_seed(seed_list: &Vec<String>) -> Result<NeatRng, NeatRngError> {
         // The seed list is assumed to be a vector of strings. We'll have
         // to figure out a clever way to construct seed strings from random seeds
         // For the default string, we present the abstract of the initial paper up to the first
@@ -145,7 +145,7 @@ mod tests {
 
     #[test]
     fn test_gen_bool() {
-        let mut rng = NeatRng::new_from_seed(vec![
+        let mut rng = NeatRng::new_from_seed(&vec![
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),
@@ -159,7 +159,7 @@ mod tests {
 
     #[test]
     fn test_random() {
-        let mut rng = NeatRng::new_from_seed(vec![
+        let mut rng = NeatRng::new_from_seed(&vec![
             "hello".to_string(),
             "cruel".to_string(),
             "world".to_string(),
@@ -175,7 +175,7 @@ mod tests {
     #[test]
     fn test_shuffle_in_place() {
         let mut my_vec = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
-        let mut rng = NeatRng::new_from_seed(vec![
+        let mut rng = NeatRng::new_from_seed(&vec![
             "hello".to_string(),
             "cruel".to_string(),
             "world".to_string(),
@@ -190,7 +190,7 @@ mod tests {
     fn test_range() {
         let min = 0;
         let max = 10;
-        let mut rng = NeatRng::new_from_seed(vec![
+        let mut rng = NeatRng::new_from_seed(&vec![
             "hello".to_string(),
             "cruel".to_string(),
             "world".to_string(),
@@ -204,7 +204,7 @@ mod tests {
 
     #[test]
     fn test_rand_int() {
-        let mut rng = NeatRng::new_from_seed(vec![
+        let mut rng = NeatRng::new_from_seed(&vec![
             "hello".to_string(),
             "cruel".to_string(),
             "world".to_string(),

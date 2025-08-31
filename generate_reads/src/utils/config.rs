@@ -2,10 +2,11 @@
 // various side functions. It is build with a ConfigurationBuilder, which can take either a
 // config yaml file or command line arguments and turn them into the configuration.
 use crate::utils;
+use chrono::Utc;
 use common;
 
 use log::{info, warn};
-use serde_yaml::Value;
+use serde_yml::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::string::String;
@@ -97,8 +98,8 @@ impl RunConfiguration {
             ),
         };
         // Uses serde_yaml to read the file into a HashMap
-        let scrape_config: HashMap<String, Value> =
-            serde_yaml::from_reader(file).expect("Could not read values");
+        let scrape_config: HashMap<String, Value> = serde_yml::from_reader(file)
+            .expect("Could not read values");
         // create a default and update it
         let mut configuration = RunConfiguration::default();
 
@@ -252,7 +253,7 @@ impl RunConfiguration {
         configuration
     }
 
-    pub fn check_and_print(&self) {
+    pub fn check_and_print(&mut self) {
         // This does a final check of the configuration for valid items. It will print info
         // message of the items, to work as a record and to assist in debugging any issues that
         // come up.
@@ -321,16 +322,15 @@ impl RunConfiguration {
             info!("Produce bam file: {}.bam", file_prefix)
         }
 
-        match self.rng_seed {
+        match &self.rng_seed {
             Some(seed) => {
                 // User supplied seed
                 // Convert the string to a string vec split at the white space.
                 // Seeds can be any whitespace-separated series of strings.
-                for seed_term in raw_string.split_whitespace() {
-                    seed_vec.push(seed_term.to_string());
+                for seed_term in seed.split_whitespace() {
+                    self.seed_vec.push(seed_term.to_string());
                 }
-                info!("Seed string to regenerate these exact results: {}", &raw_string);
-                self.seed_vec = seed_vec 
+                info!("Seed string to regenerate these exact results: {}", &seed);
             },
 
             None => {
@@ -340,10 +340,9 @@ impl RunConfiguration {
                 // seeds are case-sensitive
                 let raw_string = Utc::now().format("%Y %m %d %H %M %S %f").to_string();
                 for item in raw_string.split_whitespace() {
-                    seed_vec.push(item.to_string());
+                    self.seed_vec.push(item.to_string());
                 }
                 info!("Seed string to regenerate these exact results: {}", &raw_string);
-                self.seed_vec = seed_vec
             },
         }
     }
@@ -461,7 +460,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn test_bad_config_builder() {
-        let config = RunConfiguration::default();
+        let mut config = RunConfiguration::default();
         config.check_and_print();
     }
 

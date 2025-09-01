@@ -18,7 +18,10 @@ num-traits=">=0.2"
 chrono = "0.4.38"
 bincode = "2.0.0-rc.3"
 walkdir = "2"
-gzp = "1.0.1"
+flate2 = { version = "1.1.2", features = ['zlib-ng'], default-features = false }
 thiserror = "2.0.16"
 statrs = "0.18.0"
 vectorize = "0.2.0"
+
+[dev-dependencies]
+memmap = "0.7.0"

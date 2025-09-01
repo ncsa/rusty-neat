@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use simple_rng::{NeatRng, NeatRngError};
 use log::error;
-use crate::models::lib::{model_reader, model_writer};
+use crate::models::lib::{model_gzp_reader, model_writer};
 use crate::structs::transition_matrix::{TransitionMatrix, TransitionMatrixError};
 use crate::structs::variants::{Variant, VariantError, VariantType};
 use crate::structs::distributions::{DiscreteDistribution, DistributionErrors};
@@ -171,7 +171,7 @@ impl MutationModel {
     }
 
     pub fn from_file(filename: &str) -> Result<Self, MutationModelError> {
-        let data: MutationModel = model_reader(filename).unwrap();
+        let data: MutationModel = model_gzp_reader(filename).unwrap();
         Ok(data)
     }
 

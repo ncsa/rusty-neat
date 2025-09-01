@@ -9,11 +9,11 @@ use std::fs::File;
 use std::path::Path;
 use std::iter::Extend;
 use simple_rng::{NeatRng, NeatRngError};
-use gzp::{bgzf, BgzfSyncWriter, Compression};
+use flate2::Compression;
+use flate2::write::ZlibEncoder;
 use tempfile::TempDir;
 use thiserror::Error;
 
-use crate::file_tools::fasta_tools::BUFSIZE;
 use crate::structs::fasta_map::{FastaMapError, SequenceBlock};
 use crate::models::quality_scores::QualityScoreModel;
 use crate::structs::nucleotides::{complement, decode_base};
@@ -152,13 +152,12 @@ pub fn write_block_fastq_bgz(
     // load block into memory. Should only be 128kb long or so of sequence plus some strings. Easy peasy.
     let sequence_block = SequenceBlock::from(block_filename)?;
     // setting the buffer to 2*BUFSIZE which is approximately 0.5MB. idk, man.
-    let mut buffer_r1  = bgzf::BgzfSyncWriter::with_capacity(
-        outfile1, Compression::best(), 2*BUFSIZE
+    let mut buffer_r1  = ZlibEncoder::new(
+        outfile1, Compression::default()
     );
-    let mut buffer_r2 = bgzf::BgzfSyncWriter::with_capacity(
-        outfile2, Compression::best(), 2*BUFSIZE
+    let mut buffer_r2 = ZlibEncoder::new(
+        outfile2, Compression::default()
     );
-    
     // Get the maximum number of deletions: We assume that all deletions
     // are included, the read is paired ended, and reads overlap.
     let mut max_num_deletions = 0;
@@ -236,20 +235,12 @@ pub fn write_block_fastq_bgz(
     Ok(())
 }
 
-fn quality_scores_to_char_vec(array: Vec<u8>) -> Result<Vec<u8>, BlockFastQError> {
+fn quality_scores_to_char_vec(array: Vec<usize>) -> Result<Vec<u8>, BlockFastQError> {
     let mut score_vec = Vec::new();
     for score in array {
-        // Technically, this is unsafe, as score + 33 could go overflow u8 if it was = 254, for example
-        // However, quality scores are limited to a max of 50, so an overflow in this case would be an input error
-        // So we handle the input error as such
-        if u8::MAX - 33 <= score {
-            // We are assured we will no overflow this variable
-            score_vec.push(
-                (score + 33) as u8
-            )
-        } else {
-            return Err(BlockFastQError::FastqWriteError(format!("Invalid quality score passed to fastq tools: {}", score)))
-        }
+        score_vec.push(
+            (score + 33) as u8
+        )
     }
     Ok(score_vec)
 }
@@ -264,7 +255,7 @@ fn apply_variants_to_sequence (
     write_padding: usize,
     read_name_prefix: &str,
     read_num: usize,
-    buffer: &mut BgzfSyncWriter<File>,
+    buffer: &mut ZlibEncoder<File>,
     quality_score_model: &QualityScoreModel,
     sequencing_error_model: &SequencingErrorModel,
 ) -> Result<(), BlockFastQError> {

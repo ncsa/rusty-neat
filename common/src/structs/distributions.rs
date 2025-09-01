@@ -50,13 +50,19 @@ impl DiscreteDistribution {
     pub fn new_from_values(w_vec: &Vec<f64>, l_vec: &Vec<usize>) -> Result<Self, DistributionErrors> {
         let cumulative_probability = {
             let sum_weights: f64 = w_vec.iter().sum();
-            let mut normalized_weights = Vec::with_capacity(w_vec.len());
-            // we no longer need the w_vec_64 after this, so we consume it
-            for weight in w_vec{
-                normalized_weights.push(weight / sum_weights);
+            if sum_weights > 0.0 {
+                let mut normalized_weights = Vec::with_capacity(w_vec.len());
+                // we no longer need the w_vec_64 after this, so we consume it
+                for weight in w_vec{
+                    normalized_weights.push(weight / sum_weights);
+                }
+                cumulative_sum(&mut normalized_weights).unwrap()
+            } else {
+                // Edge case. Really, this shouldn't be allowed in the data. We'll fix it when 
+                // we rebuild the models.
+                vec![0.0_f64; w_vec.len()]
             }
-            cumulative_sum(&mut normalized_weights)
-        }?;
+        };
 
         Ok(DiscreteDistribution {
             values: Some(l_vec.clone()),
@@ -167,6 +173,15 @@ impl NormalDistribution {
 mod test {
     use simple_rng::NeatRng;
     use super::*;
+
+    #[test]
+    fn new_from_values() {
+        let l_vec = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+        let w_vec = vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        assert_eq!(l_vec.len(), w_vec.len());
+        let distribution = DiscreteDistribution::new_from_values(&w_vec, &l_vec);
+
+    }
 
     #[test]
     fn test_discrete_distribution() {

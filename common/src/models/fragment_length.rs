@@ -10,7 +10,7 @@ use std::path::Path;
 use serde_json;
 use serde::{Deserialize, Serialize};
 use crate::structs::distributions::{DiscreteDistribution, DistributionErrors, NormalDistribution};
-use crate::models::lib::{model_reader, model_writer};
+use crate::models::lib::{model_gzp_reader, model_writer};
 
 #[derive(Error, Debug)]
 pub enum FragmentModelError {
@@ -82,7 +82,7 @@ impl DiscreteFragmentLengthModel {
             _ => {},
         }
 
-        let data: DiscreteFragmentLengthModel = model_reader(&filename).unwrap();
+        let data: DiscreteFragmentLengthModel = model_gzp_reader(&filename).unwrap();
 
         Ok(data)
     }

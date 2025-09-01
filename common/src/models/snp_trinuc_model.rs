@@ -12,7 +12,7 @@ use thiserror::Error;
 use std::collections::HashMap;
 use std::slice::Iter;
 use simple_rng::NeatRngError;
-use crate::models::lib::{model_reader, model_writer};
+use crate::models::lib::{model_gzp_reader, model_writer};
 use crate::structs::transition_matrix::{TransitionMatrix, TransitionMatrixError};
 use crate::structs::distributions::{DiscreteDistribution, DistributionErrors};
 
@@ -126,16 +126,14 @@ impl SnpTrinucModel {
         // Uses the serde_json crate to write out the json form of the model. This will help us
         // create base datasets from old neat data, and give us a way to write out models that are
         // generated from user data.
-        let data = serde_json::to_string(self).unwrap();
-        model_writer(data, filename)?;
-        Ok(())
+        Ok(model_writer(self, filename).unwrap())
     }
 
     #[allow(unused)]
     /// we will write utilities to use this, eventually
     fn read_in_quality_model(&self, filename: &str) -> Result<Self, SnpTrinucError> {
         // Uses the serde_json crate to read a quality model from file
-        let data: SnpTrinucModel = model_reader(filename).unwrap();
+        let data: SnpTrinucModel = model_gzp_reader(filename).unwrap();
         Ok(data)
     }
 

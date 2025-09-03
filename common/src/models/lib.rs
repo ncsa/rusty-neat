@@ -31,15 +31,3 @@ where
     let value: T = serde_json::from_reader(reader).unwrap();
     Ok(value)
 }
-
-#[allow(unused)]
-pub fn model_json_reader<T>(filename: &str) -> Result<T, std::io::Error>
-where
-    T: for<'de> Deserialize<'de>,
-{
-    let file_in = File::open(filename)
-        .expect(&format!("Error opening file {}", &filename));
-    let reader = GzDecoder::new(file_in);
-    let data: T = serde_json::from_reader(reader)?;
-    Ok(data)
-}

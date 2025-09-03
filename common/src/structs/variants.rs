@@ -1,6 +1,7 @@
 //! These enums and structs help us keep track of variants added to the reference
 //! It stores all the necessary data to write a variant out.
 use thiserror::Error;
+use crate::structs::nucleotides::Nucleotide;
 
 #[derive(Error, Debug)]
 pub enum VariantError {
@@ -27,6 +28,17 @@ pub enum VariantType {
     Deletion,
 }
 
+impl From<usize> for VariantType {
+    fn from(i: usize) -> Self {
+        match i {
+            0 => Self::SNP,
+            1 => Self::Insertion,
+            2 => Self::Deletion,
+            _ => panic!("Index out of range!")
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Clone, Hash)]
 pub struct Variant {
     // This is a basic holder for a variant. There are several aspects of the variant that we
@@ -40,9 +52,9 @@ pub struct Variant {
     // the location, in reference coordinates, of the start of this variant
     pub location: usize,
     // The reference allele of interest. This is either one base or several bases for a deletion.
-    pub reference: Vec<u8>,
+    pub reference: Vec<Nucleotide>,
     // The alternate allele of interest. This is either one base or several bases for an insertion.
-    pub alternate: Vec<u8>,
+    pub alternate: Vec<Nucleotide>,
     // the genotype string is for writing in the vcf. 
     pub genotype_str: String,
     // The genotype is either heterozygous (not on all alleles) or homozygous (on all alleles)
@@ -53,9 +65,9 @@ impl Variant {
     pub fn new(
         variant_type: VariantType,
         location: usize,
-        reference: &Vec<u8>,
-        alternate: &Vec<u8>,
-        genotype: &mut Vec<u8>,
+        reference: &Vec<Nucleotide>,
+        alternate: &Vec<Nucleotide>,
+        genotype: &mut Vec<usize>,
     ) -> Result<Self, VariantError> {
         // This will generate a variant, storing the reference, alternate, start point relative to the contig, and a genotype
         // but first a quick sanity check
@@ -101,7 +113,7 @@ impl Variant {
     }
 }
 
-fn genotype_to_string(genotype: &mut Vec<u8>) -> String {
+fn genotype_to_string(genotype: &mut Vec<usize>) -> String {
     // Converts a vector of 0s and 1s representing genotype to a standard
     // vcf genotype string.
     //
@@ -125,13 +137,13 @@ mod tests {
             // Not actually a valid variant, but just testing the constructor
             variant_type: SNP,
             location: 222,
-            reference: vec![0, 1, 3, 2],
-            alternate: vec![0],
+            reference: vec![Nucleotide::A, Nucleotide::C, Nucleotide::T, Nucleotide::G],
+            alternate: vec![Nucleotide::A],
             genotype_str: "1/1/1".to_string(),
             genotype: Genotypes::Homozygous,
         };
         assert_eq!(variant.variant_type, SNP);
-        assert_eq!(variant.reference, vec![0, 1, 3, 2]);
+        assert_eq!(variant.reference, vec![Nucleotide::A, Nucleotide::C, Nucleotide::T, Nucleotide::G]);
         assert_eq!(variant.genotype, Genotypes::Homozygous);
     }
 
@@ -140,8 +152,8 @@ mod tests {
         let variant = Variant::new(
             Insertion,
             10,
-            &vec![0],
-            &vec![0, 1, 3, 2],
+            &vec![Nucleotide::A],
+            &vec![Nucleotide::A, Nucleotide::C, Nucleotide::T, Nucleotide::G],
             &mut vec![0, 1],
         ).unwrap();
         assert_eq!(variant.genotype, Genotypes::Heterozygous)
@@ -152,11 +164,11 @@ mod tests {
         let variant = Variant::new(
             Deletion,
             22,
-            &vec![0, 1, 3, 2],
-            &vec![0],
+            &vec![Nucleotide::A, Nucleotide::C, Nucleotide::T, Nucleotide::G],
+            &vec![Nucleotide::A],
             &mut vec![1, 1],
         ).unwrap();
-        assert_eq!(variant.genotype, Genotypes::Heterozygous)
+        assert_eq!(variant.genotype, Genotypes::Homozygous)
     }
 
     #[test]
@@ -166,8 +178,8 @@ mod tests {
             // with new it should catch this error
             SNP,
             22,
-            &vec![0, 1, 3, 2],
-            &vec![0],
+            &vec![Nucleotide::A, Nucleotide::C, Nucleotide::T, Nucleotide::G],
+            &vec![Nucleotide::A],
             &mut vec![1, 1, 1],
         ).unwrap();
     }

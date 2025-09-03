@@ -1,5 +1,12 @@
-use crate::structs::distributions::{DiscreteDistribution, DistributionErrors};
+//! The transition matrix extends the notion of a distribution. Specifically, it denotes a transition
+//! probability from one base to another. The trinucleotide SNP model requires 4 layers of these transition
+//! matrices. Indexing is now implemented for the Tranisition matrix, which should make the code more straightforward.
+use crate::structs::{
+    distributions::{DiscreteDistribution, DistributionErrors}, 
+    nucleotides::{Nucleotide, ALLOWED_USIZE}
+};
 use thiserror::Error;
+use std::ops::Index;
 use serde::{Serialize, Deserialize};
 
 #[derive(Debug, Error)]
@@ -22,23 +29,59 @@ pub struct TransitionMatrix {
     // in the standard nucleotide order (in the same a, c, g, t order). This structure is
     // fundamental to the others and to the mutation model in general.
     //
-    // The model is a 4x4 matrix with zeros along the diagonal because, e.g., A can't "mutate" to A.
-    // The model is usually symmetric, but technically, the probability for A -> G could be
-    // different from the probability for G -> A, but in practice, this seems to not be the case.
-    pub(crate) a_dist: DiscreteDistribution,
-    pub(crate) c_dist: DiscreteDistribution,
-    pub(crate) g_dist: DiscreteDistribution,
-    pub(crate) t_dist: DiscreteDistribution,
+    // This defines a transition from one Nucleotide to another.
+    a: DiscreteDistribution,
+    c: DiscreteDistribution,
+    g: DiscreteDistribution,
+    t: DiscreteDistribution,
+}
+
+impl Index<usize> for TransitionMatrix {
+    type Output = DiscreteDistribution;
+    fn index(&self, i: usize) -> &DiscreteDistribution {
+        match i {
+            0 => &self.a,
+            1 => &self.c,
+            2 => &self.g,
+            3 => &self.t,
+            _ => panic!("index out of range: {} with length 4", i)
+        }
+    }
+}
+
+impl Index<&Nucleotide> for TransitionMatrix {
+    type Output = DiscreteDistribution;
+    fn index(&self, n: &Nucleotide) -> &DiscreteDistribution {
+        match n {
+            Nucleotide::A => &self.a,
+            Nucleotide::C => &self.c,
+            Nucleotide::G => &self.g,
+            Nucleotide::T => &self.t,
+            _ => panic!("Nucleotide not found: {:?}", n)
+        }
+    }
 }
 
 impl TransitionMatrix where {
     pub fn default() -> Result<Self, TransitionMatrixError> {
         // Default transition matrix for mutations from the original NEAT 2.0
         Ok(Self {
-            a_dist: DiscreteDistribution::new_index_only(&vec![0.0, 15.0, 70.0, 15.0])?,
-            c_dist: DiscreteDistribution::new_index_only(&vec![15.0, 0.0, 15.0, 70.0])?,
-            g_dist: DiscreteDistribution::new_index_only(&vec![70.0, 15.0, 0.0, 15.0])?,
-            t_dist: DiscreteDistribution::new_index_only(&vec![15.0, 70.0, 15.0, 0.0])?,
+            a: DiscreteDistribution::new(
+                &vec![0.0, 0.16952785544157142, 0.6878218371885525,  0.1426503073698761],
+                &Vec::from(ALLOWED_USIZE),
+            )?,
+            c: DiscreteDistribution::new(
+                &vec![0.1615595177675533, 0.0, 0.1664600510853558, 0.6719804311470908],
+                &Vec::from(ALLOWED_USIZE),
+            )?,
+            g: DiscreteDistribution::new(
+                &vec![0.6704692217289652, 0.16706325641014994, 0.0, 0.1624675218608849],
+                &Vec::from(ALLOWED_USIZE),
+            )?,
+            t: DiscreteDistribution::new(
+                &vec![0.14281397280584493, 0.6885459433549382, 0.16864008383921686, 0.0],
+                &Vec::from(ALLOWED_USIZE),
+            )?,
         })
     }
 
@@ -57,10 +100,22 @@ impl TransitionMatrix where {
             }
         }
         Ok(Self {
-            a_dist: DiscreteDistribution::new_index_only(&a_weights)?,
-            c_dist: DiscreteDistribution::new_index_only(&c_weights)?,
-            g_dist: DiscreteDistribution::new_index_only(&g_weights)?,
-            t_dist: DiscreteDistribution::new_index_only(&t_weights)?,
+            a: DiscreteDistribution::new(
+                &a_weights,
+                &Vec::from(ALLOWED_USIZE),
+            )?,
+            c: DiscreteDistribution::new(
+                &c_weights,
+                &Vec::from(ALLOWED_USIZE),
+            )?,
+            g: DiscreteDistribution::new(
+                &g_weights,
+                &Vec::from(ALLOWED_USIZE),
+            )?,
+            t: DiscreteDistribution::new(
+                &t_weights,
+                &Vec::from(ALLOWED_USIZE),
+            )?,
         })
     }
 

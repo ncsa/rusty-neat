@@ -16,7 +16,7 @@ use thiserror::Error;
 
 use crate::structs::fasta_map::{FastaMapError, SequenceBlock};
 use crate::models::quality_scores::QualityScoreModel;
-use crate::structs::nucleotides::{complement, decode_base};
+use crate::structs::nucleotides::Nucleotide;
 use crate::file_tools::file_io::create_output_file;
 use crate::models::sequencing_error_model::{SeqModelError, SequencingErrorModel, SequencingErrorType};
 use crate::structs::variants::{Genotypes, Variant, VariantType};
@@ -63,12 +63,12 @@ impl From<SeqModelError> for BlockFastQError {
     }
 }
 
-fn reverse_complement(sequence: Vec<u8>) -> Vec<u8> {
+fn reverse_complement(sequence: Vec<Nucleotide>) -> Vec<Nucleotide> {
     // Returns the reverse complement of a vector of u8's representing a DNA sequence.
     let length = sequence.len();
     let mut rev_comp = Vec::new();
     for i in (0..length).rev() {
-        rev_comp.push(complement(sequence[i]))
+        rev_comp.push(sequence[i].complement())
     }
     rev_comp
 }
@@ -246,7 +246,7 @@ fn quality_scores_to_char_vec(array: Vec<usize>) -> Result<Vec<u8>, BlockFastQEr
 }
 
 fn apply_variants_to_sequence (
-    sequence: &mut Vec<u8>,
+    sequence: &mut Vec<Nucleotide>,
     variants: &Vec<&Variant>,
     position1: usize,
     position2: usize,
@@ -293,7 +293,7 @@ fn apply_variants_to_sequence (
 
     // Write read name
     buffer.write(
-        format!("@{} 1:{}\n", &read_name_prefix, read_num
+        format!("@{} 1:{}\n", &read_name_prefix, &read_num
     ).as_bytes())?;
 
     let mut index = 0;
@@ -323,7 +323,7 @@ fn apply_variants_to_sequence (
                 SequencingErrorType::SnpError(base) => {
                     // write out new base, keep quality scores unchanged 
                     // We're converting this from our simplified representation to standard utf-8 character encoding to write to file
-                    buffer.write(&[decode_base(base) as u8])?;
+                    buffer.write(&[base as u8])?;
                     written += 1;
                 },
                 SequencingErrorType::DeletionError(length) => {
@@ -341,13 +341,13 @@ fn apply_variants_to_sequence (
                     // so the next base is the one originally following the current base
                     let insert_len = &vec.len();
                     let mut insertion: Vec<u8> = Vec::new();
-                    insertion.push(decode_base(current_base) as u8);
+                    insertion.push(current_base as u8);
                     written += 1;
                     // We have to be careful here not to write out more bases than a read length, for insertions
                     // at the ends of the reads
                     if written >= read_length { break 'outer }
                     for base in vec {
-                        insertion.push(decode_base(base) as u8);
+                        insertion.push(base as u8);
                         written += 1;
                         // We have to be careful here not to write out more bases than a read length, 
                         // for insertions at the ends of the reads
@@ -362,7 +362,7 @@ fn apply_variants_to_sequence (
                 }
             }
         } else {
-            buffer.write(&[decode_base(current_base) as u8])?;
+            buffer.write(&[current_base as u8])?;
             written += 1;
         }
         index = index + 1;
@@ -382,7 +382,7 @@ fn apply_variants_to_sequence (
 }
 
 fn sequence_splicer (
-    sequence: &mut Vec<u8>,
+    sequence: &mut Vec<Nucleotide>,
     variant: &Variant,
 ) -> Result<(), BlockFastQError> {
     let reference_length = variant.reference.len();
@@ -397,33 +397,34 @@ fn sequence_splicer (
 mod tests {
     use super::*;
     use crate::structs::variants::{Variant, VariantType};
+    use crate::structs::nucleotides::Nucleotide::*;
 
     #[test]
     fn test_splicing_deletion() {
-        let mut sequence = vec![1, 2, 2, 2, 1, 0, 0, 2, 3, 1];
+        let mut sequence = vec![C, G, G, G, C, A, A, G, T, C];
         let variant = Variant::new(
             VariantType::Deletion,
             2,
-            &vec![2, 2, 1],
-            &vec![2],
+            &vec![G, G, C],
+            &vec![G],
             &mut vec![1,0]
         ).unwrap();
         sequence_splicer(&mut sequence, &variant).unwrap();
-        assert_eq!(sequence, vec![1, 2, 2, 0, 0, 2, 3, 1])
+        assert_eq!(sequence, vec![C, G, G, A, A, G, T, C,])
     }
 
     #[test]
     fn test_splicing_insertion() {
-        let mut sequence = vec![1, 2, 2, 2, 1, 0, 0, 2, 3, 1];
+        let mut sequence = vec![C, G, G, G, C, A, A, G, T, C];
         let variant = Variant::new(
             VariantType::Insertion,
             2,
-            &vec![2],
-            &vec![2, 3, 3],
+            &vec![G],
+            &vec![G, T, T],
             &mut vec![1,1]
         ).unwrap();
         sequence_splicer(&mut sequence, &variant).unwrap();
-        assert_eq!(sequence, vec![1, 2, 2, 3, 3, 2, 1, 0, 0, 2, 3, 1])
+        assert_eq!(sequence, vec![C, G, G, T, T, G, C, A, A, G, T, C,])
     }
 
     #[test]
@@ -439,8 +440,8 @@ mod tests {
 
     #[test]
     fn test_reverse_complement() {
-        let read: Vec<u8> = vec![0, 0, 0, 0, 1, 1, 1, 1];
-        let revcomp: Vec<u8> = vec![2, 2, 2, 2, 3, 3, 3, 3];
+        let read: Vec<Nucleotide> = vec![A, A, A, A, C, C, C, C, C];
+        let revcomp: Vec<Nucleotide> = vec![G, G, G, G, G, T, T, T, T];
         assert_eq!(reverse_complement(read), revcomp);
     }
 

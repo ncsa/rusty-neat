@@ -68,6 +68,7 @@ impl ContigVariants {
 mod tests {
     use crate::structs::contig_variants::ContigVariants;
     use crate::structs::fasta_map::{Contig, RegionType};
+    use crate::structs::nucleotides::Nucleotide;
     use crate::structs::variants::{Variant, VariantType};
 
     #[test]
@@ -81,9 +82,9 @@ mod tests {
         // create a variant
         let variant_type = VariantType::SNP;
         let location = 55;
-        let reference: Vec<u8> = vec![1];
-        let alternate: Vec<u8> = vec![3];
-        let mut genotype: Vec<u8> = vec![1,0];
+        let reference: Vec<Nucleotide> = vec![Nucleotide::G];
+        let alternate: Vec<Nucleotide> = vec![Nucleotide::T];
+        let mut genotype: Vec<usize> = vec![1,0];
         let variant = Variant::new(variant_type, location, &reference, &alternate, &mut genotype).unwrap();
         let variants_list = vec![variant];
         // Now create the contig variant

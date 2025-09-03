@@ -10,7 +10,7 @@
 use serde::{Deserialize, Serialize};
 use simple_rng::{NeatRng, NeatRngError};
 use thiserror::Error;
-use crate::structs::distributions::{DiscreteDistribution, DistributionErrors};
+use crate::structs::{distributions::{DiscreteDistribution, DistributionErrors}, nucleotides::{Nucleotide, allowed_vec}};
 
 #[derive(Debug, Error)]
 pub enum IndelModelError {
@@ -36,9 +36,7 @@ impl From<DistributionErrors> for IndelModelError {
 pub struct IndelModel {
     // Based what was in the original NEAT
     insertion_probability: f64,
-    ins_lengths: Vec<u32>,
     ins_dist: DiscreteDistribution,
-    del_lengths: Vec<u32>,
     del_dist: DiscreteDistribution,
 }
 
@@ -46,38 +44,42 @@ impl IndelModel {
     pub fn default() -> Result<Self, IndelModelError> {
         // Default Indel model from the original NEAT, scaled by the lowest value and rounded.
         let insertion_probability = 0.6;
-        let ins_lengths: Vec<u32> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
-        let ins_dist: DiscreteDistribution = DiscreteDistribution::new_index_only(
-            &vec![1.0, 1.0, 2.0, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
+        let ins_lengths: Vec<usize> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+        let ins_dist: DiscreteDistribution = DiscreteDistribution::new(
+            &vec![1.0, 1.0, 2.0, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
+            &ins_lengths,
         )?;
-        let del_lengths: Vec<u32> = vec![1, 2, 3, 4, 5];
-        let del_dist: DiscreteDistribution = DiscreteDistribution::new_index_only(
-            &vec![3.0, 2.0, 2.0, 2.0, 1.0]
+        let del_lengths: Vec<usize> = vec![1, 2, 3, 4, 5];
+        let del_dist: DiscreteDistribution = DiscreteDistribution::new(
+            &vec![3.0, 2.0, 2.0, 2.0, 1.0],
+            &del_lengths,
         )?;
 
         Ok(IndelModel {
             insertion_probability,
-            ins_lengths,
             ins_dist,
-            del_lengths,
             del_dist,
         })
     }
 
     pub fn from(
         ins_prob: f64, 
-        ins_lengths: Vec<u32>, 
+        ins_lengths: Vec<usize>, 
         ins_weights: Vec<f64>, 
-        del_lengths: Vec<u32>, 
+        del_lengths: Vec<usize>, 
         del_weights: Vec<f64>,
     ) -> Result<Self, IndelModelError> {
-        let ins_dist = DiscreteDistribution::new_index_only(&ins_weights)?;
-        let del_dist = DiscreteDistribution::new_index_only(&del_weights)?;
+        let ins_dist = DiscreteDistribution::new(
+            &ins_weights,
+            &ins_lengths
+        )?;
+        let del_dist = DiscreteDistribution::new(
+            &del_weights,
+            &del_lengths
+        )?;
         Ok(IndelModel {
             insertion_probability: ins_prob,
-            ins_lengths,
             ins_dist,
-            del_lengths,
             del_dist,
         })
     }
@@ -86,33 +88,40 @@ impl IndelModel {
         Ok(rand < self.insertion_probability)
     }
 
-    pub fn new_insert_length(&self, rand: f64) -> Result<u32, IndelModelError> {
+    pub fn new_insert_length(&self, rand: f64) -> Result<usize, IndelModelError> {
         // This function uses the insertion weights to choose an insertion length from the list.
-        Ok(self.ins_lengths[self.ins_dist.sample_index(rand)?])
+        Ok(self.ins_dist.sample(rand)?)
     }
 
-    pub fn new_delete_length(&self, rand: f64) -> Result<u32, IndelModelError> {
+    pub fn new_delete_length(&self, rand: f64) -> Result<usize, IndelModelError> {
         // This function is the same as above, but uses the deletion lengths instead.
-        Ok(self.del_lengths[self.del_dist.sample_index(rand)?])
+        Ok(self.del_dist.sample(rand)?)
     }
     
-    pub fn generate_random_insertion(&self, length: u32, rng: &mut NeatRng) -> Result<Vec<u8>, IndelModelError> {
-    // We could refine this with a nucleotide bias matrix. Maybe it would make a difference,
-    // but probably not, since the presence of the insertion is more important than it's content,
-    // for this use. If there was a call for it, maybe.
-    let mut insertion_vec = Vec::new();
-    for _ in 0..length {
-        // since our range is restricted, we are covered
-        insertion_vec.push(rng.range_i64(0, 4).unwrap() as u8)
+    pub fn generate_random_insertion(
+        &self, 
+        length: usize, 
+        rng: &mut NeatRng
+    ) -> Result<Vec<Nucleotide>, IndelModelError> {
+        // We could refine this with a nucleotide bias matrix. Maybe it would make a difference,
+        // but probably not, since the presence of the insertion is more important than it's content,
+        // for this use. If there was a call for it, maybe.
+        let mut insertion_vec = Vec::new();
+        let allowed_nucs = allowed_vec();
+        for _ in 0..length {
+            // since our range is restricted, we are covered
+            let nuc = rng.choose(&allowed_nucs).unwrap();
+            insertion_vec.push(nuc)
+        }
+        Ok(insertion_vec)
     }
-    Ok(insertion_vec)
-}
 }
 
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::structs::nucleotides::Nucleotide::*;
 
     #[test]
     fn test_indel_model() {
@@ -124,10 +133,8 @@ mod tests {
 
         let indel_model = IndelModel {
             insertion_probability: 0.75,
-            ins_lengths: vec![1, 2],
-            ins_dist: DiscreteDistribution::new_index_only(&vec![100.0, 1.0]).unwrap(),
-            del_lengths: vec![3, 4],
-            del_dist: DiscreteDistribution::new_index_only(&vec![1.0, 1000.0]).unwrap(),
+            ins_dist: DiscreteDistribution::new(&vec![100.0, 1.0], &vec![1, 2]).unwrap(),
+            del_dist: DiscreteDistribution::new(&vec![1.0, 1000.0], &vec![3, 4]).unwrap(),
         };
 
         let length = indel_model.new_insert_length(rng.random().unwrap()).unwrap();
@@ -146,20 +153,16 @@ mod tests {
 
         let indel_model = IndelModel {
             insertion_probability: 0.75,
-            ins_lengths: vec![1, 2],
-            ins_dist: DiscreteDistribution::new_index_only(&vec![100.0, 1.0]).unwrap(),
-            del_lengths: vec![3, 4],
-            del_dist: DiscreteDistribution::new_index_only(&vec![1.0, 1000.0]).unwrap(),
+            ins_dist: DiscreteDistribution::new(&vec![100.0, 1.0], &vec![1, 2]).unwrap(),
+            del_dist: DiscreteDistribution::new(&vec![1.0, 1000.0], &vec![3, 4]).unwrap(),
         };
 
         let insertion = indel_model.generate_random_insertion(10, &mut rng).unwrap();
         assert_eq!(insertion.len(), 10);
-        assert!(!insertion.contains(&4));
+        assert!(!insertion.contains(&Nucleotide::A));
 
         let insertion2 = indel_model.generate_random_insertion(12, &mut rng).unwrap();
         assert_eq!(insertion2.len(), 12);
-        assert!(!insertion2.contains(&4));
-
-        println!("{:?} and {:?}", insertion, insertion2);
+        assert_eq!(insertion2, Vec::from([G, T, T, G, G, G, T, C, T, C, T, T]));
     }
 }

@@ -1,7 +1,7 @@
 //! This library contains low level structs designed to catalog and index the fasta file. 
 //! Fasta files can be quite large and so this system is meant to speed up retreival when we
 //! go to write output files, while keeping the burden of memory usage low, by writing the actual
-//! sequences to file (encoded as u8) and retreiving them only as needed
+//! sequences to file (encoded as Nucleotide) and retreiving them only as needed
 //! We need to use the Variants struct to add variants to the contigs, making this a sort of second
 //! level struct
 use std::io;
@@ -14,6 +14,7 @@ use serde_json;
 use std::fs::{read_to_string, File};
 use std::path::Path;
 use crate::structs::variants::Variant;
+use crate::structs::nucleotides::Nucleotide;
 use log::{debug, error};
 
 #[derive(Error, Debug)]
@@ -88,12 +89,12 @@ pub struct SequenceBlock {
     //   - contig: the key name from the contig list. This is the contig which this sequence is a part of
     //   - ref_start: the start point of this sequence relative to the full contig
     //   - ref_end: the end point of this sequence relative to the full contig
-    //   - sequence: a list of u8 data that encodes the sequence according to the pattern
+    //   - sequence: a list of Nucleotide data that encodes the sequence according to the pattern
     //         in the nucleotides package
     pub contig: String,
     pub ref_start: usize,
     pub ref_end: usize,
-    pub sequence: Vec<u8>,
+    pub sequence: Vec<Nucleotide>,
 }
 
 impl SequenceBlock {
@@ -121,11 +122,11 @@ impl SequenceBlock {
         }
     }
 
-    pub fn get_seq_clone(&self) -> Result<Vec<u8>, FastaMapError> {
+    pub fn get_seq_clone(&self) -> Result<Vec<Nucleotide>, FastaMapError> {
         Ok(self.sequence.clone())
     }
 
-    pub fn get_subseq(&self, request_start: usize, request_end: usize) -> Result<Vec<u8>, FastaMapError> {
+    pub fn get_subseq(&self, request_start: usize, request_end: usize) -> Result<Vec<Nucleotide>, FastaMapError> {
 
         if request_start >= request_end {
             error!("Bad coordinates for sequence block retrieval - start: {} >= end: {}", request_start, request_end);
@@ -151,7 +152,7 @@ impl SequenceBlock {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum RegionType {
     NRegion,
     NonNRegion,
@@ -270,7 +271,9 @@ impl FastaMap {
 #[cfg(test)]
 mod tests {
     use std::fs::remove_file;
-    use crate::structs::fasta_map::RegionType::{NRegion, NonNRegion};    use super::*;
+    use crate::structs::fasta_map::RegionType::{NRegion, NonNRegion};
+    use crate::structs::nucleotides::Nucleotide::*;
+    use super::*;
 
     #[test]
     fn test_sequence_block() {
@@ -278,7 +281,7 @@ mod tests {
             contig: "chrom1".to_string(),
             ref_start: 0,
             ref_end: 20,
-            sequence: vec![0,0,0,0,0,0,0,0,0,0,0,0,4,4,4,0,0,0,4,0],
+            sequence: vec![A,A,A,A,A,A,A,A,A,A,A,A,T,T,T,A,A,A,T,A],
         };
         let filename = "chrom1_000_020.json".to_string();
         // Test write works

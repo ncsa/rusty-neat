@@ -257,6 +257,7 @@ dependencies = [
  "bincode",
  "chrono",
  "flate2",
+ "lazy_static 1.5.0",
  "log",
  "memmap",
  "num-traits",
@@ -545,6 +546,12 @@ name = "lazy_static"
 version = "0.2.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "76f033c7ad61445c5b347c7382dd1237847eb1bce590fe50365dcb33d546be73"
+
+[[package]]
+name = "lazy_static"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 
 [[package]]
 name = "libc"
@@ -1471,7 +1478,7 @@ version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da1942554bd45c0beacab23cc6b70dfdc76c308defc4a2519f38449aadeca1ed"
 dependencies = [
- "lazy_static",
+ "lazy_static 0.2.11",
  "rand 0.3.23",
 ]
 

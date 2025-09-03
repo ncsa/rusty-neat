@@ -25,29 +25,24 @@ impl From<NeatRngError> for DistributionErrors {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiscreteDistribution {
-    values: Option<Vec<usize>>,
+    values: Vec<usize>,
     weights: Vec<f64>,
 }
 
+fn cumulative_sum(a: &mut Vec<f64>) -> Result<Vec<f64>, DistributionErrors> {
+    // This calculation allows us to sample the dataset with a simple bisect,
+    // which is very fast an convenient.
+    let mut acc = 0.0;
+    let mut cumvec = Vec::with_capacity(a.len());
+    for x in a {
+        acc += *x;
+        cumvec.push(acc);
+    };
+    Ok(cumvec)
+}
+
 impl DiscreteDistribution {
-    pub fn new_index_only(w_vec: &Vec<f64>) -> Result<Self, DistributionErrors> {
-        let cumulative_probability = {
-            let sum_weights: f64 = w_vec.iter().sum();
-            let mut normalized_weights = Vec::with_capacity(w_vec.len());
-            // we no longer need the w_vec_64 after this, so we consume it
-            for weight in w_vec{
-                normalized_weights.push(weight / sum_weights);
-            }
-            cumulative_sum(&mut normalized_weights)
-        }?;
-
-        Ok(DiscreteDistribution {
-            values: None,
-            weights: cumulative_probability,
-        })
-    }
-
-    pub fn new_from_values(w_vec: &Vec<f64>, l_vec: &Vec<usize>) -> Result<Self, DistributionErrors> {
+    pub fn new(w_vec: &Vec<f64>, v_vec: &Vec<usize>) -> Result<Self, DistributionErrors> {
         let cumulative_probability = {
             let sum_weights: f64 = w_vec.iter().sum();
             if sum_weights > 0.0 {
@@ -65,17 +60,14 @@ impl DiscreteDistribution {
         };
 
         Ok(DiscreteDistribution {
-            values: Some(l_vec.clone()),
+            values: v_vec.to_owned(),
             weights: cumulative_probability,
         })
     }
 
     pub fn values(&self) -> Result<Vec<usize>, DistributionErrors> {
-        // fetches the value matrix, if it exists
-        match &self.values {
-            Some(vector) => Ok(vector.to_vec()),
-            None => return Err(DistributionErrors::VectorNotFound),
-        }
+        // fetches the value matrix
+        Ok(self.values.clone())
     }
 
     pub fn weights(&self) -> Result<Vec<f64>, DistributionErrors> {
@@ -83,25 +75,7 @@ impl DiscreteDistribution {
         Ok(self.weights.to_vec())
     }
 
-    pub fn sample_index(&self, rand: f64) -> Result<usize, DistributionErrors> {
-        // returns a random index for the distribution, based on cumulative probability
-        // This is basically an icdf for a discrete distribution
-        // We take a random number as an input to avoid copying the RNG around the program.
-        let mut lo: usize = 0;
-        let mut hi: usize = self.weights.len();
-        // bisect left
-        while lo < hi {
-            let mid = (lo + hi) / 2;
-            if rand > self.weights[mid] {
-                lo = mid + 1;
-            } else {
-                hi = mid;
-            }
-        }
-        Ok(lo)
-    }
-
-    pub fn sample_values(&self, rand: f64) -> Result<usize, DistributionErrors> {
+    pub fn sample(&self, rand: f64) -> Result<usize, DistributionErrors> {
         // returns a random value for the distribution, based on cumulative probability
         // This is basically an icdf for a discrete distribution
         // We take a random number as an input to avoid copying the RNG around the program.
@@ -116,23 +90,8 @@ impl DiscreteDistribution {
                 hi = mid;
             }
         }
-        match &self.values {
-            Some(v) => Ok(v[lo]),
-            None => Err(DistributionErrors::SamplingError(
-                "DiscreteDistribution tried to sample a value from an instance with no values. Use the sample method instead."
-            ))
-        }
+        Ok(self.values[lo].clone())
     }
-}
-
-fn cumulative_sum(a: &mut Vec<f64>) -> Result<Vec<f64>, DistributionErrors> {
-    let mut acc = 0.0;
-    let mut cumvec = Vec::with_capacity(a.len());
-    for x in a {
-        acc += *x;
-        cumvec.push(acc);
-    };
-    Ok(cumvec)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -168,7 +127,6 @@ impl NormalDistribution {
     }
 }
 
-
 #[cfg(test)]
 mod test {
     use simple_rng::NeatRng;
@@ -179,54 +137,55 @@ mod test {
         let l_vec = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
         let w_vec = vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
         assert_eq!(l_vec.len(), w_vec.len());
-        let distribution = DiscreteDistribution::new_from_values(&w_vec, &l_vec);
-
+        let distribution = DiscreteDistribution::new(&w_vec, &l_vec).unwrap();
+        todo!()
     }
 
     #[test]
     fn test_discrete_distribution() {
+        let values = vec![1, 2, 3, 4, 5, 6];
         let weights: Vec<f64> = vec![1.1, 2.0, 1.0, 8.0, 0.2, 2.0];
-        let d = DiscreteDistribution::new_index_only(&weights).unwrap();
+        let d = DiscreteDistribution::new(&weights, &values).unwrap();
         let mut rng = NeatRng::new_from_seed(&vec![
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),
         ]).unwrap();
         let rand = rng.random().unwrap();
-        let x = d.sample_index(rand).unwrap();
-        assert_eq!(x, 5);
+        let x = d.sample(rand).unwrap();
+        assert_eq!(x, 6);
         let rand = rng.random().unwrap();
-        let x = d.sample_index(rand).unwrap();
-        assert_eq!(x, 3);
+        let x = d.sample(rand).unwrap();
+        assert_eq!(x, 4);
         let rand = rng.random().unwrap();
-        let x = d.sample_index(rand).unwrap();
-        assert_eq!(x, 3);
+        let x = d.sample(rand).unwrap();
+        assert_eq!(x, 4);
         let rand = rng.random().unwrap();
-        let x = d.sample_index(rand).unwrap();
-        assert_eq!(x, 1);
+        let x = d.sample(rand).unwrap();
+        assert_eq!(x, 2);
     }
 
     #[test]
     fn test_discrete_distribution_with_values() {
         let weights: Vec<f64> = vec![1.1, 2.0, 1.0, 8.0, 0.2, 2.0];
         let values: Vec<usize> = vec![2, 3, 7, 8, 9, 11];
-        let d = DiscreteDistribution::new_from_values(&weights, &values).unwrap();
+        let d = DiscreteDistribution::new(&weights, &values).unwrap();
         let mut rng = NeatRng::new_from_seed(&vec![
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),
         ]).unwrap();
         let rand = rng.random().unwrap();
-        let x = d.sample_index(rand).unwrap();
-        assert_eq!(x, 5);
+        let x = d.sample(rand).unwrap();
+        assert_eq!(x, 11);
         let rand = rng.random().unwrap();
-        let x = d.sample_index(rand).unwrap();
+        let x = d.sample(rand).unwrap();
+        assert_eq!(x, 8);
+        let rand = rng.random().unwrap();
+        let x = d.sample(rand).unwrap();
+        assert_eq!(x, 8);
+        let rand = rng.random().unwrap();
+        let x = d.sample(rand).unwrap();
         assert_eq!(x, 3);
-        let rand = rng.random().unwrap();
-        let x = d.sample_index(rand).unwrap();
-        assert_eq!(x, 3);
-        let rand = rng.random().unwrap();
-        let x = d.sample_index(rand).unwrap();
-        assert_eq!(x, 1);
     }
 }

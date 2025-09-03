@@ -135,6 +135,7 @@ impl QualityScoreModel {
     }
 
     #[allow(dead_code)]
+    // need a test
     pub fn display(&self) -> String {
         // Some detailed formats. I thing these will be useful for quality model generation debugging.
         format!(
@@ -152,6 +153,7 @@ impl QualityScoreModel {
     }
 
     #[allow(dead_code)]
+    // need a test
     pub fn display_it_all(&self) -> String {
         format!(
             "QualityScoreModel: (rl: {})\n\
@@ -180,7 +182,7 @@ impl QualityScoreModel {
         let mut score_list: Vec<usize> = Vec::with_capacity(length);
         // sample the scores list with the seed weights applied to generate the first score.
         // Samples an index based on the weights, which then selects the quality score.
-        let seed_score = self.seed_dist.sample_values(rng.random()?)?;
+        let seed_score = self.seed_dist.sample(rng.random()?)?;
         // Adding the seed score to the list. This is safe so long as the qual score max is <= 255
         score_list.push(seed_score);
         // To map from one length to another, we use the algorithm found in the original NEAT 2.0,
@@ -208,7 +210,7 @@ impl QualityScoreModel {
             // (position 0) corresponds to the second quality score (position 1).
             // We need to figure out a better way if we're going to do discrete.
             let index = self.distros_from_one[i-1][score_position]
-                .sample_index(rng.random()?)?;
+                .sample(rng.random()?)?;
             let score = self.quality_score_options[index];
             score_list.push(score); 
             current_index += 1;
@@ -270,50 +272,17 @@ impl QualityScoreModel {
 #[cfg(test)]
 mod tests {
     use std::fs;
-
-    use crate::models::lib::model_gzp_reader;
-
     use super::*;
 
     #[test]
     fn test_model_write_read() {
-        let input_file = "/home/joshfactorial/code/rusty-neat/common/src/models/raw_neat_data/long.json.gz";
-        let output_file: &'static str = "/home/joshfactorial/code/rusty-neat/common/src/models/model_data/test_quality_score_model.json.gz";
-        let from_one_weights: Vec<Vec<Vec<f64>>> = model_gzp_reader(input_file).unwrap();
-        println!("{:?}", from_one_weights[99][41]);
-        let quality_score_options: Vec<usize> = Vec::from([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41]);
-        let seed_weights: Vec<f64> = Vec::from([0.0,0.00022073662966700302,0.0007568113017154389,0.0012613521695257316,0.0008514127144298688,0.0009460141271442987,0.0006622098890010091,0.0006937436932391524,0.0010406155398587286,0.0011667507568113018,0.0012613521695257316,0.0011352169525731585,0.0012613521695257316,0.0019235620585267407,0.0015766902119071645,0.0020812310797174573,0.0022073662966700302,0.0026488395560040363,0.0023650353178607465,0.0033110494450050453,0.0037840565085771947,0.004004793138244198,0.00498234106962664,0.004824672048435923,0.004572401614530777,0.007410443995963673,0.00700050454086781,0.007126639757820383,0.009554742684157416,0.011036831483350152,0.01292885973763875,0.013464934409687185,0.018352674066599396,0.021884460141271444,0.030808526740665993,0.04241296670030272,0.07006811301715439,0.18128784056508576,0.5171228557013118,0.0,0.0,0.0]);
-        
-        let seed_distro = DiscreteDistribution::new_from_values(
-            &seed_weights,
-            &quality_score_options,
-        ).unwrap();
-
-
-        let mut distros_from_one = Vec::new();
-        for outer_layer in from_one_weights {
-            let mut pos_distros = Vec::new();
-            for inner_layer in outer_layer {
-                pos_distros.push(
-                    DiscreteDistribution::new_from_values(&inner_layer, &quality_score_options).unwrap()
-                );
-            }
-            distros_from_one.push(pos_distros);
-        }
-
-        let model = QualityScoreModel {
-            quality_score_options: quality_score_options,
-            binned_scores: false,
-            assumed_read_length: 101,
-            seed_dist: seed_distro,
-            distros_from_one: distros_from_one,
-        };
-
-        model.write_to_file(output_file).unwrap();
-
-        // test read
-        let loaded_model = QualityScoreModel::from_file(output_file).unwrap();
-        assert_eq!(loaded_model.assumed_read_length, 101);
+        // rewrite this test to read default model, so we aren't keeping long.json around
+        let input_file = "/home/joshfactorial/code/rusty-neat/common/src/models/model_data/default_quality_score_model.json.gz";
+        let output_file: &'static str = "/home/joshfactorial/code/rusty-neat/common/src/models/model_data/test.json.gz";
+        let model: QualityScoreModel = QualityScoreModel::from_file(input_file).unwrap();
+        assert_eq!(model.assumed_read_length, 101);
+        let result = model.write_to_file(output_file);
+        assert_eq!(result.unwrap(), ());
         fs::remove_file(output_file).unwrap();
     }
 

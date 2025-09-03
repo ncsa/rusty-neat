@@ -12,6 +12,7 @@ use crate::models::indel_model::{IndelModel, IndelModelError};
 use crate::models::quality_scores::{QualityModelError, QualityScoreModel};
 use crate::models::sequencing_error_model::{SeqModelError, SequencingErrorModel};
 use crate::models::snp_trinuc_model::{SnpTrinucModel, SnpTrinucError};
+use crate::structs::nucleotides::Nucleotide;
 
 
 #[derive(Error, Debug)]
@@ -94,12 +95,6 @@ impl From<std::io::Error> for MutationModelError {
     }
 }
 
-const VARIANT_TYPES: [VariantType; 3] = [
-    VariantType::SNP,       // 1
-    VariantType::Insertion, // 2
-    VariantType::Deletion,  // 3
-];
-
 #[derive(Clone, Serialize, Deserialize)]
 pub struct MutationModel {
     // This is the model for mutations, the same construct used by the python version, basically.
@@ -141,8 +136,11 @@ impl MutationModel {
             0.03, // insertion
             0.02, //deletion
         ];
-        let variant_dist = DiscreteDistribution::new_index_only(
-            &Vec::from(variant_weights)
+        // We'll use the inex to find the variant
+        let variant_index = vec![0, 1, 2];
+        let variant_dist = DiscreteDistribution::new(
+            &Vec::from(variant_weights),
+            &variant_index,
         )?;
         let statistical_models = StatisticalModels::default()?;
 
@@ -159,7 +157,11 @@ impl MutationModel {
         homozygous_frequency: f64, 
         variant_weights: Vec<f64>,
     ) -> Result<Self, MutationModelError> {
-        let variant_dist = DiscreteDistribution::new_index_only(&Vec::from(variant_weights))?;
+        let variant_index = vec![0, 1, 2];
+        let variant_dist = DiscreteDistribution::new(
+            &Vec::from(variant_weights),
+            &variant_index,
+        )?;
         let statistical_models = StatisticalModels::default()?;
 
         Ok(MutationModel {
@@ -181,7 +183,7 @@ impl MutationModel {
         Ok(())
     }
 
-    fn generate_genotype(&mut self, ploidy: usize, is_homozygous: bool) -> Result<Vec<u8>, MutationModelError> {
+    fn generate_genotype(&mut self, ploidy: usize, is_homozygous: bool) -> Result<Vec<usize>, MutationModelError> {
         // "Homozygous" is ambiguous for polyploid organisms, so we'll just take "heterozygous" to
         // mean roughly half the reads will have the variant, to keep it simple
         // The is_homozygous flag is expected to be randomly determined in practice
@@ -196,7 +198,7 @@ impl MutationModel {
     pub fn generate_mutation(
         &mut self,
         // A pointer to the reference sequence to be mutated
-        reference_sequence: &Vec<u8>,
+        reference_sequence: &Vec<Nucleotide>,
         // This is the start position of the variant, the POS field of a VCF
         variant_location: usize,
         // The ploidy of this organism. We'll make determinations about heterzygous v homozygous based on this
@@ -209,13 +211,8 @@ impl MutationModel {
             ploidy, rng.gen_bool(self.homozygous_frequency)?
         )?;
         // Select a type of mutation.
-        let index = self.variant_dist.sample_index(rng.random()?)?;
-        let variant_type = if index > VARIANT_TYPES.len() {
-            error!("Weird result from sampling variant type: {}", index);
-            return Err(MutationModelError::GenerateMutationError)
-        } else {
-            VARIANT_TYPES[index]
-        };
+        let index = self.variant_dist.sample(rng.random()?)?;
+        let variant_type = VariantType::from(index);
         // todo figure out which block to mutate
         //   figure out the mutation to add
         //   Add a function in FastaMap to add a block to a vector
@@ -226,7 +223,8 @@ impl MutationModel {
                     reference_sequence[variant_location],
                     reference_sequence[variant_location+1],
                 ];
-                let alternate_base = self.statistical_models.snp_model.generate_snp(rng.random()?, &trinuc_reference)?;
+                let alternate_base = self.statistical_models.snp_model
+                    .generate_snp(rng.random()?, &trinuc_reference)?;
 
                 let reference = vec![trinuc_reference[1]];
                 let alternate = vec![alternate_base];
@@ -234,8 +232,10 @@ impl MutationModel {
                 (reference, alternate)
             },
             VariantType::Insertion => {
-                let length = self.statistical_models.indel_model.new_insert_length(rng.random()?)?;
-                let insertion_vec = self.statistical_models.indel_model.generate_random_insertion(length, rng)?;
+                let length = self.statistical_models.indel_model
+                    .new_insert_length(rng.random()?)?;
+                let insertion_vec = self.statistical_models.indel_model
+                    .generate_random_insertion(length, rng)?;
                 let reference = vec![
                     reference_sequence[variant_location].clone()
                 ];
@@ -247,13 +247,13 @@ impl MutationModel {
                 let length = self.statistical_models.indel_model.new_delete_length(rng.random()?)?;
                 // +1 is so that we grab a base for the reference in the VCF. This is similar
                 // to how we appended bases to the reference in the insertion model.
-                let reference: Vec<u8> = reference_sequence
+                let reference: Vec<Nucleotide> = reference_sequence
                     .get(variant_location..(variant_location + length as usize + 1))
                     .unwrap()
                     .iter()
                     .map(|item| *item)
                     .collect();
-                let alternate: Vec<u8> = vec![reference[0].clone()];
+                let alternate: Vec<Nucleotide> = vec![reference[0].clone()];
                 (reference, alternate)
             },
         };
@@ -284,7 +284,7 @@ impl StatisticalModels {
     pub fn default() -> Result<Self, MutationModelError> {
         // use the default transition matrix, snp model and indel model
         let transition_matrix = TransitionMatrix::default()?;
-        let snp_model = SnpTrinucModel::default()?;
+        let snp_model = SnpTrinucModel::default_minimal()?;
         let indel_model = IndelModel::default()?;
         // todo update this line:
         let quality_score_model = QualityScoreModel::from_file("test")?;

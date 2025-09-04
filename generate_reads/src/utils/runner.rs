@@ -1,5 +1,6 @@
+use crate::errors;
+use crate::errors::GenerateReadsErrors;
 use crate::utils;
-use crate::data;
 use common;
 use common::models::fragment_length::DiscreteFragmentLengthModel;
 use common::models::fragment_length::FragmentLengthModel;
@@ -16,45 +17,33 @@ use std::sync::{Arc, Mutex};
 
 use utils::config::RunConfiguration;
 use utils::generate_reads::generate_reads;
-use utils::read_models::{read_quality_score_model_file, read_quality_score_raw_data};
 use utils::generate_variants::generate_variants;
 use common::file_tools::fasta_tools::read_fasta;
 use common::structs::variants::Variant;
 use common::structs::fasta_map::FastaMap;
 use common::models::mutation_model::MutationModel;
 use simple_rng::NeatRng;
-use data::quality_score_data::RawQualityScoreData;
 use utils::mutate_fasta::apply_mutations;
 
-#[derive(Debug)]
-pub enum RunNeatError {
-    GeneralRunError,
-}
-
-pub fn run_neat(config: &Box<RunConfiguration>, rng: NeatRng) -> Result<(), RunNeatError> {
+pub fn run_neat(config: &Box<RunConfiguration>, rng: NeatRng) -> Result<(), GenerateReadsErrors> {
     let start = time::Instant::now();
+    info!("////////////// Welcome to rusty-neat read generator!");
+    info!("Processing started!");
     // Create the prefix of the files to write
-    let output_file = format!("{}/{}", config.output_dir.display(), config.output_prefix);
-
-    // Reading the reference file into memory
-    info!("Mapping reference fasta file: {}", &config.reference);
+    let output_file_prefix = format!("{}/{}", config.output_dir.display(), config.output_prefix);
+    // We'll need a temp dir to store file fragments
     let working_dir = tempfile::tempdir().unwrap();
-    
-    // Load models that will be used for the runs.
 
+    // Load models that will be used for the runs.
+    //
     // Quality score model
     let quality_score_model = {
         match config.quality_score_data {
             Some(filename) => {
-                 QualityScoreModel::from_file(&filename,)
-                    .expect(
-                        "Error reading quality score model!"
-                    )
+                 QualityScoreModel::from_file(&filename)?
             },
             None => {
-                QualityScoreModel::default().expect(
-                    "Error creating default quality score model!"
-                )
+                QualityScoreModel::default()?
             }
         }
     };
@@ -63,16 +52,10 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: NeatRng) -> Result<(), RunN
     let mutation_model = {
         match config.mutation_model_data {
             Some(filename) => {
-                MutationModel::from_file(&filename)
-                    .expect(
-                        "Error creating mutation model from data"
-                    )
+                MutationModel::from_file(&filename)?
             },
             None => {
-                MutationModel::default()
-                    .expect(
-                        "Error creating default quality score model!"
-                    )
+                MutationModel::default()?
             }
         }
     };
@@ -81,30 +64,19 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: NeatRng) -> Result<(), RunN
     let fragment_length_model: FragmentLengthModel = {
         match config.fragment_model_data {
             Some(filename) => {
-                FragmentLengthModel::Discrete(
-                    DiscreteFragmentLengthModel::discrete_from_file(&filename)
-                        .expect("Error loading discrete fragment model")
-                )
+                DiscreteFragmentLengthModel::discrete_from_file(&filename)?.into()
             },
             None => {
                 match config.fragment_mean {
                     Some(mean) => {
-                        FragmentLengthModel::Normal(
-                            NormalFragmentLengthModel::new_from_mean(
-                                mean,
-                                // Config should already have caught issues with missing data
-                                config.fragment_st_dev.unwrap()
-                            ).expect (
-                                "Error creating Normal fragment length model from mean/st dev"
-                            )
-                        )   
+                        NormalFragmentLengthModel::new_from_mean(
+                            mean,
+                            // Config should already have caught issues with missing data
+                            config.fragment_st_dev.unwrap()
+                        )?.into()
                     },
                     None => {
-                        FragmentLengthModel::Normal(
-                            NormalFragmentLengthModel::default().expect(
-                                "Error creating default Normal fragment length model"
-                            )
-                        )
+                        NormalFragmentLengthModel::default()?.into()
                     },
                 }
             }
@@ -285,7 +257,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: NeatRng) -> Result<(), RunN
             &mutated_fasta_map,
             &fasta_order,
             config.overwrite_output,
-            &output_file,
+            &output_file_prefix,
         ).expect("Error writing fasta file!")
     }
 
@@ -295,7 +267,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: NeatRng) -> Result<(), RunN
             &mut all_reads,
             config.read_len,
             config.overwrite_output,
-            &output_file,
+            &output_file_prefix,
             config.paired_ended,
             quality_score_model,
             rng.clone()

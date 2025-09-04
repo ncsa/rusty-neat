@@ -8,7 +8,7 @@ extern crate simple_rng;
 
 use common;
 pub mod utils;
-mod data;
+pub mod errors;
 
 use clap::Parser;
 use log::*;

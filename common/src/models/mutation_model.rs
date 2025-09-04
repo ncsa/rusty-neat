@@ -1,10 +1,11 @@
 //! The mutation model
 use std;
+use bincode::de;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use simple_rng::{NeatRng, NeatRngError};
 use log::error;
-use crate::models::lib::{model_gzp_reader, model_writer};
+use crate::models::lib::{model_reader, model_writer};
 use crate::structs::transition_matrix::{TransitionMatrix, TransitionMatrixError};
 use crate::structs::variants::{Variant, VariantError, VariantType};
 use crate::structs::distributions::{DiscreteDistribution, DistributionErrors};
@@ -14,85 +15,32 @@ use crate::models::sequencing_error_model::{SeqModelError, SequencingErrorModel}
 use crate::models::snp_trinuc_model::{SnpTrinucModel, SnpTrinucError};
 use crate::structs::nucleotides::Nucleotide;
 
-
 #[derive(Error, Debug)]
 pub enum MutationModelError {
     #[error("Mutation model returned Error: {0}")]
-    RngError(NeatRngError),
+    RngError(#[from] NeatRngError),
     #[error("Error retrieving reference sequence block")]
     ReferenceRetrievalError,
     #[error("Mutation model IO Error: {0}")]
-    IoError(std::io::Error),
+    IoError(#[from] std::io::Error),
     #[error("Error Generating mutations")]
     GenerateMutationError,
     #[error("Mutation model returned an error during variant creation: {0}")]
-    VariantInitationError(VariantError),
+    VariantInitationError(#[from] VariantError),
     #[error("Mutation model returned an error during SNP initation: {0}")]
-    SnpeGnerationError(SnpTrinucError),
+    SnpeGnerationError(#[from] SnpTrinucError),
     #[error("Mutation model returned error during transition matrix initation: {0}")]
-    TransMatrixInitationError(TransitionMatrixError),
+    TransMatrixInitationError(#[from] TransitionMatrixError),
     #[error("Mutation model returned error during indel model initation: {0}")]
-    IndelModelInitationError(IndelModelError),
+    IndelModelInitationError(#[from] IndelModelError),
     #[error("Mutation model returned error during quality model initiation: {0}")]
-    QualityModelInitationError(QualityModelError),
+    QualityModelInitationError(#[from] QualityModelError),
     #[error("Mutation model returned error during sequence error model initation: {0}")]
-    SeqErrModelError(SeqModelError),
+    SeqErrModelError(#[from] SeqModelError),
     #[error("Mutation model returned an error with a distribution model: {0}")]
-    DistributionError(DistributionErrors),
-}
-
-impl From<DistributionErrors> for MutationModelError {
-    fn from(error: DistributionErrors) -> Self {
-        MutationModelError::DistributionError(error)
-    }
-}
-
-impl From<QualityModelError> for MutationModelError {
-    fn from(error: QualityModelError) -> Self {
-        MutationModelError::QualityModelInitationError(error)
-    }
-}
-
-impl From<IndelModelError> for MutationModelError {
-    fn from(error: IndelModelError) -> Self {
-        MutationModelError::IndelModelInitationError(error)
-    }
-}
-
-impl From<TransitionMatrixError> for MutationModelError {
-    fn from(error: TransitionMatrixError) -> Self {
-        MutationModelError::TransMatrixInitationError(error)
-    }
-}
-
-impl From<SeqModelError> for MutationModelError {
-    fn from(error: SeqModelError) -> Self {
-        MutationModelError::SeqErrModelError(error)
-    }
-}
-
-impl From<SnpTrinucError> for MutationModelError {
-    fn from(error: SnpTrinucError) -> Self {
-        MutationModelError::SnpeGnerationError(error)
-    }
-}
-
-impl From<VariantError> for MutationModelError {
-    fn from(error: VariantError) -> Self {
-        MutationModelError::VariantInitationError(error)
-    }
-}
-
-impl From<NeatRngError> for MutationModelError {
-    fn from(error: NeatRngError) -> Self {
-        MutationModelError::RngError(error)
-    }
-}
-
-impl From<std::io::Error> for MutationModelError {
-    fn from(error: std::io::Error) -> Self {
-        MutationModelError::IoError(error)
-    }
+    DistributionError(#[from] DistributionErrors),
+    #[error("Mutation model return and error: {0}")]
+    ModelInitiationError(&'static str),
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -122,47 +70,36 @@ pub struct MutationModel {
 impl MutationModel {
     pub fn default() -> Result<Self, MutationModelError> {
         // Creating the default model based on the default for the original NEAT.
-        let mutation_rate = 0.001;
+        let statistical_models = StatisticalModels::default()?;
+        // Based on NA12878 data
+        let mutation_rate = 0.0010987132390211135;
+        // This was hard-coded in
         let homozygous_frequency = 0.01;
-        // Originally this was expressed as indel_fraction 0.05. We're using weights for
-        // readability. This gets converted to a cumulative density function by the
-        // DiscreteDistribution struct. This would have been 0.95 and 0.05, combine with an
+        // from NA12878 data
+        let insertion_given_indel_rate = statistical_models.indel_model.insertion_probability;
+        // from NA12878 data
+        let snp_rate = 0.886404192662459;
+        // Originally this was expressed as indel_fraction 0.05, So snp probs is 0.95
         // insertion frequency (relative to their being an indel variant) was 0.6.
-        // This gives us a probability of insertion of 0.6 * 0.05 = 0.03 * 100 = 3
+        // This gives us, e.g.,
+        //                 probability of insertion of 0.6 * 0.05 = 0.03 * 100 = 3
         //                 probability of deletion of  0.4 * 0.05 = 0.02 * 100 = 2
         //                 probability of SNP of       0.95              * 100 = 95
+        let ins_rate = (1.0 - snp_rate) * (insertion_given_indel_rate);
+        let del_rate = (1.0 - snp_rate) * (1.0 - insertion_given_indel_rate);
+        assert!((snp_rate + ins_rate + del_rate - 1.0).abs() < 1e-10);
         let variant_weights = [
-            0.95, // snp
-            0.03, // insertion
-            0.02, //deletion
+            snp_rate, // snp
+            ins_rate, // insertion
+            del_rate, //deletion
         ];
+
         // We'll use the inex to find the variant
         let variant_index = vec![0, 1, 2];
         let variant_dist = DiscreteDistribution::new(
             &Vec::from(variant_weights),
             &variant_index,
         )?;
-        let statistical_models = StatisticalModels::default()?;
-
-        Ok(MutationModel {
-            mutation_rate,
-            homozygous_frequency,
-            variant_dist,
-            statistical_models,
-        })
-    }
-
-    pub fn new(
-        mutation_rate: f64, 
-        homozygous_frequency: f64, 
-        variant_weights: Vec<f64>,
-    ) -> Result<Self, MutationModelError> {
-        let variant_index = vec![0, 1, 2];
-        let variant_dist = DiscreteDistribution::new(
-            &Vec::from(variant_weights),
-            &variant_index,
-        )?;
-        let statistical_models = StatisticalModels::default()?;
 
         Ok(MutationModel {
             mutation_rate,
@@ -173,13 +110,12 @@ impl MutationModel {
     }
 
     pub fn from_file(filename: &str) -> Result<Self, MutationModelError> {
-        let data: MutationModel = model_gzp_reader(filename).unwrap();
+        let data: MutationModel = model_reader(filename)?;
         Ok(data)
     }
 
     pub fn write_to_file(&self, filename: &str) -> Result<(), MutationModelError> {
-        let data = serde_json::to_string(self).unwrap();
-        model_writer(data, filename)?;
+        model_writer(self, filename)?;
         Ok(())
     }
 
@@ -287,7 +223,7 @@ impl StatisticalModels {
         let snp_model = SnpTrinucModel::default_minimal()?;
         let indel_model = IndelModel::default()?;
         // todo update this line:
-        let quality_score_model = QualityScoreModel::from_file("test")?;
+        let quality_score_model = QualityScoreModel::default()?;
         let sequencing_error_model = SequencingErrorModel::default()?;
 
         Ok(StatisticalModels {
@@ -305,69 +241,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_transition_matrix_from_weights() {
-        let a_weights = vec![0.0, 20.0, 1.0, 20.0];
-        let c_weights = vec![20.0, 0.0, 1.0, 1.0];
-        let g_weights = vec![1.0, 1.0, 0.0, 20.0];
-        let t_weights = vec![20.0, 1.0, 20.0, 0.0];
-        TransitionMatrix::from(a_weights, c_weights, g_weights, t_weights).unwrap();
-        // It actually mutates the base
-        // assert_ne!(test_model.generate_mutation
-        // (
-        //     "chr1",
-        //     VariantType::SNP,
-        //     0,
-        //     &vec![A],
-        //     &mut rng
-        // ), vec![A]);
-        // assert_ne!(test_model.generate_mutation
-        // (
-        //     "chr1",
-        //     VariantType::SNP,
-        //     0,
-        //     &vec![C],
-        //     &mut rng
-        // ), vec![C]);
-        // assert_ne!(test_model.generate_mutation
-        // (
-        //     "chr1",
-        //     VariantType::SNP,
-        //     0,
-        //     &vec![G],
-        //     &mut rng
-        // ), vec![G]);
-        // assert_ne!(test_model.generate_mutation
-        // (
-        //     "chr1",
-        //     VariantType::SNP,
-        //     0,
-        //     &vec![T],
-        //     &mut rng
-        // ), vec![T]);
-        // // It gives back N when you give it N
-        // assert_eq!(test_model.mutate(
-        //     VariantType::SNP, 0, &vec![N], &mut rng), vec![N]
-        // );
-        // // test alternate mutation methods
-        // let mutation = test_model.generate_mutation
-        // (
-        //     "chr1",
-        //     VariantType::SNP,
-        //     1,
-        //     &vec![A, C, G],
-        //     &mut rng
-        // );
-        // assert_eq!(mutation[0], A);
-        // assert_eq!(mutation[2], G);
-        // assert_ne!(mutation[3], C);
-        // let mutation = test_model.generate_mutation
-        // (
-        //     "chr1",
-        //     VariantType::Indel,
-        //     0,
-        //     &vec![A, C, C, G, T, T, A, C, G],
-        //     &mut rng
-        // );
-        // // todo something with this mutation variable
+    fn test_model_read_write() {
+        let output_file: &'static str = "default_mutation_model.json.gz";
+        let model: MutationModel = MutationModel::default().unwrap();
+        assert_eq!(model.mutation_rate, 0.0010987132390211135);
+        let result = model.write_to_file(output_file);
+        assert_eq!(result.unwrap(), ());
+        // fs::remove_file(output_file).unwrap();
     }
 }

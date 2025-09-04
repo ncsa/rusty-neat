@@ -71,12 +71,11 @@ mod tests {
     use crate::structs::nucleotides::Nucleotide;
     use crate::structs::variants::{Variant, VariantType};
 
-    #[test]
-    fn test_new_unmapped() {
+    fn setup() -> (Vec<Variant>, Contig) {
         // create contig
         let contig_name = "chr1".to_string();
         let len: usize = 1000;
-        let blocks: Vec<String> = vec!["chr1_001000_002000.json".to_string()];
+        let blocks: Vec<String> = vec!["chr1_000000_002000.json".to_string()];
         let map: Vec<(usize, usize, RegionType)> = Vec::new();
         let contig = Contig::new(contig_name.to_owned(), len, blocks.to_owned(), map.to_owned()).unwrap();
         // create a variant
@@ -87,10 +86,24 @@ mod tests {
         let mut genotype: Vec<usize> = vec![1,0];
         let variant = Variant::new(variant_type, location, &reference, &alternate, &mut genotype).unwrap();
         let variants_list = vec![variant];
-        // Now create the contig variant
-        let cv = ContigVariants::new_unmapped(contig, variants_list.to_owned()).unwrap();
-        assert_eq!(cv.contig.name, contig_name);
-        assert_eq!(cv.variants_list, variants_list);
+        (variants_list, contig)
+    }
+
+    #[test]
+    fn test_new_unmapped() {
+        let (vlist, contig) = setup();
+        let cv = ContigVariants::new_unmapped(contig, vlist.to_owned()).unwrap();
+        assert_eq!(cv.contig.name, "chr1".to_string());
+        assert_eq!(cv.variants_list, vlist);
         assert!(cv.block_map.is_none());
+    }
+
+    #[test]
+    fn test_new_mapped() {
+        let (vlist, contig) = setup();
+        let cv = ContigVariants::new_mapped(contig.clone(), vlist.clone()).unwrap();
+        assert_eq!(cv.contig.name, "chr1".to_string());
+        let result = &cv.block_map.unwrap()[&vlist[0]][0];
+        assert_eq!(result, &contig.blocks[0])
     }
 }

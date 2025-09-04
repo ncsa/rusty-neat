@@ -28,7 +28,7 @@ use serde::{Deserialize, Serialize};
 use std::{fmt::{Display, Formatter}};
 use simple_rng::{NeatRng, NeatRngError};
 
-use crate::models::lib::{model_gzp_reader, model_writer};
+use crate::models::lib::{model_reader, model_writer};
 use crate::models::sequencing_error_model::SeqModelError;
 use crate::structs::distributions::{DiscreteDistribution, DistributionErrors};
 
@@ -130,7 +130,7 @@ impl QualityScoreModel {
     /// we will write subutilities that use these features, eventually
     pub fn from_file(filename: &str) -> Result<Self, QualityModelError> {
         // Uses the serde_json crate to read a quality model from file
-        let data: QualityScoreModel = model_gzp_reader(filename).unwrap();
+        let data: QualityScoreModel = model_reader(filename).unwrap();
         Ok(data)
     }
 
@@ -277,9 +277,8 @@ mod tests {
     #[test]
     fn test_model_write_read() {
         // rewrite this test to read default model, so we aren't keeping long.json around
-        let input_file = "/home/joshfactorial/code/rusty-neat/common/src/models/model_data/default_quality_score_model.json.gz";
-        let output_file: &'static str = "/home/joshfactorial/code/rusty-neat/common/src/models/model_data/test.json.gz";
-        let model: QualityScoreModel = QualityScoreModel::from_file(input_file).unwrap();
+        let output_file: &'static str = "test.json.gz";
+        let model: QualityScoreModel = QualityScoreModel::default().unwrap();
         assert_eq!(model.assumed_read_length, 101);
         let result = model.write_to_file(output_file);
         assert_eq!(result.unwrap(), ());

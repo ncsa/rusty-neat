@@ -3,7 +3,7 @@ use std::io;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use crate::{
-    models::lib::{model_gzp_reader, model_writer}, 
+    models::lib::{model_reader, model_writer}, 
     structs::{distributions::{DiscreteDistribution, DistributionErrors}, 
     nucleotides::{Nucleotide, ALLOWED_USIZE}, 
     transition_matrix::{TransitionMatrix, TransitionMatrixError}}
@@ -104,7 +104,7 @@ impl SequencingErrorModel {
     }
 
     pub fn from_file(filename: &str) -> Result<Self, SeqModelError> {
-        let data: SequencingErrorModel = model_gzp_reader(filename).unwrap();
+        let data: SequencingErrorModel = model_reader(filename).unwrap();
         Ok(data)
     }
 

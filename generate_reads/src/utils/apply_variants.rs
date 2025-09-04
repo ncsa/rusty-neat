@@ -1,6 +1,9 @@
 use std::collections::HashMap;
-use common::structs::variants::{Variant, VariantType};
-use simple_rng::{NeatRng, DiscreteDistribution};
+use common::structs::{
+    variants::{Variant, VariantType, Genotypes::{Homozygous, Heterozygous}},
+    distributions::DiscreteDistribution,
+};
+use simple_rng::NeatRng;
 
 pub fn apply_variants(
     raw_sequence: &[u8],
@@ -20,12 +23,13 @@ pub fn apply_variants(
     for mut position in 0..raw_sequence.len() {
         if positions_to_mutate.contains(&position) {
             let variant = relevant_variants.get(&(position + start)).unwrap();
-            let mut probability = 0.5;
-            if variant.is_homozygous() {
-                probability = 1.0;
-            }
+            let mut probability = match variant.genotype {
+                Homozygous => 1.0,
+                Heterozygous => 0.5,
+            };
+
             // if it's heterozygous, we only want the variant half the time.
-            if (&mut rng).gen_bool(probability) {
+            if (&mut rng).gen_bool(probability)? {
                 match variant.variant_type {
                     VariantType::Insertion => {
                         for base in &variant.alternate {

@@ -4,21 +4,24 @@
 //! together in the literature and are usually short. Insertions are often slips that cause sections
 //! to be duplicated, but NEAT made no attempt to distinguish between the types of insertions or
 //! deletions, since they are treated similarly by variant calling software.
+use flate2::read::GzDecoder;
 use log::error;
 use vectorize;
 use serde;
 use std::hash::Hash;
-use std::io;
+use std::{fmt, io};
 use std::ops::Index;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use std::collections::HashMap;
 use simple_rng::NeatRngError;
 use lazy_static::lazy_static;
-use crate::models::lib::{model_gzp_reader, model_writer};
+use crate::models::lib::{model_reader, model_writer};
 use crate::structs::transition_matrix::{TransitionMatrix, TransitionMatrixError};
 use crate::structs::distributions::{DiscreteDistribution, DistributionErrors};
+use crate::structs::nucleotides::Nucleotide::{A, C, G, T, N};
 use crate::structs::nucleotides::Nucleotide;
+
 
 #[derive(Error, Debug)]
 pub enum SnpTrinucError {
@@ -32,6 +35,16 @@ pub enum SnpTrinucError {
     GenerateSnpError,
     #[error("SNP Trinuc model return an IO error: {0}")]
     IoError(io::Error),
+    #[error("Error Indexing the trinucleotide: {0}")]
+    IndexError(usize),
+    #[error("Serde error building default model: {0}")]
+    SerdeError(serde_json::Error),
+}
+
+impl From<serde_json::Error> for SnpTrinucError {
+    fn from(error: serde_json::Error) -> Self {
+        SnpTrinucError::SerdeError(error)
+    }
 }
 
 impl From<io::Error> for SnpTrinucError {
@@ -60,75 +73,79 @@ impl From<TransitionMatrixError> for SnpTrinucError {
 
 /// These are all the trinucleotide combinations.
 const SNP_TRINUCS: [(Nucleotide, Nucleotide, Nucleotide); 64] = [
-    (Nucleotide::A, Nucleotide::A, Nucleotide::A), // AAA
-    (Nucleotide::A, Nucleotide::A, Nucleotide::C), // AAC
-    (Nucleotide::A, Nucleotide::A, Nucleotide::G), // AAG
-    (Nucleotide::A, Nucleotide::A, Nucleotide::T), // AAT
-    (Nucleotide::A, Nucleotide::C, Nucleotide::A), // ACA
-    (Nucleotide::A, Nucleotide::C, Nucleotide::C), // ACC
-    (Nucleotide::A, Nucleotide::C, Nucleotide::G), // ACG
-    (Nucleotide::A, Nucleotide::C, Nucleotide::T), // ACT
-    (Nucleotide::A, Nucleotide::G, Nucleotide::A), // AGA
-    (Nucleotide::A, Nucleotide::G, Nucleotide::C), // AGC
-    (Nucleotide::A, Nucleotide::G, Nucleotide::G), // AGG
-    (Nucleotide::A, Nucleotide::G, Nucleotide::T), // AGT
-    (Nucleotide::A, Nucleotide::T, Nucleotide::A), // ATA
-    (Nucleotide::A, Nucleotide::T, Nucleotide::C), // ATC
-    (Nucleotide::A, Nucleotide::T, Nucleotide::G), // ATG
-    (Nucleotide::A, Nucleotide::T, Nucleotide::T), // ATT
-    (Nucleotide::C, Nucleotide::A, Nucleotide::A), // CAA
-    (Nucleotide::C, Nucleotide::A, Nucleotide::C), // CAC
-    (Nucleotide::C, Nucleotide::A, Nucleotide::G), // CAG
-    (Nucleotide::C, Nucleotide::A, Nucleotide::T), // CAT
-    (Nucleotide::C, Nucleotide::C, Nucleotide::A), // CCA
-    (Nucleotide::C, Nucleotide::C, Nucleotide::C), // CCC
-    (Nucleotide::C, Nucleotide::C, Nucleotide::G), // CCG
-    (Nucleotide::C, Nucleotide::C, Nucleotide::T), // CCT
-    (Nucleotide::C, Nucleotide::G, Nucleotide::A), // CGA
-    (Nucleotide::C, Nucleotide::G, Nucleotide::C), // CGC
-    (Nucleotide::C, Nucleotide::G, Nucleotide::G), // CGG
-    (Nucleotide::C, Nucleotide::G, Nucleotide::T), // CGT
-    (Nucleotide::C, Nucleotide::T, Nucleotide::A), // CTA
-    (Nucleotide::C, Nucleotide::T, Nucleotide::C), // CTC
-    (Nucleotide::C, Nucleotide::T, Nucleotide::G), // CTG
-    (Nucleotide::C, Nucleotide::T, Nucleotide::T), // CTT
-    (Nucleotide::G, Nucleotide::A, Nucleotide::A), // GAA
-    (Nucleotide::G, Nucleotide::A, Nucleotide::C), // GAC
-    (Nucleotide::G, Nucleotide::A, Nucleotide::G), // GAG
-    (Nucleotide::G, Nucleotide::A, Nucleotide::T), // GAT
-    (Nucleotide::G, Nucleotide::C, Nucleotide::A), // GCA
-    (Nucleotide::G, Nucleotide::C, Nucleotide::C), // GCC
-    (Nucleotide::G, Nucleotide::C, Nucleotide::G), // GCG
-    (Nucleotide::G, Nucleotide::C, Nucleotide::T), // GCT
-    (Nucleotide::G, Nucleotide::G, Nucleotide::A), // GGA
-    (Nucleotide::G, Nucleotide::G, Nucleotide::C), // GGC
-    (Nucleotide::G, Nucleotide::G, Nucleotide::G), // GGG
-    (Nucleotide::G, Nucleotide::G, Nucleotide::T), // GGT
-    (Nucleotide::G, Nucleotide::T, Nucleotide::A), // GTA
-    (Nucleotide::G, Nucleotide::T, Nucleotide::C), // GTC
-    (Nucleotide::G, Nucleotide::T, Nucleotide::G), // GTG
-    (Nucleotide::G, Nucleotide::T, Nucleotide::T), // GTT
-    (Nucleotide::T, Nucleotide::A, Nucleotide::A), // TAA
-    (Nucleotide::T, Nucleotide::A, Nucleotide::C), // TAC
-    (Nucleotide::T, Nucleotide::A, Nucleotide::G), // TAG
-    (Nucleotide::T, Nucleotide::A, Nucleotide::T), // TAT
-    (Nucleotide::T, Nucleotide::C, Nucleotide::A), // TCA
-    (Nucleotide::T, Nucleotide::C, Nucleotide::C), // TCC
-    (Nucleotide::T, Nucleotide::C, Nucleotide::G), // TCG
-    (Nucleotide::T, Nucleotide::C, Nucleotide::T), // TCT
-    (Nucleotide::T, Nucleotide::G, Nucleotide::A), // TGA
-    (Nucleotide::T, Nucleotide::G, Nucleotide::C), // TGC
-    (Nucleotide::T, Nucleotide::G, Nucleotide::G), // TGG
-    (Nucleotide::T, Nucleotide::G, Nucleotide::T), // TGT
-    (Nucleotide::T, Nucleotide::T, Nucleotide::A), // TTA
-    (Nucleotide::T, Nucleotide::T, Nucleotide::C), // TTC
-    (Nucleotide::T, Nucleotide::T, Nucleotide::G), // TTG
-    (Nucleotide::T, Nucleotide::T, Nucleotide::T), // TTT
+    (A, A, A), // AAA
+    (A, A, C), // AAC
+    (A, A, G), // AAG
+    (A, A, T), // AAT
+    (A, C, A), // ACA
+    (A, C, C), // ACC
+    (A, C, G), // ACG
+    (A, C, T), // ACT
+    (A, G, A), // AGA
+    (A, G, C), // AGC
+    (A, G, G), // AGG
+    (A, G, T), // AGT
+    (A, T, A), // ATA
+    (A, T, C), // ATC
+    (A, T, G), // ATG
+    (A, T, T), // ATT
+    (C, A, A), // CAA
+    (C, A, C), // CAC
+    (C, A, G), // CAG
+    (C, A, T), // CAT
+    (C, C, A), // CCA
+    (C, C, C), // CCC
+    (C, C, G), // CCG
+    (C, C, T), // CCT
+    (C, G, A), // CGA
+    (C, G, C), // CGC
+    (C, G, G), // CGG
+    (C, G, T), // CGT
+    (C, T, A), // CTA
+    (C, T, C), // CTC
+    (C, T, G), // CTG
+    (C, T, T), // CTT
+    (G, A, A), // GAA
+    (G, A, C), // GAC
+    (G, A, G), // GAG
+    (G, A, T), // GAT
+    (G, C, A), // GCA
+    (G, C, C), // GCC
+    (G, C, G), // GCG
+    (G, C, T), // GCT
+    (G, G, A), // GGA
+    (G, G, C), // GGC
+    (G, G, G), // GGG
+    (G, G, T), // GGT
+    (G, T, A), // GTA
+    (G, T, C), // GTC
+    (G, T, G), // GTG
+    (G, T, T), // GTT
+    (T, A, A), // TAA
+    (T, A, C), // TAC
+    (T, A, G), // TAG
+    (T, A, T), // TAT
+    (T, C, A), // TCA
+    (T, C, C), // TCC
+    (T, C, G), // TCG
+    (T, C, T), // TCT
+    (T, G, A), // TGA
+    (T, G, C), // TGC
+    (T, G, G), // TGG
+    (T, G, T), // TGT
+    (T, T, A), // TTA
+    (T, T, C), // TTC
+    (T, T, G), // TTG
+    (T, T, T), // TTT
 ];
 
 lazy_static! {
-    static ref ALL_FRAMES: Vec<(Nucleotide, Nucleotide, Nucleotide)> = {
-        Vec::from(SNP_TRINUCS)
+    static ref ALL_FRAMES: Vec<TrinucFrame> = {
+        let mut all_frames = Vec::new();
+        for trinuc in SNP_TRINUCS {
+            all_frames.push(TrinucFrame::from(trinuc))
+        }
+        all_frames
     };
 
     static ref ALIAS_MAP: HashMap<TrinucFrame, TrinucFrame> = {
@@ -141,14 +158,20 @@ lazy_static! {
         let all_frames = ALL_FRAMES.clone();
         let mut alias_map = HashMap::new();
         for frame in all_frames {
-            alias_map.insert(TrinucFrame::from(frame), TrinucFrame::from((frame.0, Nucleotide::N, frame.2)));
+            alias_map.insert(
+                TrinucFrame::from(frame), 
+                TrinucFrame::from((frame[0], N, frame[2]))
+            );
         }
         alias_map
     };
 
     static ref ALL_CONTEXTS: Vec<TrinucFrame> = {
         let alias_map = ALIAS_MAP.clone();
-        let frames: Vec<TrinucFrame> = alias_map.keys().map(|s| s.convert()).collect();
+        let frames: Vec<TrinucFrame> = alias_map
+            .keys()
+            .map(|s| s.convert())
+            .collect();
         frames
     };
 
@@ -163,14 +186,14 @@ lazy_static! {
             for k in 0..4 {
                 let mut frame_list = Vec::new();
                 for frame in ALL_FRAMES.clone().into_iter() {
-                    let frame_0: usize = frame.0.into();
-                    let frame_2: usize = frame.2.into();
+                    let frame_0: usize = frame[0].into();
+                    let frame_2: usize = frame[2].into();
                     if frame_0 == i && frame_2 == k {
                         frame_list.push(TrinucFrame::from(frame.clone()))
                     }
                 }
                 frame_map.insert(
-                    TrinucFrame::from((Nucleotide::from(i), Nucleotide::N, Nucleotide::from(k))), 
+                    TrinucFrame::from((i.into(), N, k.into())), 
                     frame_list
                 );
             }
@@ -182,8 +205,18 @@ lazy_static! {
 
 // We need all these derivations to write these out to file
 #[derive(Debug, Eq, PartialEq, Hash, Clone, Copy, Serialize, Deserialize)]
-enum TrinucFrame {
-    Frame(Nucleotide, Nucleotide, Nucleotide)
+pub enum TrinucFrame {
+    Frame(Nucleotide, Nucleotide, Nucleotide),
+}
+
+impl fmt::Display for TrinucFrame {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let mut display: String = String::new();
+        for i in 0..3 {
+            display.push(self[i].into())
+        }
+        write!(f, "{}", display)
+    }
 }
 
 impl From<(Nucleotide, Nucleotide, Nucleotide)> for TrinucFrame {
@@ -209,10 +242,11 @@ impl From<&[Nucleotide; 3]> for TrinucFrame {
 impl Index<usize> for TrinucFrame {
     type Output = Nucleotide;
     fn index(&self, i: usize) -> &Nucleotide {
+        let TrinucFrame::Frame(b0, b1, b2) = self;
         match i {
-            0 => &self[0],
-            1 => &self[1],
-            2 => &self[2],
+            0 => b0,
+            1 => b1,
+            2 => b2,
             _ => panic!("Index out of range: {}", i)
         }
     }
@@ -221,12 +255,14 @@ impl Index<usize> for TrinucFrame {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SnpTrinucModel {
     // Relative weights given to each SNP frame. Ultimately this will be imputed from data.
-    snp_distr: DiscreteDistribution,
+    snp_distro: DiscreteDistribution,
     // The transition matrix is the chance of mutating the middle base from A, C, T, or G to a
     // different base (4x4 matrix with 0s on the diagonal).
     #[serde(with = "vectorize")]
     trinuc_distros: HashMap<TrinucFrame, TransitionMatrix>,
 }
+
+static DATA_FILE: &'static [u8] = include_bytes!("model_data/default_trinuc_model.json.gz");
 
 impl SnpTrinucModel {
     pub fn default_minimal() -> Result<Self, SnpTrinucError> {
@@ -249,7 +285,7 @@ impl SnpTrinucModel {
             &(0..all_frames.len()).collect(),
         )?;
         Ok(SnpTrinucModel {
-            snp_distr,
+            snp_distro: snp_distr,
             trinuc_distros,
         })
     }
@@ -257,7 +293,18 @@ impl SnpTrinucModel {
     pub fn default() -> Result<Self, SnpTrinucError> {
         // This default will read in data from the original NEAT trinuc model to create a more realistic trinuc
         // bias.
-        todo!()
+        let reader = GzDecoder::new(DATA_FILE);
+        let data: SnpTrinucModel = serde_json::from_reader(reader)
+            .map_err(SnpTrinucError::SerdeError)?;
+        Ok(data)
+    }
+
+    #[allow(unused)]
+    /// we will write utilities to use this, eventually
+    fn from_file(&self, filename: &str) -> Result<Self, SnpTrinucError> {
+        // Uses the serde_json crate to read a quality model from file
+        let data: SnpTrinucModel = model_reader(filename).unwrap();
+        Ok(data)
     }
 
     #[allow(unused)]
@@ -270,19 +317,11 @@ impl SnpTrinucModel {
 
     #[allow(unused)]
     /// we will write utilities to use this, eventually
-    fn write_out_quality_model(&self, filename: &str) -> std::io::Result<()> {
+    fn write_out(&self, filename: &str) -> std::io::Result<()> {
         // Uses the serde_json crate to write out the json form of the model. This will help us
         // create base datasets from old neat data, and give us a way to write out models that are
         // generated from user data.
         Ok(model_writer(self, filename).unwrap())
-    }
-
-    #[allow(unused)]
-    /// we will write utilities to use this, eventually
-    fn read_in_quality_model(&self, filename: &str) -> Result<Self, SnpTrinucError> {
-        // Uses the serde_json crate to read a quality model from file
-        let data: SnpTrinucModel = model_gzp_reader(filename).unwrap();
-        Ok(data)
     }
 
     pub fn generate_snp(
@@ -306,10 +345,17 @@ impl SnpTrinucModel {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use super::*;
 
     #[test]
-    fn test_snp_model() {
-        println!("TODO");
-        assert_eq!(1, 1)
+    fn test_model_write_read() {
+        let output_file: &'static str = "test.json.gz";
+        let model = SnpTrinucModel::default().unwrap();
+        let frame = TrinucFrame::from((A, N, G));
+        assert!(model.trinuc_distros.contains_key(&frame));
+        let result = model.write_out(output_file);
+        assert_eq!(result.unwrap(), ());
+        fs::remove_file(output_file).unwrap();
     }
 }

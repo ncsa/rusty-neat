@@ -6,6 +6,8 @@
 //!     N (or other unknown chars) = 4
 //! This is intended to make it easier to store them. Note that the bases are always in alphabetical order
 //! with N tacked on at the end.
+use core::fmt;
+
 use serde::{Deserialize, Serialize};
 
 // The following are equivalent
@@ -30,6 +32,13 @@ pub enum Nucleotide {
     G = 3,
     N = 4,
     X = 5, // This is purely used to fill out buffers when writing files.
+}
+
+impl fmt::Display for Nucleotide {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let name: char = self.to_owned().into();
+        write!(f, "{}", name.to_string())
+    }
 }
 
 impl From<char> for Nucleotide {

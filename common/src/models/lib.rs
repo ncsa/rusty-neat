@@ -20,7 +20,7 @@ pub fn model_writer<T: Serialize>(model: T, filename: &str) -> std::io::Result<(
     Ok(())
 }
 
-pub fn model_gzp_reader<T>(filename: &str) -> Result<T, std::io::Error>
+pub fn model_reader<T>(filename: &str) -> Result<T, std::io::Error>
 where
     T: for<'de> Deserialize<'de>,
 {
@@ -28,6 +28,19 @@ where
     let filein = File::open(filename)
         .expect(&format!("Error opening file {}", &filename));
     let reader = GzDecoder::new(BufReader::new(filein));
+    let value: T = serde_json::from_reader(reader).unwrap();
+    Ok(value)
+}
+
+#[allow(unused)]
+pub fn model_unzipped_reader<T>(filename: &str) -> Result<T, std::io::Error>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    // This will take any serializable model and write it to file.
+    let filein = File::open(filename)
+        .expect(&format!("Error opening file {}", &filename));
+    let reader = BufReader::new(filein);
     let value: T = serde_json::from_reader(reader).unwrap();
     Ok(value)
 }

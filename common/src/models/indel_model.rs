@@ -10,78 +10,52 @@
 use serde::{Deserialize, Serialize};
 use simple_rng::{NeatRng, NeatRngError};
 use thiserror::Error;
-use crate::structs::{distributions::{DiscreteDistribution, DistributionErrors}, nucleotides::{Nucleotide, allowed_vec}};
+use std::io;
+use flate2::read::GzDecoder;
+use crate::{models::lib::{model_reader, model_writer}, structs::{
+    distributions::{DiscreteDistribution, DistributionErrors}, 
+    nucleotides::{allowed_vec, Nucleotide}
+}};
 
 #[derive(Debug, Error)]
 pub enum IndelModelError {
     #[error("Indel Model returned an Rng Error: {0}")]
-    RngError(NeatRngError),
+    RngError(#[from] NeatRngError),
     #[error("Indel model returnd an error while initializng distributions.")]
-    DistributionInitializationError(DistributionErrors),
-}
-
-impl From<NeatRngError> for IndelModelError {
-    fn from(error: NeatRngError) -> Self {
-        IndelModelError::RngError(error)
-    }
-}
-
-impl From<DistributionErrors> for IndelModelError {
-    fn from(error: DistributionErrors) -> Self {
-        IndelModelError::DistributionInitializationError(error)
-    }
+    DistributionInitializationError(#[from] DistributionErrors),
+    #[error("Error during input/output: {0}")]
+    IoError(#[from] io::Error),
+    #[error("Serde error building default model: {0}")]
+    SerdeError(#[from] serde_json::Error),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndelModel {
     // Based what was in the original NEAT
-    insertion_probability: f64,
+    pub (crate) insertion_probability: f64,
     ins_dist: DiscreteDistribution,
     del_dist: DiscreteDistribution,
 }
 
+static DATA_FILE: &'static [u8] = include_bytes!("model_data/default_indel_model.json.gz");
+
 impl IndelModel {
     pub fn default() -> Result<Self, IndelModelError> {
         // Default Indel model from the original NEAT, scaled by the lowest value and rounded.
-        let insertion_probability = 0.6;
-        let ins_lengths: Vec<usize> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
-        let ins_dist: DiscreteDistribution = DiscreteDistribution::new(
-            &vec![1.0, 1.0, 2.0, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
-            &ins_lengths,
-        )?;
-        let del_lengths: Vec<usize> = vec![1, 2, 3, 4, 5];
-        let del_dist: DiscreteDistribution = DiscreteDistribution::new(
-            &vec![3.0, 2.0, 2.0, 2.0, 1.0],
-            &del_lengths,
-        )?;
-
-        Ok(IndelModel {
-            insertion_probability,
-            ins_dist,
-            del_dist,
-        })
+        let reader = GzDecoder::new(DATA_FILE);
+        let data: IndelModel = serde_json::from_reader(reader)
+            .map_err(IndelModelError::SerdeError)?;
+        Ok(data)
     }
 
-    pub fn from(
-        ins_prob: f64, 
-        ins_lengths: Vec<usize>, 
-        ins_weights: Vec<f64>, 
-        del_lengths: Vec<usize>, 
-        del_weights: Vec<f64>,
-    ) -> Result<Self, IndelModelError> {
-        let ins_dist = DiscreteDistribution::new(
-            &ins_weights,
-            &ins_lengths
-        )?;
-        let del_dist = DiscreteDistribution::new(
-            &del_weights,
-            &del_lengths
-        )?;
-        Ok(IndelModel {
-            insertion_probability: ins_prob,
-            ins_dist,
-            del_dist,
-        })
+    pub fn from(filename: &str) -> Result<Self, IndelModelError> {
+        let data: IndelModel = model_reader(filename)?;
+        Ok(data)
+    }
+
+    pub fn write_to_file(&self, filename: &str) -> Result<(), IndelModelError> {
+        model_writer(self, filename)?;
+        Ok(())
     }
 
     pub fn is_insertion(&self, rand: f64) -> Result<bool, IndelModelError> {

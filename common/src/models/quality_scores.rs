@@ -21,7 +21,7 @@
 //!   * Assumes a fixed read length, meaning you have to extrapolate for longer read lengths.
 //!   * In Python, at least, this was slow, although in retrospect it didn't eat up much memory.
 use serde_json;
-use std::io;
+use std::{io, path::PathBuf};
 use thiserror::Error;
 use flate2::read::GzDecoder;
 use serde::{Deserialize, Serialize};
@@ -128,7 +128,7 @@ impl QualityScoreModel {
     }
 
     /// we will write subutilities that use these features, eventually
-    pub fn from_file(filename: &str) -> Result<Self, QualityModelError> {
+    pub fn from_file(filename: &PathBuf) -> Result<Self, QualityModelError> {
         // Uses the serde_json crate to read a quality model from file
         let data: QualityScoreModel = model_reader(filename).unwrap();
         Ok(data)
@@ -259,7 +259,7 @@ impl QualityScoreModel {
 
     #[allow(unused)]
     /// we will write subutilities that use these features, eventually
-    fn write_to_file(&self, filename: &str) -> std::io::Result<()> {
+    fn write_to_file(&self, filename: &PathBuf) -> std::io::Result<()> {
         // Uses the serde_json crate to write out the json form of the model. This will help us
         // create base datasets from old neat data, and give us a way to write out models that are
         // generated from user data.
@@ -277,10 +277,10 @@ mod tests {
     #[test]
     fn test_model_write_read() {
         // rewrite this test to read default model, so we aren't keeping long.json around
-        let output_file: &'static str = "test.json.gz";
+        let output_file: PathBuf = PathBuf::from("test.json.gz");
         let model: QualityScoreModel = QualityScoreModel::default().unwrap();
         assert_eq!(model.assumed_read_length, 101);
-        let result = model.write_to_file(output_file);
+        let result = model.write_to_file(&output_file);
         assert_eq!(result.unwrap(), ());
         fs::remove_file(output_file).unwrap();
     }

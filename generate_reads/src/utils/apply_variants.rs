@@ -1,5 +1,6 @@
 use std::collections::HashMap;
-use common::structs::{
+use crate::errors::GenerateReadsErrors;
+use crate::common::structs::{
     variants::{Variant, VariantType, Genotypes::{Homozygous, Heterozygous}},
     distributions::DiscreteDistribution,
 };

@@ -6,7 +6,7 @@
 use std::io::Write;
 use std::fs;
 use std::fs::File;
-use std::path::Path;
+use std::path::PathBuf;
 use std::iter::Extend;
 use simple_rng::{NeatRng, NeatRngError};
 use flate2::Compression;
@@ -90,7 +90,7 @@ fn reverse_complement(sequence: Vec<Nucleotide>) -> Vec<Nucleotide> {
 pub fn write_block_fastq_bgz(
     block_reads: &Vec<(usize, usize, usize, usize)>,
     read_number_vec: Vec<usize>,
-    block_filename: &str,
+    block_filename: &PathBuf,
     variants: Vec<&Variant>, 
     read_length: usize,
     paired_ended: bool,
@@ -119,7 +119,7 @@ pub fn write_block_fastq_bgz(
     //
     // Extract the filename from the block file name, this will hopefully give us 
     // unique filenames, if we've set things up right.
-    let block_name = Path::new(block_filename)
+    let block_name = &block_filename
         .file_stem()
         .unwrap()
         .display()
@@ -146,7 +146,7 @@ pub fn write_block_fastq_bgz(
 
     // length of read_number_vec and length of block_reads should be the same
     if read_number_vec.len() != block_reads.len() {
-        return Err(BlockFastQError::InvalidFastqBlock(block_name))
+        return Err(BlockFastQError::InvalidFastqBlock(block_name.to_string()))
     }
 
     // load block into memory. Should only be 128kb long or so of sequence plus some strings. Easy peasy.
@@ -444,72 +444,4 @@ mod tests {
         let revcomp: Vec<Nucleotide> = vec![G, G, G, G, G, T, T, T, T];
         assert_eq!(reverse_complement(read), revcomp);
     }
-
-    // #[test]
-    // fn test_write_fastq() {
-    //     let mutated_reference_seq = vec![0, 2, 3, 0, 1, 3, 1, 0, 2, 3, 2, 3, 3, 1, 1, 3];
-    //     let mutated_fasta_map = Box::new(HashMap::from([
-    //         ("chr1".to_string(), mutated_reference_seq)
-    //     ]));
-    //     let mut reads_dataset = Box::new(vec![
-    //         ("chr1".to_string(), 0, 4),
-    //         ("chr1".to_string(), 6, 10),
-    //     ]);
-    //     let read_length = 4;
-    //     let overwrite_output = true;
-    //     let fastq_filename = "test_single";
-    //     let paired_ended = false;
-    //     let rng = NeatRng::new_from_seed(Vec::from([
-    //         "Hello".to_string(),
-    //         "cruel".to_string(),
-    //         "world".to_string(),
-    //     ]));
-    //     let quality_score_model = QualityScoreModel::new();
-    //     write_fastq(
-    //         &mutated_fasta_map,
-    //         &mut reads_dataset,
-    //         read_length,
-    //         overwrite_output,
-    //         fastq_filename,
-    //         paired_ended,
-    //         quality_score_model.clone(),
-    //         rng.clone()
-    //     )
-    //     .unwrap();
-    //     let outfile1 = Path::new("test_single_r1.fastq");
-    //     let outfile2 = Path::new("test_single_r2.fastq");
-    //     assert!(outfile1.exists());
-    //     assert!(!outfile2.exists());
-    //     fs::remove_file(outfile1).unwrap();
-    //
-    //     let mut reads_dataset = Box::new(vec![
-    //         ("chr1".to_string(), 0, 4),
-    //         ("chr1".to_string(), 6, 14),
-    //     ]);
-    //
-    //     let read_length = 4;
-    //     let overwrite_output = false;
-    //     let fastq_filename = "test_paired";
-    //     let paired_ended = true;
-    //
-    //     write_fastq(
-    //         &mutated_fasta_map,
-    //         &mut reads_dataset,
-    //         read_length,
-    //         overwrite_output,
-    //         fastq_filename,
-    //         paired_ended,
-    //         quality_score_model,
-    //         rng.clone()
-    //     )
-    //         .unwrap();
-    //
-    //     let outfile1 = Path::new("test_paired_r1.fastq");
-    //     let outfile2 = Path::new("test_paired_r2.fastq");
-    //     assert!(outfile1.exists());
-    //     assert!(outfile2.exists());
-    //     fs::remove_file(outfile1).unwrap();
-    //     fs::remove_file(outfile2).unwrap();
-    // }
-
 }

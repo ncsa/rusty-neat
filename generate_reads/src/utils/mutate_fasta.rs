@@ -3,7 +3,7 @@
 // mutations introduced
 //
 // mutate_sequence adds actual mutations to the fasta sequence
-
+use crate::errors::GenerateReadsErrors;
 use std::collections::HashMap;
 use common::structs::variants::{Variant, VariantType};
 

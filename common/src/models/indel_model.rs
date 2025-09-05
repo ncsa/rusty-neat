@@ -10,7 +10,7 @@
 use serde::{Deserialize, Serialize};
 use simple_rng::{NeatRng, NeatRngError};
 use thiserror::Error;
-use std::io;
+use std::{io, path::PathBuf};
 use flate2::read::GzDecoder;
 use crate::{models::lib::{model_reader, model_writer}, structs::{
     distributions::{DiscreteDistribution, DistributionErrors}, 
@@ -48,12 +48,12 @@ impl IndelModel {
         Ok(data)
     }
 
-    pub fn from(filename: &str) -> Result<Self, IndelModelError> {
+    pub fn from(filename: &PathBuf) -> Result<Self, IndelModelError> {
         let data: IndelModel = model_reader(filename)?;
         Ok(data)
     }
 
-    pub fn write_to_file(&self, filename: &str) -> Result<(), IndelModelError> {
+    pub fn write_to_file(&self, filename: &PathBuf) -> Result<(), IndelModelError> {
         model_writer(self, filename)?;
         Ok(())
     }

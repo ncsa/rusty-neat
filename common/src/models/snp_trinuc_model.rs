@@ -9,7 +9,7 @@ use log::error;
 use vectorize;
 use serde;
 use std::hash::Hash;
-use std::{fmt, io};
+use std::{fmt, io, path::PathBuf};
 use std::ops::Index;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -301,7 +301,7 @@ impl SnpTrinucModel {
 
     #[allow(unused)]
     /// we will write utilities to use this, eventually
-    fn from_file(&self, filename: &str) -> Result<Self, SnpTrinucError> {
+    fn from_file(&self, filename: &PathBuf) -> Result<Self, SnpTrinucError> {
         // Uses the serde_json crate to read a quality model from file
         let data: SnpTrinucModel = model_reader(filename).unwrap();
         Ok(data)
@@ -317,7 +317,7 @@ impl SnpTrinucModel {
 
     #[allow(unused)]
     /// we will write utilities to use this, eventually
-    fn write_out(&self, filename: &str) -> std::io::Result<()> {
+    fn write_out(&self, filename: &PathBuf) -> std::io::Result<()> {
         // Uses the serde_json crate to write out the json form of the model. This will help us
         // create base datasets from old neat data, and give us a way to write out models that are
         // generated from user data.
@@ -350,11 +350,11 @@ mod tests {
 
     #[test]
     fn test_model_write_read() {
-        let output_file: &'static str = "test.json.gz";
+        let output_file: PathBuf = PathBuf::from("test.json.gz");
         let model = SnpTrinucModel::default().unwrap();
         let frame = TrinucFrame::from((A, N, G));
         assert!(model.trinuc_distros.contains_key(&frame));
-        let result = model.write_out(output_file);
+        let result = model.write_out(&output_file);
         assert_eq!(result.unwrap(), ());
         fs::remove_file(output_file).unwrap();
     }

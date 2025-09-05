@@ -4,10 +4,11 @@
 // read coverage. Generate reads uses this to create a list of coordinates to take slices from
 // the mutated fasta file. These will either be read-length fragments or fragment model length
 // fragments.
-use common;
+use common::{self, models::fragment_length::FragmentLengthModel};
 use log::debug;
 use std::collections::VecDeque;
 use simple_rng::{NeatRng, NormalDistribution, DiscreteDistribution};
+use crate::errors::GenerateReadsErrors;
 
 fn cover_dataset(
     span_length: usize,
@@ -82,7 +83,7 @@ fn cover_dataset(
             gap_size += fragment_length - (read_length * 2)
         };
         // Picks a number between zero and a quarter of a read length
-        let wildcard: usize = (rng.rand_u32() % 10) as usize;
+        let wildcard: usize = (rng.rand_u32()? % 10) as usize;
         // adds to the start to give it some spice
         start += temp_end + wildcard;
         // sanity check. If we are already out of bounds, take the modulo
@@ -104,9 +105,8 @@ pub fn generate_reads(
     read_length: usize,
     coverage: usize,
     paired_ended: bool,
-    mean: Option<f64>,
-    st_dev: Option<f64>,
-    mut rng: NeatRng,
+    fragment_model: FragmentLengthModel,
+    rng: &mut NeatRng,
 ) -> Result<Vec<(usize, usize)>, &'static str> {
     // Takes:
     // sequence_length: The length of the sequence to generate reads for.
@@ -153,6 +153,7 @@ pub fn generate_reads(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use common::models::fragment_length;
     use simple_rng::NeatRng;
 
     #[test]
@@ -187,7 +188,7 @@ mod tests {
 
     #[test]
     fn test_generate_reads_single() {
-        let mutated_sequence = vec![0, 0, 2, 0, 3, 3, 3, 3, 0, 0, 0, 0, 0, 2, 2, 2, 4, 4, 4, 4];
+        let sequence = vec![0, 0, 2, 0, 3, 3, 3, 3, 0, 0, 0, 0, 0, 2, 2, 2, 4, 4, 4, 4];
         let read_length = 10;
         let coverage = 1;
         let paired_ended = false;
@@ -198,23 +199,22 @@ mod tests {
             "Cruel".to_string(),
             "World".to_string(),
         ]);
+        let fragment_model = FragmentLengthModel::default();
         let reads = generate_reads(
-            mutated_sequence.len(),
+            sequence.len(),
             read_length,
             coverage,
             paired_ended,
-            mean,
-            st_dev,
-            rng,
-        )
-        .unwrap();
+            fragment_model,
+            &mut rng,
+        ).unwrap();
         println!("{:?}", reads);
         assert!(reads.contains(&(0, 10)));
     }
 
     #[test]
     fn test_seed_rng() {
-        let mutated_sequence = vec![
+        let sequnce = vec![
             0, 0, 2, 0, 3, 3, 3, 3, 0, 0, 0, 0, 0, 2, 2, 2, 4, 4, 4, 4
         ];
         let read_length = 10;
@@ -227,27 +227,24 @@ mod tests {
             "Cruel".to_string(),
             "World".to_string(),
         ]);
+        let fragment_model = FragmentLengthModel::default();
         let run1 = generate_reads(
-            mutated_sequence.len(),
+            sequnce.len(),
             read_length,
             coverage,
             paired_ended,
-            mean,
-            st_dev,
-            rng.clone(),
-        )
-        .unwrap();
+            fragment_model,
+            &mut rng,
+        ).unwrap();
 
         let run2 = generate_reads(
-            mutated_sequence.len(),
+            sequnce.len(),
             read_length,
             coverage,
             paired_ended,
-            mean,
-            st_dev,
-            rng.clone(),
-        )
-        .unwrap();
+            fragment_model,
+            &mut rng,
+        ).unwrap();
 
         assert_eq!(run1, run2)
     }
@@ -265,15 +262,15 @@ mod tests {
             "Cruel".to_string(),
             "World".to_string(),
         ]);
-        let reads = generate_reads(
-            mutated_sequence.len(),
+        let fragment_model = FragmentLengthModel::default();
+        let run1 = generate_reads(
+            sequnce.len(),
             read_length,
             coverage,
             paired_ended,
-            mean,
-            st_dev,
-            rng.clone(),
-        );
+            fragment_model,
+            &mut rng,
+        ).unwrap();
         assert!(!reads.unwrap().is_empty())
     }
 }

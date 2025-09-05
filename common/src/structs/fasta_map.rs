@@ -12,8 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde;
 use serde_json;
 use std::fs::{read_to_string, File};
-use std::path::Path;
-use crate::structs::variants::Variant;
+use std::path::{Path, PathBuf};
 use crate::structs::nucleotides::Nucleotide;
 use log::{debug, error};
 
@@ -25,35 +24,19 @@ pub enum FastaMapError {
     BadCoordinatesError,
     #[error("FastaMap reported an out of bounds error.")]
     OutOfBoundsError,
+    #[error("FastaMap failed to validate the sequence map")]
+    SeqMapValidationError,
     #[error("FastaMap reported a ContigNotFoundError")]
     ContigNotFoundError(&'static str),
     #[error("FastaMap reported a serde error: {0}")]
-    SerdeValueError(serde::de::value::Error),
+    SerdeValueError(#[from] serde::de::value::Error),
     #[error("FastaMap reported an error from serde_json: {0}")]
-    SerdeJsonError(serde_json::Error),
+    SerdeJsonError(#[from] serde_json::Error),
     #[error("FastaMap reported a malformed filename error: {0}")]
-    MalformedFilenameError(ParseIntError),
+    MalformedFilenameError(#[from] ParseIntError),
 }
 
-impl From<serde_json::Error> for FastaMapError {
-    fn from(error: serde_json::Error) -> Self {
-        FastaMapError::SerdeJsonError(error)
-    }
-}
-
-impl From<serde::de::value::Error> for FastaMapError {
-    fn from(error: serde::de::value::Error) -> Self {
-        FastaMapError::SerdeValueError(error)
-    }
-}
-
-impl From<ParseIntError> for FastaMapError {
-    fn from(error: ParseIntError) -> Self {
-        FastaMapError::MalformedFilenameError(error)
-    }
-}
-
-pub fn decode_file_name(path_string: &str) -> Result<(usize, usize), FastaMapError> {
+pub fn decode_contig_filename(path_string: &PathBuf) -> Result<(usize, usize), FastaMapError> {
     // This function parses the filename according to the established convention in NEAT
     // contigname_0001100000_0001200000.json
     // where the 2 groups of numbers are the start and end points of the sequence block
@@ -61,7 +44,7 @@ pub fn decode_file_name(path_string: &str) -> Result<(usize, usize), FastaMapErr
     let mut underscores: Vec<usize> = Vec::new();
     let mut index = 0;
     // We'll extract just the file stem part of the path and convert to string
-    let filename = Path::new(path_string).file_stem().unwrap().display().to_string();
+    let filename = path_string.file_stem().unwrap().display().to_string();
     for char in filename.chars() {
         // Find all the underscores
         match char {
@@ -91,20 +74,66 @@ pub struct SequenceBlock {
     //   - ref_end: the end point of this sequence relative to the full contig
     //   - sequence: a list of Nucleotide data that encodes the sequence according to the pattern
     //         in the nucleotides package
+    //   - sequence_map: A map of the region. This should allow us to quickly find areas to mutate.
+    //        Note: this was moved from the contig level, because we were having to do a bunch of weird translations and
+    //              remappings and so this ended up making more sense.
     pub contig: String,
     pub ref_start: usize,
     pub ref_end: usize,
     pub sequence: Vec<Nucleotide>,
+    pub sequence_map: Vec<(RegionType, usize, usize)>,
 }
 
 impl SequenceBlock {
-    pub fn from(mut filename: &str) -> Result<Self, FastaMapError> {
+    pub fn from(mut filename: &PathBuf) -> Result<Self, FastaMapError> {
         // This is a check that the filename is properly encoded
-        (_, _) = decode_file_name(&filename)?;
-
+        (_, _) = decode_contig_filename(&filename)?;
+        // Load the sequence block
         let json_data = read_to_string(&mut filename)?;
         let sequence_block: SequenceBlock = serde_json::from_str(&json_data)?;
+        sequence_block.verify_regions()?;
         Ok(sequence_block)
+    }
+
+    pub fn get_non_n_regions(
+        &self
+    ) -> Result<Vec<(RegionType, usize, usize)>, FastaMapError> {
+        let mut return_regions = Vec::new();
+        for region in &self.sequence_map {
+            match region.0 {
+                RegionType::NonNRegion => continue,
+                RegionType::NRegion => return_regions.push(region.clone()),
+            }
+        }
+        Ok(return_regions)
+    }
+
+    fn verify_regions(&self) -> Result<(), FastaMapError> {
+        // assume we have only N-regions and then look for valid regions.
+        let mut all_ns = true;
+        let mut prev_end = 0;
+        for segment in &self.sequence_map {
+            match segment.0 {
+                RegionType::NRegion => {
+                    // We found a valid region
+                    if all_ns { all_ns = false }
+                    if prev_end > 0 {
+                        // prev_end == 0 means we are in the first loop, where we skip this block
+                        //
+                        // If prev_end != segment.1 means are regions are either overlapping or not fully inclusive.
+                        if prev_end != segment.1 {
+                            return Err(FastaMapError::SeqMapValidationError)
+                        }
+                    };
+                    // update prev_end for first and subsequent loops.
+                    prev_end = segment.2.clone();                    
+                },
+                RegionType::NonNRegion => {
+                    prev_end = segment.2.clone();
+                },
+            }
+        };
+        Ok(())
     }
 
     pub fn write_block(&mut self, mut file: File) -> std::io::Result<()> {
@@ -127,7 +156,7 @@ impl SequenceBlock {
     }
 
     pub fn get_subseq(&self, request_start: usize, request_end: usize) -> Result<Vec<Nucleotide>, FastaMapError> {
-
+        // Fetches a subsequence of the original sequence
         if request_start >= request_end {
             error!("Bad coordinates for sequence block retrieval - start: {} >= end: {}", request_start, request_end);
             return Err(FastaMapError::BadCoordinatesError)
@@ -152,7 +181,7 @@ impl SequenceBlock {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum RegionType {
     NRegion,
     NonNRegion,
@@ -160,6 +189,7 @@ pub enum RegionType {
 
 #[derive(Debug, Clone)]
 // Each Contig contains a vector of filenames, each containing a sequence block in json format.
+// The contig level keeps things organized
 pub struct Contig {
     // This is the short name of the contig
     pub name: String,
@@ -168,77 +198,26 @@ pub struct Contig {
     // This is a vector of filenames. Each filename represents a sequence block and can be accessed via the contig block
     // The naming convention of the filenames will follow this format: contigname_0001100000_0001200000.jfa
     // Where contigname = the short name of the contig, the first string of digits is the start point of that file and the second block of digits is the end point 
-    pub blocks: Vec<String>,
-    // This is a map of the contig, giving the overall N-region versus NonN-regions of the contig
-    pub contig_map: Vec<(usize, usize, RegionType)>,
+    pub blocks: Vec<PathBuf>,
 }
 
 impl Contig {
     pub fn new(
         name: String,
         len: usize,
-        blocks: Vec<String>,
-        map: Vec<(usize, usize, RegionType)>
+        blocks: Vec<PathBuf>,
     ) -> Result<Self, FastaMapError> {
-        
+
         Ok(Contig {
             name,
             len,
             blocks,
-            contig_map: map,
         })
-    }
-
-    pub fn get_sequence_block(&self, request_start: usize, request_end: usize) -> Result<Vec<String>, &'static str> {
-        // This attempts to find a sequence block matching the first coordinate. Some coordinates may have two
-        // files that have this location.
-        // 
-        // We may need a special case for when the location is in more than one block
-        // Instead of a panic, we return a string error, in case the calling code is not necessarily expecting 
-        // to find a result, it can deal with that itself.
-        let mut found_blocks: Vec<String> = Vec::new();
-        for block_name in &self.blocks {
-            // Unwrapping here because we want a custom return error message
-            let (start, end) = decode_file_name(block_name).unwrap();
-            if ((request_start >= start) && (request_start < end)) && 
-                ((request_end > start) && (request_end <= end)) {
-                // In an attempt to keep features from spanning more than one sequence block, making
-                // the simulaton more difficult, we're only looking for sequences that entirely contain
-                // the feature. We could potentially improve on this idea in the future.
-                //
-                // block found! Note they may not be univque because of overlaps
-                found_blocks.push(block_name.clone());
-            }
-        }
-        if found_blocks.is_empty(){
-            Err("No blocks found matching range")
-        } else {
-            Ok(found_blocks)
-        }
-    }
-
-    pub fn map_variants(&self, variants_list: Vec<Variant>) -> Result<HashMap<Variant, Vec<String>>, FastaMapError> {
-        // This returns a hashmap of the variants from the list as the key, with values being sequence blocks that the variant
-        // intersects. This gives a complete map for the entire contig
-        let mut variant_map: HashMap<Variant, Vec<String>> = HashMap::new();
-
-        for variant in variants_list.iter() {
-            let request_start = variant.location;
-            // Guaranteed to work because a reference vector must have at least 1 element
-            let request_end = request_start + variant.reference.len();
-            let result = self.get_sequence_block(request_start, request_end);
-            match result {
-                Ok(result) => { variant_map.insert(variant.clone(), result); },
-                // This is a little weird, but we'll debug later
-                Err(e) => { debug!("{}", e) }
-            }
-        }
-        Ok(variant_map)
     }
 }
 
 #[derive(Debug)]
-// The FastaMap holds all the data for retrieving items from the fasta files
+// The FastaMap holds all the data for retrieving items from the fasta files and constructing outputs
 pub struct FastaMap {
     // A vector of Contig objects, one for each contig in the fasta file
     pub contigs: Vec<Contig>,
@@ -282,8 +261,9 @@ mod tests {
             ref_start: 0,
             ref_end: 20,
             sequence: vec![A,A,A,A,A,A,A,A,A,A,A,A,T,T,T,A,A,A,T,A],
+            sequence_map: vec![(NonNRegion, 0, 20)]
         };
-        let filename = "chrom1_000_020.json".to_string();
+        let filename = PathBuf::from("chrom1_000_020.json");
         // Test write works
         let file = File::create(&filename).unwrap();
         seq_block.write_block(file).unwrap();
@@ -298,15 +278,15 @@ mod tests {
 
     #[test]
     fn test_filename_decoder() {
-        let filename = "chr1_001000_002000.json".to_string();
-        let (a, b) = decode_file_name(&filename).unwrap();
+        let filename = PathBuf::from("chr1_001000_002000.json");
+        let (a, b) = decode_contig_filename(&filename).unwrap();
         assert_eq!(a, 1000);
         assert_eq!(b, 2000)
     }
     
     #[test]
     fn test_basic_map() {
-        let filename = "chrom1_0000_0020.json".to_string();
+        let filename = PathBuf::from("chrom1_0000_0020.json");
         let sequences = vec![filename];
         let contig_map = Vec::from([
             (0, 12, NRegion),
@@ -315,12 +295,11 @@ mod tests {
             (18, 19, NonNRegion),
             (19, 20, NRegion),
         ]);
-        let contig = Contig::new(
-            "chrom1".to_string(),
-            20,
-            sequences,
-            contig_map,
-        ).unwrap();
+        let contig = Contig {
+            name: "chrom1".to_string(),
+            len: 20,
+            blocks: sequences,
+        };
         let name_map = HashMap::from([
             ("chrom1".to_string(), ">chrom1 foo bar\n".to_string())
         ]);
@@ -337,13 +316,7 @@ mod tests {
             name: \"chrom1\", \
             len: 20, \
             blocks: [\
-                \"chrom1_0000_0020.json\"], \
-            contig_map: [\
-                (0, 12, NRegion), \
-                (12, 15, NonNRegion), \
-                (15, 18, NRegion), \
-                (18, 19, NonNRegion), \
-                (19, 20, NRegion)] }], \
+                \"chrom1_0000_0020.json\"] }], \
             name_map: {\"chrom1\": \">chrom1 foo bar\\n\"}, \
             contig_order: [\"chrom1\"] }";
 

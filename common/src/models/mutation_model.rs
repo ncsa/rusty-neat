@@ -1,7 +1,7 @@
 //! The mutation model
 use std;
-use bincode::de;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use thiserror::Error;
 use simple_rng::{NeatRng, NeatRngError};
 use log::error;
@@ -109,17 +109,17 @@ impl MutationModel {
         })
     }
 
-    pub fn from_file(filename: &str) -> Result<Self, MutationModelError> {
+    pub fn from_file(filename: &PathBuf) -> Result<Self, MutationModelError> {
         let data: MutationModel = model_reader(filename)?;
         Ok(data)
     }
 
-    pub fn write_to_file(&self, filename: &str) -> Result<(), MutationModelError> {
+    pub fn write_to_file(&self, filename: &PathBuf) -> Result<(), MutationModelError> {
         model_writer(self, filename)?;
         Ok(())
     }
 
-    fn generate_genotype(&mut self, ploidy: usize, is_homozygous: bool) -> Result<Vec<usize>, MutationModelError> {
+    fn generate_genotype(&self, ploidy: usize, is_homozygous: bool) -> Result<Vec<usize>, MutationModelError> {
         // "Homozygous" is ambiguous for polyploid organisms, so we'll just take "heterozygous" to
         // mean roughly half the reads will have the variant, to keep it simple
         // The is_homozygous flag is expected to be randomly determined in practice
@@ -132,7 +132,7 @@ impl MutationModel {
     }
 
     pub fn generate_mutation(
-        &mut self,
+        &self,
         // A pointer to the reference sequence to be mutated
         reference_sequence: &Vec<Nucleotide>,
         // This is the start position of the variant, the POS field of a VCF
@@ -242,10 +242,10 @@ mod tests {
 
     #[test]
     fn test_model_read_write() {
-        let output_file: &'static str = "default_mutation_model.json.gz";
+        let output_file: PathBuf = PathBuf::from("default_mutation_model.json.gz");
         let model: MutationModel = MutationModel::default().unwrap();
         assert_eq!(model.mutation_rate, 0.0010987132390211135);
-        let result = model.write_to_file(output_file);
+        let result = model.write_to_file(&output_file);
         assert_eq!(result.unwrap(), ());
         // fs::remove_file(output_file).unwrap();
     }

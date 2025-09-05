@@ -1,5 +1,5 @@
 use log::debug;
-use std::io;
+use std::{io, path::PathBuf};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use crate::{
@@ -10,53 +10,30 @@ use crate::{
 };
 use simple_rng::{NeatRng, NeatRngError};
 
-#[derive(Error, Debug)]
+#[derive(Debug, Error)]
 pub enum SeqModelError{
     #[error("Error creating sequencing error model")]
     ModelCreationError,
     #[error("Error creating transition matrix: {0}")]
-    TransMatrixError(TransitionMatrixError),
+    TransMatrixError(#[from] TransitionMatrixError),
     #[error("Error sampling distribution: {0}")]
-    DistributionError(DistributionErrors),
+    DistributionError(#[from] DistributionErrors),
     #[error("Error with rng: {0}")]
-    RngError(NeatRngError),
+    RngError(#[from] NeatRngError),
     #[error("No RNG supplied for this model.")]
     MissingRngError,
     #[error("Sequencing Error model return an IO error: {0}")]
-    IoError(io::Error),
+    IoError(#[from] io::Error),
 }
 
-impl From<io::Error> for SeqModelError {
-    fn from(error: io::Error) -> Self {
-        SeqModelError::IoError(error)
-    }
-}
-
-impl From<DistributionErrors> for SeqModelError {
-    fn from(error: DistributionErrors) -> Self {
-        SeqModelError::DistributionError(error)
-    }
-}
-
-impl From<NeatRngError> for SeqModelError {
-    fn from(error: NeatRngError) -> Self {
-        SeqModelError::RngError(error)
-    }
-}
-
-impl From<TransitionMatrixError> for SeqModelError {
-    fn from(error: TransitionMatrixError) -> Self {
-        SeqModelError::TransMatrixError(error)
-    }
-}
-
+#[derive(Debug)]
 pub enum SequencingErrorType {
     SnpError(Nucleotide),
     InsertionError(Vec<Nucleotide>),
     DeletionError(usize),
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SequencingErrorModel {
     // Neat only dealt with 2 types of sequencing errors: snps and small indels.
     // We will retain that idea and assume it is accurate.
@@ -103,12 +80,12 @@ impl SequencingErrorModel {
         })
     }
 
-    pub fn from_file(filename: &str) -> Result<Self, SeqModelError> {
+    pub fn from_file(filename: &PathBuf) -> Result<Self, SeqModelError> {
         let data: SequencingErrorModel = model_reader(filename).unwrap();
         Ok(data)
     }
 
-    pub fn write_model(&self, filename: &str) -> Result<(), SeqModelError> {
+    pub fn write_model(&self, filename: &PathBuf) -> Result<(), SeqModelError> {
         model_writer(self, filename)?;
         Ok(())
     }

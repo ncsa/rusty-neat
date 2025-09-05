@@ -4,5 +4,5 @@
 pub mod file_io;
 pub mod folder_tools;
 pub mod fastq_tools;
-pub mod fasta_tools;
+pub mod fasta_reader;
 pub mod vcf_tools;

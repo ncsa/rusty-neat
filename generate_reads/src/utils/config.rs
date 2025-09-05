@@ -1,9 +1,7 @@
 // This is the run configuration for this particular run, which holds the parameters needed by the
 // various side functions. It is build with a ConfigurationBuilder, which can take either a
 // config yaml file or command line arguments and turn them into the configuration.
-use crate::utils;
 use chrono::Utc;
-use common;
 
 use log::{info, warn};
 use serde_yml::Value;
@@ -11,8 +9,11 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::string::String;
 use std::{env, fs};
-use utils::cli::Cli;
-use common::file_tools::folder_tools::check_create_dir;
+use crate::{
+    common::file_tools::folder_tools::check_create_dir,
+    errors::GenerateReadsErrors,
+    utils::cli::Cli
+};
 
 #[derive(Debug, Clone)]
 pub struct RunConfiguration {
@@ -31,7 +32,6 @@ pub struct RunConfiguration {
     // fragment_st_dev: Standard deviation of the fragment mean describing the sample set to sample
     // fragments from.
     // produce_fastq: True or false on whether to produce an output fastq file.
-    // produce_fasta: True or false on whether to produce an output fasta file, 1 per ploid.
     // produce_vcf: True or false on whether to produce an output VCF file, with genotyped variants.
     // produce_bam: True or false on whether to produce an output BAM file, which will be aligned to
     // the reference.
@@ -48,7 +48,6 @@ pub struct RunConfiguration {
     pub fragment_mean: Option<f64>,
     pub fragment_st_dev: Option<f64>,
     pub produce_fastq: bool,
-    pub produce_fasta: bool,
     pub produce_vcf: bool,
     pub produce_bam: bool,
     pub rng_seed: Option<String>,
@@ -57,15 +56,20 @@ pub struct RunConfiguration {
     pub minimum_mutations: usize,
     pub output_dir: PathBuf,
     pub output_prefix: String,
+    pub output_fastq_1: Option<String>,
+    pub output_fastq_2: Option<String>,
+    pub output_vcf: Option<String>,
+    pub output_bam: Option<String>, 
     // model input
-    pub quality_score_data: Option<String>,
-    pub mutation_model_data: Option<String>,
-    pub fragment_model_data: Option<String>
+    pub quality_score_model: Option<PathBuf>,
+    pub mutation_model: Option<PathBuf>,
+    pub fragment_model: Option<PathBuf>,
+    pub sequence_error_model: Option<PathBuf>,
 }
 
 impl RunConfiguration {
     fn default() -> RunConfiguration {
-        RunConfiguration { 
+        let mut config = RunConfiguration { 
             reference: String::new(),
             read_len: 151, 
             coverage: 10, 
@@ -75,7 +79,6 @@ impl RunConfiguration {
             fragment_mean: None, 
             fragment_st_dev: None, 
             produce_fastq: true, 
-            produce_fasta: false, 
             produce_vcf: false, 
             produce_bam: false, 
             rng_seed: None,
@@ -84,7 +87,17 @@ impl RunConfiguration {
             minimum_mutations: 0,
             output_dir: env::current_dir().unwrap(), 
             output_prefix: "neat_out".to_string(),
-        }
+            output_fastq_1: None,
+            output_fastq_2: None,
+            output_vcf: None,
+            output_bam: None, 
+            quality_score_model: None,
+            mutation_model: None,
+            fragment_model: None,
+            sequence_error_model: None,
+        };
+        config.update_and_log();
+        config
     }
 
     pub fn from_yaml_file(yaml_file: String) -> RunConfiguration {
@@ -169,11 +182,6 @@ impl RunConfiguration {
                                     .as_bool()
                                     .expect(&generate_error(&key, "boolean", &value))
                             }
-                            "produce_fasta" => {
-                                configuration.produce_fasta = value
-                                    .as_bool()
-                                    .expect(&generate_error(&key, "boolean", &value))
-                            }
                             "produce_vcf" => {
                                 configuration.produce_vcf = value
                                     .as_bool()
@@ -206,18 +214,64 @@ impl RunConfiguration {
                             }
                             "output_dir" => {
                                 let output_path = value.as_str().unwrap().to_string();
+                                if !Path::new(&output_path).is_dir() {
+                                    generate_error(&key, "Path", &value);
+                                }
                                 configuration.output_dir = PathBuf::from(output_path);
                             }
                             "output_prefix" => {
-                                configuration.output_prefix = value.as_str().unwrap().to_string()
+                                configuration.output_prefix = value
+                                    .as_str()
+                                    .expect(&generate_error(&key, "String", &value))
+                                    .to_string()
                             }
+                            "quality_score_model" => {
+                                let output_path = value
+                                    .as_str()
+                                    .expect("Value for quality_score_model must be a string")
+                                    .to_string();
+                                if !Path::new(&output_path).is_file() {
+                                    generate_error(&key, "Path", &value);
+                                }
+                                configuration.quality_score_model = Some(PathBuf::from(output_path))
+                            }
+                            "mutation_model" => {
+                                let output_path = value
+                                    .as_str()
+                                    .expect("Value for mutation model must be a string")
+                                    .to_string();
+                                if !Path::new(&output_path).is_file() {
+                                    generate_error(&key, "Path", &value);
+                                }
+                                configuration.mutation_model = Some(PathBuf::from(output_path))
+                            }
+                            "fragment_model_datafile" => {
+                                let output_path = value
+                                    .as_str()
+                                    .expect("Value for fragment lengt model must be a string")
+                                    .to_string();
+                                if !Path::new(&output_path).is_file() {
+                                    generate_error(&key, "Path", &value);
+                                }
+                                configuration.mutation_model = Some(PathBuf::from(output_path))
+                            },
+                            "sequence_error_model" => {
+                                let output_path = value
+                                    .as_str()
+                                    .expect("Value for mutation model must be a string")
+                                    .to_string();
+                                if !Path::new(&output_path).is_file() {
+                                    generate_error(&key, "Path", &value);
+                                }
+                                configuration.mutation_model = Some(PathBuf::from(output_path))
+                            },
                             _ => continue,
                         },
                     }
                 }
             }
         }
-        configuration.check_and_print();
+        configuration.update_and_log();
         configuration
     }
 
@@ -253,11 +307,11 @@ impl RunConfiguration {
             configuration.minimum_mutations = input_min_muts;
         }
         // Wraps things in a Box to move this object to the heap
-        configuration.check_and_print();
+        configuration.update_and_log();
         configuration
     }
 
-    pub fn check_and_print(&mut self) {
+    pub fn update_and_log(&mut self) {
         // This does a final check of the configuration for valid items. It will print info
         // message of the items, to work as a record and to assist in debugging any issues that
         // come up.
@@ -291,7 +345,7 @@ impl RunConfiguration {
         let file_prefix = format!("{:?}/{}", self.output_dir, self.output_prefix);
 
         // No point in running if we aren't producing files
-        if !(self.produce_fastq | self.produce_fasta | self.produce_vcf | self.produce_bam) {
+        if !(self.produce_fastq | self.produce_vcf | self.produce_bam) {
             panic!("All file types set to false, no files would be produced.");
         }
 
@@ -309,21 +363,29 @@ impl RunConfiguration {
                     self.fragment_st_dev.unwrap()
                 );
                 info!("Producing fastq files:");
-                info!("\t> {}_r1.fastq", file_prefix);
-                info!("\t> {}_r2.fastq", file_prefix);
+
+                let fastq_1 = format!("{}_r1.fastq", file_prefix);
+                info!("\t> {}", &fastq_1);
+                self.output_fastq_1 = Some(fastq_1);
+                let fastq_2 = format!("{}_r2.fastq", file_prefix);
+                info!("\t> {}", fastq_2);
+                self.output_fastq_2 = Some(fastq_2)
             }
         } else {
             info!("Producing fastq file:");
-            info!("\t> {}_r1.fastq", file_prefix);
-        }
-        if self.produce_fasta {
-            info!("Producing fasta file: {}.fasta", file_prefix);
+            let fastq_1 = format!("{}_r1.fastq", file_prefix);
+            info!("\t> {}", fastq_1);
+            self.output_fastq_1 = Some(fastq_1);
         }
         if self.produce_vcf {
-            info!("Producing vcf file: {}.vcf", file_prefix)
+            let vcf: String = format!("{}.vcf", file_prefix);
+            info!("Producing vcf file: {}.vcf", vcf);
+            self.output_vcf = Some(vcf);
         }
         if self.produce_bam {
-            info!("Produce bam file: {}.bam", file_prefix)
+            let bam: String = format!("{}.bam", file_prefix);
+            info!("Produce bam file: {}", bam);
+            self.output_vcf = Some(bam);
         }
 
         match &self.rng_seed {
@@ -376,7 +438,6 @@ mod tests {
             fragment_st_dev: Option::from(33.0),
             produce_fastq: false,
             produce_bam: true,
-            produce_fasta: true,
             produce_vcf: true,
             rng_seed: None,
             seed_vec: Vec::new(),
@@ -384,6 +445,14 @@ mod tests {
             minimum_mutations: 0,
             output_dir: PathBuf::from("/my/my"),
             output_prefix: String::from("Hey.hey"),
+            output_fastq_1: None,
+            output_fastq_2: None,
+            output_vcf: None,
+            output_bam: None, 
+            quality_score_model: None,
+            mutation_model: None,
+            fragment_model: None,
+            sequence_error_model: None,
         };
 
         println!("{:?}", test_configuration);
@@ -398,7 +467,6 @@ mod tests {
         assert_eq!(test_configuration.produce_fastq, false);
         assert_eq!(test_configuration.produce_vcf, true);
         assert_eq!(test_configuration.produce_bam, true);
-        assert_eq!(test_configuration.produce_fasta, true);
         assert_eq!(test_configuration.rng_seed, None);
         assert_eq!(test_configuration.overwrite_output, true);
         assert_eq!(test_configuration.output_dir, PathBuf::from("/my/my"));
@@ -465,7 +533,7 @@ mod tests {
     #[should_panic]
     fn test_bad_config_builder() {
         let mut config = RunConfiguration::default();
-        config.check_and_print();
+        config.update_and_log();
     }
 
     #[test]
@@ -473,7 +541,7 @@ mod tests {
         let mut config = RunConfiguration::default();
         config.reference = "test_data/references/H1N1.fa".to_string();
         config.output_dir = PathBuf::from("contig/");
-        config.check_and_print();
+        config.update_and_log();
         fs::remove_dir("contig").unwrap()
     }
 
@@ -501,7 +569,7 @@ mod tests {
         let mut config = RunConfiguration::default();
         config.reference = "test_data/references/H1N1.fa".to_string();
         config.overwrite_output = true;
-        config.check_and_print();
+        config.update_and_log();
     }
 
     #[test]
@@ -512,25 +580,11 @@ mod tests {
         config.fragment_mean = Some(100.0);
         config.fragment_st_dev = Some(10.0);
         // tests first branch of if statement for paired_ended & produce_fastq = true
-        config.check_and_print();
+        config.update_and_log();
         // Checks the alternative pe = true, produce_fastq = false
         config.produce_fastq = false;
         // need to produce at least one file or check will panic
-        config.produce_fasta = true;
-        config.check_and_print();
-    }
-
-    #[test]
-    fn test_produce_fasta_messages() {
-        let mut config = RunConfiguration::default();
-        config.reference = "test_data/references/H1N1.fa".to_string();
-        config.produce_fasta = true;
-        config.check_and_print();
-        config.produce_vcf = true;
-        config.check_and_print();
-        config.produce_bam = true;
-        config.check_and_print();
-        // If it passes all the checks, we're good.
+        config.update_and_log();
     }
 
     #[test]
@@ -539,7 +593,7 @@ mod tests {
         let mut config = RunConfiguration::default();
         config.reference = "test_data/references/H1N1.fa".to_string();
         config.produce_fastq = false;
-        config.check_and_print();
+        config.update_and_log();
     }
 
     #[test]
@@ -549,7 +603,7 @@ mod tests {
         config.reference = "test_data/references/H1N1.fa".to_string();
         // paired end set to true, by default, fragment mean and st dev are None
         config.paired_ended = true;
-        config.check_and_print();
+        config.update_and_log();
     }
 
     #[test]
@@ -559,7 +613,7 @@ mod tests {
         config.reference = "test_data/references/H1N1.fa".to_string();
         config.paired_ended = true;
         config.fragment_st_dev = Some(10.0);
-        config.check_and_print();
+        config.update_and_log();
     }
 
     #[test]
@@ -569,7 +623,7 @@ mod tests {
         config.reference = "test_data/references/H1N1.fa".to_string();
         config.paired_ended = true;
         config.fragment_mean = Some(100.0);
-        config.check_and_print();
+        config.update_and_log();
     }
 
     #[test]

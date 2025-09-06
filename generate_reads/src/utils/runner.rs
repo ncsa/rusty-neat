@@ -14,11 +14,7 @@ use crate::common::{
     },
     models::{
         mutation_model::MutationModel,
-        fragment_length::{
-            DiscreteFragmentLengthModel,
-            FragmentLengthModel,
-            NormalFragmentLengthModel,
-        },
+        fragment_length::FragmentLengthModel,
         quality_scores::QualityScoreModel,
         sequencing_error_model::{
             SequencingErrorModel
@@ -69,19 +65,19 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
         // FragmentLengthModel is an enum that allows us to choose one of two models.
         match config.fragment_model {
             Some(filename) => {
-                DiscreteFragmentLengthModel::discrete_from_file(&filename)?.into()
+                FragmentLengthModel::discrete_from_file(&filename)?.into()
             },
             None => {
                 match config.fragment_mean {
                     Some(mean) => {
-                        NormalFragmentLengthModel::new_from_mean(
+                        FragmentLengthModel::new_normal(
                             mean,
                             // Config should already have caught issues with missing data
                             config.fragment_st_dev.unwrap()
                         )?.into()
                     },
                     None => {
-                        NormalFragmentLengthModel::default()?.into()
+                        FragmentLengthModel::default()?.into()
                     },
                 }
             }
@@ -118,7 +114,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
     // Todo think about if we want to make a read container struct. 
     //    We have sequece retrieval covered by fasta map, so I'm feeling like it's
     //    just extra work at this point.
-    let all_reads: HashMap<String, Vec<(usize, usize)>> = HashMap::new();
+    let all_reads: HashMap<String, Vec<(usize, usize, usize, usize)>> = HashMap::new();
     // iterate over contigs
     for (i, contig) in fasta_map.contigs.iter().enumerate() {
         // Iterate over blocks within the contig

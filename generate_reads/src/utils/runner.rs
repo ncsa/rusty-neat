@@ -1,4 +1,5 @@
 use crate::errors::GenerateReadsErrors;
+use common::file_tools::fastq_tools::write_block_fastq_bgz;
 use tempfile;
 use std::time;
 use log::{info, debug};
@@ -172,6 +173,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
                 block_variants.extend(variants);
             }
             
+            /// TODO generate reads is currently only generating read 1ses.
             let contig_reads = generate_reads(
                 current_block.get_len(),
                 config.read_len,
@@ -179,11 +181,11 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
                 config.paired_ended,
                 fragment_length_model,
                 rng,
-            );
+            ).unwrap();
 
             /// TODO update to write block fastq file
             if config.produce_fastq {
-                write_fastq(
+                write_block_fastq_bgz(
                     &current_block,
                     &mut all_reads,
                     config.read_len,

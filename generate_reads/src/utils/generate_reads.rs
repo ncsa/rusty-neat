@@ -4,11 +4,63 @@
 // read coverage. Generate reads uses this to create a list of coordinates to take slices from
 // the mutated fasta file. These will either be read-length fragments or fragment model length
 // fragments.
-use common::{self, models::fragment_length::FragmentLengthModel};
+use crate::common::{
+    models::fragment_length::FragmentLengthModel,
+    structs::distributions::{DiscreteDistribution, NormalDistribution}
+};
 use log::debug;
 use std::collections::VecDeque;
-use simple_rng::{NeatRng, NormalDistribution, DiscreteDistribution};
+use simple_rng::NeatRng;
 use crate::errors::GenerateReadsErrors;
+
+pub fn generate_reads(
+    sequence_length: usize,
+    read_length: usize,
+    coverage: usize,
+    paired_ended: bool,
+    fragment_model: FragmentLengthModel,
+    rng: &mut NeatRng,
+) -> Result<Vec<(usize, usize, usize, usize)>, &'static str> {
+    // Takes:
+    // sequence_length: The length of the sequence to generate reads for.
+    // read_length: the length ef the reads for this run
+    // coverage: the average depth of coverage for this run
+    // rng: the random number generator for the run
+    // Returns:
+    // HashSet of vectors representing the read sequences, stored on the heap in box.
+    //
+    // This takes a mutated sequence and produces a set of reads based on the mutated sequence. For
+    // paired ended reads, this will generate a set of reads from each end, by taking the reverse
+    // complement in the output
+
+    // todo We need to select for non-N areas for the reads, or at least have reads be more than 1/2
+    //  true bases, I think.
+    let mut fragment_pool: Vec<usize> = Vec::new();
+    if paired_ended {
+        let num_frags = (sequence_length / read_length) * coverage;
+        // add fragments to the fragment pool
+        for _ in 0..num_frags {
+            let frag = fragment_model;
+            fragment_pool.push(frag);
+        }
+    }
+    // Generate a vector of read positions
+    debug!("Generating read coordinates.");
+    let read_positions: Vec<(usize, usize)> = cover_dataset(
+        sequence_length,
+        read_length,
+        fragment_pool,
+        coverage,
+        &mut rng
+    );
+
+    debug!("Outputting read set");
+    if read_positions.is_empty() {
+        Err("No reads generated")
+    } else {
+        Ok(read_positions)
+    }
+}
 
 fn cover_dataset(
     span_length: usize,
@@ -98,56 +150,6 @@ fn cover_dataset(
         }
     }
     read_set
-}
-
-pub fn generate_reads(
-    sequence_length: usize,
-    read_length: usize,
-    coverage: usize,
-    paired_ended: bool,
-    fragment_model: FragmentLengthModel,
-    rng: &mut NeatRng,
-) -> Result<Vec<(usize, usize)>, &'static str> {
-    // Takes:
-    // sequence_length: The length of the sequence to generate reads for.
-    // read_length: the length ef the reads for this run
-    // coverage: the average depth of coverage for this run
-    // rng: the random number generator for the run
-    // Returns:
-    // HashSet of vectors representing the read sequences, stored on the heap in box.
-    //
-    // This takes a mutated sequence and produces a set of reads based on the mutated sequence. For
-    // paired ended reads, this will generate a set of reads from each end, by taking the reverse
-    // complement in the output
-
-    // todo We need to select for non-N areas for the reads, or at least have reads be more than 1/2
-    //  true bases, I think.
-    let mut fragment_pool: Vec<usize> = Vec::new();
-    if paired_ended {
-        let num_frags = (sequence_length / read_length) * (coverage * 2);
-        let fragment_distribution = NormalDistribution::new(mean.unwrap(), st_dev.unwrap());
-        // add fragments to the fragment pool
-        for _ in 0..num_frags {
-            let frag = fragment_distribution.sample(&mut rng).round() as usize;
-            fragment_pool.push(frag);
-        }
-    }
-    // Generate a vector of read positions
-    debug!("Generating read coordinates.");
-    let read_positions: Vec<(usize, usize)> = cover_dataset(
-        sequence_length,
-        read_length,
-        fragment_pool,
-        coverage,
-        &mut rng
-    );
-
-    debug!("Outputting read set");
-    if read_positions.is_empty() {
-        Err("No reads generated")
-    } else {
-        Ok(read_positions)
-    }
 }
 
 #[cfg(test)]

@@ -2,43 +2,38 @@
 //! from the py/probability.py file in tag 2.1 of github.com/ncsa/neat
 //! (see also github.com/zstephens/neat-genreads). We may try the statrs Categorical distribution
 //! as well, as I think it does the same thing.
+use std::fmt;
+
 use simple_rng::NeatRngError;
 use thiserror::Error;
-use serde::{Deserialize, Serialize};
-use statrs::{distribution::{ContinuousCDF, Normal}, statistics::Distribution};
+use serde::{
+    de::{
+        self, 
+        Visitor,
+        MapAccess,
+    }, 
+    Deserialize, 
+    Serialize
+};
+use statrs::{
+    distribution::{ContinuousCDF, Normal},
+    statistics::Distribution
+};
 
 #[derive(Debug, Error)]
 pub enum DistributionErrors {
     #[error("A distribution returned a sampling error: {0}.")]
     SamplingError(&'static str),
     #[error("A distribution returned an Rng Error: {0}")]
-    RngError(NeatRngError),
+    RngError(#[from] NeatRngError),
     #[error("Requested a value vector from an index-only model")]
     VectorNotFound,
-}
-
-impl From<NeatRngError> for DistributionErrors {
-    fn from(error: NeatRngError) -> Self {
-        DistributionErrors::RngError(error)
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiscreteDistribution {
     values: Vec<usize>,
     weights: Vec<f64>,
-}
-
-fn cumulative_sum(a: &mut Vec<f64>) -> Result<Vec<f64>, DistributionErrors> {
-    // This calculation allows us to sample the dataset with a simple bisect,
-    // which is very fast an convenient.
-    let mut acc = 0.0;
-    let mut cumvec = Vec::with_capacity(a.len());
-    for x in a {
-        acc += *x;
-        cumvec.push(acc);
-    };
-    Ok(cumvec)
 }
 
 impl DiscreteDistribution {
@@ -94,7 +89,9 @@ impl DiscreteDistribution {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+/// TODO: Figure out how to implement serialize and deserialize for normal. I think it should be easy 
+/// enough to do, but I'm tired
+#[derive(Debug, Clone)]
 pub struct NormalDistribution {
     distribution: Normal,
 }
@@ -125,6 +122,18 @@ impl NormalDistribution {
         // generate the corresponding Y value from the PDF. Very handy!
         Ok(self.distribution.inverse_cdf(rand))
     }
+}
+
+fn cumulative_sum(a: &mut Vec<f64>) -> Result<Vec<f64>, DistributionErrors> {
+    // This calculation allows us to sample the dataset with a simple bisect,
+    // which is very fast an convenient.
+    let mut acc = 0.0;
+    let mut cumvec = Vec::with_capacity(a.len());
+    for x in a {
+        acc += *x;
+        cumvec.push(acc);
+    };
+    Ok(cumvec)
 }
 
 #[cfg(test)]

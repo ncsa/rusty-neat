@@ -239,14 +239,15 @@ impl StatisticalModels {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn test_model_read_write() {
-        let output_file: PathBuf = PathBuf::from("default_mutation_model.json.gz");
+        let output_file: PathBuf = PathBuf::from("test.json.gz");
         let model: MutationModel = MutationModel::default().unwrap();
         assert_eq!(model.mutation_rate, 0.0010987132390211135);
         let result = model.write_to_file(&output_file);
         assert_eq!(result.unwrap(), ());
-        // fs::remove_file(output_file).unwrap();
+        fs::remove_file(output_file).unwrap();
     }
 }

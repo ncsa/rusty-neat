@@ -1,5 +1,4 @@
 use crate::errors::GenerateReadsErrors;
-use common::structs::fasta_map::FastaMap;
 use tempfile;
 use std::time;
 use log::{info, debug};
@@ -11,6 +10,7 @@ use crate::common::{
     file_tools::{
         fasta_reader::read_fasta,
         fastq_tools::write_fastq,
+        vcf_tools::write_vcf,
     },
     structs::{
         variants::Variant,
@@ -43,7 +43,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
     //
     // Quality score model
     let quality_score_model = {
-        match config.quality_score_model {
+        match &config.quality_score_model {
             Some(filename) => {
                  QualityScoreModel::from_file(&filename)?
             },
@@ -55,7 +55,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
 
     // load mutation model
     let mutation_model = {
-        match config.mutation_model {
+        match &config.mutation_model {
             Some(filename) => {
                 MutationModel::from_file(&filename)?
             },
@@ -68,7 +68,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
     // Fragment Length Model
     let fragment_length_model: FragmentLengthModel = {
         // FragmentLengthModel is an enum that allows us to choose one of two models.
-        match config.fragment_model {
+        match &config.fragment_model {
             Some(filename) => {
                 FragmentLengthModel::discrete_from_file(&filename)?.into()
             },
@@ -91,7 +91,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
 
     // Load Sequencing Error Model
     let seq_error_model: SequencingErrorModel = {
-        match config.sequence_error_model {
+        match &config.sequence_error_model {
             Some(filename) => {
                 SequencingErrorModel::from_file(&filename)?
             },
@@ -123,24 +123,21 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
     // Count the number of blocks
 
     // iterate over contigs
-    for contig in fasta_map.contigs {
+    for contig in &fasta_map.contigs {
         // Iterate over blocks within the contig
         // This is probably where we want to parallelize
-        let contig_blocks = contig.blocks;
-        let contig_name = contig.name;
+        let contig_blocks = &contig.blocks;
+        let contig_name = &contig.name;
         let mut contig_reads: Vec<(usize, usize, Option<usize>, usize)> = Vec::new();
         let mut contig_maps: Vec<MutatedMap> = Vec::new();
-        debug!("Processing {}", contig.name);
-        for block_filename in contig.blocks {
+        debug!("Processing {}", contig_name);
+        for block_filename in contig_blocks {
             let mut block_variants: Vec<Variant> = Vec::new();
-            let mut block_reads: Vec<(usize, usize)> = Vec::new();
             debug!("Processing block {:?}", block_filename);
             // Set up current block
             let current_block = SequenceBlock::from(&block_filename)?;
             // First we have to create the region weights data based on the fasta 
             // map and maybe gc-bias later at some point
-            let block_start = current_block.ref_start;
-            let block_end = current_block.ref_end;
             // filter down to minimal regions to search
             debug!("    > Generating bias map.");
             let regions_of_interest = current_block.get_non_n_regions()?;
@@ -149,7 +146,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
                 continue
             }
             let mut bias_map: Vec<f64> = Vec::with_capacity(current_block.get_len());
-            for i in 0..current_block.get_len() {
+            for _ in 0..current_block.get_len() {
                 bias_map.push(0.0);
             }
             for region in regions_of_interest {
@@ -184,33 +181,33 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
                 config.read_len,
                 config.coverage,
                 config.paired_ended,
-                fragment_length_model,
+                &fragment_length_model,
                 rng,
             )?;
 
             contig_reads.extend(block_reads);
 
             let mutated_map = MutatedMap::new(
-                block_filename,
+                block_filename.to_path_buf(),
                 block_variants,
             )?;
 
             contig_maps.push(mutated_map);
         }
-        mutated_maps.insert(contig_name, contig_maps);
+        mutated_maps.insert(contig_name.clone(), contig_maps.clone());
         // Add reads to all_reads
         for read in contig_reads {
-            all_reads.push((contig_name, read.0, read.1, read.2, read.3))
+            all_reads.push((contig_name.clone(), read.0, read.1, read.2, read.3))
         }
     }
 
     if config.produce_fastq {
-        if let Some(filename_r1) = config.output_fastq_1 {
-            if let Some(filename_r2) = config.output_fastq_2 {
+        if let Some(filename_r1) = &config.output_fastq_1 {
+            if let Some(filename_r2) = &config.output_fastq_2 {
                 info!("Producing paired-ended fastq files");
                 write_fastq(
                     &mut all_reads,
-                    mutated_maps,
+                    &mutated_maps,
                     config.read_len,
                     config.paired_ended,
                     (PathBuf::from(filename_r1), Some(PathBuf::from(filename_r2))),
@@ -222,7 +219,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
                 info!("Producing single-ended fastq file");
                 write_fastq(
                     &mut all_reads,
-                    mutated_maps,
+                    &mutated_maps,
                     config.read_len,
                     config.paired_ended,
                     (PathBuf::from(filename_r1), None),
@@ -236,21 +233,22 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
         }
     }
 
-    match config.output_vcf {
+    match &config.output_vcf {
         Some(filename) => {
             info!("Writing output vcf file");
             // Maps contig to a total contig size, a required entry for a valid vcf file.
-            let fasta_lengths: HashMap<String, usize> = HashMap::new();
-            for contig in &fasta_map.contig_order {
-                fasta_lengths.insert(contig.clone(),fasta_map.contigs.len())
+            let mut fasta_lengths: HashMap<String, usize> = HashMap::new();
+            let contigs = fasta_map.contigs.clone();
+            for contig in contigs {
+                fasta_lengths.insert(contig.name.clone(), contig.contig_len);
             }
             write_vcf(
                 &mutated_maps,
-                &fasta_order,
+                &fasta_map.contig_order,
                 &fasta_lengths,
                 &config.reference,
                 config.overwrite_output,
-                &PathBuf::from(filename),
+                &mut PathBuf::from(filename),
             ).expect("Error writing vcf file!")
         },
         None => {
@@ -265,33 +263,34 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
 
 #[cfg(test)]
 mod tests {
+    use log::LevelFilter;
+    use simplelog::{ColorChoice, Config, TermLogger, TerminalMode};
+
     use super::*;
-    use rand_core::SeedableRng;
-    use std::fs;
-    use std::fs::File;
-    use std::io::{BufRead, BufReader};
-    use std::path::PathBuf;
-    use utils::config::ConfigBuilder;
-    use simplelog;
-    use simplelog::*;
+    use std::{fs::{self, File}, io::{BufRead, BufReader}};
+    use crate::utils::config::RunConfiguration;
 
     #[test]
     fn test_runner() {
-        let mut config = RunConfiguration::build();
-        config.reference = Some("test_data/references/H1N1.fa".to_string());
+        let mut config = RunConfiguration::default();
+        config.reference = "test_data/references/H1N1.fa".to_string();
         // Because we are building this the wrong way, we need to manually create the output dir
         config.output_dir = PathBuf::from("test_runner");
         fs::create_dir("test_runner").unwrap();
-        let config = config.build();
-        let _ = run_neat(Box::new(config), ChaCha20Rng::seed_from_u64(0)).unwrap();
+        config.update_and_log();
+        let mut rng = NeatRng::new_from_seed(&vec![
+            "Hello".to_string(),
+            "Cruel".to_string(),
+            "World".to_string(),
+        ]).unwrap();
+        let _ = run_neat(&Box::new(config), &mut rng);
         fs::remove_dir_all("test_runner").unwrap();
     }
 
     #[test]
     fn test_runner_files_message() {
-        let mut config = ConfigBuilder::new();
-        config.reference = Some("test_data/references/H1N1.fa".to_string());
-        config.produce_fasta = true;
+        let mut config = RunConfiguration::default();
+        config.reference = "test_data/references/H1N1.fa".to_string();
         config.produce_vcf = true;
         // Because we are building this the wrong way, we need to manually create the output dir
         config.output_dir = PathBuf::from("test_run_output");
@@ -305,9 +304,13 @@ mod tests {
             .unwrap();
 
         fs::create_dir("test_run_output").unwrap();
-        let config = Box::new(config.build());
-        let rng = ChaCha20Rng::seed_from_u64(0);
-        run_neat(config, rng.clone()).unwrap();
+        config.update_and_log();
+        let mut rng = NeatRng::new_from_seed(&vec![
+            "Hello".to_string(),
+            "Cruel".to_string(),
+            "World".to_string(),
+        ]).unwrap();
+        run_neat(&Box::new(config), &mut rng).unwrap();
         let file_path = "test_run_output/neat_out.fasta";
         let input = File::open(file_path).unwrap();
         let buffered = BufReader::new(input);

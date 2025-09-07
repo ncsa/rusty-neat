@@ -7,14 +7,14 @@
 use std::io;
 use thiserror::Error;
 use std::num::ParseIntError;
-use std::{collections::{HashMap, VecDeque}, io::Write};
+use std::{collections::HashMap, io::Write};
 use serde::{Deserialize, Serialize};
 use serde;
 use serde_json;
 use std::fs::{read_to_string, File};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use crate::structs::nucleotides::Nucleotide;
-use log::{debug, error};
+use log::error;
 
 #[derive(Error, Debug)]
 pub enum FastaMapError {
@@ -208,7 +208,7 @@ pub struct Contig {
     // This is the short name of the contig
     pub name: String,
     // The overall length of the contig in bases
-    pub len: usize,
+    pub contig_len: usize,
     // This is a vector of filenames. Each filename represents a sequence block and can be accessed via the contig block
     // The naming convention of the filenames will follow this format: contigname_0001100000_0001200000.jfa
     // Where contigname = the short name of the contig, the first string of digits is the start point of that file and the second block of digits is the end point 
@@ -224,7 +224,7 @@ impl Contig {
 
         Ok(Contig {
             name,
-            len,
+            contig_len: len,
             blocks,
         })
     }
@@ -237,16 +237,15 @@ pub struct FastaMap {
     pub contigs: Vec<Contig>,
     // This maps the short contig name, used throughout, to the full name from the fasta file
     pub name_map: HashMap<String, String>,
-    // This is a VecDeque with the contig short names in the order they appeared in the fasta
-    // We need the correct order to output a valid file at the end.
-    pub contig_order: VecDeque<String>,
+    // This is a Vec with the contig short names in the order they appeared in the fasta
+    pub contig_order: Vec<String>,
 }
 
 impl FastaMap {
     pub fn new(
         contigs: Vec<Contig>, 
         name_map: HashMap<String, String>, 
-        contig_order: VecDeque<String>
+        contig_order: Vec<String>
     ) -> Self {
         FastaMap { contigs, name_map, contig_order }
     }
@@ -264,7 +263,7 @@ impl FastaMap {
 #[cfg(test)]
 mod tests {
     use std::fs::remove_file;
-    use crate::structs::fasta_map::RegionType::{NRegion, NonNRegion};
+    use crate::structs::fasta_map::RegionType::NonNRegion;
     use crate::structs::nucleotides::Nucleotide::*;
     use super::*;
 
@@ -302,23 +301,16 @@ mod tests {
     fn test_basic_map() {
         let filename = PathBuf::from("chrom1_0000_0020.json");
         let sequences = vec![filename];
-        let contig_map = Vec::from([
-            (0, 12, NRegion),
-            (12, 15, NonNRegion),
-            (15, 18, NRegion),
-            (18, 19, NonNRegion),
-            (19, 20, NRegion),
-        ]);
         let contig = Contig {
             name: "chrom1".to_string(),
-            len: 20,
+            contig_len: 20,
             blocks: sequences,
         };
         let name_map = HashMap::from([
             ("chrom1".to_string(), ">chrom1 foo bar\n".to_string())
         ]);
         let contigs = Vec::from([contig]);
-        let contig_order = VecDeque::from(["chrom1".to_string()]);
+        let contig_order = Vec::from(["chrom1".to_string()]);
         let fasta_map = FastaMap::new(
             contigs,
             name_map,

@@ -36,7 +36,7 @@ pub fn generate_variants(
         &region_weights,
         &(0..sequence_block.get_len()).collect()
     )?;
-    for i in 0..num_mutations {
+    for _ in 0..num_mutations {
         let location: usize = sequence_dist.sample(rng.random()?)?;
         block_variants.push(
             mutation_model.generate_mutation(

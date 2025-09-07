@@ -2,11 +2,9 @@
 use std;
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Write};
-use std::path::{Path, PathBuf};
-use flate2::read::GzDecoder;
+use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
-use flate2::Compression;
-use flate2::write::GzEncoder;
+use flate2::{Compression, write::GzEncoder, read::GzDecoder};
 use crate::file_tools::file_io::create_output_file;
 
 pub fn model_writer<T: Serialize>(model: T, filename: &PathBuf) -> std::io::Result<()> 

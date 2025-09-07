@@ -6,7 +6,6 @@
 // fragments.
 use crate::common::{
     models::fragment_length::FragmentLengthModel,
-    structs::distributions::{DiscreteDistribution, NormalDistribution}
 };
 use log::debug;
 use std::collections::VecDeque;
@@ -18,7 +17,7 @@ pub fn generate_reads(
     read_length: usize,
     coverage: usize,
     paired_ended: bool,
-    fragment_model: FragmentLengthModel,
+    fragment_model: &FragmentLengthModel,
     rng: &mut NeatRng,
 ) -> Result<Vec<(usize, usize, Option<usize>, usize)>, GenerateReadsErrors> {
     // Takes:
@@ -118,7 +117,8 @@ fn cover_dataset(
         cover_fragment_pool = VecDeque::from([read_length]);
     } else {
         // shuffle the fragment pool
-        rng.shuffle_in_place(&mut fragment_pool);
+        rng.shuffle_in_place(&mut fragment_pool)
+            .expect("Generate reads failed while shuffling the fragment pool");
         cover_fragment_pool = VecDeque::from(fragment_pool)
     }
     // Gap size to keep track of how many uncovered bases we have per layer, to help decide if we
@@ -203,11 +203,11 @@ mod tests {
             read_length,
             coverage,
             paired_ended,
-            fragment_model,
+            &fragment_model,
             &mut rng,
         ).unwrap();
         println!("{:?}", reads);
-        assert!(reads.contains(&(0, 10, None, None)));
+        assert!(reads.contains(&(0, 10, None, sequence.len())));
     }
 
     #[test]
@@ -229,7 +229,7 @@ mod tests {
             read_length,
             coverage,
             paired_ended,
-            fragment_model,
+            &fragment_model,
             &mut rng,
         ).unwrap();
 
@@ -239,7 +239,7 @@ mod tests {
             read_length,
             coverage,
             paired_ended,
-            fragment_model,
+            &fragment_model,
             &mut rng,
         ).unwrap();
 
@@ -263,7 +263,7 @@ mod tests {
             read_length,
             coverage,
             paired_ended,
-            fragment_model,
+            &fragment_model,
             &mut rng,
         ).unwrap();
         assert!(!reads.is_empty())

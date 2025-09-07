@@ -9,7 +9,7 @@
 //! 
 //! Eventually, we will add a write fasta function to write out output fasta files, but there's 
 //! some simulation details to work out and it is low-priority.
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::fs::File;
 use std::io;
 use std::path::PathBuf;
@@ -86,7 +86,7 @@ pub fn read_fasta(
     let mut block_filenames: Vec<PathBuf> = Vec::new();
 
     let mut name_map: HashMap<String, String> = HashMap::new();
-    let mut contig_order: VecDeque<String> = VecDeque::new();
+    let mut contig_order: Vec<String> = Vec::new();
     let mut current_key = String::new();
     // We're using X solely as a placeholder. Any X's should be ignored or passed over by the code
     let mut buffer = [Nucleotide::X; BUFSIZE];
@@ -162,7 +162,7 @@ pub fn read_fasta(
                     let long_name = l[1..].to_string();
                     current_key = extract_key_name(&long_name);
                     name_map.entry(current_key.clone()).or_insert(long_name);
-                    contig_order.push_back(current_key.clone());
+                    contig_order.push(current_key.clone());
                 } else {
                     for char in l.chars() {
                         // If we have filled the buffer, time to write the file and clear the buffer

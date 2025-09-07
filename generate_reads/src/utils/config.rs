@@ -11,7 +11,6 @@ use std::string::String;
 use std::{env, fs};
 use crate::{
     common::file_tools::folder_tools::check_create_dir,
-    errors::GenerateReadsErrors,
     utils::cli::Cli
 };
 
@@ -68,7 +67,7 @@ pub struct RunConfiguration {
 }
 
 impl RunConfiguration {
-    fn default() -> RunConfiguration {
+    pub (crate) fn default() -> RunConfiguration {
         let mut config = RunConfiguration { 
             reference: String::new(),
             read_len: 151, 

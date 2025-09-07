@@ -2,7 +2,4 @@ pub mod cli;
 pub mod config;
 pub mod generate_reads;
 pub mod runner;
-pub mod runner_parallel;
 pub mod generate_variants;
-pub mod apply_variants;
-pub mod mutate_fasta;

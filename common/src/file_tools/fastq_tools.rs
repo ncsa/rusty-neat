@@ -80,7 +80,7 @@ fn find_map (interval: (usize, usize), mutated_maps: &Vec<MutatedMap>) -> Result
 /// buffer size first.
 pub fn write_fastq(
     all_reads: &mut Vec<(String, usize, usize, Option<usize>, usize)>,
-    mutated_maps: HashMap<String, Vec<MutatedMap>>,
+    mutated_maps: &HashMap<String, Vec<MutatedMap>>,
     read_length: usize,
     paired_ended: bool,
     output_files: (PathBuf, Option<PathBuf>),
@@ -217,7 +217,7 @@ pub fn write_fastq(
                 read_length, 
                 &read_name_prefix, 
                 read_index, 
-                &mut buffer_r1, 
+                &mut buffer_r2, 
                 quality_scores,
                 sequencing_error_model,
                 rng,
@@ -339,10 +339,10 @@ fn apply_variants_and_write_sequence (
                     }
                 }
             }
-            for base in base_to_write {
-                buffer.write(&[base as u8])?;
-                bases_written += 1;
-            }
+        }
+        for base in base_to_write {
+            buffer.write(&[base as u8])?;
+            bases_written += 1;
         }
     } 
     // Read has been written at this point
@@ -359,7 +359,6 @@ fn apply_variants_and_write_sequence (
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::sequencing_error_model;
     use crate::structs::variants::{Variant, VariantType};
     use crate::structs::nucleotides::Nucleotide::*;
 

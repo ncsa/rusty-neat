@@ -23,6 +23,7 @@ pub enum MutatedMapError {
     FastaMapError(#[from] FastaMapError),
 }
 
+#[derive(Debug, Clone)]
 pub struct MutatedMap {
     // This is the index of positions for the variants
     pub flagged_positions: Vec<usize>,
@@ -95,8 +96,7 @@ impl MutatedMap {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::structs::nucleotides::Nucleotide::{A, C, T, G};
-    use crate::structs::fasta_map::RegionType;
+    use crate::structs::nucleotides::Nucleotide::{A, G};
     use crate::structs::variants::VariantType;
 
     #[test]

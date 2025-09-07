@@ -2,16 +2,9 @@
 //! from the py/probability.py file in tag 2.1 of github.com/ncsa/neat
 //! (see also github.com/zstephens/neat-genreads). We may try the statrs Categorical distribution
 //! as well, as I think it does the same thing.
-use std::fmt;
-
 use simple_rng::NeatRngError;
 use thiserror::Error;
 use serde::{
-    de::{
-        self, 
-        Visitor,
-        MapAccess,
-    }, 
     Deserialize, 
     Serialize
 };
@@ -147,7 +140,8 @@ mod test {
         let w_vec = vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
         assert_eq!(l_vec.len(), w_vec.len());
         let distribution = DiscreteDistribution::new(&w_vec, &l_vec).unwrap();
-        todo!()
+        assert_eq!(distribution.values().unwrap(), l_vec);
+        assert_eq!(distribution.weights().unwrap(), w_vec);
     }
 
     #[test]

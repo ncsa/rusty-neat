@@ -68,9 +68,9 @@ fn main() {
     };
     // Generate the RNG used for this run. If one was given in the config file, use that, or else
     // use thread_rng to generate a random seed, then seed using a SeedableRng based on StdRng
-    let rng: NeatRng = NeatRng::new_from_seed(&config.seed_vec)
+    let mut rng: NeatRng = NeatRng::new_from_seed(&config.seed_vec)
         .expect("Neat failed during rng creation!");
     // run the generate reads main script
-    run_neat(&Box::new(config), rng)
+    run_neat(&Box::new(config), &mut rng)
         .unwrap_or_else(|error| panic!("Neat encountered a problem: {:?}", error))
 }

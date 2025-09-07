@@ -1,6 +1,16 @@
-use common::{models::{
-    fragment_length::FragmentModelError, mutated_map::MutatedMapError, mutation_model::MutationModelError, quality_scores::QualityModelError, sequencing_error_model::SeqModelError
-}, structs::{distributions::DistributionErrors, fasta_map::FastaMapError}};
+use common::{
+    models::{
+        fragment_length::FragmentModelError, 
+        mutation_model::MutationModelError, 
+        quality_scores::QualityModelError, 
+        sequencing_error_model::SeqModelError,
+    }, 
+    structs::{
+        distributions::DistributionErrors, 
+        fasta_map::FastaMapError,
+        mutated_map::MutatedMapError,
+    }
+};
 use simple_rng::NeatRngError;
 use thiserror::Error;
 

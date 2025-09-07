@@ -1,22 +1,21 @@
 //! This will convert data to a writable form and output the results. Needs some updates to account for the new data structures.
 extern crate log;
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::io;
 use std::path::PathBuf;
 use std::io::Write;
 use crate::file_tools::file_io::create_output_file;
 use crate::structs::nucleotides::sequence_array_to_string;
-use crate::structs::mutated_map::{MutatedMap, MutatedMapError};
-use crate::structs::variants::Variant;
+use crate::structs::mutated_map::MutatedMap;
 
 pub fn write_vcf(
     mutated_maps: &HashMap<String, Vec<MutatedMap>>,
-    fasta_order: &VecDeque<String>,
+    contig_order: &Vec<String>,
     fasta_lengths: &HashMap<String, usize>,
     reference_path: &str,
     overwrite_output: bool,
-    output_vcf: &PathBuf,
+    output_vcf: &mut PathBuf,
 ) -> io::Result<()> {
     // Takes:
     // mutated_maps: A map of contig names keyed to lists of mutated maps holding variants 
@@ -31,13 +30,13 @@ pub fn write_vcf(
     //
     // set the filename of the output vcf
     let mut outfile = create_output_file(
-        &mut output_vcf, 
+        output_vcf, 
         overwrite_output
     )?;
     // add the vcf header
     writeln!(&mut outfile, "##fileformat=VCFv4.1")?;
     writeln!(&mut outfile, "##reference={}", reference_path)?;
-    for contig in fasta_order.iter() {
+    for contig in contig_order {
         let length = fasta_lengths[contig];
         writeln!(
             &mut outfile,
@@ -62,20 +61,23 @@ pub fn write_vcf(
         "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tNEAT_simulated_sample"
     )?;
     // write out mutations
-    for contig in fasta_order.pop_front() {
-        for block_maps in mutated_maps[contig] {
-            // Format the output line. Any fields without data will be a simple period. Quality
-            // is set to 37 for all these variants, to indicate in the golden vcf that these are
-            // the generated variants.
-            let line = format!(
-                "{}\t{}\t.\t{}\t{}\t37\tPASS\t.\tGT\t{}",
-                contig,
-                position + 1,
-                sequence_array_to_string(&mutation.reference),
-                sequence_array_to_string(&mutation.alternate),
-                mutation.genotype_str,
-            );
-            writeln!(&mut outfile, "{}", line)?;
+    for contig in contig_order {
+        let block_maps = &mutated_maps[contig];
+        for block_map in block_maps {
+            for (position, variant) in &block_map.variant_map {
+                // Format the output line. Any fields without data will be a simple period. Quality
+                // is set to 37 for all these variants, to indicate in the golden vcf that these are
+                // the generated variants.
+                let line = format!(
+                    "{}\t{}\t.\t{}\t{}\t37\tPASS\t.\tGT\t{}",
+                    contig,
+                    position + 1,
+                    sequence_array_to_string(&variant.reference),
+                    sequence_array_to_string(&variant.alternate),
+                    variant.genotype_str,
+                );
+                writeln!(&mut outfile, "{}", line)?;
+            }
         }
     }
     Ok(())

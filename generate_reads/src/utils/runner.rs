@@ -1,4 +1,5 @@
 use crate::errors::GenerateReadsErrors;
+use common::structs::fasta_map::FastaMap;
 use tempfile;
 use std::time;
 use log::{info, debug};
@@ -237,13 +238,19 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
 
     match config.output_vcf {
         Some(filename) => {
+            info!("Writing output vcf file");
+            // Maps contig to a total contig size, a required entry for a valid vcf file.
+            let fasta_lengths: HashMap<String, usize> = HashMap::new();
+            for contig in &fasta_map.contig_order {
+                fasta_lengths.insert(contig.clone(),fasta_map.contigs.len())
+            }
             write_vcf(
-                &all_variants,
+                &mutated_maps,
                 &fasta_order,
                 &fasta_lengths,
                 &config.reference,
                 config.overwrite_output,
-                &output_file,
+                &PathBuf::from(filename),
             ).expect("Error writing vcf file!")
         },
         None => {

@@ -20,7 +20,7 @@ pub fn generate_reads(
     paired_ended: bool,
     fragment_model: FragmentLengthModel,
     rng: &mut NeatRng,
-) -> Result<Vec<(usize, usize, Option<usize>, Option<usize>)>, GenerateReadsErrors> {
+) -> Result<Vec<(usize, usize, Option<usize>, usize)>, GenerateReadsErrors> {
     // Takes:
     // sequence_length: The length of the sequence to generate reads for.
     // read_length: the length ef the reads for this run
@@ -55,7 +55,7 @@ pub fn generate_reads(
     );
 
     // TODO Generate single or paired ended reads from the fragments
-    let mut read_set: Vec<(usize, usize, Option<usize>, Option<usize>)> = Vec::new();
+    let mut read_set: Vec<(usize, usize, Option<usize>, usize)> = Vec::new();
     if paired_ended {
         for fragment in fragments {
             // Push a paired ended read off the fragment
@@ -63,7 +63,7 @@ pub fn generate_reads(
                 fragment.0, 
                 fragment.0 + read_length, 
                 Some(fragment.1 - read_length), 
-                Some(fragment.1)
+                fragment.1
             ))
         }
     } else {
@@ -73,7 +73,7 @@ pub fn generate_reads(
                 fragment.0, 
                 fragment.0 + read_length,
                 None,
-                None,
+                fragment.1,
             ))
         }
     }

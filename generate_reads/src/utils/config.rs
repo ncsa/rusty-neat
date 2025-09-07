@@ -385,7 +385,7 @@ impl RunConfiguration {
         if self.produce_bam {
             let bam: String = format!("{}.bam", file_prefix);
             info!("Produce bam file: {}", bam);
-            self.output_vcf = Some(bam);
+            self.output_bam = Some(bam);
         }
 
         match &self.rng_seed {

@@ -34,9 +34,11 @@ pub enum FastaMapError {
     SerdeJsonError(#[from] serde_json::Error),
     #[error("FastaMap reported a malformed filename error: {0}")]
     MalformedFilenameError(#[from] ParseIntError),
+    #[error("Error retrieveing coordinates")]
+    CoordinateRetrievalError,
 }
 
-pub fn decode_contig_filename(path_string: &PathBuf) -> Result<(usize, usize), FastaMapError> {
+pub fn decode_block_filename(path_string: &PathBuf) -> Result<(usize, usize), FastaMapError> {
     // This function parses the filename according to the established convention in NEAT
     // contigname_0001100000_0001200000.json
     // where the 2 groups of numbers are the start and end points of the sequence block
@@ -87,12 +89,24 @@ pub struct SequenceBlock {
 impl SequenceBlock {
     pub fn from(mut filename: &PathBuf) -> Result<Self, FastaMapError> {
         // This is a check that the filename is properly encoded
-        (_, _) = decode_contig_filename(&filename)?;
+        (_, _) = decode_block_filename(&filename)?;
         // Load the sequence block
         let json_data = read_to_string(&mut filename)?;
         let sequence_block: SequenceBlock = serde_json::from_str(&json_data)?;
         sequence_block.verify_regions()?;
         Ok(sequence_block)
+    }
+
+    pub fn get_start(&self) -> Result<usize, FastaMapError> {
+        Ok(self.ref_start.clone())
+    }
+    
+    pub fn get_end(&self) -> Result<usize, FastaMapError> {
+        Ok(self.ref_end.clone())
+    }
+
+    pub fn contains(&self, (x, y): (usize, usize)) -> Result<bool, FastaMapError> {
+        Ok((x >= self.get_start()?) && (y <= self.get_end()?))
     }
 
     pub fn get_non_n_regions(
@@ -279,7 +293,7 @@ mod tests {
     #[test]
     fn test_filename_decoder() {
         let filename = PathBuf::from("chr1_001000_002000.json");
-        let (a, b) = decode_contig_filename(&filename).unwrap();
+        let (a, b) = decode_block_filename(&filename).unwrap();
         assert_eq!(a, 1000);
         assert_eq!(b, 2000)
     }

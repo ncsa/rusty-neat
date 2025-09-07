@@ -6,10 +6,11 @@ use std::io;
 use std::io::Write;
 use crate::file_tools::file_io::create_output_file;
 use crate::structs::nucleotides::sequence_array_to_string;
+use crate::structs::mutated_map::{MutatedMap, MutatedMapError};
 use crate::structs::variants::Variant;
 
 pub fn write_vcf(
-    variant_locations: &mut Box<HashMap<String, HashMap<usize, Variant>>>,
+    variant_locations: &HashMap<String, Vec<MutatedMap>>,
     fasta_order: &VecDeque<String>,
     fasta_lengths: &HashMap<String, usize>,
     reference_path: &str,

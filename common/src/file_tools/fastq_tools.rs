@@ -4,25 +4,27 @@
 //! This one needs a major overhaul, it is autogenerating quality scores etc. 
 //! Will wait to get other things set up first
 use std::io::Write;
+use log::info;
 use std::fs;
 use std::fs::File;
 use std::path::PathBuf;
-use std::iter::Extend;
+use std::collections::HashMap;
 use simple_rng::{NeatRng, NeatRngError};
 use flate2::Compression;
 use flate2::write::ZlibEncoder;
-use tempfile::TempDir;
 use thiserror::Error;
+use indicatif::ProgressBar;
 
+use crate::structs::mutated_map::{MutatedMap, MutatedMapError};
 use crate::structs::fasta_map::{FastaMapError, SequenceBlock};
 use crate::models::quality_scores::QualityScoreModel;
 use crate::structs::nucleotides::Nucleotide;
 use crate::file_tools::file_io::create_output_file;
 use crate::models::sequencing_error_model::{SeqModelError, SequencingErrorModel, SequencingErrorType};
-use crate::structs::variants::{Genotypes, Variant, VariantType};
+use crate::structs::variants::{Genotypes, Variant};
 
 #[derive(Error, Debug)]
-pub enum BlockFastQError {
+pub enum FastqToolsError {
     #[error("Error writing bgzip fastq block {0}")]
     FastqWriteError(String),
     #[error("Error reading bgzip fastq block {0}")]
@@ -30,37 +32,17 @@ pub enum BlockFastQError {
     #[error("Mismatch between indexing and reads set for block {0}")]
     InvalidFastqBlock(String),
     #[error("Fastq Tools reported a FastaMap error: {0}")]
-    FastaMapError(FastaMapError),
+    FastaMapError(#[from] FastaMapError),
     #[error("Fastq tools reported a error model error: {0}")]
-    ErrorModelError(SeqModelError),
+    ErrorModelError(#[from] SeqModelError),
     #[error("Fastq tools reported an IO error: {0}")]
-    IoError(std::io::Error),
+    IoError(#[from] std::io::Error),
     #[error("Fastq tools reported an Rng Error: {0}")]
-    RngError(NeatRngError),
-}
-
-impl From<NeatRngError> for BlockFastQError {
-    fn from(error: NeatRngError) -> Self {
-        BlockFastQError::RngError(error)
-    }
-}
-
-impl From<std::io::Error> for BlockFastQError {
-    fn from(error: std::io::Error) -> Self {
-        BlockFastQError::IoError(error)
-    }
-}
-
-impl From<FastaMapError> for BlockFastQError {
-    fn from(error: FastaMapError) -> Self {
-        BlockFastQError::FastaMapError(error)
-    }
-}
-
-impl From<SeqModelError> for BlockFastQError {
-    fn from(error: SeqModelError) -> Self {
-        BlockFastQError::ErrorModelError(error)
-    }
+    RngError(#[from] NeatRngError),
+    #[error("Error from MutatedMap: {0}")]
+    MutatedMapError(#[from] MutatedMapError),
+    #[error("Error locating a matching mutated map")]
+    FindMapError,
 }
 
 fn reverse_complement(sequence: Vec<Nucleotide>) -> Vec<Nucleotide> {
@@ -71,6 +53,15 @@ fn reverse_complement(sequence: Vec<Nucleotide>) -> Vec<Nucleotide> {
         rev_comp.push(sequence[i].complement())
     }
     rev_comp
+}
+
+fn find_map (interval: (usize, usize), mutated_maps: &Vec<MutatedMap>) -> Result<&MutatedMap, FastqToolsError> {
+    for map in mutated_maps {
+        if map.contains(interval)? {
+            return Ok(map);
+        }
+    }
+    Err(FastqToolsError::FindMapError)
 }
 
 /// write_fastq. This is freeform writing. I think each thread will get a sequence block
@@ -87,25 +78,24 @@ fn reverse_complement(sequence: Vec<Nucleotide>) -> Vec<Nucleotide> {
 /// Okay, so we create a buffer and we write the data to the buffer then I guess compress it?
 /// I could set it to best compression, set to "best" Maybe we need to figure out an appropriate
 /// buffer size first.
-pub fn write_block_fastq_bgz(
-    block_reads: &Vec<(usize, usize, usize, usize)>,
-    read_number_vec: Vec<usize>,
-    block_filename: &PathBuf,
-    variants: Vec<&Variant>, 
+pub fn write_fastq(
+    all_reads: &mut Vec<(String, usize, usize, Option<usize>, usize)>,
+    mutated_maps: HashMap<String, Vec<MutatedMap>>,
     read_length: usize,
     paired_ended: bool,
-    temp_dir: TempDir,
+    output_files: (PathBuf, Option<PathBuf>),
     quality_score_model: &QualityScoreModel,
     sequencing_error_model: &SequencingErrorModel,
     rng: &mut NeatRng,
-) -> Result<(), BlockFastQError> {
+) -> Result<(), FastqToolsError> {
     // Takes:
-    // block reads: A list of tuples with coordinates of the reads for the block.
-    // block_filename: A file name holding the sequence for this block. This should be an already mutated sequence.
-    // variants: this should be a vetted list of variants to apply to this block.
-    //      We assume here that all variants submitted will be processed.
+    // all_reads: All reads along with contig name.
+    // mutated_maps: An vector of MutatedMap objects (one per block), indexed by contig name.
+    //      This holds sequence and applicable mutations
+    // contig_names: The keys to the other two maps.
     // read_length: The length of the reads. Any output reads will be trimmed to this length.
     // paired_ended: boolean to set paired ended mode on or off.
+    // output_files: A tuple with the PathBuf objects to read1 and (if applicable) read2.
     // quality_score_model: The statistical model we will use to generate quality scores.
     //      We only need a reference to it, we don't want to copy this everywhere as these
     //      may get very large in practice
@@ -116,126 +106,144 @@ pub fn write_block_fastq_bgz(
     //
     // returns:
     // Error if there is a problem or else it successfully wrote the file(s)
-    //
-    // Extract the filename from the block file name, this will hopefully give us 
-    // unique filenames, if we've set things up right.
-    let block_name = &block_filename
-        .file_stem()
-        .unwrap()
-        .display()
-        .to_string();
-    // We don't want these files to have a valid extension, so they aren't accidentally 
-    // read, but we need to distinguish them, so they are bgfq
-    let filename1 = Some(temp_dir
-        .path()
-        .join(format!("{}_r1.bgfq", block_name)))
-        .unwrap();
-    let filename2 = Some(temp_dir
-        .path()
-        .join(format!("{}_r2.bgfq", block_name)))
-        .unwrap();
 
+    // TODO future improvement idea. Add in some randomly generated reads to simulate telomeres.
     let read_name_prefix = "neat_generated_".to_string();
-    
-    // open the file and append lines
-    let outfile1 = create_output_file(&filename1, false)
-        .expect(&format!("Error creating output {:?}. If file alread exists, remove.", filename1));
-    // open the second file and append lines
-    let outfile2 = create_output_file(&filename2, false)
-        .expect(&format!("Error opening output {:?}. If file alread exists, remove.", filename2));
+    // shuffle reads
+    rng.shuffle_in_place(all_reads)?;
+    info!("Writing output fastq file(s)");
+    let bar = ProgressBar::new(all_reads.len() as u64);
+    // We'll start numbering reads at 1
+    let mut read_index = 1;
+    // Open our files for writing
+    // Since Rust won't be able to write if there is a possibility the open file will not be there,
+    // we'll have to use a dummy file for read 2, which will never get written to, then will be 
+    // deleted at the end
+    let filename1 = output_files.0;
+    let filename2 = {
+        match output_files.1 {
+            Some(filename) => filename,
+            None => PathBuf::from("dummy.fa"),
+        }
+    };
 
-    // length of read_number_vec and length of block_reads should be the same
-    if read_number_vec.len() != block_reads.len() {
-        return Err(BlockFastQError::InvalidFastqBlock(block_name.to_string()))
-    }
+    let outfile1 = create_output_file(&filename1, false)?;
+    let outfile2 = create_output_file(&filename2, false)?;
 
-    // load block into memory. Should only be 128kb long or so of sequence plus some strings. Easy peasy.
-    let sequence_block = SequenceBlock::from(block_filename)?;
-    // setting the buffer to 2*BUFSIZE which is approximately 0.5MB. idk, man.
     let mut buffer_r1  = ZlibEncoder::new(
         outfile1, Compression::default()
     );
     let mut buffer_r2 = ZlibEncoder::new(
         outfile2, Compression::default()
     );
-    // Get the maximum number of deletions: We assume that all deletions
-    // are included, the read is paired ended, and reads overlap.
-    let mut max_num_deletions = 0;
-    for variant in &variants {
-        match variant.variant_type {
-            VariantType::Deletion => max_num_deletions += variant.reference.len() - 1,
-            _ => continue,
+
+    for read in all_reads {
+        bar.inc(1);
+        let contig_name = &read.0;
+        let contig_blocks = &mutated_maps[contig_name];
+        let current_map = find_map((read.1, read.4), contig_blocks)?;
+        let block = SequenceBlock::from(&current_map.sequence_block)?;
+        let fragment: Vec<Nucleotide> = block.get_subseq(read.1, read.4)?;
+        let quality_score_r1 = quality_score_model.generate_quality_scores(read_length, rng)?;
+        let mut quality_score_r2: Option<Vec<usize>> = None;
+        match paired_ended {
+            true => quality_score_r2 = Some(quality_score_model.generate_quality_scores(read_length, rng)?),
+            false => (),
         }
-    }
-    // write out sequence by sequence, throwing in random errors and adding variants as appropriate
-    // We combine the read1 and read2 reads so that we get a match on the naming. This could be done 
-    // with a second loop as well, which would allow us to atomize the write sequences process, but 
-    // the hope is that this is slightly more efficient. If this part is super slow, that may be
-    // something to try
-    for (index, read_num) in read_number_vec.iter().enumerate() {
-        let (position1, position2, position3, position4) = block_reads[index];
-        // Load actual sequence into a short lived variable
-        // This is tricky, if the padding goes past the end of the read,
-        // we'll get an index error.
-        let write_padding = {
-            if position4 - position1 < max_num_deletions {
-                position4 - position1
-            } else {
-                max_num_deletions
-            }
-        };
-        let mut current_read_1 = sequence_block
-            .get_subseq(position1, position2 + write_padding)?;
-        // Apply variants to read
-        apply_variants_to_sequence(
-            &mut current_read_1, 
-            &variants, 
-            position1, 
-            position2, 
-            rng,
-            read_length, 
-            write_padding, 
-            &read_name_prefix, 
-            *read_num, 
-            &mut buffer_r1, 
-            quality_score_model, 
-            sequencing_error_model
-        ).unwrap();
         
+        // Find variants in the read and translate the coordinates to read coordinates
+        let mut read_1_variants: HashMap<usize, &Variant> = HashMap::new();
+        let mut read_1_flagged: Vec<usize> = Vec::new();
+        for (pos, variant) in &current_map.variant_map {
+            if (read.1..read.2).contains(&pos) {
+                let start_pos = pos - read.1;
+                read_1_variants.insert(start_pos, variant);
+                read_1_flagged.push(start_pos)
+            }
+        }
+
+        // This is for read1
+        let result_r1 = apply_variants_and_write_sequence(
+            fragment.clone(), 
+            &read_1_flagged,
+            &read_1_variants, 
+            read_length, 
+            &read_name_prefix, 
+            read_index, 
+            &mut buffer_r1, 
+            quality_score_r1,
+            sequencing_error_model,
+            rng,
+        );
+
+        match result_r1 {
+            Err(error) => return Err(error),
+            _ => read_index += 1,
+        }
+
         if paired_ended {
-            // Read 2 is read from the 3' end so we will write out the reverse complement
-            let mut current_read_2 = reverse_complement(
-                sequence_block
-                    .get_subseq(position3 - write_padding, position4)?
+            // This is for read2, so we need to reverse the coordinates and do a reverse complement of the sequence
+            let pos1 = match read.3 {
+                Some(num) => num,
+                None => panic!("Bug: Paired-ended declared but no position 3 in the read")
+            };
+            let pos2 = read.4;
+            let quality_scores = match quality_score_r2 {
+                Some(vec) => vec,
+                None => panic!("Bug: Paired-ended declared but missing second quality score vector")
+            };
+
+            let r2_frag = reverse_complement(fragment);
+
+            // Find variants in the read and translate the coordinates to read coordinates
+            let mut read_2_variants: HashMap<usize, &Variant> = HashMap::new();
+            let reverse_index: Vec<usize> = (0..r2_frag.len()).rev().collect();
+
+            let mut r2_flagged_positions = Vec::new();
+            for (pos, variant) in &current_map.variant_map {
+                if (pos1..pos2).contains(&pos) {
+                    let index = r2_frag.len() - pos1;
+                    // The index is relative to the original fragment, now we need the reversed coordinate
+                    let start_pos = reverse_index[index];
+                    read_2_variants.insert(start_pos, variant);
+                    r2_flagged_positions.push(start_pos);
+                }
+            }
+
+            let result_r2 = apply_variants_and_write_sequence(
+                r2_frag, 
+                &r2_flagged_positions,
+                &read_2_variants, 
+                read_length, 
+                &read_name_prefix, 
+                read_index, 
+                &mut buffer_r1, 
+                quality_scores,
+                sequencing_error_model,
+                rng,
             );
 
-            // Apply variants to read 2
-            apply_variants_to_sequence(
-                &mut current_read_2, 
-                &variants, 
-                position3, 
-                position4, 
-                rng,
-                read_length, 
-                write_padding, 
-                &read_name_prefix, 
-                *read_num, 
-                &mut buffer_r2, 
-                quality_score_model, 
-                sequencing_error_model
-            ).unwrap();
+            match result_r2 {
+                Err(error) => return Err(error),
+                _ => read_index += 1,
+            }
+
         }
     }
+    bar.finish();
 
-    if !paired_ended {
-        // We don't need this second file in this case
+    let mut files_written = vec![filename1];
+    if filename2.ends_with("dummy.fa") {
         fs::remove_file(filename2)?;
+    } else {
+        files_written.push(filename2)
     }
+    info!("Fastq successfully written: {:?}!", files_written);
 
     Ok(())
 }
 
-fn quality_scores_to_char_vec(array: Vec<usize>) -> Result<Vec<u8>, BlockFastQError> {
+fn quality_scores_to_char_vec(array: Vec<usize>) -> Result<Vec<u8>, FastqToolsError> {
     let mut score_vec = Vec::new();
     for score in array {
         score_vec.push(
@@ -245,197 +253,137 @@ fn quality_scores_to_char_vec(array: Vec<usize>) -> Result<Vec<u8>, BlockFastQEr
     Ok(score_vec)
 }
 
-fn apply_variants_to_sequence (
-    sequence: &mut Vec<Nucleotide>,
-    variants: &Vec<&Variant>,
-    position1: usize,
-    position2: usize,
-    rng: &mut NeatRng,
+fn apply_variants_and_write_sequence (
+    sequence: Vec<Nucleotide>,
+    flagged_positions: &Vec<usize>,
+    variant_map: &HashMap<usize, &Variant>,
     read_length: usize,
-    write_padding: usize,
     read_name_prefix: &str,
     read_num: usize,
     buffer: &mut ZlibEncoder<File>,
-    quality_score_model: &QualityScoreModel,
+    quality_scores: Vec<usize>,
     sequencing_error_model: &SequencingErrorModel,
-) -> Result<(), BlockFastQError> {
-    // This process will be needed for each read
-    for variant in variants {
-        if (position1..position2).contains(&variant.location) {
-            // variant is in scope
-            match variant.genotype {
-                Genotypes::Heterozygous => {
-                    // 50/50 chance it gets applied
-                    if rng.random()? < 0.5 {
-                        sequence_splicer(
-                            sequence, 
-                            variant,
-                        )?;
-                    }
-                },
-                Genotypes::Homozygous => {
-                    // Always applied
-                    sequence_splicer(
-                        sequence, 
-                        variant,
-                    )?;
-                },
-            }
-        }
-    }
-    // We build in some padding for deletions
-    let qual_score_len = read_length + write_padding;
-    // we may need to update quality scores
-    let mut quality_scores_1 = quality_score_model
-        .generate_quality_scores(qual_score_len, rng)?;
-
-    let mut del_len_max_r1 = write_padding;
-
+    rng: &mut NeatRng,
+) -> Result<(), FastqToolsError> {
+    // This process will apply variants and sequencing errors to a fragment, then write the reads,
+    // as applicable.
+    // we start by writing the read name:
     // Write read name
     buffer.write(
         format!("@{} 1:{}\n", &read_name_prefix, &read_num
     ).as_bytes())?;
-
-    let mut index = 0;
-    let mut written = 0;
-
-    // This section writes out the actual sequence. We stop when we reach the end of the read
-    // or we write out 1 read_length worth of characters. Hopefully we catch all the edge cases.
-    'outer: while (index < sequence.len()) && (written < read_length) {
-        // This section will work like this:
-        //     - for each index, check for an error with the quality score
-        //     - if an error, handle according to type, including incrementing the index
-        //     - Tricky part is, we only want to write out READ LENGTH number of bases,
-        //           but there are indels of random length, so we have to be flexible
-        //     - What if too many deletions accumulate in a read?
-        let score = quality_scores_1[index];
-        let prob = sequencing_error_model.convert_score(score as usize)?;
-        
-        // grab current base
-        let current_base = sequence[index];
-        
-        // Lower score will translate to a higher probability of error
-        if rng.random()? < prob {
-            // sequencing error
-            let error = sequencing_error_model
-                .generate_sequencing_error(current_base, rng)?;
-            match error {
-                SequencingErrorType::SnpError(base) => {
-                    // write out new base, keep quality scores unchanged 
-                    // We're converting this from our simplified representation to standard utf-8 character encoding to write to file
-                    buffer.write(&[base as u8])?;
-                    written += 1;
-                },
-                SequencingErrorType::DeletionError(length) => {
-                    // skip `length` bases, leave quality scores untouched (because it's close enough)
-                    // First we check to make sure we haven't deleted too many bases this read
-                    if length > del_len_max_r1 {
-                        index += length;
-                        del_len_max_r1 -= length;
-                    } else {
-                        // We added enough deletion errors to this read, skip
+    // Use a while loop so we can skip for deletions
+    // To figure out where we are on the contig, we use the reference_read_position. This helps us find relevant variants
+    let mut reference_position = 0;
+    let mut bases_written = 0;
+    while (reference_position < sequence.len()) && (bases_written < read_length) {
+        let reference_base = sequence[reference_position];
+        let mut base_to_write: Vec<Nucleotide> = vec![reference_base];
+        // Figure out what to actually write at this position
+        if flagged_positions.contains(&reference_position) {
+            // Potentially contains a mutation, so we will write that, if applicable
+            let variant = variant_map[&reference_position];
+            match variant.genotype {
+                Genotypes::Heterozygous => {
+                    // sequence splicing isn't going to work because if I change the sequence, then it throws off my positions.
+                    // 50/50 chance it gets applied
+                    if rng.random()? < 0.5 {
+                        base_to_write = variant.alternate.clone();
                     }
                 },
-                SequencingErrorType::InsertionError(vec) => {
-                    // Write out current base, then insertion vec with low quality scores, but don't increment index,
-                    // so the next base is the one originally following the current base
-                    let insert_len = &vec.len();
-                    let mut insertion: Vec<u8> = Vec::new();
-                    insertion.push(current_base as u8);
-                    written += 1;
-                    // We have to be careful here not to write out more bases than a read length, for insertions
-                    // at the ends of the reads
-                    if written >= read_length { break 'outer }
-                    for base in vec {
-                        insertion.push(base as u8);
-                        written += 1;
-                        // We have to be careful here not to write out more bases than a read length, 
-                        // for insertions at the ends of the reads
-                        if written >= read_length { break 'outer }
-                    }
-                    buffer.write(&insertion)?;
-
-                    let low_score = vec![5; *insert_len];
-                    quality_scores_1.splice(
-                        (index+1)..(index+1), low_score.iter().cloned()
-                    );
-                }
+                Genotypes::Homozygous => {
+                    // Always applied
+                    base_to_write = variant.alternate.clone()
+                },
             }
         } else {
-            buffer.write(&[current_base as u8])?;
-            written += 1;
+            // if no variant, test for an error
+            let score = quality_scores[reference_position];
+            let prob = sequencing_error_model.convert_score(score as usize)?;
+            if rng.random()? < prob {
+                // This position contains a sequencing error
+                let error = sequencing_error_model
+                    .generate_sequencing_error(reference_base, rng)?;
+                match error {
+                    SequencingErrorType::SnpError(base) => {
+                        // write out new base, keep quality scores unchanged 
+                        // We're converting this from our simplified representation to standard utf-8 character encoding to write to file
+                        base_to_write = vec![base];
+                    },
+                    SequencingErrorType::DeletionError(length) => {
+                        // skip `length` bases, leave quality scores untouched (because it's close enough)
+                        // First we check to make sure we haven't deleted too many bases this read
+                        if reference_position + length > sequence.len() {
+                            // In this case, we would be deleting too many bases, so we'll skip
+                        } else {
+                            // for a deletion, we still writet the reference base, then we skip the next length bases
+                            // base_to_write remains unchanged
+                            reference_position += length;
+                        }
+                    },
+                    SequencingErrorType::InsertionError(vec) => {
+                        // Write out current base, then insertion vec with low quality scores, but don't increment index,
+                        // so the next base is the one originally following the current base
+                        let mut insert_len = vec.len();
+                        let mut insertion: Vec<Nucleotide> = Vec::new();
+                        insertion.push(reference_base);
+                        // We have to be careful here not to write out more bases than a read length, for insertions
+                        // at the ends of the reads. The +1 signifies the reference_base already included
+                        if bases_written + insert_len + 1 >= read_length {
+                            // If the insertion takes us past the read_length, we'll trim the insertion
+                            insert_len = bases_written + insert_len + 1 - read_length;
+                        };
+                        for i in 0..insert_len {
+                            insertion.push(vec[i])
+                        }
+                    }
+                }
+            }
+            for base in base_to_write {
+                buffer.write(&[base as u8])?;
+                bases_written += 1;
+            }
         }
-        index = index + 1;
-    }
+    } 
+    // Read has been written at this point
     
     // Write out the plus sign spacer
     buffer.write(b"\n+\n")?;
     // Convert quality scores to a character vec, write out `read_length` scores and a line break
-    let mut char_vec = quality_scores_to_char_vec(quality_scores_1)?;
-    // Trim toinal length. If this throws an error, then we have a bug.
-    char_vec = char_vec[..read_length].to_vec();
+    buffer.write(&quality_scores_to_char_vec(quality_scores)?)?;
     // Add a line break
-    char_vec.extend(b"\n");
-    // and write
-    buffer.write(&char_vec)?;
-    Ok(())
-}
-
-fn sequence_splicer (
-    sequence: &mut Vec<Nucleotide>,
-    variant: &Variant,
-) -> Result<(), BlockFastQError> {
-    let reference_length = variant.reference.len();
-    sequence.splice(
-        variant.location..(variant.location + reference_length),
-        variant.alternate.iter().cloned(),
-    );
+    buffer.write(b"\n")?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::sequencing_error_model;
     use crate::structs::variants::{Variant, VariantType};
     use crate::structs::nucleotides::Nucleotide::*;
 
     #[test]
-    fn test_splicing_deletion() {
-        let mut sequence = vec![C, G, G, G, C, A, A, G, T, C];
+    fn test_find_map() {
+        let sequence_block = PathBuf::from("chr1_001000_002000.json");
         let variant = Variant::new(
             VariantType::Deletion,
-            2,
+            1002,
             &vec![G, G, C],
             &vec![G],
             &mut vec![1,0]
         ).unwrap();
-        sequence_splicer(&mut sequence, &variant).unwrap();
-        assert_eq!(sequence, vec![C, G, G, A, A, G, T, C,])
+        let variant_vec = vec![variant];
+        let mutated_map = MutatedMap::new(sequence_block.clone(), variant_vec).unwrap();
+        assert_eq!(find_map((1050, 1550), &vec![mutated_map]).unwrap().sequence_block, sequence_block);
+        
     }
 
     #[test]
-    fn test_splicing_insertion() {
-        let mut sequence = vec![C, G, G, G, C, A, A, G, T, C];
-        let variant = Variant::new(
-            VariantType::Insertion,
-            2,
-            &vec![G],
-            &vec![G, T, T],
-            &mut vec![1,1]
-        ).unwrap();
-        sequence_splicer(&mut sequence, &variant).unwrap();
-        assert_eq!(sequence, vec![C, G, G, T, T, G, C, A, A, G, T, C,])
-    }
-
-    #[test]
-    fn test_variables() {
-        let v = 5;
-        let mut x = v;
-        for _ in 0..2 {
-            x -= 1
-        }
-        assert_eq!(x, 3);
-        assert_eq!(v, 5);
+    fn test_qual_score_to_write() {
+        let qual_scores = vec![33, 25, 37, 28, 15, 33, 33, 37, 37, 25];
+        let qual_string = "B:F=0BBFF:".as_bytes();
+        assert_eq!(qual_string, quality_scores_to_char_vec(qual_scores).unwrap())
     }
 
     #[test]
@@ -443,5 +391,58 @@ mod tests {
         let read: Vec<Nucleotide> = vec![A, A, A, A, C, C, C, C, C];
         let revcomp: Vec<Nucleotide> = vec![G, G, G, G, G, T, T, T, T];
         assert_eq!(reverse_complement(read), revcomp);
+    }
+
+    #[test]
+    fn test_apply_variants() {
+        let sequence = vec![A, C, G, T, T, A, T, G];
+        let variant1 = Variant::new(
+                VariantType::SNP,
+                1,
+                &vec![T],
+                &vec![C],
+                &mut vec![1, 0],
+        ).unwrap();
+        let variant2 = Variant::new(
+                VariantType::Deletion,
+                3,
+                &vec![T, T],
+                &vec![T],
+                &mut vec![0,1],
+        ).unwrap();
+        let variant_map = HashMap::from([
+            (1, &variant1),
+            (3, &variant2),
+        ]);
+        let flagged_positions = vec![1,3];
+        let read_name_prefix = "neat_generated_";
+        let file = PathBuf::from("fake.fq");
+        let outfile = create_output_file(&file, true).unwrap();
+        let mut buffer = ZlibEncoder::new(outfile, Compression::default());
+        let qual_scores = vec![33, 25, 37, 28, 15, 33, 33, 37];
+        let sequencing_error_model = SequencingErrorModel::default().unwrap();
+        let mut rng = NeatRng::new_from_seed(&vec![
+            "Hello".to_string(),
+            "Cruel".to_string(),
+            "World".to_string(),
+        ]).unwrap();
+        let result = apply_variants_and_write_sequence(
+            sequence, 
+            &flagged_positions, 
+            &variant_map, 
+            8, 
+            read_name_prefix, 
+            1, 
+            &mut buffer, 
+            qual_scores, 
+            &sequencing_error_model, 
+            &mut rng
+        );
+
+        match result {
+            Ok(()) => assert!(true),
+            Err(_) => assert!(false),
+        }
+        fs::remove_file(file).unwrap();
     }
 }

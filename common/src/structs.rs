@@ -8,3 +8,5 @@ pub mod transition_matrix;
 pub mod variants;
 pub mod fasta_map;
 pub mod distributions;
+pub mod sequence_variants;
+pub mod mutated_map;

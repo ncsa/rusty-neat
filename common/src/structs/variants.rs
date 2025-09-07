@@ -13,6 +13,8 @@ pub enum VariantError {
     MalformedRef,
     #[error("ERROR: Malformed variant alt!")]
     MalformedAlt,
+    #[error("Error Generating the genotype string!")]
+    GenoStringError,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
@@ -62,6 +64,7 @@ pub struct Variant {
 }
 
 impl Variant {
+
     pub fn new(
         variant_type: VariantType,
         location: usize,
@@ -107,13 +110,17 @@ impl Variant {
             location,
             reference: reference.clone(),
             alternate: alternate.clone(),
-            genotype_str: genotype_to_string(genotype),
+            genotype_str: genotype_to_string(genotype)?,
             genotype: genotype_label,
         })
     }
+
+    pub fn get_loc(&self) -> Result<usize, VariantError> {
+        Ok(self.location.clone())
+    }
 }
 
-fn genotype_to_string(genotype: &mut Vec<usize>) -> String {
+fn genotype_to_string(genotype: &mut Vec<usize>) -> Result<String, VariantError> {
     // Converts a vector of 0s and 1s representing genotype to a standard
     // vcf genotype string.
     //
@@ -121,9 +128,10 @@ fn genotype_to_string(genotype: &mut Vec<usize>) -> String {
     // it doesn't look like one ploid got all the mutations. I actually don't know if this is
     // realistic or not, but that's what we're doing.
     let geno_str = genotype.iter().map(|x| x.to_string() + "/").collect::<String>();
-    geno_str.strip_suffix("/").expect(
-        &format!("Problem with genotype string: {:?}", genotype)
-    ).to_string()
+    match geno_str.strip_suffix("/") {
+        Some(str) => Ok(str.to_string()),
+        None => Err(VariantError::GenoStringError)
+    }
 }
 
 #[cfg(test)]
@@ -187,6 +195,6 @@ mod tests {
     #[test]
     fn test_genotype_to_string() {
         let mut genotype = vec![0, 1, 0];
-        assert_eq!(String::from("0/1/0"), genotype_to_string(&mut genotype));
+        assert_eq!(String::from("0/1/0"), genotype_to_string(&mut genotype).unwrap());
     }
 }

@@ -1,7 +1,7 @@
 # Full path to reference in fasta format
-reference: .
+reference: /home/joshfactorial/code/rusty-neat/generate_reads/src/utils/test_data/H1N1.fa
 # Whole number length of reads
-read_len: .
+read_len: 150
 # Whole number target coverage value 
 coverage: .
 # float giving the average mutation rate
@@ -16,22 +16,23 @@ fragment_mean: .
 fragment_st_dev: .
 
 # Boolean values
-produce_bam: .
-produce_vcf: .
-produce_fastq: .
+produce_bam: true
+produce_vcf: true
+produce_fastq: true
 
 # true or false (default false)
-overwrite_output: .
+overwrite_output: true
 
 # the directory where you want to write files
-output_dir: .
+output_dir: /home/joshfactorial/code
 # the common name given to all output files (e.g., "TEST" => TEST_r1.fastq, TEST.vcf, TEST.bam)
-output_filename: .
+output_filename: test
 
 # input files (full paths to files)
 mutation_model: .
-fragment_model: .
+fragment_madel: .
 sequence_error_model: .
 
 # debug option (default false)
-debug: . 
+debug: true
+rng_seed: .

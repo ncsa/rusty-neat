@@ -4,18 +4,93 @@
 // read coverage. Generate reads uses this to create a list of coordinates to take slices from
 // the mutated fasta file. These will either be read-length fragments or fragment model length
 // fragments.
-use common;
-
+use crate::common::{
+    models::fragment_length::FragmentLengthModel,
+};
 use log::debug;
 use std::collections::VecDeque;
-use simple_rng::{NeatRng, NormalDistribution, DiscreteDistribution};
+use simple_rng::NeatRng;
+use crate::errors::GenerateReadsErrors;
+
+pub fn generate_reads(
+    sequence_length: usize,
+    read_length: usize,
+    coverage: usize,
+    paired_ended: bool,
+    fragment_model: &FragmentLengthModel,
+    rng: &mut NeatRng,
+) -> Result<Vec<(usize, usize, Option<usize>, usize)>, GenerateReadsErrors> {
+    // Takes:
+    // sequence_length: The length of the sequence to generate reads for.
+    // read_length: the length ef the reads for this run
+    // coverage: the average depth of coverage for this run
+    // rng: the random number generator for the run
+    // Returns:
+    // HashSet of vectors representing the read sequences, stored on the heap in box.
+    //
+    // This takes a mutated sequence and produces a set of reads based on the mutated sequence. For
+    // paired ended reads, this will generate a set of reads from each end, by taking the reverse
+    // complement in the output
+
+    // todo We need to select for non-N areas for the reads, or at least have reads be more than 1/2
+    //  true bases, I think.
+    let mut fragment_pool: Vec<usize> = Vec::new();
+    if paired_ended {
+        let num_frags = (sequence_length / read_length) * coverage;
+        // add fragments to the fragment pool
+        for _ in 0..num_frags {
+            let frag = fragment_model.generate_fragment(rng.random()?)?;
+            fragment_pool.push(frag);
+        }
+    }
+    // Generate a vector of read positions
+    debug!("Generating read coordinates.");
+    let fragments: Vec<(usize, usize)> = cover_dataset(
+        sequence_length,
+        read_length,
+        fragment_pool,
+        coverage,
+        rng
+    );
+
+    // TODO Generate single or paired ended reads from the fragments
+    let mut read_set: Vec<(usize, usize, Option<usize>, usize)> = Vec::new();
+    if paired_ended {
+        for fragment in fragments {
+            // Push a paired ended read off the fragment
+            read_set.push((
+                fragment.0, 
+                fragment.0 + read_length, 
+                Some(fragment.1 - read_length), 
+                fragment.1
+            ))
+        }
+    } else {
+        // Push a single ended read
+        for fragment in fragments {
+            read_set.push((
+                fragment.0, 
+                fragment.0 + read_length,
+                None,
+                fragment.1,
+            ))
+        }
+    }
+
+    debug!("Outputting read set");
+    if read_set.is_empty() {
+        Err(GenerateReadsErrors::GenerateReadsError)
+    } else {
+        Ok(read_set)
+    }
+}
 
 fn cover_dataset(
     span_length: usize,
     read_length: usize,
     mut fragment_pool: Vec<usize>,
     coverage: usize,
-    mut rng: &mut NeatRng,
+    rng: &mut NeatRng,
 ) -> Vec<(usize, usize)> {
     // Takes:
     // span_length: Total number of bases in the sequence
@@ -33,122 +108,47 @@ fn cover_dataset(
     // And picks those coordinates for a second read. Once the tail of the read is past the end,
     // we start over again at 0.
     //
-    // todo I think I need to know the locations of the variants and if they are homozygous or
-    //  heterozygous. Maybe recast the variants map to that and input it in this function.
-    //  Basically, we want to tag these reads, so that when they are written later, we get stuff
-    //  like heterozygous reads only showing up on half the reads.
     // Reads that will be start and end of the fragment.
-    let mut read_set: Vec<(usize, usize)> = vec![];
+    let mut fragment_set: Vec<(usize, usize)> = vec![];
 
     let mut cover_fragment_pool: VecDeque<usize>;
     if fragment_pool.is_empty() {
         // set the shuffled fragment pool just equal to an instance of read_length
-        cover_fragment_pool = VecDeque::from([read_length]);
+        cover_fragment_pool = VecDeque::from([read_length*2]);
     } else {
         // shuffle the fragment pool
-        fragment_pool.shuffle(&mut rng);
+        rng.shuffle_in_place(&mut fragment_pool)
+            .expect("Generate reads failed while shuffling the fragment pool");
         cover_fragment_pool = VecDeque::from(fragment_pool)
     }
     // Gap size to keep track of how many uncovered bases we have per layer, to help decide if we
     // need more layers
-    let mut gap_size: usize = 0;
     let mut layer_count: usize = 0;
     // start this party off at zero.
     let mut start: usize = 0;
     // create coverage number of layers
-    while layer_count <= coverage {
+    while layer_count < coverage {
         let fragment_length = cover_fragment_pool.pop_front().unwrap();
         let temp_end = start + fragment_length;
         cover_fragment_pool.push_back(fragment_length.clone());
         if temp_end > span_length {
             // TODO some variation on this modulo idea will work for bacterial reads
             start = temp_end % span_length;
-            gap_size += start;
-            if gap_size >= span_length {
-                // if we have accumulated enough gap, then we need to run the same layer again.
-                // We'll reset gap size but not increment layer_count.
-                gap_size = gap_size % span_length;
-                continue;
-            } else {
-                layer_count += 1;
-                continue;
-            }
+            layer_count += 1;
+            continue
         }
-        read_set.push((start, temp_end));
-        // insert size is the number of bases between reads in the fragment for paired ended reads
-        // if these are singled ended reads, then the insert size will always be -read_length
-        if fragment_length > (read_length * 2) {
-            // if there's any insert size on paired ended reads, we'll add
-            // that to the gap to ensure adequate coverage.
-            gap_size += fragment_length - (read_length * 2)
-        };
+        fragment_set.push((start, temp_end));
         // Picks a number between zero and a quarter of a read length
-        let wildcard: usize = (rng.rand_u32() % 10) as usize;
+        let wildcard: usize = (rng.rand_u32().unwrap() % 10) as usize;
         // adds to the start to give it some spice
         start += temp_end + wildcard;
-        // sanity check. If we are already out of bounds, take the modulo
+        // sanity check. If we are out of bounds, take the modulo
         if start >= span_length {
             // get us back in bounds
             start = start % span_length;
-            // add the gap
-            gap_size += start;
-        } else {
-            // still in bounds, just add the gap
-            gap_size += wildcard;
         }
     }
-    read_set
-}
-
-pub fn generate_reads(
-    sequence_length: usize,
-    read_length: usize,
-    coverage: usize,
-    paired_ended: bool,
-    mean: Option<f64>,
-    st_dev: Option<f64>,
-    mut rng: NeatRng,
-) -> Result<Vec<(usize, usize)>, &'static str> {
-    // Takes:
-    // sequence_length: The length of the sequence to generate reads for.
-    // read_length: the length ef the reads for this run
-    // coverage: the average depth of coverage for this run
-    // rng: the random number generator for the run
-    // Returns:
-    // HashSet of vectors representing the read sequences, stored on the heap in box.
-    //
-    // This takes a mutated sequence and produces a set of reads based on the mutated sequence. For
-    // paired ended reads, this will generate a set of reads from each end, by taking the reverse
-    // complement in the output
-
-    // todo We need to select for non-N areas for the reads, or at least have reads be more than 1/2
-    //  true bases, I think.
-    let mut fragment_pool: Vec<usize> = Vec::new();
-    if paired_ended {
-        let num_frags = (sequence_length / read_length) * (coverage * 2);
-        let fragment_distribution = NormalDistribution::new(mean.unwrap(), st_dev.unwrap());
-        // add fragments to the fragment pool
-        for _ in 0..num_frags {
-            let frag = fragment_distribution.sample(&mut rng).round() as usize;
-            fragment_pool.push(frag);
-        }
-    }
-    // Generate a vector of read positions
-    debug!("Generating read coordinates.");
-    let read_positions: Vec<(usize, usize)> = cover_dataset(
-        sequence_length,
-        read_length,
-        fragment_pool,
-        coverage,
-        &mut rng
-    );
-
-    debug!("Outputting read set");
-    if read_positions.is_empty() {
-        Err("No reads generated")
-    } else {
-        Ok(read_positions)
-    }
+    fragment_set
 }
 
 #[cfg(test)]
@@ -162,11 +162,11 @@ mod tests {
         let read_length = 10;
         let fragment_pool = vec![10];
         let coverage = 1;
-        let mut rng = NeatRng::new_from_seed(vec![
+        let mut rng = NeatRng::new_from_seed(&vec![
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),
-        ]);
+        ]).unwrap();
         let cover = cover_dataset(span_length, read_length, fragment_pool, coverage, &mut rng);
         assert_eq!(cover[0], (0, 10))
     }
@@ -177,104 +177,93 @@ mod tests {
         let read_length = 100;
         let fragment_pool = vec![300];
         let coverage = 1;
-        let mut rng = NeatRng::new_from_seed(vec![
+        let mut rng = NeatRng::new_from_seed(&vec![
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),
-        ]);
+        ]).unwrap();
         let cover = cover_dataset(span_length, read_length, fragment_pool, coverage, &mut rng);
         assert_eq!(cover[0], (0, 300))
     }
 
     #[test]
     fn test_generate_reads_single() {
-        let mutated_sequence = vec![0, 0, 2, 0, 3, 3, 3, 3, 0, 0, 0, 0, 0, 2, 2, 2, 4, 4, 4, 4];
         let read_length = 10;
         let coverage = 1;
         let paired_ended = false;
-        let mean = None;
-        let st_dev = None;
-        let mut rng = NeatRng::new_from_seed(vec![
+        let mut rng = NeatRng::new_from_seed(&vec![
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),
-        ]);
+        ]).unwrap();
+        let fragment_model = FragmentLengthModel::default().unwrap();
         let reads = generate_reads(
-            mutated_sequence.len(),
+            2000,
             read_length,
             coverage,
             paired_ended,
-            mean,
-            st_dev,
-            rng,
-        )
-        .unwrap();
-        println!("{:?}", reads);
-        assert!(reads.contains(&(0, 10)));
+            &fragment_model,
+            &mut rng,
+        ).unwrap();
+        assert!(reads.contains(&(0, 10, None, 20)));
     }
 
     #[test]
     fn test_seed_rng() {
-        let mutated_sequence = vec![
+        let sequnce = vec![
             0, 0, 2, 0, 3, 3, 3, 3, 0, 0, 0, 0, 0, 2, 2, 2, 4, 4, 4, 4
         ];
         let read_length = 10;
         let coverage = 1;
         let paired_ended = false;
-        let mean = None;
-        let st_dev = None;
-        let mut rng = NeatRng::new_from_seed(vec![
+        let mut rng = NeatRng::new_from_seed(&vec![
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),
-        ]);
+        ]).unwrap();
+        let fragment_model = FragmentLengthModel::default().unwrap();
         let run1 = generate_reads(
-            mutated_sequence.len(),
+            sequnce.len(),
             read_length,
             coverage,
             paired_ended,
-            mean,
-            st_dev,
-            rng.clone(),
-        )
-        .unwrap();
+            &fragment_model,
+            &mut rng,
+        ).unwrap();
 
+        let fragment_model = FragmentLengthModel::default().unwrap();
         let run2 = generate_reads(
-            mutated_sequence.len(),
+            sequnce.len(),
             read_length,
             coverage,
             paired_ended,
-            mean,
-            st_dev,
-            rng.clone(),
-        )
-        .unwrap();
+            &fragment_model,
+            &mut rng,
+        ).unwrap();
 
         assert_eq!(run1, run2)
     }
 
     #[test]
     fn test_generate_reads_paired() {
-        let mutated_sequence: Vec<u8> = std::iter::repeat(0_u8).take(100_000).collect();
+        let sequence: Vec<u8> = std::iter::repeat(0_u8).take(100_000).collect();
         let read_length = 100;
         let coverage = 1;
         let paired_ended = true;
-        let mean = Some(200.0);
-        let st_dev = Some(1.0);
-        let mut rng = NeatRng::new_from_seed(vec![
+        let mut rng = NeatRng::new_from_seed(&vec![
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),
-        ]);
+        ]).unwrap();
+        let fragment_model = FragmentLengthModel::default().unwrap();
         let reads = generate_reads(
-            mutated_sequence.len(),
+            sequence.len(),
             read_length,
             coverage,
             paired_ended,
-            mean,
-            st_dev,
-            rng.clone(),
-        );
-        assert!(!reads.unwrap().is_empty())
+            &fragment_model,
+            &mut rng,
+        ).unwrap();
+        assert!(!reads.is_empty())
     }
 }

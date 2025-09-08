@@ -1,92 +1,150 @@
 use log::debug;
+use std::{io, path::PathBuf};
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+use crate::{
+    models::lib::{model_reader, model_writer}, 
+    structs::{distributions::{DiscreteDistribution, DistributionErrors}, 
+    nucleotides::{Nucleotide, ALLOWED_USIZE}, 
+    transition_matrix::{TransitionMatrix, TransitionMatrixError}}
+};
+use simple_rng::{NeatRng, NeatRngError};
 
-use crate::structs::sequencing_errors::SequencingError;
-use crate::structs::sequencing_errors::{IndelErr, SnpErr};
-use crate::structs::transition_matrix::TransitionMatrix;
-use crate::structs::sequencing_errors::SequencingError::{IndelError, SNPError};
-use simple_rng::{NeatRng, DiscreteDistribution};
+#[derive(Debug, Error)]
+pub enum SeqModelError{
+    #[error("Error creating sequencing error model")]
+    ModelCreationError,
+    #[error("Error creating transition matrix: {0}")]
+    TransMatrixError(#[from] TransitionMatrixError),
+    #[error("Error sampling distribution: {0}")]
+    DistributionError(#[from] DistributionErrors),
+    #[error("Error with rng: {0}")]
+    RngError(#[from] NeatRngError),
+    #[error("No RNG supplied for this model.")]
+    MissingRngError,
+    #[error("Sequencing Error model return an IO error: {0}")]
+    IoError(#[from] io::Error),
+}
 
-#[derive(Clone)]
+#[derive(Debug)]
+pub enum SequencingErrorType {
+    SnpError(Nucleotide),
+    InsertionError(Vec<Nucleotide>),
+    DeletionError(usize),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SequencingErrorModel {
     // Neat only dealt with 2 types of sequencing errors: snps and small indels.
     // We will retain that idea and assume it is accurate.
     error_rate: f64,
-    lengths: [i8; 4],
-    length_distr: DiscreteDistribution,
-    insertion_probability: f64,
+    del_length_distribution: DiscreteDistribution,
+    ins_length_distribution: DiscreteDistribution,
+    indel_probability: f64,
     insertion_bias: DiscreteDistribution,
     transition_distros: TransitionMatrix,
 }
 
 impl SequencingErrorModel {
-    pub fn new() -> Self {
+    pub fn default() -> Result<Self, SeqModelError> {
         // This is the default sequencing error model employed by NEAT2
+        // Note that this was originally in a file, and we could have done it the way we did
+        // the other defaults, but it was so small, I just included it in full here.
         let default_transition_distros = TransitionMatrix::from(
             vec![0.0, 0.4918, 0.3377, 0.1705],
             vec![0.5238, 0.0, 0.2661, 0.2101],
             vec![0.3754, 0.2355, 0.0, 0.389],
             vec![0.2505, 0.2552, 0.4942, 0.0],
-        );
-        let default_error_rate = 0.01;
-        let default_lengths = [-2, -1, 1, 2];
-        let default_length_distr = DiscreteDistribution::new(&vec![0.001, 0.999, 0.999, 0.001]);
-        let default_insertion_probability = 0.4;
+        )?;
+        let default_error_rate = 0.006638164688495656;
+        let default_lengths = vec![1, 2];
+        let default_ins_distr = DiscreteDistribution::new(
+            &vec![0.999, 0.001],
+            &default_lengths,
+        )?;
+        let default_del_distr = default_ins_distr.clone();
+        let default_indel_probability = 0.4;
         // default is no bias
-        let default_insertion_bias = DiscreteDistribution::new(&vec![1.0, 1.0, 1.0, 1.0]);
+        let default_insertion_bias = DiscreteDistribution::new(
+            &vec![1.0, 1.0, 1.0, 1.0],
+            &Vec::from(ALLOWED_USIZE.clone()),
+        )?;
 
-        SequencingErrorModel {
+        Ok(SequencingErrorModel {
             error_rate: default_error_rate,
-            lengths: default_lengths,
-            length_distr: default_length_distr,
-            insertion_probability: default_insertion_probability,
+            del_length_distribution: default_del_distr,
+            ins_length_distribution: default_ins_distr,
+            indel_probability: default_indel_probability,
             insertion_bias: default_insertion_bias,
             transition_distros: default_transition_distros,
+        })
+    }
+
+    pub fn from_file(filename: &PathBuf) -> Result<Self, SeqModelError> {
+        let data: SequencingErrorModel = model_reader(filename).unwrap();
+        Ok(data)
+    }
+
+    pub fn write_model(&self, filename: &PathBuf) -> Result<(), SeqModelError> {
+        model_writer(self, filename)?;
+        Ok(())
+    }
+
+    pub fn generate_sequencing_error(&self, reference: Nucleotide, rng: &mut NeatRng) -> Result<SequencingErrorType, SeqModelError> {
+        // This method picks an error type and determines any additional data needed
+        // for the current error, based on the statistical model
+        if rng.random()? < self.indel_probability {
+            // Indel error
+            Ok(self.generate_indel_error(rng)?)
+        } else {
+            // SNP error
+            Ok(SequencingErrorType::SnpError(self.generate_snp_error(reference, rng.random()?)?))
         }
     }
-    pub fn generate_snp_error(&self, base: u8, rng: &mut NeatRng) -> SequencingError {
+
+    pub fn convert_score(&self, score: usize) -> Result<f64, SeqModelError> {
+        // Takes a quality score, converts it to a probability of error, and returns the result
+        let score = score as f64;
+        Ok(10.0_f64.powf(-score/10.0))
+    }
+
+    fn generate_snp_error(&self, reference: Nucleotide, rand: f64) -> Result<Nucleotide, SeqModelError> {
         // This is a basic mutation function for starting us off
         // Pick the weights list for the base that was input
         // We will use this simple model for sequence errors ultimately.
         debug!("Generating basic SNP variant");
-        let weights: &DiscreteDistribution = match base {
-            0 => &self.transition_distros.a_dist,
-            1 => &self.transition_distros.c_dist,
-            2 => &self.transition_distros.g_dist,
-            3 => &self.transition_distros.t_dist,
-            _ => panic!("Trying to mutate an unknown bases!")
-        };
+        let distro = &self.transition_distros[&reference];
         // Now we create a distribution from the weights and sample our choices.
-        match weights.sample(rng) {
-            0 => SNPError(SnpErr::new(0)),
-            1 => SNPError(SnpErr::new(1)),
-            2 => SNPError(SnpErr::new(2)),
-            3 => SNPError(SnpErr::new(3)),
-            // technically, the following part isn't reachable because of how we have constructed
-            // things. Our weights vector has a max length of 4, but Rust doesn't know that.
-            _ => panic!("Invalid index selected!"),
-        }
+        // We have constructed things such that this will return a valid u8. But 
+        // to be extra safe, we could mod by 4 and then convert
+        Ok(Nucleotide::from(distro.sample(rand)?))
     }
 
-    pub fn generate_indel_error(&self, rng: &mut NeatRng) -> SequencingError {
-        let length = self.lengths[self.length_distr.sample(rng)];
-        if length > 0 {
+    fn generate_indel_error(&self, rng: &mut NeatRng) -> Result<SequencingErrorType, SeqModelError> {
+        // Returns either an insertion (option 1) or a deletion (option 2) depending on a random selection from a list of potential
+        // error lengths (-2..2). This makes an insertion of up to 2 bases as likely as a random deletion of up to 2 bases.
+        if rng.random()? < 0.5 {
+            // We assume fifty-fifty chance of insertion v deletion
             // insertion
             let mut sequence = Vec::new();
+            let length = self.ins_length_distribution.sample(rng.random()?)?;
             for _ in 0..length {
-                sequence.push(self.insertion_bias.sample(rng) as u8)
+                // We could mod this value by 4 to ensure it is a valid base. Or create a data structure.
+                sequence.push(Nucleotide::from(self.insertion_bias.sample(rng.random()?)?))
             }
             // Insertion of sequence
-            IndelError(IndelErr::new(length, Some(sequence)))
+            Ok(SequencingErrorType::InsertionError(sequence))
         } else {
-            // Deletion of length bases
-            IndelError(IndelErr::new(length, None))
+            // Deletion
+            let length = self.del_length_distribution.sample(rng.random()?)?;
+            Ok(SequencingErrorType::DeletionError(length))
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+
     #[test]
     fn test_sequencing_error_model() {
         // todo needs tests

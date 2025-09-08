@@ -4,8 +4,7 @@
 //! This one needs a major overhaul, it is autogenerating quality scores etc. 
 //! Will wait to get other things set up first
 use std::io::Write;
-use log::{info, debug};
-use std::{env, fs};
+use log::{debug, error, info};
 use std::fs::File;
 use std::path::PathBuf;
 use std::collections::HashMap;
@@ -27,6 +26,8 @@ use crate::structs::variants::{Genotypes, Variant};
 pub enum FastqToolsError {
     #[error("Error writing bgzip fastq block {0}")]
     FastqWriteError(String),
+    #[error("Quality scores missing for read 2")]
+    MissingQScores,
     #[error("Error reading bgzip fastq block {0}")]
     FastqReadError(String),
     #[error("Mismatch between indexing and reads set for block {0}")]
@@ -43,6 +44,10 @@ pub enum FastqToolsError {
     MutatedMapError(#[from] MutatedMapError),
     #[error("Error locating a matching mutated map")]
     FindMapError,
+    #[error("Paired ended declared, but r2 buffer empty")]
+    BufferInitError,
+    #[error("Malformed read during pair-ended analysis: {0}")]
+    MalformedReadError(String),
 }
 
 fn reverse_complement(sequence: Vec<Nucleotide>) -> Vec<Nucleotide> {
@@ -83,7 +88,7 @@ pub fn write_fastq(
     mutated_maps: &HashMap<String, Vec<MutatedMap>>,
     read_length: usize,
     paired_ended: bool,
-    output_files: (PathBuf, Option<PathBuf>),
+    output_files: (PathBuf, &mut Option<PathBuf>),
     quality_score_model: &QualityScoreModel,
     sequencing_error_model: &SequencingErrorModel,
     overwrite_output: bool,
@@ -120,29 +125,14 @@ pub fn write_fastq(
     // Since Rust won't be able to write if there is a possibility the open file will not be there,
     // we'll have to use a dummy file for read 2, which will never get written to, then will be 
     // deleted at the end
-    let filename1 = output_files.0;
-    debug!("Output filename1: {:?}", &filename1);
-    let filename2 = {
-        match output_files.1 {
-            Some(filename) => filename,
-            None => {
-                let mut path = env::current_dir()?;
-                path.push("dummy.fa");
-                path
-            },
-        }
-    };
-    debug!("Output filename2: {:?}", &filename2);
-    let outfile1 = create_output_file(&filename1, overwrite_output)?;
-    let outfile2 = create_output_file(&filename2, overwrite_output)?;
-    debug!("Successfully created both output files");
-    let mut buffer_r1  = GzEncoder::new(
+    debug!("Output filename1: {:?}", &output_files.0);
+    let outfile1 = create_output_file(&output_files.0, overwrite_output)?;
+    debug!("Successfully created output files");
+    let mut buffer_r1: GzEncoder<File>  = GzEncoder::new(
         outfile1, Compression::default()
     );
-    let mut buffer_r2 = GzEncoder::new(
-        outfile2, Compression::default()
-    );
     debug!("We made it THIS far!");
+    let mut files_written = Vec::new();
     for read in all_reads {
         bar.inc(1);
         let contig_name = &read.0;
@@ -185,69 +175,74 @@ pub fn write_fastq(
 
         match result_r1 {
             Err(error) => return Err(error),
-            _ => read_index += 1,
+            _ => {
+                read_index += 1;
+                files_written.push(output_files.0.clone());
+            },
         }
 
         if paired_ended {
-            // This is for read2, so we need to reverse the coordinates and do a reverse complement of the sequence
-            let pos1 = match read.3 {
-                Some(num) => num,
-                None => panic!("Bug: Paired-ended declared but no position 3 in the read")
-            };
-            let pos2 = read.4;
-            let quality_scores = match quality_score_r2 {
-                Some(vec) => vec,
-                None => panic!("Bug: Paired-ended declared but missing second quality score vector")
-            };
+            match output_files.1 {
+                Some(file) => {
+                    debug!("Output filename2: {:?}", &file);
+                    let outfile2 = create_output_file(&file, overwrite_output)?;
+                    let mut buffer_r2 = GzEncoder::new(outfile2, Compression::default());
+                    // This is for read2, so we need to reverse the coordinates and do a reverse complement of the sequence
+                    let pos1 = match read.3 {
+                        Some(num) => num,
+                        None => return Err(FastqToolsError::MalformedReadError("read.3".to_string()))
+                    };
+                    let pos2 = read.4;
+                    let quality_scores = match quality_score_r2 {
+                        Some(vec) => vec,
+                        None => return Err(FastqToolsError::MissingQScores)
+                    };
 
-            let r2_frag = reverse_complement(fragment);
+                    let r2_frag = reverse_complement(fragment);
 
-            // Find variants in the read and translate the coordinates to read coordinates
-            let mut read_2_variants: HashMap<usize, &Variant> = HashMap::new();
-            let reverse_index: Vec<usize> = (0..r2_frag.len()).rev().collect();
+                    // Find variants in the read and translate the coordinates to read coordinates
+                    let mut read_2_variants: HashMap<usize, &Variant> = HashMap::new();
+                    let reverse_index: Vec<usize> = (0..r2_frag.len()).rev().collect();
 
-            let mut r2_flagged_positions = Vec::new();
-            for (pos, variant) in &current_map.variant_map {
-                if (pos1..pos2).contains(&pos) {
-                    let index = r2_frag.len() - pos1;
-                    // The index is relative to the original fragment, now we need the reversed coordinate
-                    let start_pos = reverse_index[index];
-                    read_2_variants.insert(start_pos, variant);
-                    r2_flagged_positions.push(start_pos);
-                }
+                    let mut r2_flagged_positions = Vec::new();
+                    for (pos, variant) in &current_map.variant_map {
+                        if (pos1..pos2).contains(&pos) {
+                            let index = r2_frag.len() - pos1;
+                            // The index is relative to the original fragment, now we need the reversed coordinate
+                            let start_pos = reverse_index[index];
+                            read_2_variants.insert(start_pos, variant);
+                            r2_flagged_positions.push(start_pos);
+                        }
+                    }
+
+                    let result_r2 = apply_variants_and_write_sequence(
+                        r2_frag, 
+                        &r2_flagged_positions,
+                        &read_2_variants, 
+                        read_length, 
+                        &read_name_prefix, 
+                        read_index, 
+                        2,
+                        &mut buffer_r2, 
+                        quality_scores,
+                        sequencing_error_model,
+                        rng,
+                    );
+
+                    match result_r2 {
+                        Err(error) => return Err(error),
+                        _ => {
+                            read_index += 1;
+                            files_written.push(file.to_path_buf());
+                        },
+                    }
+                },
+                None => {},
             }
-
-            let result_r2 = apply_variants_and_write_sequence(
-                r2_frag, 
-                &r2_flagged_positions,
-                &read_2_variants, 
-                read_length, 
-                &read_name_prefix, 
-                read_index, 
-                2,
-                &mut buffer_r2, 
-                quality_scores,
-                sequencing_error_model,
-                rng,
-            );
-
-            match result_r2 {
-                Err(error) => return Err(error),
-                _ => read_index += 1,
-            }
-
         }
     }
     bar.finish();
-
-    let mut files_written = vec![filename1];
-    if filename2.ends_with("dummy.fa") {
-        fs::remove_file(filename2)?;
-    } else {
-        files_written.push(filename2)
-    }
-    info!("Fastq successfully written: {:?}!", files_written);
-
+    info!("Fastq(s) successfully written: {:?}!", files_written);
     Ok(())
 }
 

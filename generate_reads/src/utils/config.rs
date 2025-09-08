@@ -332,7 +332,7 @@ impl RunConfiguration {
                         }
                     },
                     // output_prefix is for backward compatability
-                    "output_filename" | "output_prefix "=> {
+                    "output_filename" | "output_prefix" => {
                         let pref_val = value.as_str();
                         match pref_val {
                             Some(name) => {

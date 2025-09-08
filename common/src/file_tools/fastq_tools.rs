@@ -345,10 +345,12 @@ fn apply_variants_and_write_sequence (
                 }
             }
         }
+        let mut seq = String::new();
         for base in base_to_write {
-            buffer.write(&[base as u8])?;
+            seq.push(base.into());
             bases_written += 1;
         }
+        buffer.write(&seq.into_bytes())?;
     } 
     // Read has been written at this point
     

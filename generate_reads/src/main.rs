@@ -50,7 +50,6 @@ fn main() -> Result<(), GenerateReadsErrors> {
             TerminalMode::Mixed,
             ColorChoice::Auto,
         ),
-        SimpleLogger::new(LevelFilter::Trace, Config::default()),
         WriteLogger::new(
             level_filter,
             Config::default(),

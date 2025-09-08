@@ -24,9 +24,9 @@ produce_fastq: true
 overwrite_output: .
 
 # the directory where you want to write files
-output_dir: .
+output_dir: /home/joshfactorial/code
 # the common name given to all output files (e.g., "TEST" => TEST_r1.fastq, TEST.vcf, TEST.bam)
-output_prefix: .
+output_filename: test
 
 # input files (full paths to files)
 mutation_model: .
@@ -35,4 +35,4 @@ sequence_error_model: .
 
 # debug option (default false)
 debug: true
-rng_seed: "2025 09 07 16 17 06 885084669"
+rng_seed: .

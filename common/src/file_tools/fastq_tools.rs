@@ -372,6 +372,7 @@ mod tests {
     use super::*;
     use crate::structs::variants::{Variant, VariantType};
     use crate::structs::nucleotides::Nucleotide::*;
+    use std::fs;
 
     #[test]
     fn test_find_map() {

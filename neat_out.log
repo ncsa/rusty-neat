@@ -1,0 +1,23 @@
+02:19:23 [INFO] Using Configuration file input: simple_template.yml
+02:19:23 [INFO] Running rusty-neat to generate reads on "/home/joshfactorial/code/rusty-neat/generate_reads/src/utils/test_data/H1N1.fa" with...
+02:19:23 [WARN] Produce BAM is currently not functional, but will be implemented soon!
+02:19:23 [INFO] Running rusty-neat to generate reads on /home/joshfactorial/code/rusty-neat/generate_reads/src/utils/test_data/H1N1.fa with...
+02:19:23 [INFO]   >read length: 150
+02:19:23 [INFO]   >coverage: 10
+02:19:23 [INFO]   >mutation rate: 0.001
+02:19:23 [INFO]   >ploidy: 2
+02:19:23 [INFO]   >paired ended: false
+02:19:23 [INFO] Producing fastq file:
+02:19:23 [INFO] 	> "/home/joshfactorial/code/rusty-neat/neat_out_r1.fastq.gz"
+02:19:23 [INFO] 	> "/home/joshfactorial/code/rusty-neat/neat_out.vcf"
+02:19:23 [INFO] 	> "/home/joshfactorial/code/rusty-neat/neat_out.bam"
+02:19:23 [INFO] Seed string to regenerate these exact results: 2025 09 07 16 17 06 885084669
+02:19:23 [INFO] ////////////// Welcome to rusty-neat read generator!
+02:19:23 [INFO] Processing started!
+02:19:23 [INFO] Created temp dir at TempDir { path: "/tmp/.tmpCcQinD" }
+02:19:23 [INFO] Generating simulated dataset
+02:19:23 [INFO] Producing single-ended fastq file
+02:19:23 [INFO] Writing output fastq file(s)
+02:19:23 [INFO] Fastq successfully written: ["/home/joshfactorial/code/rusty-neat/neat_out_r1.fastq.gz"]!
+02:19:23 [INFO] Writing output vcf file
+02:19:23 [INFO] Processing finished in 312 milliseconds

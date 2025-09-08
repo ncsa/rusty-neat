@@ -5,7 +5,8 @@
 //! to be duplicated, but NEAT made no attempt to distinguish between the types of insertions or
 //! deletions, since they are treated similarly by variant calling software.
 use flate2::read::GzDecoder;
-use log::error;
+use itertools::Itertools;
+use log::{error, debug};
 use vectorize;
 use serde;
 use std::hash::Hash;
@@ -169,9 +170,10 @@ lazy_static! {
     static ref ALL_CONTEXTS: Vec<TrinucFrame> = {
         let alias_map = ALIAS_MAP.clone();
         let frames: Vec<TrinucFrame> = alias_map
-            .keys()
+            .values()
             .map(|s| s.convert())
             .collect();
+        let frames = frames.iter().unique().cloned().collect::<Vec<_>>();
         frames
     };
 
@@ -274,6 +276,7 @@ impl SnpTrinucModel {
         let mut snp_weights: Vec<f64> = Vec::with_capacity(16);
         let mut trinuc_distros: HashMap<TrinucFrame, TransitionMatrix> = HashMap::new();
         let all_contexts = ALL_CONTEXTS.clone();
+        debug!("All contexts: {:?}", &all_contexts);
         let all_frames = ALL_FRAMES.clone();
         for frame in &all_contexts {
             trinuc_distros.insert(frame.clone() ,TransitionMatrix::default()?);
@@ -333,9 +336,9 @@ impl SnpTrinucModel {
         // then uses that as the index for the trinuc matrix of interest.
         // eliminating the need to copy the rng or a pointer to it, if possible
         let trinuc = TrinucFrame::from(trinuc_reference);
-        let alias_map = &ALIAS_MAP;
+        let alias_map = &ALIAS_MAP.clone();
         let alias_trinuc = alias_map[&trinuc].clone();
-        let matrix = &self.trinuc_distros[&alias_trinuc];
+        let matrix = self.trinuc_distros[&alias_trinuc].clone();
 
         let nuc: Nucleotide = matrix[&trinuc[1]].sample(rand)?.into();
         Ok(nuc)

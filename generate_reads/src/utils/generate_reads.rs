@@ -114,7 +114,7 @@ fn cover_dataset(
     let mut cover_fragment_pool: VecDeque<usize>;
     if fragment_pool.is_empty() {
         // set the shuffled fragment pool just equal to an instance of read_length
-        cover_fragment_pool = VecDeque::from([read_length]);
+        cover_fragment_pool = VecDeque::from([read_length*2]);
     } else {
         // shuffle the fragment pool
         rng.shuffle_in_place(&mut fragment_pool)
@@ -188,7 +188,6 @@ mod tests {
 
     #[test]
     fn test_generate_reads_single() {
-        let sequence = vec![0, 0, 2, 0, 3, 3, 3, 3, 0, 0, 0, 0, 0, 2, 2, 2, 4, 4, 4, 4];
         let read_length = 10;
         let coverage = 1;
         let paired_ended = false;
@@ -199,15 +198,14 @@ mod tests {
         ]).unwrap();
         let fragment_model = FragmentLengthModel::default().unwrap();
         let reads = generate_reads(
-            sequence.len(),
+            2000,
             read_length,
             coverage,
             paired_ended,
             &fragment_model,
             &mut rng,
         ).unwrap();
-        println!("{:?}", reads);
-        assert!(reads.contains(&(0, 10, None, sequence.len())));
+        assert!(reads.contains(&(0, 10, None, 20)));
     }
 
     #[test]

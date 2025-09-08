@@ -248,7 +248,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
                 &fasta_lengths,
                 &config.reference,
                 config.overwrite_output,
-                &mut PathBuf::from(filename),
+                &filename,
             ).expect("Error writing vcf file!")
         },
         None => {
@@ -268,16 +268,17 @@ mod tests {
 
     use super::*;
     use std::{fs::{self, File}, io::{BufRead, BufReader}};
-    use crate::utils::config::RunConfiguration;
+    use crate::utils::config::ConfigBuilder;
 
     #[test]
     fn test_runner() {
-        let mut config = RunConfiguration::default();
-        config.reference = "test_data/references/H1N1.fa".to_string();
+        let mut config_builder = ConfigBuilder::new();
+        config_builder.reference = Some("test_data/references/H1N1.fa".to_string());
+        let mut config = config_builder.build();
         // Because we are building this the wrong way, we need to manually create the output dir
         config.output_dir = PathBuf::from("test_runner");
         fs::create_dir("test_runner").unwrap();
-        config.update_and_log();
+        config.update_and_log().unwrap();
         let mut rng = NeatRng::new_from_seed(&vec![
             "Hello".to_string(),
             "Cruel".to_string(),
@@ -289,8 +290,9 @@ mod tests {
 
     #[test]
     fn test_runner_files_message() {
-        let mut config = RunConfiguration::default();
-        config.reference = "test_data/references/H1N1.fa".to_string();
+        let mut config_builder = ConfigBuilder::new();
+        config_builder.reference = Some("test_data/references/H1N1.fa".to_string());
+        let mut config = config_builder.build();
         config.produce_vcf = true;
         // Because we are building this the wrong way, we need to manually create the output dir
         config.output_dir = PathBuf::from("test_run_output");
@@ -304,7 +306,7 @@ mod tests {
             .unwrap();
 
         fs::create_dir("test_run_output").unwrap();
-        config.update_and_log();
+        config.update_and_log().unwrap();
         let mut rng = NeatRng::new_from_seed(&vec![
             "Hello".to_string(),
             "Cruel".to_string(),

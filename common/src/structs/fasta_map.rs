@@ -115,8 +115,8 @@ impl SequenceBlock {
         let mut return_regions = Vec::new();
         for region in &self.sequence_map {
             match region.0 {
-                RegionType::NonNRegion => continue,
-                RegionType::NRegion => return_regions.push(region.clone()),
+                RegionType::NonNRegion => return_regions.push(region.clone()),
+                RegionType::NRegion => continue,
             }
         }
         Ok(return_regions)
@@ -320,7 +320,7 @@ mod tests {
         let expected_output = "FastaMap { \
         contigs: [Contig { \
             name: \"chrom1\", \
-            len: 20, \
+            contig_len: 20, \
             blocks: [\
                 \"chrom1_0000_0020.json\"] }], \
             name_map: {\"chrom1\": \">chrom1 foo bar\\n\"}, \

@@ -84,9 +84,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: NeatRng) -> Result<(), Gene
     };
 
     // Load Indel model
-    let indel_model = {
-        match config
-    }
+    let indel_model = None;
 
     // The FastaMap struct consists of a vector of Contig objects, each describing a
     // block of Sequence, broken up into chunks in the SequenceBlock objects. It also

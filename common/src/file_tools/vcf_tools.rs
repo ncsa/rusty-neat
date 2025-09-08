@@ -15,7 +15,7 @@ pub fn write_vcf(
     fasta_lengths: &HashMap<String, usize>,
     reference_path: &str,
     overwrite_output: bool,
-    output_vcf: &mut PathBuf,
+    output_vcf: &PathBuf,
 ) -> io::Result<()> {
     // Takes:
     // mutated_maps: A map of contig names keyed to lists of mutated maps holding variants 

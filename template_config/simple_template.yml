@@ -26,11 +26,11 @@ overwrite_output: .
 # the directory where you want to write files
 output_dir: .
 # the common name given to all output files (e.g., "TEST" => TEST_r1.fastq, TEST.vcf, TEST.bam)
-output_prefix: .
+output_filename: .
 
 # input files (full paths to files)
 mutation_model: .
-fragment_madel: .
+fragment_model: .
 sequence_error_model: .
 
 # debug option (default false)

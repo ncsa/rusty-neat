@@ -4,14 +4,14 @@
 //! This one needs a major overhaul, it is autogenerating quality scores etc. 
 //! Will wait to get other things set up first
 use std::io::Write;
-use log::info;
-use std::fs;
+use log::{info, debug};
+use std::{env, fs};
 use std::fs::File;
 use std::path::PathBuf;
 use std::collections::HashMap;
 use simple_rng::{NeatRng, NeatRngError};
 use flate2::Compression;
-use flate2::write::ZlibEncoder;
+use flate2::write::GzEncoder;
 use thiserror::Error;
 use indicatif::ProgressBar;
 
@@ -120,23 +120,28 @@ pub fn write_fastq(
     // we'll have to use a dummy file for read 2, which will never get written to, then will be 
     // deleted at the end
     let filename1 = output_files.0;
+    debug!("Output filename1: {:?}", &filename1);
     let filename2 = {
         match output_files.1 {
             Some(filename) => filename,
-            None => PathBuf::from("dummy.fa"),
+            None => {
+                let mut path = env::current_dir()?;
+                path.push("dummy.fa");
+                path
+            },
         }
     };
-
+    debug!("Output filename2: {:?}", &filename2);
     let outfile1 = create_output_file(&filename1, false)?;
     let outfile2 = create_output_file(&filename2, false)?;
-
-    let mut buffer_r1  = ZlibEncoder::new(
+    debug!("Successfully created both output files");
+    let mut buffer_r1  = GzEncoder::new(
         outfile1, Compression::default()
     );
-    let mut buffer_r2 = ZlibEncoder::new(
+    let mut buffer_r2 = GzEncoder::new(
         outfile2, Compression::default()
     );
-
+    debug!("We made it THIS far!");
     for read in all_reads {
         bar.inc(1);
         let contig_name = &read.0;
@@ -260,7 +265,7 @@ fn apply_variants_and_write_sequence (
     read_length: usize,
     read_name_prefix: &str,
     read_num: usize,
-    buffer: &mut ZlibEncoder<File>,
+    buffer: &mut GzEncoder<File>,
     quality_scores: Vec<usize>,
     sequencing_error_model: &SequencingErrorModel,
     rng: &mut NeatRng,
@@ -417,7 +422,7 @@ mod tests {
         let read_name_prefix = "neat_generated_";
         let file = PathBuf::from("fake.fq");
         let outfile = create_output_file(&file, true).unwrap();
-        let mut buffer = ZlibEncoder::new(outfile, Compression::default());
+        let mut buffer = GzEncoder::new(outfile, Compression::default());
         let qual_scores = vec![33, 25, 37, 28, 15, 33, 33, 37];
         let sequencing_error_model = SequencingErrorModel::default().unwrap();
         let mut rng = NeatRng::new_from_seed(&vec![

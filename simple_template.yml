@@ -21,7 +21,7 @@ produce_vcf: true
 produce_fastq: true
 
 # true or false (default false)
-overwrite_output: .
+overwrite_output: true
 
 # the directory where you want to write files
 output_dir: /home/joshfactorial/code

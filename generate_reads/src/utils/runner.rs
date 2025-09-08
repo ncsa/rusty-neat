@@ -213,6 +213,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
                     (PathBuf::from(filename_r1), Some(PathBuf::from(filename_r2))),
                     &quality_score_model,
                     &seq_error_model,
+                    config.overwrite_output,
                     rng,
                 ).expect("Error writing fastq file(s)!")
             } else {
@@ -225,6 +226,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
                     (PathBuf::from(filename_r1), None),
                     &quality_score_model,
                     &seq_error_model,
+                    config.overwrite_output,
                     rng,
                 ).expect("Error writing fastq file(s)!")
             }

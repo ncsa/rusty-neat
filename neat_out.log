@@ -1,23 +1,71 @@
-02:30:47 [INFO] Using Configuration file input: simple_template.yml
-02:30:47 [INFO] Running rusty-neat to generate reads on "/home/joshfactorial/code/rusty-neat/generate_reads/src/utils/test_data/H1N1.fa" with...
-02:30:47 [WARN] Produce BAM is currently not functional, but will be implemented soon!
-02:30:47 [INFO] Running rusty-neat to generate reads on /home/joshfactorial/code/rusty-neat/generate_reads/src/utils/test_data/H1N1.fa with...
-02:30:47 [INFO]   >read length: 150
-02:30:47 [INFO]   >coverage: 10
-02:30:47 [INFO]   >mutation rate: 0.001
-02:30:47 [INFO]   >ploidy: 2
-02:30:47 [INFO]   >paired ended: false
-02:30:47 [INFO] Producing fastq file:
-02:30:47 [INFO] 	> "/home/joshfactorial/code/test_r1.fastq.gz"
-02:30:47 [INFO] 	> "/home/joshfactorial/code/test.vcf"
-02:30:47 [INFO] 	> "/home/joshfactorial/code/test.bam"
-02:30:47 [INFO] Seed string to regenerate these exact results: 2025 09 08 02 30 47 230862685
-02:30:47 [INFO] ////////////// Welcome to rusty-neat read generator!
-02:30:47 [INFO] Processing started!
-02:30:47 [INFO] Created temp dir at TempDir { path: "/tmp/.tmpC8hNWh" }
-02:30:47 [INFO] Generating simulated dataset
-02:30:47 [INFO] Producing single-ended fastq file
-02:30:47 [INFO] Writing output fastq file(s)
-02:30:47 [INFO] Fastq successfully written: ["/home/joshfactorial/code/test_r1.fastq.gz"]!
-02:30:47 [INFO] Writing output vcf file
-02:30:47 [INFO] Processing finished in 311 milliseconds
+02:45:48 [INFO] Using command line arguments.
+02:45:48 [DEBUG] (1) generate_reads: Command line args: Cli { config: "", reference: "/home/joshfactorial/code/rusty-neat/generate_reads/src/utils/test_data/H1N1.fa", output_dir: "", output_filename: "neat_out", read_length: 150, coverage: 10, log_level: "Trace", log_dest: "/home/joshfactorial/code/rusty-neat/neat_out.log" }
+02:45:48 [INFO] Running rusty-neat to generate reads on "/home/joshfactorial/code/rusty-neat/generate_reads/src/utils/test_data/H1N1.fa" with...
+02:45:48 [INFO] Running rusty-neat to generate reads on /home/joshfactorial/code/rusty-neat/generate_reads/src/utils/test_data/H1N1.fa with...
+02:45:48 [INFO]   >read length: 150
+02:45:48 [INFO]   >coverage: 10
+02:45:48 [INFO]   >mutation rate: 0.001
+02:45:48 [INFO]   >ploidy: 2
+02:45:48 [INFO]   >paired ended: false
+02:45:48 [INFO] Producing fastq file:
+02:45:48 [INFO] 	> "/home/joshfactorial/code/rusty-neat/neat_out_r1.fastq.gz"
+02:45:48 [INFO] Seed string to regenerate these exact results: 2025 09 08 02 45 48 451762405
+02:45:48 [INFO] ////////////// Welcome to rusty-neat read generator!
+02:45:48 [INFO] Processing started!
+02:45:48 [INFO] Created temp dir at TempDir { path: "/tmp/.tmpxrftGa" }
+02:45:49 [DEBUG] (1) common::models::snp_trinuc_model: All contexts: [Frame(T, N, G), Frame(C, N, C), Frame(G, N, A), Frame(G, N, G), Frame(A, N, G), Frame(A, N, A), Frame(T, N, A), Frame(T, N, C), Frame(C, N, A), Frame(G, N, C), Frame(T, N, T), Frame(C, N, T), Frame(A, N, T), Frame(C, N, G), Frame(G, N, T), Frame(A, N, C)]
+02:45:49 [INFO] Generating simulated dataset
+02:45:49 [DEBUG] (1) generate_reads::utils::runner: Processing H1N1_HA
+02:45:49 [DEBUG] (1) generate_reads::utils::runner: Processing block "/tmp/.tmpxrftGa/H1N1_HA_0000000000_0000001701.json"
+02:45:49 [DEBUG] (1) generate_reads::utils::runner:     > Generating bias map.
+02:45:49 [DEBUG] (1) generate_reads::utils::runner: Adding 1 mutations to block "/tmp/.tmpxrftGa/H1N1_HA_0000000000_0000001701.json"
+02:45:49 [DEBUG] (1) generate_reads::utils::generate_reads: Generating read coordinates.
+02:45:49 [DEBUG] (1) generate_reads::utils::generate_reads: Outputting read set
+02:45:49 [DEBUG] (1) generate_reads::utils::runner: Processing H1N1_MP
+02:45:49 [DEBUG] (1) generate_reads::utils::runner: Processing block "/tmp/.tmpxrftGa/H1N1_MP_0000000000_0000000982.json"
+02:45:49 [DEBUG] (1) generate_reads::utils::runner:     > Generating bias map.
+02:45:49 [DEBUG] (1) generate_reads::utils::runner: Adding 0 mutations to block "/tmp/.tmpxrftGa/H1N1_MP_0000000000_0000000982.json"
+02:45:49 [DEBUG] (1) generate_reads::utils::generate_reads: Generating read coordinates.
+02:45:49 [DEBUG] (1) generate_reads::utils::generate_reads: Outputting read set
+02:45:49 [DEBUG] (1) generate_reads::utils::runner: Processing H1N1_NA
+02:45:49 [DEBUG] (1) generate_reads::utils::runner: Processing block "/tmp/.tmpxrftGa/H1N1_NA_0000000000_0000001410.json"
+02:45:49 [DEBUG] (1) generate_reads::utils::runner:     > Generating bias map.
+02:45:49 [DEBUG] (1) generate_reads::utils::runner: Adding 1 mutations to block "/tmp/.tmpxrftGa/H1N1_NA_0000000000_0000001410.json"
+02:45:49 [DEBUG] (1) generate_reads::utils::generate_reads: Generating read coordinates.
+02:45:49 [DEBUG] (1) generate_reads::utils::generate_reads: Outputting read set
+02:45:49 [DEBUG] (1) generate_reads::utils::runner: Processing H1N1_NP
+02:45:49 [DEBUG] (1) generate_reads::utils::runner: Processing block "/tmp/.tmpxrftGa/H1N1_NP_0000000000_0000001497.json"
+02:45:49 [DEBUG] (1) generate_reads::utils::runner:     > Generating bias map.
+02:45:49 [DEBUG] (1) generate_reads::utils::runner: Adding 1 mutations to block "/tmp/.tmpxrftGa/H1N1_NP_0000000000_0000001497.json"
+02:45:49 [DEBUG] (1) generate_reads::utils::generate_reads: Generating read coordinates.
+02:45:49 [DEBUG] (1) generate_reads::utils::generate_reads: Outputting read set
+02:45:49 [DEBUG] (1) generate_reads::utils::runner: Processing H1N1_NS
+02:45:49 [DEBUG] (1) generate_reads::utils::runner: Processing block "/tmp/.tmpxrftGa/H1N1_NS_0000000000_0000000838.json"
+02:45:49 [DEBUG] (1) generate_reads::utils::runner:     > Generating bias map.
+02:45:49 [DEBUG] (1) generate_reads::utils::runner: Adding 0 mutations to block "/tmp/.tmpxrftGa/H1N1_NS_0000000000_0000000838.json"
+02:45:49 [DEBUG] (1) generate_reads::utils::generate_reads: Generating read coordinates.
+02:45:49 [DEBUG] (1) generate_reads::utils::generate_reads: Outputting read set
+02:45:49 [DEBUG] (1) generate_reads::utils::runner: Processing H1N1_PA
+02:45:49 [DEBUG] (1) generate_reads::utils::runner: Processing block "/tmp/.tmpxrftGa/H1N1_PA_0000000000_0000002151.json"
+02:45:49 [DEBUG] (1) generate_reads::utils::runner:     > Generating bias map.
+02:45:49 [DEBUG] (1) generate_reads::utils::runner: Adding 2 mutations to block "/tmp/.tmpxrftGa/H1N1_PA_0000000000_0000002151.json"
+02:45:49 [DEBUG] (1) generate_reads::utils::generate_reads: Generating read coordinates.
+02:45:49 [DEBUG] (1) generate_reads::utils::generate_reads: Outputting read set
+02:45:49 [DEBUG] (1) generate_reads::utils::runner: Processing H1N1_PB1
+02:45:49 [DEBUG] (1) generate_reads::utils::runner: Processing block "/tmp/.tmpxrftGa/H1N1_PB1_0000000000_0000002274.json"
+02:45:49 [DEBUG] (1) generate_reads::utils::runner:     > Generating bias map.
+02:45:49 [DEBUG] (1) generate_reads::utils::runner: Adding 2 mutations to block "/tmp/.tmpxrftGa/H1N1_PB1_0000000000_0000002274.json"
+02:45:49 [DEBUG] (1) generate_reads::utils::generate_reads: Generating read coordinates.
+02:45:49 [DEBUG] (1) generate_reads::utils::generate_reads: Outputting read set
+02:45:49 [DEBUG] (1) generate_reads::utils::runner: Processing H1N1_PB2
+02:45:49 [DEBUG] (1) generate_reads::utils::runner: Processing block "/tmp/.tmpxrftGa/H1N1_PB2_0000000000_0000002280.json"
+02:45:49 [DEBUG] (1) generate_reads::utils::runner:     > Generating bias map.
+02:45:49 [DEBUG] (1) generate_reads::utils::runner: Adding 2 mutations to block "/tmp/.tmpxrftGa/H1N1_PB2_0000000000_0000002280.json"
+02:45:49 [DEBUG] (1) generate_reads::utils::generate_reads: Generating read coordinates.
+02:45:49 [DEBUG] (1) generate_reads::utils::generate_reads: Outputting read set
+02:45:49 [INFO] Producing single-ended fastq file
+02:45:49 [INFO] Writing output fastq file(s)
+02:45:49 [DEBUG] (1) common::file_tools::fastq_tools: Output filename1: "/home/joshfactorial/code/rusty-neat/neat_out_r1.fastq.gz"
+02:45:49 [DEBUG] (1) common::file_tools::fastq_tools: Output filename2: "/home/joshfactorial/code/rusty-neat/dummy.fa"
+02:45:49 [DEBUG] (1) common::file_tools::fastq_tools: Successfully created both output files
+02:45:49 [DEBUG] (1) common::file_tools::fastq_tools: We made it THIS far!

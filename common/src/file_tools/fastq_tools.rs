@@ -86,6 +86,7 @@ pub fn write_fastq(
     output_files: (PathBuf, Option<PathBuf>),
     quality_score_model: &QualityScoreModel,
     sequencing_error_model: &SequencingErrorModel,
+    overwrite_output: bool,
     rng: &mut NeatRng,
 ) -> Result<(), FastqToolsError> {
     // Takes:
@@ -132,8 +133,8 @@ pub fn write_fastq(
         }
     };
     debug!("Output filename2: {:?}", &filename2);
-    let outfile1 = create_output_file(&filename1, false)?;
-    let outfile2 = create_output_file(&filename2, false)?;
+    let outfile1 = create_output_file(&filename1, overwrite_output)?;
+    let outfile2 = create_output_file(&filename2, overwrite_output)?;
     debug!("Successfully created both output files");
     let mut buffer_r1  = GzEncoder::new(
         outfile1, Compression::default()
@@ -175,6 +176,7 @@ pub fn write_fastq(
             read_length, 
             &read_name_prefix, 
             read_index, 
+            1,
             &mut buffer_r1, 
             quality_score_r1,
             sequencing_error_model,
@@ -222,6 +224,7 @@ pub fn write_fastq(
                 read_length, 
                 &read_name_prefix, 
                 read_index, 
+                2,
                 &mut buffer_r2, 
                 quality_scores,
                 sequencing_error_model,
@@ -265,6 +268,7 @@ fn apply_variants_and_write_sequence (
     read_length: usize,
     read_name_prefix: &str,
     read_num: usize,
+    read_strand: usize,
     buffer: &mut GzEncoder<File>,
     quality_scores: Vec<usize>,
     sequencing_error_model: &SequencingErrorModel,
@@ -275,12 +279,16 @@ fn apply_variants_and_write_sequence (
     // we start by writing the read name:
     // Write read name
     buffer.write(
-        format!("@{} 1:{}\n", &read_name_prefix, &read_num
+        format!("@{}{}:{}\n", 
+        &read_name_prefix, 
+        &read_num, 
+        read_strand
     ).as_bytes())?;
     // Use a while loop so we can skip for deletions
     // To figure out where we are on the contig, we use the reference_read_position. This helps us find relevant variants
     let mut reference_position = 0;
     let mut bases_written = 0;
+    let mut seq = String::new();
     while (reference_position < sequence.len()) && (bases_written < read_length) {
         let reference_base = sequence[reference_position];
         let mut base_to_write: Vec<Nucleotide> = vec![reference_base];
@@ -307,6 +315,7 @@ fn apply_variants_and_write_sequence (
             let prob = sequencing_error_model.convert_score(score as usize)?;
             if rng.random()? < prob {
                 // This position contains a sequencing error
+                debug!("Creating sequencing error");
                 let error = sequencing_error_model
                     .generate_sequencing_error(reference_base, rng)?;
                 match error {
@@ -318,12 +327,12 @@ fn apply_variants_and_write_sequence (
                     SequencingErrorType::DeletionError(length) => {
                         // skip `length` bases, leave quality scores untouched (because it's close enough)
                         // First we check to make sure we haven't deleted too many bases this read
-                        if reference_position + length > sequence.len() {
+                        if reference_position + length >= sequence.len() {
                             // In this case, we would be deleting too many bases, so we'll skip
                         } else {
                             // for a deletion, we still writet the reference base, then we skip the next length bases
                             // base_to_write remains unchanged
-                            reference_position += length;
+                            reference_position += length - 1;
                         }
                     },
                     SequencingErrorType::InsertionError(vec) => {
@@ -345,13 +354,13 @@ fn apply_variants_and_write_sequence (
                 }
             }
         }
-        let mut seq = String::new();
         for base in base_to_write {
             seq.push(base.into());
             bases_written += 1;
         }
-        buffer.write(&seq.into_bytes())?;
+        reference_position += 1;
     } 
+    buffer.write(&seq.into_bytes())?;
     // Read has been written at this point
     
     // Write out the plus sign spacer
@@ -439,6 +448,7 @@ mod tests {
             8, 
             read_name_prefix, 
             1, 
+            1,
             &mut buffer, 
             qual_scores, 
             &sequencing_error_model, 

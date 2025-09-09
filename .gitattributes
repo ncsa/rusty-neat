@@ -1,2 +1,4 @@
-models/* linguist-generated
-* text eol=lf
+data/* linguist-generated=true
+config/* linguist-generated=true
+model_data/* linguist-generated=true
+test_data/* linguist-generated=true

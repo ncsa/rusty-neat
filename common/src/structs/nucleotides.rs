@@ -1,0 +1,227 @@
+//! Representing bases by a simple u8 num
+//!     A = 0
+//!     C = 1
+//!     G = 2
+//!     T = 3
+//!     N (or other unknown chars) = 4
+//! This is intended to make it easier to store them. Note that the bases are always in alphabetical order
+//! with N tacked on at the end.
+use core::fmt;
+
+use serde::{Deserialize, Serialize};
+use crate::structs::distributions::DiscreteDistribution;
+
+// The following are equivalent
+pub const ALLOWED_NUCS: [Nucleotide; 4] = [Nucleotide::A, Nucleotide::C, Nucleotide::G, Nucleotide::T];
+pub const ALLOWED_USIZE: [usize; 4] = [0, 1, 2, 3];
+
+pub fn allowed_vec() -> Vec<Nucleotide> {
+    // This gives us the vec form for iteration and copying into models
+    Vec::from(ALLOWED_NUCS)
+}
+
+pub fn allowed_usize() -> Vec<usize> {
+    // This makes the distribution part work easier, so that can stay more generic
+    Vec::from(ALLOWED_USIZE)
+}
+
+pub struct NucleotideSelector {
+    // Struct for selecting a random nucleotide
+    distribution: DiscreteDistribution,
+}
+
+impl NucleotideSelector {
+    pub fn new() -> Self {
+        let allowed_idx: Vec<usize> = allowed_usize();
+        let weights: Vec<f64> = vec![0.25, 0.25, 0.25, 0.25];
+        NucleotideSelector {
+            distribution: DiscreteDistribution::new(&weights, &allowed_idx).expect(
+                "Error creating distribution",
+            )
+        }
+    }
+
+    pub fn sample_bases(&self, rand: f64) -> Nucleotide {
+        self.distribution.sample(rand).expect(
+            "Error sampling bases",
+        ).into()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Hash, Eq, Serialize, Deserialize)]
+pub enum Nucleotide {
+    A = 0,
+    C = 1,
+    T = 2,
+    G = 3,
+    N = 4,
+    X = 5, // This is purely used to fill out buffers when writing files.
+}
+
+impl fmt::Display for Nucleotide {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let name: char = self.to_owned().into();
+        write!(f, "{}", name.to_string())
+    }
+}
+
+impl From<char> for Nucleotide {
+    fn from(c: char) -> Self {
+        match c {
+            'A' | 'a' => Self::A,
+            'C' | 'c' => Self::C,
+            'G' | 'g' => Self::G,
+            'T' | 't' => Self::T,
+            _ => Self::N,
+        }
+    }
+}
+
+impl From<usize> for Nucleotide {
+    fn from(value: usize) -> Self {
+        match value {
+            0 => Self::A,
+            1 => Self::C,
+            2 => Self::G,
+            3 => Self::T,
+            _ => Self::N,
+        }
+    }
+}
+
+impl Into<usize> for Nucleotide {
+    fn into(self) -> usize {
+        match self {
+            Self::A => 0,
+            Self::C => 1,
+            Self::G => 2,
+            Self::T => 3,
+            _ => 4,
+        }
+    }
+}
+
+impl Into<char> for Nucleotide {
+    fn into(self) -> char {
+        match self {
+            Self::A => 'A',
+            Self::C => 'C',
+            Self::G => 'G',
+            Self::T => 'T',
+            _ => 'N',
+        }
+    }
+}
+
+impl Nucleotide {
+    pub fn complement(&self) -> Self {
+        // matches with the complement of each nucleotide.
+        match self {
+            Self::A => Self::T,
+            Self::C => Self::G,
+            Self::G => Self::C,
+            Self::T => Self::A,
+            _ => self.clone(),
+        }
+    }
+}
+
+#[allow(unused)]
+pub enum AminoAcid {
+    A = 255,
+    R = 254,
+    N = 253,
+    D = 252,
+    C = 251,
+    E = 250,
+    Q = 249,
+    G = 248,
+    H = 247,
+    I = 246,
+    L = 245,
+    K = 244,
+    M = 243,
+    F = 242,
+    P = 241,
+    S = 240,
+    T = 239,
+    W = 238,
+    Y = 237,
+    V = 236,
+    X = 235,
+}
+
+impl From<&str> for AminoAcid {
+    fn from(name: &str) -> AminoAcid {
+        // Translates string representations of the amino acids into char
+        match name.to_lowercase().as_str() {
+            "alanine"       | "ala" => Self::A,
+            "arginine"      | "arg" => Self::R,
+            "asparagine"    | "asn" => Self::N,
+            "aspartic acid" | "asp" => Self::D,
+            "cysteine"      | "cys" => Self::C,
+            "glutamic acid" | "glu" => Self::E,
+            "glutamine"     | "gln" => Self::Q,
+            "glycine"       | "gly" => Self::G,
+            "histidine"     | "his" => Self::H,        
+            "isoleucine"    | "ile" => Self::I,
+            "leucine"       | "leu" => Self::L,
+            "lysine"        | "lys" => Self::K,
+            "methionine"    | "met" => Self::M,
+            "phenylaline"   | "phe" => Self::F,
+            "proline"       | "pro" => Self::P,
+            "serine"        | "ser" => Self::S,
+            "threonine"     | "thr" => Self::T,
+            "tryptophan"    | "trp" => Self::W,
+            "tyrosine"      | "tyr" => Self::Y,
+            "valine"        | "val" => Self::V,
+            _ => panic!("Unknown amino acid: {}", name),
+        }
+    }
+}
+
+
+pub fn sequence_array_to_string(input_array: &Vec<Nucleotide>) -> String {
+    // Converts a sequence vector into a string representing the DNA sequence
+    let mut return_string = String::with_capacity(input_array.len());
+    for nuc in input_array {
+        // We need the nucleotide the pointer is aimed at
+        return_string.push((*nuc).into());
+    }
+    return_string
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_base_to_nuc() {
+        let test_nuc: char = 'A';
+        let nuc: Nucleotide = Nucleotide::from(test_nuc);
+        let nuc_num: usize = nuc.into();
+        assert_eq!(nuc_num, 0);
+    }
+
+    #[test]
+    fn cast_type() {
+        let nuc = Nucleotide::from(0);
+        let nuc_char: char = nuc.into();
+        assert_eq!(nuc_char, 'A')
+    }
+
+    #[test]
+    fn test_complement() {
+        let nuc1 = Nucleotide::A;
+        let nuc2 = Nucleotide::C;
+        let nuc3 = Nucleotide::G;
+        let nuc4 = Nucleotide::T;
+        let nuc5 = Nucleotide::N;
+
+        assert_eq!(nuc1.complement(), nuc4);
+        assert_eq!(nuc2.complement(), nuc3);
+        assert_eq!(nuc3.complement(), nuc2);
+        assert_eq!(nuc4.complement(), nuc1);
+        assert_eq!(nuc5.complement(), nuc5);
+    }
+}

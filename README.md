@@ -1,31 +1,17 @@
 # The rusty-neat project
-NEAT (https://github.com/ncsa/neat) is essentially a simple program, since attempts to add some of the data packages from Python met with memory issues, time issues and more. As such, it required us to code NEAT in a way that would potentially translate well to a systems-level language such as C++ or Rust. Because of the desire to multi-thread NEAT, and the helpful way rust builds both thread parallelization and thread safety into their code, it is an appealing option to recreate NEAT and hopefully gain some speed and parallelization.
+Rusty-neat is a Rust port of NEAT (https://github.com/ncsa/neat), a genetic simulation program that creates next-gen-looking fastq files along with an accompanying golden vcf file showing all of the variants inserted by NEAT. It also generates "noise" in the form of sequencing errors as it is writing out files. These features can help you hone in your alignment software to your data. 
 
-We will be taking an iterative approach, partly out of necessity as we learn the complexities of Rust. 
-
-Check this branch for updates or submit a request to contribute code directly. There won't be any solid tasks yet until we're further along in development. 
+As of now, rusty-neat is still under development. This is our 1.0.0 version, but it is still in alpha. There are several features yet to be completed. One of which is the ability to read data from real data, to hone NEAT's statistics. There are other features we hope to add too. Check the changelog for more information. 
 
 # How to use rusty-neat
 
-Download the executable in the release (current version 0.1.0).
+Download the executable in the release (current version 1.0.0).
 
 ```
 ./rusty-neat -h
 ```
 
 displays help
-
-```
-./rusty-neat
-```
-rusty-neat on the default file (data/H1N1.fa). Only works from the repo level dir, run from anywhere else, you will need to specify the input reference file. The file is expected to be in FASTA format:
-
-```angular2html
->Contig_name: other_info
-AAAAAAAAAA
->Contig_name2: other_info2
-GGGGGGGGGG
-```
 
 Use the help menu to see the available options and leave an issue if you find something bad happening. This data is not currently considered usable for anything requiring real rigor, but this is the first iteration toward a final product. 
 
@@ -37,9 +23,9 @@ To compile and run rusty-neat yourself, you will need the Rust environment (http
 ~/rusty-neat/$
 ```
 
-For Windows and Mac users, you can use a GUI or some similar command line method, but you'll figure it out (Post help requests in the Issues tab).
+For Windows users, you're probably going to want to use WSL, but go ahead and test it if there's a Rust for windows. (Post help requests in the Issues tab if you need assistance or have suggestions).
 
-Once in the repo, you can build the program either in debug (default) or release mode. The main difference is how much info it gives you if there is an error.
+Once in the repo, you can build the program either in debug (default) or release mode. The main difference is how much info it gives you if there is an error. Release mode also has some optimizations to run it faster.
 
 ```angular2html
 ~/rusty-neat/$ cargo build --release
@@ -51,5 +37,18 @@ If you prefer to run the package directly without using the binary, you can also
 Rust will download any required packages. Compiling Rust code is the slowest part of the process. The final binary will be built and the program run immediately after in the second case. To run the program manually, from the repo main dir, run
 
 ```angular2html
-~/rusty-neat/$ ./target/debug/rusty-neat
+~/rusty-neat/$ ./target/debug/rusty-neat -h
 ```
+
+You can either run rusty-neat as a cli or using a configuration file. Most of these features should be active, but there is currently no way to generate your own data, so stick with default models for now. Also, there is not yet a way to create bams. A command line execution might look like this:
+
+```angular2html
+~/rusty-neat/$ ./target/debug/rusty-neat --log-level Info -r /path/to/my_bacterium.fa 
+```
+or for a configuration file:
+```angular2html
+~/rusty-neat/$ ./target/debug/rusty-neat -C /path/to/filled/in/config.yml
+```
+If you record the output in the logs of Seed string to regenerate these exact results: XXXXXXX, you should be able to use that string as input with rng_seed and reproduce your results (untested as of yet).
+
+That's it so far! Test out the features and let us know what you think!

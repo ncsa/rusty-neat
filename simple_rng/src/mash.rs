@@ -11,6 +11,7 @@
 // In Rust 0x100000000 (2^32) used by the algorithm below is not a valid u32 so using f64 instead.
 const NORM: f64 = u32::MAX as f64 + 1.0;
 
+#[derive(Clone)]
 pub struct Mash {
     n: u64,
 }

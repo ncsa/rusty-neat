@@ -4,6 +4,7 @@ use std::time;
 use log::{info, debug};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use common::structs::nucleotides::NucleotideSelector;
 use simple_rng::NeatRng;
 
 use crate::common::{
@@ -101,14 +102,21 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
         }
     };
 
+    // This model provides an alternate base for N based on a simple equal weight distribution.
+    let nuc_sub_model: NucleotideSelector = {
+        NucleotideSelector::new()
+    };
+
     // The FastaMap struct consists of a vector of Contig objects, each describing a
     // block of Sequence, broken up into chunks in the SequenceBlock objects. It also
     // holds a name_map hashmap that links tho contig name from the Fasta with the shortname
     let fasta_map = read_fasta(
         &config.reference,
+        nuc_sub_model,
         config.read_len,
         &working_dir,
-    ).unwrap();
+        rng,
+    )?;
 
     // Mutating the reference and recording the variant locations.
     info!("Generating simulated dataset");
@@ -152,7 +160,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
             for region in regions_of_interest {
                 // all of these have RegionType::NonNRegion
                 // This is where we might apply bias
-                for j in region.1..region.2 {
+                for j in region.start..region.end {
                     bias_map[j] = 1.0;
                 }
             }
@@ -164,16 +172,23 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
             // Generate any relevant mutations
             if num_mutations > 0 {
                 // first we generate variants for the block
-                let variants: Vec<Variant> = generate_variants(
+                let result = generate_variants(
                     &current_block, 
                     &bias_map, 
                     &mutation_model, 
                     num_mutations, 
                     config.ploidy, 
                     rng
-                )?.unwrap();
-                // Add variants 
-                block_variants.extend(variants);
+                )?;
+                match result {
+                    Some(vec) => {
+                        // Add variants 
+                        block_variants.extend(vec);
+                    },
+                    None => {
+                        // No variants for this block
+                    }
+                }
             }
             
             let block_reads: Vec<(usize, usize, Option<usize>, usize)> = generate_reads(
@@ -202,37 +217,59 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
     }
 
     if config.produce_fastq {
+        // We know it's max 2 files for fastqs
+        let mut files_written = Vec::with_capacity(2);
+
+        // Shuffle all reads to randomize fastq output
+        rng.shuffle_in_place(&mut all_reads)?;
         if let Some(filename_r1) = &config.output_fastq_1 {
             if let Some(filename_r2) = &config.output_fastq_2 {
                 info!("Producing paired-ended fastq files");
+                info!("Writing fastq 1");
                 write_fastq(
                     &mut all_reads,
                     &mutated_maps,
                     config.read_len,
-                    config.paired_ended,
-                    (PathBuf::from(filename_r1), &mut Some(PathBuf::from(filename_r2))),
+                    1,
+                    PathBuf::from(filename_r1),
                     &quality_score_model,
                     &seq_error_model,
                     config.overwrite_output,
                     rng,
-                ).expect("Error writing fastq file(s)!")
+                )?;
+                info!("Writing fastq 2");
+                write_fastq(
+                    &mut all_reads,
+                    &mutated_maps,
+                    config.read_len,
+                    2,
+                    PathBuf::from(filename_r2),
+                    &quality_score_model,
+                    &seq_error_model,
+                    config.overwrite_output,
+                    rng,
+                )?;
+                files_written.push(filename_r1.clone());
+                files_written.push(filename_r2.clone());
             } else {
                 info!("Producing single-ended fastq file");
                 write_fastq(
                     &mut all_reads,
                     &mutated_maps,
                     config.read_len,
-                    config.paired_ended,
-                    (PathBuf::from(filename_r1), &mut None),
+                    1,
+                    PathBuf::from(filename_r1),
                     &quality_score_model,
                     &seq_error_model,
                     config.overwrite_output,
                     rng,
-                ).expect("Error writing fastq file(s)!")
+                )?;
+                files_written.push(filename_r1.clone());
             }
         } else {
             panic!("Error produce fastq set to true but no fastq filename set")
         }
+        info!("Fastq(s) successfully written: {:?}!", files_written);
     }
 
     match &config.output_vcf {

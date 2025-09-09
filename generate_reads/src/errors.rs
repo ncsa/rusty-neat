@@ -1,12 +1,15 @@
 use std::{num::{ParseFloatError, ParseIntError}, str::ParseBoolError};
 
 use common::{
+    file_tools::{fasta_reader::FastaReaderError, fastq_tools::FastqToolsError}, 
+    
     models::{
         fragment_length::FragmentModelError, 
         mutation_model::MutationModelError, 
         quality_scores::QualityModelError, 
         sequencing_error_model::SeqModelError,
     }, 
+    
     structs::{
         distributions::DistributionErrors, 
         fasta_map::FastaMapError,
@@ -51,6 +54,8 @@ pub enum GenerateReadsErrors {
     SeqModelError(#[from] SeqModelError),
     #[error("Error accessing FastaMap: {0}")]
     FastaMapError(#[from] FastaMapError),
+    #[error("Error reading fasta file: {0}")]
+    FastaReaderError(#[from] FastaReaderError),
     #[error("Error creating distributions: {0}")]
     GenReadsDistroError(#[from] DistributionErrors),
     #[error("Error sampling distro: {0}")]
@@ -67,4 +72,6 @@ pub enum GenerateReadsErrors {
     ConfigParseBoolError(#[from] ParseBoolError),
     #[error("Main threw an error: {0}")]
     MainError(#[from] Box<dyn std::error::Error>),
+    #[error("FastqTools error: {0}")]
+    FqToolsError(#[from] FastqToolsError)
 }

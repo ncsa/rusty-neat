@@ -1,4 +1,4 @@
-use log::error;
+use log::{error, debug};
 use simple_rng::NeatRng;
 use crate::common::{
     models::mutation_model::MutationModel,
@@ -33,14 +33,15 @@ pub fn generate_variants(
     // The keys are the position of each variant added.
     let mut block_variants: Vec<Variant> = Vec::new();
     let sequence_dist = DiscreteDistribution::new(
-        &region_weights,
+        &region_weights[0..sequence_block.get_len()].to_vec(),
         &(0..sequence_block.get_len()).collect()
     )?;
     for _ in 0..num_mutations {
         let location: usize = sequence_dist.sample(rng.random()?)?;
+        debug!("{}", location);
         block_variants.push(
             mutation_model.generate_mutation(
-                &sequence_block.get_seq_clone().unwrap(),
+                &sequence_block.get_seq_clone()?,
                 location,
                 ploidy,
                 rng,

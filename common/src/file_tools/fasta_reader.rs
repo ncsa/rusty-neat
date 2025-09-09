@@ -16,28 +16,40 @@ use std::path::PathBuf;
 use tempfile::TempDir;
 use crate::file_tools::file_io::read_lines;
 use crate::structs::fasta_map::{
-    Contig, 
-    FastaMap, 
-    FastaMapError, 
-    RegionType, 
-    SequenceBlock
+    Contig,
+    FastaMap,
+    FastaMapError,
+    SequenceBlock,
+    SequenceMap,
+    RegionType::{
+        NRegion,
+        NonNRegion
+    },
 };
-use crate::structs::fasta_map::RegionType::{
-    NRegion, 
-    NonNRegion
+use crate::structs::nucleotides::{
+    Nucleotide,
+    Nucleotide::{N, X},
+    NucleotideSelector
 };
-use crate::structs::nucleotides::{Nucleotide, Nucleotide::{N, X}};
 use log::error;
+use simple_rng::{NeatRng, NeatRngError};
+use thiserror::Error;
 
 pub const BUFSIZE: usize = 131_072usize; // i.e., 128kb
 pub const DICT_SIZE: usize = 32768usize; // i.e., 32kb
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum FastaReaderError {
+    #[error("Error reading fasta file")]
     ReadFastaError,
-    IoError(io::Error),
+    #[error("IO error while reading fasta file")]
+    IoError(#[from] io::Error),
+    #[error("Error interfacing with FastaMap: {0}")]
     FastaMapInterfaceError(FastaMapError),
+    #[error("Error in fasta block name")]
     FastaBlockNameError,
+    #[error("Error in random number generator: {0}")]
+    RngError(#[from] NeatRngError),
 }
 
 impl From<FastaMapError> for FastaReaderError {
@@ -46,16 +58,13 @@ impl From<FastaMapError> for FastaReaderError {
     }
 }
 
-impl From<io::Error> for FastaReaderError {
-    fn from(error: io::Error) -> Self {
-        FastaReaderError::IoError(error)
-    }
-}
 
 pub fn read_fasta(
     fasta_path: &str,
+    nucleotide_selector: NucleotideSelector,
     overlap_len: usize,
-    temp_dir: &TempDir
+    temp_dir: &TempDir,
+    rng: &mut NeatRng,
 ) -> Result<Box<FastaMap>, FastaReaderError> {
     // Here's the basic idea:
     //     1. Read in 128kb worth of sequence (or the entire sequence)
@@ -84,19 +93,23 @@ pub fn read_fasta(
     let mut contigs: Vec<Contig> = Vec::new();
     // This is a vector of filenames from which we can reconstruct the sequence_block.
     let mut block_filenames: Vec<PathBuf> = Vec::new();
-
+    // This hashmap maps the short name to a long name.
     let mut name_map: HashMap<String, String> = HashMap::new();
+    // This will give us the write order for the bam and vcf
     let mut contig_order: Vec<String> = Vec::new();
+    // current contig
     let mut current_key = String::new();
     // We're using X solely as a placeholder. Any X's should be ignored or passed over by the code
-    let mut buffer = [Nucleotide::X; BUFSIZE];
-
+    let mut buffer = [X; BUFSIZE];
+    // Bufreader for the fasta file
     let lines = read_lines(fasta_path)?;
     // This will help us keep track of where we are in the read
     let mut block_start = 0;
+    // And this helps us keep track of where we are in the buffer
     let mut buffer_index = 0;
     // counts up the bases in the contig
     let mut contig_length = 0;
+    // Process the file
     for line in lines {
         match line {
             Ok(l) => {
@@ -137,7 +150,9 @@ pub fn read_fasta(
                             &buffer_to_write, 
                             &current_key, 
                             block_start, 
-                            &temp_dir
+                            &temp_dir,
+                            &nucleotide_selector,
+                            rng,
                         )?;
 
                         // Store the filename
@@ -171,10 +186,12 @@ pub fn read_fasta(
                             let overlap_buffer: Vec<Nucleotide> = buffer[buffer_index-overlap_len..].to_vec();
                             // Encode the data and write to temporary file
                             let sequence_block_filename = process_buffer_into_sequenceblock(
-                                &buffer, 
-                                &current_key, 
-                                block_start, 
-                                temp_dir
+                                &buffer,
+                                &current_key,
+                                block_start,
+                                temp_dir,
+                                &nucleotide_selector,
+                                rng,
                             )?;
 
                             // record sequence block filename for later retrieval
@@ -183,7 +200,7 @@ pub fn read_fasta(
                             // Set start point for recording next block, offset to account for the overlap
                             block_start += BUFSIZE-overlap_len;
                             // Reset primary buffer and index
-                            buffer = [Nucleotide::X; BUFSIZE];
+                            buffer = [X; BUFSIZE];
                             // We checked above that overlap_len < BUFSIZE, so we are safe from overflowing the buffer
                             buffer_index = 0;
                             for i in 0..overlap_len {
@@ -196,7 +213,6 @@ pub fn read_fasta(
                             }
                         }
                         buffer[buffer_index] = Nucleotide::from(char);
-                        // We've written data, so switch the flag
                         buffer_index += 1;
                         contig_length += 1;
                     }
@@ -221,6 +237,8 @@ pub fn read_fasta(
             &current_key, 
             block_start, 
             temp_dir,
+            &nucleotide_selector,
+            rng,
         )?;
 
         // Store the filename
@@ -262,7 +280,8 @@ fn extract_key_name(full_name: &str) -> String {
     full_name[..delim_index].to_string()
 }
 
-fn map_sequence(sequence: &[Nucleotide]) -> Result<Vec<(RegionType, usize, usize)>, FastaReaderError> {
+
+fn map_sequence(sequence: &[Nucleotide]) -> Result<Vec<SequenceMap>, FastaReaderError> {
     // This is a 2D vector map representing the regions of the string of DNA.
     // example: If a DNA strand looks like this:
     //     NNNNNNNNAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAANNNNN
@@ -270,7 +289,7 @@ fn map_sequence(sequence: &[Nucleotide]) -> Result<Vec<(RegionType, usize, usize
     // Note that the numbers are invented for illustration
     // The idea here is to help ensure we are getting reads from regions with actual data, not
     // masked regions, since those regions tend to be highly repetitive
-    let mut map: Vec<(RegionType, usize, usize)> = Vec::new();
+    let mut map: Vec<SequenceMap> = Vec::new();
 
     // tracking variables to create the map
     let mut region_start = 0;
@@ -293,7 +312,7 @@ fn map_sequence(sequence: &[Nucleotide]) -> Result<Vec<(RegionType, usize, usize
                     },
                     _ => {
                         inside_n_region = false;
-                        map.push((NRegion, 0, region_end));
+                        map.push(SequenceMap::from(NRegion, 0, region_end));
                         region_start = region_end.clone();
                         region_end = region_start + 1;
                         break
@@ -302,17 +321,17 @@ fn map_sequence(sequence: &[Nucleotide]) -> Result<Vec<(RegionType, usize, usize
             }
             if inside_n_region {
                 // This indicates our entire block was Ns
-                map.push((NRegion, 0, region_end));
+                map.push(SequenceMap::from(NRegion, 0, region_end));
                 return Ok(map)
             }
         },
         // If we find ourselves with a real base, then we are safe to continue processing
         _ => {
-            region_end += 1;
+            // Nothing to do in this case
         },
     }
     // Now we look at the remainder
-    let remainder: Vec<Nucleotide> = sequence[(region_end)..].to_vec();
+    let remainder: Vec<Nucleotide> = sequence[region_end..].to_vec();
     // Now we process the block
     for base in remainder {
         match base {
@@ -324,7 +343,7 @@ fn map_sequence(sequence: &[Nucleotide]) -> Result<Vec<(RegionType, usize, usize
                     // Welcome to an n region
                     inside_n_region = true;
                     // write previous region, which was non-n
-                    map.push((NonNRegion, region_start, region_end));
+                    map.push(SequenceMap::from(NonNRegion, region_start, region_end));
 
                     region_start = region_end.clone();
                     region_end = region_start.clone() + 1;
@@ -335,7 +354,7 @@ fn map_sequence(sequence: &[Nucleotide]) -> Result<Vec<(RegionType, usize, usize
                     // Welcome to a non-n region
                     inside_n_region = false;
                     // write previous region, an n-region
-                    map.push((NRegion, region_start, region_end));
+                    map.push(SequenceMap::from(NRegion, region_start, region_end));
                     region_start = region_end.clone();
                     region_end = region_start.clone() + 1;
                 } else {
@@ -350,7 +369,7 @@ fn map_sequence(sequence: &[Nucleotide]) -> Result<Vec<(RegionType, usize, usize
     if inside_n_region {
         region = NRegion
     }
-    map.push((region, region_start, region_end));
+    map.push(SequenceMap::from(region, region_start, region_end));
     Ok(map)
 }
 
@@ -359,19 +378,34 @@ fn process_buffer_into_sequenceblock(
     current_key: &str, // The contig short name
     block_start: usize, // Where, relative to the reference, this block starts
     temp_dir: &TempDir, // where to write files
+    nucleotide_selector: &NucleotideSelector, // Used to find a valid nucleotide
+    rng: &mut NeatRng,
 ) -> Result<PathBuf, FastaReaderError> {
     // This function creates a temporary sequence block to store data then serializes it into
     // json format and writes that to file. Later, SequenceBlock can reconstruct this struct instance
     // based on the json file. This way we can parallelize the simulation.
     let block_end = block_start+buffer.len();
-    let sequence_map = map_sequence(buffer).unwrap();
-
+    let sequence_map = map_sequence(buffer)?;
+    let mut buffer_to_write: Vec<Nucleotide> = Vec::with_capacity(buffer.len());
+    for item in buffer {
+        match item {
+            N => {
+                buffer_to_write.push(nucleotide_selector.sample_bases(rng.random()?));
+            },
+            X => {
+                //skip
+            }
+            _ => {
+                buffer_to_write.push(item.clone());
+            },
+        }
+    }
     let mut sequence_block = SequenceBlock {
         contig: current_key.to_string(),
         ref_start: block_start,
         ref_end: block_end,
-        sequence: buffer.to_vec(),
-        sequence_map: sequence_map,
+        sequence: buffer_to_write,
+        sequence_map,
     };
 
     let sequence_file_path = temp_dir
@@ -398,11 +432,19 @@ mod tests {
     fn test_process_buffer_into_sequenceblock() {
         let test = [Nucleotide::A; BUFSIZE];
         let temp_dir = tempfile::tempdir().unwrap();
+        let nucleotide_selector = NucleotideSelector::new();
+        let mut rng = NeatRng::new_from_seed(&vec![
+            "Hello".to_string(),
+            "Cruel".to_string(),
+            "World".to_string(),
+        ]).unwrap();
         let segment_file = process_buffer_into_sequenceblock(
             &test, 
             "chr1", 
             25, 
-            &temp_dir
+            &temp_dir,
+            &nucleotide_selector,
+            &mut rng,
         ).unwrap();
 
         // below is the decode code from fasta_map
@@ -414,7 +456,19 @@ mod tests {
     fn test_read_fasta() {
         let test_fasta = "test_data/H1N1.fa";
         let temp_dir = tempfile::tempdir().unwrap();
-        let test_map = read_fasta(test_fasta, 350, &temp_dir).unwrap();
+        let nucleotide_selector = NucleotideSelector::new();
+        let mut rng = NeatRng::new_from_seed(&vec![
+            "Hello".to_string(),
+            "Cruel".to_string(),
+            "World".to_string(),
+        ]).unwrap();
+        let test_map = read_fasta(
+            test_fasta,
+            nucleotide_selector,
+            350,
+            &temp_dir,
+            &mut rng,
+        ).unwrap();
         assert_eq!(test_map.contig_order[0], "H1N1_HA".to_string());
         let dir_list: Vec<String> = WalkDir::new(&temp_dir)
             .into_iter()
@@ -450,11 +504,11 @@ mod tests {
         for char in sequence.chars() {
             buffer.push(Nucleotide::from(char))
         }
-        let map: Vec<(RegionType, usize, usize)> = map_sequence(buffer.as_slice()).unwrap();
+        let map: Vec<SequenceMap> = map_sequence(buffer.as_slice()).unwrap();
         assert_eq!(map.len(), 3);
-        assert_eq!(map[0], (RegionType::NRegion, 0, 3));
-        assert_eq!(map[1], (RegionType::NonNRegion, 3, 7));
-        assert_eq!(map[2], (RegionType::NRegion, 7, buffer.len()));
+        assert_eq!(map[0], SequenceMap::from(NRegion, 0, 3));
+        assert_eq!(map[1], SequenceMap::from(NonNRegion, 3, 7));
+        assert_eq!(map[2], SequenceMap::from(NRegion, 7, buffer.len()));
     }
 
     #[test]
@@ -464,8 +518,22 @@ mod tests {
         for char in sequence.chars() {
             buffer.push(Nucleotide::from(char))
         }
-        let map: Vec<(RegionType, usize, usize)> = map_sequence(buffer.as_slice()).unwrap();
+        let map: Vec<SequenceMap> = map_sequence(buffer.as_slice()).unwrap();
         assert_eq!(map.len(), 1);
-        assert_eq!(map[0], (RegionType::NRegion, 0, 8));
+        assert_eq!(map[0], SequenceMap::from(NRegion, 0, 8));
+    }
+
+    #[test]
+    fn test_build_contig_map_middle() {
+        let sequence = String::from("AAAANNNAAAAAAAAAAAA");
+        let mut buffer = Vec::new();
+        for char in sequence.chars() {
+            buffer.push(Nucleotide::from(char))
+        }
+        let map: Vec<SequenceMap> = map_sequence(buffer.as_slice()).unwrap();
+        assert_eq!(map.len(), 3);
+        assert_eq!(map[0], SequenceMap::from(NonNRegion, 0, 4));
+        assert_eq!(map[1], SequenceMap::from(NRegion, 4, 7));
+        assert_eq!(map[2], SequenceMap::from(NonNRegion, 7, buffer.len()));
     }
 }

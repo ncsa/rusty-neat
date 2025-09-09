@@ -67,6 +67,34 @@ pub fn decode_block_filename(path_string: &PathBuf) -> Result<(usize, usize), Fa
     Ok((start, end))
 }
 
+#[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SequenceMap {
+    // The purpose of this struct is to store where the N's were in the original fasta, since we
+    // are overwriting those areas with random bases. This will help us place slightly more
+    // meaningful mutations into the genome.
+    pub region_type: RegionType,
+    pub start: usize,
+    pub end: usize,
+}
+
+impl SequenceMap {
+    pub fn from(
+        region_type: RegionType,
+        start: usize,
+        end: usize
+    ) -> SequenceMap {
+        SequenceMap {
+            region_type,
+            start,
+            end,
+        }
+    }
+
+    pub fn increment_end(&mut self) {
+        self.end += 1;
+    }
+}
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct SequenceBlock {
     // This struct is for accessing the data stored in the sequence block file, a yaml file
@@ -83,7 +111,7 @@ pub struct SequenceBlock {
     pub ref_start: usize,
     pub ref_end: usize,
     pub sequence: Vec<Nucleotide>,
-    pub sequence_map: Vec<(RegionType, usize, usize)>,
+    pub sequence_map: Vec<SequenceMap>,
 }
 
 impl SequenceBlock {
@@ -111,11 +139,11 @@ impl SequenceBlock {
 
     pub fn get_non_n_regions(
         &self
-    ) -> Result<Vec<(RegionType, usize, usize)>, FastaMapError> {
+    ) -> Result<Vec<&SequenceMap>, FastaMapError> {
         let mut return_regions = Vec::new();
         for region in &self.sequence_map {
-            match region.0 {
-                RegionType::NonNRegion => return_regions.push(region.clone()),
+            match region.region_type {
+                RegionType::NonNRegion => return_regions.push(region),
                 RegionType::NRegion => continue,
             }
         }
@@ -126,8 +154,8 @@ impl SequenceBlock {
         // assume we have only N-regions and then look for valid regions.
         let mut all_ns = true;
         let mut prev_end = 0;
-        for segment in &self.sequence_map {
-            match segment.0 {
+        for region in &self.sequence_map {
+            match region.region_type {
                 RegionType::NRegion => {
                     // We found a valid region
                     if all_ns { all_ns = false }
@@ -135,24 +163,24 @@ impl SequenceBlock {
                         // prev_end == 0 means we are in the first loop, where we skip this block
                         //
                         // If prev_end != segment.1 means are regions are either overlapping or not fully inclusive.
-                        if prev_end != segment.1 {
+                        if prev_end != region.start {
                             return Err(FastaMapError::SeqMapValidationError)
                         }
                     };
                     // update prev_end for first and subsequent loops.
-                    prev_end = segment.2.clone();                    
+                    prev_end = region.end.clone();
                 },
                 RegionType::NonNRegion => {
-                    prev_end = segment.2.clone();
+                    prev_end = region.end.clone();
                 },
             }
         };
         Ok(())
     }
 
-    pub fn write_block(&mut self, mut file: File) -> std::io::Result<()> {
+    pub fn write_block(&mut self, mut file: File) -> io::Result<()> {
         // This will serialize the data to a byte vector and write it to the file
-        let data = serde_json::to_vec(&self).unwrap();
+        let data = serde_json::to_vec(&self)?;
         file.write_all(&data)?;
         Ok(())
     }
@@ -173,7 +201,7 @@ impl SequenceBlock {
         // Fetches a subsequence of the original sequence
         if request_start >= request_end {
             error!("Bad coordinates for sequence block retrieval - start: {} >= end: {}", request_start, request_end);
-            return Err(FastaMapError::BadCoordinatesError)
+            Err(FastaMapError::BadCoordinatesError)
         } else if (request_end <= self.ref_start) || 
                   (request_start > self.ref_end) || 
                   (request_end > self.ref_end) || 
@@ -195,8 +223,9 @@ impl SequenceBlock {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub enum RegionType {
+    #[default]
     NRegion,
     NonNRegion,
 }
@@ -274,7 +303,7 @@ mod tests {
             ref_start: 0,
             ref_end: 20,
             sequence: vec![A,A,A,A,A,A,A,A,A,A,A,A,T,T,T,A,A,A,T,A],
-            sequence_map: vec![(NonNRegion, 0, 20)]
+            sequence_map: vec![SequenceMap::from(NonNRegion, 0, 20)]
         };
         let filename = PathBuf::from("chrom1_000_020.json");
         // Test write works

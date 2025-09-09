@@ -45,7 +45,7 @@ fn main() -> Result<(), GenerateReadsErrors> {
     // Set up the logger for the run
     CombinedLogger::init(vec![
         TermLogger::new(
-            level_filter,
+            LevelFilter::Info,
             Config::default(),
             TerminalMode::Mixed,
             ColorChoice::Auto,

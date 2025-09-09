@@ -4,16 +4,21 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use thiserror::Error;
 use simple_rng::{NeatRng, NeatRngError};
-use log::error;
-use crate::models::lib::{model_reader, model_writer};
-use crate::structs::transition_matrix::{TransitionMatrix, TransitionMatrixError};
-use crate::structs::variants::{Variant, VariantError, VariantType};
-use crate::structs::distributions::{DiscreteDistribution, DistributionErrors};
-use crate::models::indel_model::{IndelModel, IndelModelError};
-use crate::models::quality_scores::{QualityModelError, QualityScoreModel};
-use crate::models::sequencing_error_model::{SeqModelError, SequencingErrorModel};
-use crate::models::snp_trinuc_model::{SnpTrinucModel, SnpTrinucError};
-use crate::structs::nucleotides::Nucleotide;
+use log::{error, debug};
+
+use crate::structs::{
+    variants::{Variant, VariantError, VariantType},
+    distributions::{DiscreteDistribution, DistributionErrors},
+    nucleotides::Nucleotide,
+    transition_matrix::{TransitionMatrix, TransitionMatrixError}
+};
+use crate::models::{
+    indel_model::{IndelModel, IndelModelError},
+    quality_scores::{QualityModelError, QualityScoreModel},
+    sequencing_error_model::{SeqModelError, SequencingErrorModel},
+    snp_trinuc_model::{SnpTrinucModel, SnpTrinucError},
+    lib::{model_reader, model_writer},
+};
 
 #[derive(Error, Debug)]
 pub enum MutationModelError {
@@ -137,7 +142,8 @@ impl MutationModel {
         reference_sequence: &Vec<Nucleotide>,
         // This is the start position of the variant, the POS field of a VCF
         variant_location: usize,
-        // The ploidy of this organism. We'll make determinations about heterzygous v homozygous based on this
+        // The ploidy of this organism. We'll make determinations about heterzygous
+        // v homozygous based on this
         ploidy: usize,
         // The run's rng. Needed to determine type then generate the mutation
         rng: &mut NeatRng,
@@ -149,16 +155,14 @@ impl MutationModel {
         // Select a type of mutation.
         let index = self.variant_dist.sample(rng.random()?)?;
         let variant_type = VariantType::from(index);
-        // todo figure out which block to mutate
-        //   figure out the mutation to add
-        //   Add a function in FastaMap to add a block to a vector
         let (reference, alternate) = match variant_type {
             VariantType::SNP => {
                 let trinuc_reference = [
-                    reference_sequence[variant_location-1],
-                    reference_sequence[variant_location],
-                    reference_sequence[variant_location+1],
+                    check_base(reference_sequence[variant_location-1]),
+                    check_base(reference_sequence[variant_location]),
+                    check_base(reference_sequence[variant_location+1]),
                 ];
+                debug!("Trinuc reference: {:?}", trinuc_reference);
                 let alternate_base = self.statistical_models.snp_model
                     .generate_snp(rng.random()?, &trinuc_reference)?;
 
@@ -233,6 +237,14 @@ impl StatisticalModels {
             indel_model,
             sequencing_error_model,
         })
+    }
+}
+
+fn check_base(nuc: Nucleotide) -> Nucleotide {
+    // For now we'll replace occasional N's with A's.
+    match nuc {
+        Nucleotide::N => Nucleotide::A,
+        _ => nuc,
     }
 }
 

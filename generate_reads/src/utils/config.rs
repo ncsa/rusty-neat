@@ -92,7 +92,7 @@ impl ConfigBuilder {
                 info!("Running rusty-neat to generate reads on {:?} with...", &reference);
 
                 RunConfiguration {
-                    reference: reference,
+                    reference,
                     read_len: 151, 
                     coverage: 10, 
                     mutation_rate: 0.001, 
@@ -135,8 +135,8 @@ impl RunConfiguration {
     }
 
     pub fn from_yaml_file(yaml_file: String) -> Result<RunConfiguration, GenerateReadsErrors> {
-        // Reads an input configuration file from yaml using the serde package. Then sets the parameters
-        // based on the inputs. A "." value means to use the default value.
+        // Reads an input configuration file from yaml using the serde package. Then sets the
+        // parameters based on the inputs. A "." value means to use the default value.
 
         // Opens file for reading
         let f = fs::File::open(&yaml_file);

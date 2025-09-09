@@ -9,6 +9,7 @@
 use core::fmt;
 
 use serde::{Deserialize, Serialize};
+use crate::structs::distributions::DiscreteDistribution;
 
 // The following are equivalent
 pub const ALLOWED_NUCS: [Nucleotide; 4] = [Nucleotide::A, Nucleotide::C, Nucleotide::G, Nucleotide::T];
@@ -21,7 +22,30 @@ pub fn allowed_vec() -> Vec<Nucleotide> {
 
 pub fn allowed_usize() -> Vec<usize> {
     // This makes the distribution part work easier, so that can stay more generic
-    allowed_vec().into_iter().map(|s| s.into()).collect()
+    Vec::from(ALLOWED_USIZE)
+}
+
+pub struct NucleotideSelector {
+    // Struct for selecting a random nucleotide
+    distribution: DiscreteDistribution,
+}
+
+impl NucleotideSelector {
+    pub fn new() -> Self {
+        let allowed_idx: Vec<usize> = allowed_usize();
+        let weights: Vec<f64> = vec![0.25, 0.25, 0.25, 0.25];
+        NucleotideSelector {
+            distribution: DiscreteDistribution::new(&weights, &allowed_idx).expect(
+                "Error creating distribution",
+            )
+        }
+    }
+
+    pub fn sample_bases(&self, rand: f64) -> Nucleotide {
+        self.distribution.sample(rand).expect(
+            "Error sampling bases",
+        ).into()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Hash, Eq, Serialize, Deserialize)]

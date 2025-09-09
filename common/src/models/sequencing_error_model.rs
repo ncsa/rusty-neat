@@ -112,7 +112,7 @@ impl SequencingErrorModel {
         // This is a basic mutation function for starting us off
         // Pick the weights list for the base that was input
         // We will use this simple model for sequence errors ultimately.
-        debug!("Generating basic SNP variant");
+        debug!("Generating basic SNP error");
         let distro = &self.transition_distros[&reference];
         // Now we create a distribution from the weights and sample our choices.
         // We have constructed things such that this will return a valid u8. But 

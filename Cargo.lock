@@ -253,7 +253,7 @@ checksum = "b05b61dc5112cbb17e4b6cd61790d9845d13888356391624cbe7e41efeac1e75"
 
 [[package]]
 name = "common"
-version = "0.2.0"
+version = "1.0.0"
 dependencies = [
  "bincode",
  "chrono",
@@ -409,7 +409,7 @@ checksum = "a06f77d526c1a601b7c4cdd98f54b5eaabffc14d5f2f0296febdc7f357c6d3ba"
 
 [[package]]
 name = "generate_reads"
-version = "0.2.0"
+version = "1.0.0"
 dependencies = [
  "assert_fs",
  "chrono",
@@ -1105,7 +1105,7 @@ dependencies = [
 
 [[package]]
 name = "simple_rng"
-version = "0.2.0"
+version = "1.0.0"
 dependencies = [
  "chrono",
  "thiserror",

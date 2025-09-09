@@ -9,8 +9,8 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = '0.2.0'
-edition = '2021'
+version = '1.0.0'
+edition = '2024'
 authors = ["Joshua Allen"]
-description = "Generates a randomly mutated fastq file, along with golden vcf and bam to compare results"
+description = "Generates a randomly mutated fastq file, along with golden vcf to compare results"
 repository = "https://github.com/ncsa/rusty-neat"

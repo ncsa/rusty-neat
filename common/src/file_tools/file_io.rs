@@ -1,5 +1,5 @@
 //! This contains only one function at the moment, a general opener and reader
-use std::io::{BufReader, BufRead, Result, Lines};
+use std::io::{BufReader, BufRead, Result, Lines, self, Write};
 use std::fs::File;
 use std::path::Path;
 
@@ -21,9 +21,9 @@ pub fn create_output_file<T: AsRef<Path>> (filename: &T, overwrite_file: bool) -
     }
 }
 
-pub fn append_to_file(filename: &str) -> Result<File> {
+pub fn append_to_file<T: AsRef<Path>>(filename: &T) -> Result<File> {
     // if the file doesn't exist, we'll create it. If it does, we'll append to it
-    if Path::new(&filename).exists() {
+    if Path::new(&filename.as_ref()).exists() {
         File::options()
             .write(true)
             .append(true)
@@ -33,5 +33,28 @@ pub fn append_to_file(filename: &str) -> Result<File> {
             .create(true)
             .write(true)
             .open(&filename)
+    }
+}
+
+pub struct VectorBuffer {
+    buffer: Vec<u8>,
+}
+
+impl VectorBuffer {
+    pub fn new() -> VectorBuffer {
+        VectorBuffer { buffer: Vec::new() }
+    }
+}
+
+impl Write for VectorBuffer {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.buffer.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        // In this case, flushing does nothing because
+        // VectorBuffer only simulates buffering to stdout or other medium
+        Ok(())
     }
 }

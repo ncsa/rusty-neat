@@ -129,6 +129,16 @@ impl FragmentLengthModel {
         Ok(())
     }
 
+    #[allow(dead_code)]
+    fn is_discrete(&self) -> bool {
+        // This is mainly for testing purposes
+        if let FragmentLengthModel::Discrete { distribution } = self {
+            distribution.weights.len() > 0
+        } else {
+            false
+        }
+    }
+
 }
 
 #[cfg(test)]
@@ -234,11 +244,18 @@ mod tests{
 
     #[test]
     fn test_from_file() {
-        todo!()
-    }
-
-    #[test]
-    fn test_write_file() {
-        todo!()
+        let model = FragmentLengthModel::default().unwrap();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut temp_file = PathBuf::from(temp_dir.path());
+        let filename = "model_test.json";
+        temp_file.push(filename);
+        let result = model.write_file(&temp_file);
+        match result {
+            Ok(()) => assert!(true),
+            Err(_) => assert!(false),
+        }
+        let model2 = FragmentLengthModel::discrete_from_file(&temp_file).unwrap();
+        assert_eq!(model.is_discrete(), model2.is_discrete());
+        temp_dir.close().unwrap();
     }
 }

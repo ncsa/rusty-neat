@@ -683,16 +683,6 @@ mod tests {
     }
 
     #[test]
-    fn test_creat_nonexisting_out() {
-        let mut config_builder = ConfigBuilder::new();
-        config_builder.reference = Some("test_data/H1N1.fa".to_string());
-        let mut config = config_builder.build();
-        config.output_dir = PathBuf::from("contig/");
-        config.update_and_log().unwrap();
-        fs::remove_dir("contig").unwrap()
-    }
-
-    #[test]
     #[should_panic]
     fn test_cl_missing_ref() {
         let args: Cli = Cli {

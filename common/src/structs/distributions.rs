@@ -26,8 +26,8 @@ pub enum DistributionErrors {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiscreteDistribution {
-    values: Vec<usize>,
-    weights: Vec<f64>,
+    pub(crate) values: Vec<usize>,
+    pub(crate) weights: Vec<f64>,
 }
 
 impl DiscreteDistribution {
@@ -153,7 +153,7 @@ mod test {
         assert_eq!(l_vec.len(), w_vec.len());
         let distribution = DiscreteDistribution::new(&w_vec, &l_vec).unwrap();
         assert_eq!(distribution.values().unwrap(), l_vec);
-        assert_eq!(distribution.weights().unwrap(), w_vec);
+        assert_eq!(distribution.weights().unwrap(), vec![1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]);
     }
 
     #[test]

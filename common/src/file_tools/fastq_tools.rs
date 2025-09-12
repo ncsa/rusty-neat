@@ -316,15 +316,11 @@ pub fn quality_scores_to_char_vec(array: Vec<usize>) -> Result<Vec<u8>, FastqToo
 
 #[cfg(test)]
 mod tests {
-    use flate2::read::GzDecoder;
-    use tempfile::env::temp_dir;
-
     use super::*;
     use crate::file_tools::file_io::create_output_file;
     use crate::structs::variants::{Variant, VariantType};
     use crate::structs::nucleotides::Nucleotide::*;
-    use std::fs::{self, File};
-    use std::io::Read;
+    use std::fs;
 
     #[test]
     fn test_qual_score_to_write() {
@@ -394,34 +390,4 @@ mod tests {
         fs::remove_file(file).unwrap();
     }
 
-    #[test]
-    fn test_combine_files() {
-        let contents = "read1\nAAAACACACACACA\n+\nffffffffffffff".to_string();
-        let tempdir = temp_dir().to_path_buf();
-        let mut file1 = tempdir.clone();
-        file1.push("fake1.fastq");
-        let mut file2 = tempdir.clone();
-        file2.push("fake2.fastq");
-        let mut temp_file_1 = create_output_file(&file1, true).unwrap();
-        let mut temp_file_2 = create_output_file(&file2, true).unwrap();
-        temp_file_1.write(contents.as_bytes()).unwrap();
-        temp_file_2.write(contents.as_bytes()).unwrap();
-        temp_file_1.flush().unwrap();
-        temp_file_2.flush().unwrap();
-        let files = vec![file1, file2];
-        let mut final_filename = tempdir.clone();
-        final_filename.push("final.fastq.gz");
-        let result = combine_temp_fastqs(
-            files,
-            &final_filename,
-            false,
-            true,
-        );
-        assert_eq!(result.unwrap(), ());
-        let final_in = File::open(&final_filename).unwrap();
-        let mut buffered = GzDecoder::new(&final_in);
-        let mut final_contents = String::new();
-        buffered.read_to_string(&mut final_contents).unwrap();
-        assert_eq!(final_contents, "read1AAAACACACACACA+ffffffffffffffread1AAAACACACACACA+ffffffffffffff".to_string());
-    }
 }

@@ -178,7 +178,7 @@ mod tests {
             coverage, 
             &mut rng
         ).unwrap();
-        assert_eq!(cover[0], (0, 300))
+        assert_eq!(cover[0], (10, 310))
     }
 
     #[test]

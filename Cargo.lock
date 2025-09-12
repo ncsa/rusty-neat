@@ -400,29 +400,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a06f77d526c1a601b7c4cdd98f54b5eaabffc14d5f2f0296febdc7f357c6d3ba"
 
 [[package]]
-name = "generate_reads"
-version = "1.1.0"
-dependencies = [
- "assert_fs",
- "chrono",
- "clap",
- "common",
- "flate2",
- "itertools",
- "log",
- "rand_chacha 0.9.0",
- "rand_core 0.9.3",
- "serde",
- "serde_json",
- "serde_yml",
- "simple_rng",
- "simplelog",
- "tempfile",
- "thiserror",
- "xorshift",
-]
-
-[[package]]
 name = "getrandom"
 version = "0.2.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -672,6 +649,29 @@ dependencies = [
  "rand_distr",
  "simba",
  "typenum",
+]
+
+[[package]]
+name = "neat"
+version = "1.1.0"
+dependencies = [
+ "assert_fs",
+ "chrono",
+ "clap",
+ "common",
+ "flate2",
+ "itertools",
+ "log",
+ "rand_chacha 0.9.0",
+ "rand_core 0.9.3",
+ "serde",
+ "serde_json",
+ "serde_yml",
+ "simple_rng",
+ "simplelog",
+ "tempfile",
+ "thiserror",
+ "xorshift",
 ]
 
 [[package]]

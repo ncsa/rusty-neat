@@ -37,6 +37,7 @@ pub fn append_to_file<T: AsRef<Path>>(filename: &T) -> Result<File> {
 }
 
 pub struct VectorBuffer {
+    // The purpose of this struct is to mock a buffer so we can run single-ended read generation
     buffer: Vec<u8>,
 }
 

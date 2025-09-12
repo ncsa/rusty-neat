@@ -8,6 +8,7 @@ use clap::Parser;
 use std::env;
 
 #[derive(Parser, Debug)]
+#[command(arg_required_else_help=true)]
 pub struct Cli {
     /*
     Command line interface for neat. The current configuration items allowed are listed below,

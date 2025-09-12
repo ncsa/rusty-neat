@@ -1,4 +1,4 @@
-use tempfile::{self, tempdir};
+use tempfile;
 use std::time;
 use log::{info, debug, error};
 use std::collections::HashMap;
@@ -46,6 +46,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
     // Load models that will be used for the runs.
     //
     // Quality score model
+    info!("Generate quality score model");
     let quality_score_model = {
         match &config.quality_score_model {
             Some(filename) => {
@@ -58,6 +59,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
     };
 
     // load mutation model
+    info!("Generate mutation model");
     let mutation_model = {
         match &config.mutation_model {
             Some(filename) => {
@@ -70,6 +72,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
     };
 
     // Fragment Length Model
+    info!("Generate fragment length model");
     let fragment_length_model: FragmentLengthModel = {
         // FragmentLengthModel is an enum that allows us to choose one of two models.
         match &config.fragment_model {
@@ -94,6 +97,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
     };
 
     // Load Sequencing Error Model
+    info!("Generate sequencing error model");
     let seq_error_model: SequencingErrorModel = {
         match &config.sequence_error_model {
             Some(filename) => {
@@ -106,6 +110,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
     };
 
     // This model provides an alternate base for N based on a simple equal weight distribution.
+    info!("Generate quality score model");
     let nuc_sub_model: NucleotideSelector = {
         NucleotideSelector::new()
     };
@@ -113,6 +118,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
     // The FastaMap struct consists of a vector of Contig objects, each describing a
     // block of Sequence, broken up into chunks in the SequenceBlock objects. It also
     // holds a name_map hashmap that links tho contig name from the Fasta with the shortname
+    info!("Reading fasta file: {}", &config.reference);
     let fasta_map = read_fasta(
         &config.reference,
         nuc_sub_model,
@@ -126,15 +132,16 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
 
     // all variants will be a hashmap of the contig name indexing a variants.
     let mut mutated_maps: HashMap<String, Vec<MutatedMap>> = HashMap::new();
-    // All files written indexed by contig_name
-    let mut all_fastq_files: HashMap<String, Vec<PathBuf>> = HashMap::new(); 
+    // All files written indexed by contig_name, separated by read1/read2
+    let mut all_fastq_files: HashMap<String, (Vec<PathBuf>, Vec<PathBuf>)> = HashMap::new(); 
     // iterate over contigs
     for contig in &fasta_map.contigs {
         // Iterate over blocks within the contig
         // This is probably where we want to parallelize
         let contig_blocks = &contig.blocks;
         let contig_name = &contig.name;
-        let mut contig_files: Vec<PathBuf> = Vec::new();
+        let mut contig_files_r1: Vec<PathBuf> = Vec::new();
+        let mut contig_files_r2: Vec<PathBuf> = Vec::new();
         let mut contig_maps: Vec<MutatedMap> = Vec::new();
         debug!("Processing {}", contig_name);
         for block_filename in contig_blocks {
@@ -205,106 +212,91 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
             )?;
 
             if config.produce_fastq {
-                match &config.output_fastq_1 {
-                    Some(_) => {
-                        // Need a file name that helps us ID this fastq later
-                        let mut file_to_write_1 = PathBuf::from(working_dir.path());
-                        file_to_write_1
-                            .push(&config.output_filename);
-                        file_to_write_1
-                            .push(
-                                format!(
-                                    "_{}_{}_{}_r1_tmp.fastq.gz",
-                                    contig_name,
-                                    current_block.get_start()?, 
-                                    current_block.get_end()?,
-                                )
-                            );
-                        let file1 = append_to_file(&file_to_write_1)?;
-                        let mut buffer1 = GzEncoder::new(
-                            file1, Compression::default()
-                        );
-                        let read_name_prefix = format!(
-                            "neat_generated_{}_{}_{}_",
-                            current_block.contig,
-                            current_block.get_start()?,
+                // Need a file name that helps us ID this fastq later
+                let mut file_to_write_1 = PathBuf::from(working_dir.path());
+                file_to_write_1
+                    .push(&config.output_filename);
+                file_to_write_1
+                    .push(
+                        format!(
+                            "_{}_{}_{}_r1_tmp.fastq.gz",
+                            contig_name,
+                            current_block.get_start()?, 
                             current_block.get_end()?,
+                        )
+                    );
+                let file1 = append_to_file(&file_to_write_1)?;
+                let mut buffer1 = GzEncoder::new(
+                    file1, Compression::default()
+                );
+                let read_name_prefix = format!(
+                    "neat_generated_{}_{}_{}_",
+                    current_block.contig,
+                    current_block.get_start()?,
+                    current_block.get_end()?,
+                );
+                if config.paired_ended {
+                    let mut file_to_write_2 = PathBuf::from(working_dir.path());
+                    file_to_write_2
+                        .push(&config.output_filename);
+                    file_to_write_2
+                        .push(
+                            format!(
+                                "_{}_{}_{}_r2_tmp.fastq.gz",
+                                contig_name,
+                                current_block.get_start()?, 
+                                current_block.get_end()?
+                            )
                         );
-                        if config.paired_ended {
-                            match &config.output_fastq_2 {
-                                Some(_) => {
-                                    let mut file_to_write_2 = PathBuf::from(working_dir.path());
-                                    file_to_write_2
-                                        .push(&config.output_filename);
-                                    file_to_write_2
-                                        .push(
-                                            format!(
-                                                "_{}_{}_{}_r2_tmp.fastq.gz",
-                                                contig_name,
-                                                current_block.get_start()?, 
-                                                current_block.get_end()?
-                                            )
-                                        );
-                                    let file2 = append_to_file(&file_to_write_2)?;
-                                    let mut buffer2 = GzEncoder::new(
-                                        file2, Compression::default()
-                                    );
-                                    debug!("Writing paired-ended block fastq files");
-                                    write_block_fastq (
-                                        block_fragments,
-                                        &mutated_map,
-                                        true,
-                                        &mut buffer1,
-                                        &mut buffer2,
-                                        config.read_len,
-                                        &quality_score_model,
-                                        &seq_error_model,
-                                        rng,
-                                    )?;
-                                    contig_files
-                                        .push(file_to_write_1);
-                                    contig_files
-                                        .push(file_to_write_2);
-                                },
-                                None =>{
-                                    error!("Produce fastq true and paired-ended true, but output_fastq_2 was empty.");
-                                    return Err(GenerateReadsErrors::ConfigError)
-                                }
-                            }
-                        } else {
-                            debug!("Writing single-ended block fastq file");
-                            // Single-ended mode. We create a fake vector to hold the data we won't write.
-                            // dummy will be destroyed at the end of this block without being used.
-                            let dummy_data: VectorBuffer = VectorBuffer::new();
-                            let mut buffer2 = GzEncoder::new(
-                                dummy_data, Compression::default()
-                            );
-                            write_block_fastq (
-                                block_fragments,
-                                &mutated_map,
-                                false,
-                                &mut buffer1,
-                                &mut buffer2,
-                                config.read_len,
-                                &quality_score_model,
-                                &seq_error_model,
-                                rng,
-                            )?;
-                            contig_files
-                                .push(file_to_write_1)
-                        }
-                    },
-                    None => {
-                        error!("Produce fastq true, but output_fastq_1 was empty.");
-                        return Err(GenerateReadsErrors::ConfigError)
-                    },
+                    let file2 = append_to_file(&file_to_write_2)?;
+                    let mut buffer2 = GzEncoder::new(
+                        file2, Compression::default()
+                    );
+                    debug!("Writing paired-ended block fastq files");
+                    write_block_fastq (
+                        block_fragments,
+                        &mutated_map,
+                        true,
+                        &mut buffer1,
+                        &mut buffer2,
+                        config.read_len,
+                        &read_name_prefix,
+                        &quality_score_model,
+                        &seq_error_model,
+                        rng,
+                    )?;
+                    contig_files_r1
+                        .push(file_to_write_1);
+                    contig_files_r2
+                        .push(file_to_write_2);
+                } else {
+                    debug!("Writing single-ended block fastq file");
+                    // Single-ended mode. We create a fake vector to hold the data we won't write.
+                    // dummy will be destroyed at the end of this block without being used.
+                    let dummy_data: VectorBuffer = VectorBuffer::new();
+                    let mut buffer2 = GzEncoder::new(
+                        dummy_data, Compression::default()
+                    );
+                    write_block_fastq (
+                        block_fragments,
+                        &mutated_map,
+                        false,
+                        &mut buffer1,
+                        &mut buffer2,
+                        config.read_len,
+                        &read_name_prefix,
+                        &quality_score_model,
+                        &seq_error_model,
+                        rng,
+                    )?;
+                    contig_files_r1
+                        .push(file_to_write_1)
                 }
-                
             } 
             contig_maps.push(mutated_map);
         }
         mutated_maps.insert(contig_name.clone(), contig_maps.clone());
-        all_fastq_files.insert(contig_name.clone(), contig_files);
+        all_fastq_files.insert(contig_name.clone(), (contig_files_r1, contig_files_r2));
     }
 
     if config.produce_fastq {
@@ -316,24 +308,42 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
         let mut final_fastqs = Vec::with_capacity(2);
 
         // Shuffle all reads to randomize fastq output
-        
-        if let Some(filename_r1) = &config.output_fastq_1 {
-            if let Some(filename_r2) = &config.output_fastq_2 {
-                info!("Producing paired-ended fastq files");
-                info!("Writing fastq 1");
-                combine_temp_fastqs( todo!());
-                info!("Writing fastq 2");
-                combine_temp_fastqs(todo!());
-                final_fastqs.push(filename_r1.clone());
-                final_fastqs.push(filename_r2.clone());
-            } else {
-                info!("Producing single-ended fastq file");
-                combine_temp_fastqs(todo!());
-                final_fastqs.push(filename_r1.clone());
+        for (_contig, temp_fastqs) in all_fastq_files {
+            // read 1
+            match &config.output_fastq_1 {
+                Some(filename) => {
+                    combine_temp_fastqs(
+                        temp_fastqs.0, 
+                        &filename, 
+                        false,
+                        config.overwrite_output,
+                    )?;
+                    final_fastqs.push(filename);
+                },
+                None => {
+                    error!("Produce fastq true but output_fastq_1 was missing.");
+                    return Err(GenerateReadsErrors::ConfigError)
+                }
             }
-        } else {
-            panic!("Error produce fastq set to true but no fastq filename set")
-        };
+            if config.paired_ended {
+                // read 2 - this will be empty for single-ended reads
+                match &config.output_fastq_2 {
+                    Some(filename) => {
+                        combine_temp_fastqs(
+                            temp_fastqs.1,
+                            &filename,
+                            false,
+                            config.overwrite_output,
+                        )?;
+                    },
+                    None => {
+                        error!("Produce fastq true and paired-ended true, but output_fastq_2 was missing.");
+                        return Err(GenerateReadsErrors::ConfigError)
+                    }
+                }
+            }
+        }
+        
         info!("Fastq(s) successfully written: {:?}!", final_fastqs);
     }
 
@@ -353,7 +363,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
                 &config.reference,
                 config.overwrite_output,
                 &filename,
-            ).expect("Error writing vcf file!")
+            )?
         },
         None => {
             info!("Skipping vcf creation")
@@ -361,7 +371,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
     }
 
     let elapsed_time = time::Instant::now() - start;
-    info!("Processing finished in {} milliseconds", elapsed_time.as_millis());
+    info!("Processing finished in {} seconds", elapsed_time.as_secs());
     Ok(())
 }
 

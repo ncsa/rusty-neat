@@ -22,8 +22,6 @@ use simple_rng::NeatRng;
 use std::{thread, time};
 
 fn main() -> Result<(), GenerateReadsErrors> {
-    info!("////////////// Welcome to rusty-neat read generator! \\\\\\\\\\\\\\\\\\");
-    thread::sleep(time::Duration::from_millis(100));
     // parse the arguments from the command line
     let args = cli::Cli::parse();
     if args.config.is_empty() && args.reference.is_empty() {
@@ -60,6 +58,8 @@ fn main() -> Result<(), GenerateReadsErrors> {
     ])
     .unwrap();
 
+    info!("////////////// Welcome to rusty-neat read generator! \\\\\\\\\\\\\\\\\\");
+    thread::sleep(time::Duration::from_millis(100));
     // set up the config struct based on whether there was an input config. Input config
     // overrides any other inputs.
     let config = if args.config != "" {

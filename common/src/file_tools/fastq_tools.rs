@@ -4,11 +4,9 @@
 //! This one needs a major overhaul, it is autogenerating quality scores etc. 
 //! Will wait to get other things set up first
 use std::io::Write;
-use bincode::de::read;
-use log::{debug, error, warn, info};
-use std::fs::File;
+use log::{debug, error, warn};
 use std::path::PathBuf;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use simple_rng::{NeatRng, NeatRngError};
 use flate2::Compression;
 use flate2::write::GzEncoder;
@@ -17,9 +15,9 @@ use indicatif::ProgressBar;
 
 use crate::structs::mutated_map::{MutatedMap, MutatedMapError};
 use crate::structs::fasta_map::{FastaMapError, SequenceBlock};
-use crate::models::quality_scores::{self, QualityScoreModel};
+use crate::models::quality_scores::{QualityScoreModel};
 use crate::structs::nucleotides::Nucleotide;
-use crate::file_tools::file_io::{create_output_file, append_to_file};
+use crate::file_tools::file_io::{create_output_file, read_lines};
 use crate::models::sequencing_error_model::{SeqModelError, SequencingErrorModel, SequencingErrorType};
 use crate::structs::nucleotides::Nucleotide::N;
 use crate::structs::variants::{Genotypes, Variant};
@@ -62,15 +60,6 @@ fn reverse_complement(sequence: Vec<Nucleotide>) -> Vec<Nucleotide> {
         rev_comp.push(sequence[i].complement())
     }
     rev_comp
-}
-
-fn find_map (interval: (usize, usize), mutated_maps: &Vec<MutatedMap>) -> Result<&MutatedMap, FastqToolsError> {
-    for map in mutated_maps {
-        if map.contains(interval)? {
-            return Ok(map);
-        }
-    }
-    Err(FastqToolsError::FindMapError)
 }
 
 pub fn write_block_fastq<T: Write, W: Write> (
@@ -163,16 +152,34 @@ pub fn write_block_fastq<T: Write, W: Write> (
     Ok(())
 }
 
-pub fn combine_temp_fastqs(files: Vec<PathBuf>, shuffle: bool) -> Result<(), FastqToolsError> {
+pub fn combine_temp_fastqs(
+    files: Vec<PathBuf>, 
+    final_filename: &PathBuf, 
+    shuffle: bool, 
+    overwrite: bool
+) -> Result<(), FastqToolsError> {
     // This will take all the temporary fastqs we wrote out on a per-block level and 
     // combine them into one fastq. An improvement here might be to randomize the order:
     // We could do this with a hashmap from the original name to a number in a shuffled vector
     // of indexes. We'll make that optional.
     if shuffle {
-        warn!("Fastq shuffle implementation comming")
+        warn!("Fastq shuffle implementation not yet ready, proceeding with ordered fastq")
     }
+    let final_file = create_output_file(final_filename, overwrite)?;
+    let mut buffer = GzEncoder::new(final_file, Compression::default());
     for file in files {
-        println!("{:?}", file)
+        let in_buf = read_lines(&file)?;
+        for line in in_buf {
+            match line {
+                Ok(l) => {
+                    buffer.write(l.as_bytes())?;
+                },
+                Err(error) => {
+                    error!("Problems reading temp fastq file");
+                    return Err(FastqToolsError::FastqReadError(error.to_string()))
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -308,26 +315,14 @@ pub fn quality_scores_to_char_vec(array: Vec<usize>) -> Result<Vec<u8>, FastqToo
 
 #[cfg(test)]
 mod tests {
+    use flate2::read::GzDecoder;
+    use tempfile::env::temp_dir;
+
     use super::*;
     use crate::structs::variants::{Variant, VariantType};
     use crate::structs::nucleotides::Nucleotide::*;
-    use std::fs;
-
-    #[test]
-    fn test_find_map() {
-        let sequence_block = PathBuf::from("chr1_001000_002000.json");
-        let variant = Variant::new(
-            VariantType::Deletion,
-            1002,
-            &vec![G, G, C],
-            &vec![G],
-            &mut vec![1,0]
-        ).unwrap();
-        let variant_vec = vec![variant];
-        let mutated_map = MutatedMap::new(sequence_block.clone(), variant_vec).unwrap();
-        assert_eq!(find_map((1050, 1550), &vec![mutated_map]).unwrap().sequence_block, sequence_block);
-        
-    }
+    use std::fs::{self, File};
+    use std::io::Read;
 
     #[test]
     fn test_qual_score_to_write() {
@@ -395,5 +390,36 @@ mod tests {
             Err(_) => assert!(false),
         }
         fs::remove_file(file).unwrap();
+    }
+
+    #[test]
+    fn test_combine_files() {
+        let contents = "read1\nAAAACACACACACA\n+\nffffffffffffff".to_string();
+        let tempdir = temp_dir().to_path_buf();
+        let mut file1 = tempdir.clone();
+        file1.push("fake1.fastq");
+        let mut file2 = tempdir.clone();
+        file2.push("fake2.fastq");
+        let mut temp_file_1 = create_output_file(&file1, true).unwrap();
+        let mut temp_file_2 = create_output_file(&file2, true).unwrap();
+        temp_file_1.write(contents.as_bytes()).unwrap();
+        temp_file_2.write(contents.as_bytes()).unwrap();
+        temp_file_1.flush().unwrap();
+        temp_file_2.flush().unwrap();
+        let files = vec![file1, file2];
+        let mut final_filename = tempdir.clone();
+        final_filename.push("final.fastq.gz");
+        let result = combine_temp_fastqs(
+            files,
+            &final_filename,
+            false,
+            true,
+        );
+        assert_eq!(result.unwrap(), ());
+        let final_in = File::open(&final_filename).unwrap();
+        let mut buffered = GzDecoder::new(&final_in);
+        let mut final_contents = String::new();
+        buffered.read_to_string(&mut final_contents).unwrap();
+        assert_eq!(final_contents, "read1AAAACACACACACA+ffffffffffffffread1AAAACACACACACA+ffffffffffffff".to_string());
     }
 }

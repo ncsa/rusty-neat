@@ -14,7 +14,7 @@ use clap::Parser;
 use log::*;
 use simplelog::*;
 use std::fs::File;
-use utils::cli;
+use crate::utils::cli;
 use crate::{errors::GenerateReadsErrors, utils::config::RunConfiguration};
 use common::file_tools::folder_tools::check_parent;
 use utils::runner::run_neat;
@@ -24,8 +24,22 @@ use std::{thread, time};
 fn main() -> Result<(), GenerateReadsErrors> {
     // parse the arguments from the command line
     let args = cli::Cli::parse();
+    match args.submodule.as_str() {
+        "gen-reads" => {},
+        _ => { 
+            return Err(
+                GenerateReadsErrors::CliError(
+                    "Invalid submodule".to_string()
+                )
+            )
+        },
+    }
     if args.config.is_empty() && args.reference.is_empty() {
-        panic!("Must supply either a configuration file or a reference file to run NEAT!")
+        return Err(
+            GenerateReadsErrors::CliError(
+                "Must supply either a configuration file or a reference file to run NEAT!".to_string()
+            )
+        )
     }
     // log filter
     let level_filter = match args.log_level.to_lowercase().as_str() {

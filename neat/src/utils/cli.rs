@@ -33,7 +33,10 @@ pub struct Cli {
     log_dest <String> = Full path filename where to write the log. The default is current working
         dir, filename "neat_out.log," which is set during config parsing.
      */
-    #[arg(short='C', long="configuration_yaml", default_value_t=String::new(),
+    #[arg(help="Enter a valid submodule. Option(s):\n  - gen-reads\n-----------------", required=true)]
+    pub submodule: String,
+
+    #[arg(short='c', long="configuration_yaml", default_value_t=String::new(),
     help="Enter a full path and filename to a configuration file. \
     This will override most other options")]
     pub config: String,
@@ -47,7 +50,7 @@ pub struct Cli {
     pub output_filename: String,
     #[arg(short = 'l', long = "read_len", default_value_t = 150)]
     pub read_length: usize,
-    #[arg(short = 'c', long = "coverage", default_value_t = 10)]
+    #[arg(short = 'd', long = "coverage (depth)", default_value_t = 10)]
     pub coverage: usize,
 
     // These options relate to the logging features and are not overridden by a config

@@ -660,6 +660,7 @@ mod tests {
     #[test]
     fn test_command_line_inputs() {
         let args: Cli = Cli {
+            submodule: "gen-reads".to_string(),
             config: String::new(),
             reference: String::from("test_data/references/ecoli.fa"),
             output_dir: String::from("data"),
@@ -695,6 +696,7 @@ mod tests {
     #[should_panic]
     fn test_cl_missing_ref() {
         let args: Cli = Cli {
+            submodule: "gen-reads".to_string(),
             config: String::new(),
             reference: String::from(""),
             output_dir: String::from("test_dir"),
@@ -781,6 +783,7 @@ mod tests {
     #[test]
     fn no_output_dir_given() {
         let args: Cli = Cli {
+            submodule: "gen-reads".to_string(),
             config: String::new(),
             reference: String::from("test_data/references/H1N1.fa"),
             output_dir: String::new(),
@@ -798,6 +801,7 @@ mod tests {
     #[test]
     fn test_minimum_mutations_and_others() {
         let args: Cli = Cli {
+            submodule: "gen-reads".to_string(),
             config: String::new(),
             reference: String::from("test_data/references/H1N1.fa"),
             output_dir: String::new(),

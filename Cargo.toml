@@ -1,7 +1,7 @@
 [workspace]
 
 members = [
-    "generate_reads",
+    "neat",
     "common",
     "simple_rng",
 ]

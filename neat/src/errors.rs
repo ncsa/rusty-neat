@@ -22,6 +22,8 @@ use serde_yml;
 
 #[derive(Debug, Error)]
 pub enum GenerateReadsErrors {
+    #[error("Invalid CLI inputs: {0}")]
+    CliError(String),
     #[error("NEAT generate-reads requires a reference to proceed.")]
     MissingReferenceError,
     #[error("Error processing Configuration for the run")]

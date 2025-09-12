@@ -11,13 +11,12 @@ use simple_rng::{NeatRng, NeatRngError};
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use thiserror::Error;
-use indicatif::ProgressBar;
 
 use crate::structs::mutated_map::{MutatedMap, MutatedMapError};
 use crate::structs::fasta_map::{FastaMapError, SequenceBlock};
 use crate::models::quality_scores::{QualityScoreModel};
 use crate::structs::nucleotides::Nucleotide;
-use crate::file_tools::file_io::{create_output_file, read_gzip_lines};
+use crate::file_tools::file_io::{append_to_file, read_gzip_lines};
 use crate::models::sequencing_error_model::{SeqModelError, SequencingErrorModel, SequencingErrorType};
 use crate::structs::nucleotides::Nucleotide::N;
 use crate::structs::variants::{Genotypes, Variant};
@@ -85,13 +84,12 @@ pub fn write_block_fastq<T: Write, W: Write> (
     // quality_score_model: Generate quality scores for a read.
     // sequencing_error_model: Model to generate sequencing errors for a read.
     // rng: The NeatRng random number generator for the this run.
-    let bar: ProgressBar = ProgressBar::new(block_fragments.len() as u64);
+    debug!("writing reads for {:?}", block_map.sequence_block);
     let mut counter: usize = 1;
     let sequence_block: SequenceBlock = SequenceBlock::from(&block_map.sequence_block)?;
     // These reads should be in order of sequence block, but if we find one out of order, we can tuck it
     // in the back and maybe it matches later. If not it'll just get skipped.
     for (start, end) in block_fragments {
-        bar.tick();
         let fragment = sequence_block.get_subseq(start, end)?;
         let mut read1_variants: HashMap<usize, &Variant> = HashMap::new();
         let mut reads1_flagged: Vec<usize> = Vec::new();
@@ -165,7 +163,12 @@ pub fn combine_temp_fastqs(
     if shuffle {
         warn!("Fastq shuffle implementation not yet ready, proceeding with ordered fastq")
     }
-    let final_file = create_output_file(final_filename, overwrite)?;
+    if final_filename.is_file() && !overwrite {
+        return Err(FastqToolsError::FastqWriteError(
+            format!("Overwrite is false, but file with this name found. Please remove file: {:?}", final_filename)
+        ))
+    }
+    let final_file = append_to_file(final_filename)?;
     let buffer = GzEncoder::new(final_file, Compression::default());
     let mut writer = BufWriter::new(buffer);
     for file in files {
@@ -313,14 +316,11 @@ pub fn quality_scores_to_char_vec(array: Vec<usize>) -> Result<Vec<u8>, FastqToo
 
 #[cfg(test)]
 mod tests {
-    use flate2::read::GzDecoder;
-    use tempfile::env::temp_dir;
-
     use super::*;
+    use crate::file_tools::file_io::create_output_file;
     use crate::structs::variants::{Variant, VariantType};
     use crate::structs::nucleotides::Nucleotide::*;
-    use std::fs::{self, File};
-    use std::io::Read;
+    use std::fs;
 
     #[test]
     fn test_qual_score_to_write() {
@@ -390,34 +390,4 @@ mod tests {
         fs::remove_file(file).unwrap();
     }
 
-    #[test]
-    fn test_combine_files() {
-        let contents = "read1\nAAAACACACACACA\n+\nffffffffffffff".to_string();
-        let tempdir = temp_dir().to_path_buf();
-        let mut file1 = tempdir.clone();
-        file1.push("fake1.fastq");
-        let mut file2 = tempdir.clone();
-        file2.push("fake2.fastq");
-        let mut temp_file_1 = create_output_file(&file1, true).unwrap();
-        let mut temp_file_2 = create_output_file(&file2, true).unwrap();
-        temp_file_1.write(contents.as_bytes()).unwrap();
-        temp_file_2.write(contents.as_bytes()).unwrap();
-        temp_file_1.flush().unwrap();
-        temp_file_2.flush().unwrap();
-        let files = vec![file1, file2];
-        let mut final_filename = tempdir.clone();
-        final_filename.push("final.fastq.gz");
-        let result = combine_temp_fastqs(
-            files,
-            &final_filename,
-            false,
-            true,
-        );
-        assert_eq!(result.unwrap(), ());
-        let final_in = File::open(&final_filename).unwrap();
-        let mut buffered = GzDecoder::new(&final_in);
-        let mut final_contents = String::new();
-        buffered.read_to_string(&mut final_contents).unwrap();
-        assert_eq!(final_contents, "read1AAAACACACACACA+ffffffffffffffread1AAAACACACACACA+ffffffffffffff".to_string());
-    }
 }

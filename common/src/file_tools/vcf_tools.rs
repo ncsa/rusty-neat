@@ -85,47 +85,49 @@ pub fn write_vcf(
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
+    use super::*;
+    use crate::structs::{nucleotides::Nucleotide, variants::{Variant, VariantType}};
+    use std::fs;
 
     #[test]
     pub fn test_write_vcf() {
-        todo!("broken test");
-        // let mut variant_locations = Box::from(HashMap::from([
-        //     (
-        //         "chr1".to_string(),
-        //         HashMap::from([
-        //             (3, Variant::new(
-        //                 VariantType::SNP,
-        //                 &vec![0],
-        //                 &vec![1],
-        //                 vec![1, 0]
-        //             )
-        //             ),
-        //             (7, Variant::new(
-        //                 VariantType::SNP,
-        //                 &vec![Thy],
-        //                 &vec![Gua],
-        //                 vec![1, 1])
-        //             )
-        //         ])
-        //     )
-        // ]));
-        // let fasta_order = VecDeque::from(["chr1".to_string()]);
-        // let fasta_length = HashMap::from([("chr1".to_string(), 20)]);
-        // let reference_path = "test_data/references/H1N1.fa";
-        // let overwrite_output = false;
-        // let output_file_prefix = "good_test";
-        // let rng = ChaCha20Rng::seed_from_u64(0);
-        // let result = write_vcf(
-        //     &mut variant_locations,
-        //     &fasta_order,
-        //     &fasta_length,
-        //     reference_path,
-        //     overwrite_output,
-        //     output_file_prefix,
-        //     rng,
-        // );
-        // result.unwrap();
-        // assert!(Path::new("good_test.vcf").exists());
-        // fs::remove_file("good_test.vcf").unwrap();
+        let variant1 = Variant::new(
+            VariantType::SNP,
+            3,
+            &vec![Nucleotide::A],
+            &vec![Nucleotide::G],
+            &mut vec![0,1],
+        ).unwrap();
+        let variant2 = Variant::new(
+            VariantType::SNP,
+            7,
+            &vec![Nucleotide::T],
+            &vec![Nucleotide::G],
+            &mut vec![1,1],
+        ).unwrap();
+        let mutated_map = MutatedMap::new(
+            PathBuf::from("name_000100_000200.fa"),
+            vec![variant1, variant2]
+        ).unwrap();
+        let mut mutated_maps = HashMap::new();
+        mutated_maps.insert("chr1".to_string(), vec![mutated_map]);
+        let fasta_order = Vec::from(["chr1".to_string()]);
+        let fasta_length = HashMap::from([("chr1".to_string(), 20)]);
+        let reference_path = PathBuf::from("test_data/references/H1N1.fa");
+        let overwrite_output = false;
+        let output_filename = PathBuf::from("good_test.vcf");
+        let result = write_vcf(
+            &mutated_maps,
+            &fasta_order,
+            &fasta_length,
+            &reference_path,
+            overwrite_output,
+            &output_filename,
+        );
+        result.unwrap();
+        assert!(Path::new("good_test.vcf").exists());
+        fs::remove_file("good_test.vcf").unwrap();
     }
 }

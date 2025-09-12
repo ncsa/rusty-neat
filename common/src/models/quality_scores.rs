@@ -271,18 +271,19 @@ impl QualityScoreModel {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
     use super::*;
 
     #[test]
     fn test_model_write_read() {
         // rewrite this test to read default model, so we aren't keeping long.json around
-        let output_file: PathBuf = PathBuf::from("test.json.gz");
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut temp_file = PathBuf::from(temp_dir.path());
+        temp_file.push("test.json.gz");
         let model: QualityScoreModel = QualityScoreModel::default().unwrap();
         assert_eq!(model.assumed_read_length, 101);
-        let result = model.write_to_file(&output_file);
+        let result = model.write_to_file(&temp_file);
         assert_eq!(result.unwrap(), ());
-        fs::remove_file(output_file).unwrap();
+        temp_dir.close().unwrap();
     }
 
     #[test]

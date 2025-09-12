@@ -7,10 +7,7 @@ use simple_rng::{NeatRng, NeatRngError};
 use log::error;
 
 use crate::structs::{
-    variants::{Variant, VariantError, VariantType},
-    distributions::{DiscreteDistribution, DistributionErrors},
-    nucleotides::Nucleotide,
-    transition_matrix::{TransitionMatrix, TransitionMatrixError}
+    distributions::{DiscreteDistribution, DistributionErrors}, nucleotides::{allowed_vec, Nucleotide}, transition_matrix::{TransitionMatrix, TransitionMatrixError}, variants::{Variant, VariantError, VariantType}
 };
 use crate::models::{
     indel_model::{IndelModel, IndelModelError},
@@ -22,7 +19,7 @@ use crate::models::{
 
 #[derive(Error, Debug)]
 pub enum MutationModelError {
-    #[error("Mutation model returned Error: {0}")]
+    #[error("Mutation model returned RNG error: {0}")]
     RngError(#[from] NeatRngError),
     #[error("Error retrieving reference sequence block")]
     ReferenceRetrievalError,
@@ -154,49 +151,61 @@ impl MutationModel {
         )?;
         // Select a type of mutation.
         let index = self.variant_dist.sample(rng.random()?)?;
-        let variant_type = VariantType::from(index);
-        let (reference, alternate) = match variant_type {
+        let mut variant_type = VariantType::from(index);
+        let ref_base = reference_sequence[variant_location];
+        // For insertions and SNPs, the reference will be the ref_base
+        let mut reference: Vec<Nucleotide> = vec![ref_base];
+        // For deletions, the alternato will be the ref_base
+        let mut alternate: Vec<Nucleotide> = vec![ref_base];
+        match variant_type {
             VariantType::SNP => {
-                let trinuc_reference = [
-                    check_base(reference_sequence[variant_location-1]),
-                    check_base(reference_sequence[variant_location]),
-                    check_base(reference_sequence[variant_location+1]),
-                ];
-                let alternate_base = self.statistical_models.snp_model
-                    .generate_snp(rng.random()?, &trinuc_reference)?;
+                if (variant_location < 1) || ((variant_location + 1) >= reference_sequence.len()) {
+                    // We don't want to accidentally go out of bounds, so we'll 
+                    // just pick a random base.
+                    alternate = pick_random_snp(ref_base, rng)?;
+                } else {
+                    // In this case we use the trinculeotide model
+                    let trinuc_reference = [
+                        check_base(reference_sequence[variant_location-1]),
+                        check_base(reference_sequence[variant_location]),
+                        check_base(reference_sequence[variant_location+1]),
+                    ];
+                    let alternate_base = self.statistical_models.snp_model
+                        .generate_snp(rng.random()?, &trinuc_reference)?;
 
-                let reference = vec![trinuc_reference[1]];
-                let alternate = vec![alternate_base];
-
-                (reference, alternate)
+                    alternate = vec![alternate_base];
+                }
             },
             VariantType::Insertion => {
                 let length = self.statistical_models.indel_model
                     .new_insert_length(rng.random()?)?;
                 let insertion_vec = self.statistical_models.indel_model
                     .generate_random_insertion(length, rng)?;
-                let reference = vec![
-                    reference_sequence[variant_location].clone()
-                ];
-                let alternate = [reference.clone(), insertion_vec.clone()].concat();
-                (reference, alternate)
+                alternate = [reference.clone(), insertion_vec.clone()].concat();
             },
             VariantType::Deletion => {
                 // todo Deletions are a bitch. I need to think about them.
                 let length = self.statistical_models.indel_model.new_delete_length(rng.random()?)?;
                 // +1 is so that we grab a base for the reference in the VCF. This is similar
                 // to how we appended bases to the reference in the insertion model.
-                let reference: Vec<Nucleotide> = reference_sequence
-                    .get(variant_location..(variant_location + length as usize + 1))
-                    .unwrap()
-                    .iter()
-                    .map(|item| *item)
-                    .collect();
-                let alternate: Vec<Nucleotide> = vec![reference[0].clone()];
-                (reference, alternate)
+                if (variant_location + length as usize + 1) > reference_sequence.len() {
+                    // Too close to the end, so let's skip this
+                    let ref_base = reference_sequence[variant_location];
+                    alternate = pick_random_snp(ref_base, rng)?;
+                    variant_type = VariantType::SNP;
+                } else {
+                    reference = reference_sequence
+                        .get(variant_location..(variant_location + length as usize + 1))
+                        .unwrap()
+                        .to_vec();
+                }
             },
         };
         
+        if reference.is_empty() || alternate.is_empty() || reference == alternate {
+            error!("Malformed mutation: {:?} {:?} {:?}", variant_type, reference, alternate);
+            return Err(MutationModelError::GenerateMutationError)
+        }
         Ok(Variant::new(
             variant_type,
             variant_location,
@@ -237,6 +246,18 @@ impl StatisticalModels {
             sequencing_error_model,
         })
     }
+}
+
+fn pick_random_snp(ref_base: Nucleotide, rng: &mut NeatRng)-> Result<Vec<Nucleotide>, MutationModelError> {
+    // Grab allowed nucs
+    let mut allowed: Vec<Nucleotide> = allowed_vec();
+    // Throw out the reference base
+    allowed.retain(|&x| x != ref_base);
+    // Pick one of the remaining
+    let alt = rng.choose(&allowed)?;
+    // sanity check
+    assert!(alt != ref_base);
+    Ok(vec![alt])
 }
 
 fn check_base(nuc: Nucleotide) -> Nucleotide {

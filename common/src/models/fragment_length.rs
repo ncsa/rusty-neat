@@ -227,7 +227,9 @@ mod tests{
 
     #[test]
     fn test_generate_fragment() {
-        todo!()
+        let model = FragmentLengthModel::default().unwrap();
+        let frag = model.generate_fragment(0.1).unwrap();
+        assert_eq!(frag, 295)
     }
 
     #[test]

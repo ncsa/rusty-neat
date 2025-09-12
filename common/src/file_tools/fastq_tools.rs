@@ -11,13 +11,12 @@ use simple_rng::{NeatRng, NeatRngError};
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use thiserror::Error;
-use indicatif::ProgressBar;
 
 use crate::structs::mutated_map::{MutatedMap, MutatedMapError};
 use crate::structs::fasta_map::{FastaMapError, SequenceBlock};
 use crate::models::quality_scores::{QualityScoreModel};
 use crate::structs::nucleotides::Nucleotide;
-use crate::file_tools::file_io::{create_output_file, read_gzip_lines};
+use crate::file_tools::file_io::{append_to_file, read_gzip_lines};
 use crate::models::sequencing_error_model::{SeqModelError, SequencingErrorModel, SequencingErrorType};
 use crate::structs::nucleotides::Nucleotide::N;
 use crate::structs::variants::{Genotypes, Variant};
@@ -85,13 +84,12 @@ pub fn write_block_fastq<T: Write, W: Write> (
     // quality_score_model: Generate quality scores for a read.
     // sequencing_error_model: Model to generate sequencing errors for a read.
     // rng: The NeatRng random number generator for the this run.
-    let bar: ProgressBar = ProgressBar::new(block_fragments.len() as u64);
+    debug!("writing reads for {:?}", block_map.sequence_block);
     let mut counter: usize = 1;
     let sequence_block: SequenceBlock = SequenceBlock::from(&block_map.sequence_block)?;
     // These reads should be in order of sequence block, but if we find one out of order, we can tuck it
     // in the back and maybe it matches later. If not it'll just get skipped.
     for (start, end) in block_fragments {
-        bar.tick();
         let fragment = sequence_block.get_subseq(start, end)?;
         let mut read1_variants: HashMap<usize, &Variant> = HashMap::new();
         let mut reads1_flagged: Vec<usize> = Vec::new();
@@ -165,7 +163,12 @@ pub fn combine_temp_fastqs(
     if shuffle {
         warn!("Fastq shuffle implementation not yet ready, proceeding with ordered fastq")
     }
-    let final_file = create_output_file(final_filename, overwrite)?;
+    if final_filename.is_file() && !overwrite {
+        return Err(FastqToolsError::FastqWriteError(
+            format!("Overwrite is false, but file with this name found. Please remove file: {:?}", final_filename)
+        ))
+    }
+    let final_file = append_to_file(final_filename)?;
     let buffer = GzEncoder::new(final_file, Compression::default());
     let mut writer = BufWriter::new(buffer);
     for file in files {
@@ -317,6 +320,7 @@ mod tests {
     use tempfile::env::temp_dir;
 
     use super::*;
+    use crate::file_tools::file_io::create_output_file;
     use crate::structs::variants::{Variant, VariantType};
     use crate::structs::nucleotides::Nucleotide::*;
     use std::fs::{self, File};

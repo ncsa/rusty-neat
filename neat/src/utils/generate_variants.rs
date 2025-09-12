@@ -26,19 +26,20 @@ pub fn generate_variants(
     // calculated on the contig level.
     // Region weights are calculated from the contig map (they essentially just mask N-regions for
     // now, but we'll add more machine bias and trinuc bias nuance in future releases)
-    if region_weights.len() != sequence_block.get_len() {
+    let block_len = sequence_block.get_len();
+    if region_weights.len() != block_len {
         error!("Region weights did not match block length");
         return Err(GenerateReadsErrors::GenerateVariantsError)
     }
     // The keys are the position of each variant added.
     let mut block_variants: Vec<Variant> = Vec::new();
     let sequence_dist = DiscreteDistribution::new(
-        &region_weights[0..sequence_block.get_len()].to_vec(),
-        &(0..sequence_block.get_len()).collect()
+        &region_weights[0..block_len].to_vec(),
+        &(0..block_len).collect()
     )?;
     for _ in 0..num_mutations {
         let location: usize = sequence_dist.sample(rng.random()?)?;
-        debug!("{}", location);
+        debug!("location: {}", location);
         block_variants.push(
             mutation_model.generate_mutation(
                 &sequence_block.get_seq_clone()?,

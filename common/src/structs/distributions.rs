@@ -3,6 +3,7 @@
 //! (see also github.com/zstephens/neat-genreads). We may try the statrs Categorical distribution
 //! as well, as I think it does the same thing.
 use simple_rng::NeatRngError;
+use log::debug;
 use thiserror::Error;
 use serde::{
     Deserialize, 
@@ -43,7 +44,7 @@ impl DiscreteDistribution {
             } else {
                 // Edge case. Really, this shouldn't be allowed in the data. We'll fix it when 
                 // we rebuild the models.
-                vec![0.0_f64; w_vec.len()]
+                vec![1.0_f64; w_vec.len()]
             }
         };
 
@@ -68,15 +69,26 @@ impl DiscreteDistribution {
         // This is basically an icdf for a discrete distribution
         // We take a random number as an input to avoid copying the RNG around the program.
         let mut lo: usize = 0;
+        // There was no minus 1 in the original, but I ran into an issue with this, for example,
+        // lo = 47, hi = 48
+        // mid = (lo + hi) / 2 = 47
+        // lo = mid + 1 = 48
+        // now we're out of bounds
         let mut hi: usize = self.weights.len();
         // bisect left
         while lo < hi {
             let mid = (lo + hi) / 2;
-            if rand > self.weights[mid] {
+            if self.weights[mid] < rand {
                 lo = mid + 1;
             } else {
                 hi = mid;
             }
+        }
+        if lo == self.values.len() {
+            // All right, the edge case in question is when the quaity array has no values, because the original quality array wasn't 100% filled
+            // out. In the future, when we fix the quality arrays so that this doesn't happen, we will be able to remove this safety check, I think
+            debug!("Errored on {:?}", self);
+            return Ok(self.values[0].clone())
         }
         Ok(self.values[lo].clone())
     }

@@ -355,7 +355,6 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: NeatRng) -> Result<(), Gene
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand_core::SeedableRng;
     use std::fs;
     use std::fs::File;
     use std::io::{BufRead, BufReader};

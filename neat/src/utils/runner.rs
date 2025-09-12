@@ -5,6 +5,7 @@ use simple_rng::NeatRng;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::io::BufWriter;
+use indicatif::ProgressBar;
 use flate2::{ 
     Compression,
     write::GzEncoder
@@ -134,7 +135,10 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
     // all variants will be a hashmap of the contig name indexing a variants.
     let mut mutated_maps: HashMap<String, Vec<MutatedMap>> = HashMap::new();
     // All files written indexed by contig_name, separated by read1/read2
-    let mut all_fastq_files: HashMap<String, (Vec<PathBuf>, Vec<PathBuf>)> = HashMap::new(); 
+    let mut all_fastq_files: HashMap<String, (Vec<PathBuf>, Vec<PathBuf>)> = HashMap::new();
+    let bar: ProgressBar = ProgressBar::new(fasta_map.contigs.len() as u64);
+    // to display bar
+    bar.tick();
     // iterate over contigs
     for contig in &fasta_map.contigs {
         // Iterate over blocks within the contig
@@ -294,13 +298,17 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
         }
         mutated_maps.insert(contig_name.clone(), contig_maps.clone());
         all_fastq_files.insert(contig_name.clone(), (contig_files_r1, contig_files_r2));
+        bar.inc(1);
     }
 
+    bar.finish_and_clear();
+    
     if config.produce_fastq {
         // First we need to shuffle the output order using a HashMap that maps
         // The original filename: read number to a final read number. Will need
         // to keep pairs together during this
         //
+        let bar: ProgressBar = ProgressBar::new(all_fastq_files.len() as u64);
         for (_contig, temp_fastqs) in all_fastq_files {
             // read 1
             match &config.output_fastq_1 {
@@ -334,6 +342,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
                     }
                 }
             }
+            bar.inc(1);
         }
     }
 
@@ -380,7 +389,14 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
     }
 
     let elapsed_time = time::Instant::now() - start;
-    info!("Processing finished in {} seconds", elapsed_time.as_secs());
+    info!("Processing finished in {} milliseconds", elapsed_time.as_millis());
+    if elapsed_time.as_millis() < 1000 {
+        info!("Processing finished in {} milliseconds", elapsed_time.as_millis());
+    } else if elapsed_time.as_secs() > 300 {
+        info!("Processing finished in {} minutes", ((elapsed_time.as_secs() as f64)/60.0))
+    } else {
+        info!("Processing finished in {} seconds", elapsed_time.as_secs());
+    }
     Ok(())
 }
 

@@ -1,9 +1,10 @@
 use tempfile;
 use std::time;
 use log::{info, debug, error};
+use simple_rng::NeatRng;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use simple_rng::NeatRng;
+use std::io::BufWriter;
 use flate2::{ 
     Compression,
     write::GzEncoder
@@ -118,7 +119,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
     // The FastaMap struct consists of a vector of Contig objects, each describing a
     // block of Sequence, broken up into chunks in the SequenceBlock objects. It also
     // holds a name_map hashmap that links tho contig name from the Fasta with the shortname
-    info!("Reading fasta file: {}", &config.reference);
+    info!("Reading fasta file: {}", &config.reference.display());
     let fasta_map = read_fasta(
         &config.reference,
         nuc_sub_model,
@@ -197,6 +198,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
             let block_fragments: Vec<(usize, usize)> = generate_fragments(
                 current_block.get_len(),
                 config.read_len,
+                current_block.get_start()?,
                 config.coverage,
                 config.paired_ended,
                 &fragment_length_model,
@@ -221,19 +223,18 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
                         )
                     );
                 let file1 = append_to_file(&file_to_write_1)?;
+                let writer1 = BufWriter::new(&file1);
                 let mut buffer1 = GzEncoder::new(
-                    file1, Compression::default()
+                    writer1, Compression::default()
                 );
                 let read_name_prefix = format!(
-                    "neat_generated_{}_{}_{}_",
+                    "neat_generated_{}_{:010}_{:010}_",
                     current_block.contig,
                     current_block.get_start()?,
                     current_block.get_end()?,
                 );
                 if config.paired_ended {
                     let mut file_to_write_2 = PathBuf::from(working_dir.path());
-                    file_to_write_2
-                        .push(&config.output_filename);
                     file_to_write_2
                         .push(
                             format!(
@@ -244,8 +245,9 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
                             )
                         );
                     let file2 = append_to_file(&file_to_write_2)?;
+                    let writer2 = BufWriter::new(&file2);
                     let mut buffer2 = GzEncoder::new(
-                        file2, Compression::default()
+                        writer2, Compression::default()
                     );
                     debug!("Writing paired-ended block fastq files");
                     write_block_fastq (
@@ -299,10 +301,6 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
         // The original filename: read number to a final read number. Will need
         // to keep pairs together during this
         //
-        // We know it's max 2 files for fastqs
-        let mut final_fastqs = Vec::with_capacity(2);
-
-        // Shuffle all reads to randomize fastq output
         for (_contig, temp_fastqs) in all_fastq_files {
             // read 1
             match &config.output_fastq_1 {
@@ -313,7 +311,6 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
                         false,
                         config.overwrite_output,
                     )?;
-                    final_fastqs.push(filename);
                 },
                 None => {
                     error!("Produce fastq true but output_fastq_1 was missing.");
@@ -338,8 +335,25 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
                 }
             }
         }
-        
-        info!("Fastq(s) successfully written: {:?}!", final_fastqs);
+    }
+
+    if config.paired_ended {
+        match &config.output_fastq_1 {
+            Some(filename1) => {
+                match &config.output_fastq_2 {
+                    Some(filename2) => info!("Successfully wrote fastq files: {:?}, {:?}", &filename1, &filename2),
+                    None => {},
+                }
+            },
+            None => {},
+        }
+    } else {
+        match &config.output_fastq_1 {
+            Some(filename1) => {
+                info!("Successfully wrote fastq files: {:?}", &filename1)
+            },
+            None => {},
+        }
     }
 
     match &config.output_vcf {

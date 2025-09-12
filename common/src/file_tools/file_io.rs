@@ -1,26 +1,40 @@
 //! This contains only one function at the moment, a general opener and reader
 use std::io::{BufReader, BufRead, Result, Lines, self, Write};
 use std::fs::File;
-use std::path::Path;
+use std::path::PathBuf;
 
-pub fn read_lines<T: AsRef<Path> + ?Sized>(filename: &T) -> Result<Lines<BufReader<File>>> {
+use flate2::read::GzDecoder;
+
+pub fn read_lines(filename: &PathBuf) -> Result<Lines<BufReader<File>>> {
     // This opens file and creates a buffer to read lines
     let file = File::open(filename)?;
     Ok(BufReader::new(file).lines())
 }
 
-pub fn create_output_file<T: AsRef<Path>> (filename: &T, overwrite_file: bool) -> Result<File> {
-    if Path::new(filename.as_ref()).is_file() && !overwrite_file {
+pub fn read_gzip_lines(filename: &PathBuf) -> Result<Lines<BufReader<GzDecoder<File>>>> {
+    // Reads a file from gzipped format into lines
+    let file = File::open(filename)?;
+    Ok(BufReader::new(GzDecoder::new(file)).lines())
+}
+
+pub fn open_safe(filename: &PathBuf) -> Result<BufReader<File>> {
+    // This opens a file for reading without compression
+    let file = File::open(filename)?;
+    Ok(BufReader::new(file))
+}
+
+pub fn create_output_file (filename: &PathBuf, overwrite_file: bool) -> Result<File> {
+    if filename.is_file() && !overwrite_file {
         // The file already exists and we're in non overwrite mode
-        panic!("Attempting to overwrite an existing file: {}", filename.as_ref().display())
+        panic!("Attempting to overwrite an existing file: {}", filename.display())
     } else {
         File::create(&filename)
     }
 }
 
-pub fn append_to_file<T: AsRef<Path>>(filename: &T) -> Result<File> {
+pub fn append_to_file(filename: &PathBuf) -> Result<File> {
     // if the file doesn't exist, we'll create it. If it does, we'll append to it
-    if Path::new(&filename.as_ref()).is_file() {
+    if filename.is_file() {
         File::options()
             .write(true)
             .append(true)

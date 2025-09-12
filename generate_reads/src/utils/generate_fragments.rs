@@ -15,6 +15,7 @@ use crate::errors::GenerateReadsErrors;
 pub fn generate_fragments(
     sequence_length: usize,
     read_length: usize,
+    start: usize,
     coverage: usize,
     paired_ended: bool,
     fragment_model: &FragmentLengthModel,
@@ -48,10 +49,11 @@ pub fn generate_fragments(
     let fragments: Vec<(usize, usize)> = cover_dataset(
         sequence_length,
         read_length,
+        start,
         fragment_pool,
         coverage,
         rng
-    );
+    )?;
 
     if fragments.is_empty() {
         Err(GenerateReadsErrors::GenerateReadsError)
@@ -63,10 +65,11 @@ pub fn generate_fragments(
 fn cover_dataset(
     span_length: usize,
     read_length: usize,
+    read_start: usize,
     mut fragment_pool: Vec<usize>,
     coverage: usize,
     rng: &mut NeatRng,
-) -> Vec<(usize, usize)> {
+) -> Result<Vec<(usize, usize)>, GenerateReadsErrors> {
     // Takes:
     // span_length: Total number of bases in the sequence
     // read_length: The length of the reads for this run
@@ -92,15 +95,14 @@ fn cover_dataset(
         cover_fragment_pool = VecDeque::from([read_length*2]);
     } else {
         // shuffle the fragment pool
-        rng.shuffle_in_place(&mut fragment_pool)
-            .expect("Generate reads failed while shuffling the fragment pool");
+        rng.shuffle_in_place(&mut fragment_pool)?;
         cover_fragment_pool = VecDeque::from(fragment_pool)
     }
     // Gap size to keep track of how many uncovered bases we have per layer, to help decide if we
     // need more layers
     let mut layer_count: usize = 0;
-    // start this party off at zero.
-    let mut start: usize = 0;
+    // start this party off somewhere random.
+    let mut start = ((rng.rand_int()?) as usize) % (read_length/4);
     // create coverage number of layers
     while layer_count < coverage {
         let fragment_length = cover_fragment_pool.pop_front().unwrap();
@@ -112,7 +114,8 @@ fn cover_dataset(
             layer_count += 1;
             continue
         }
-        fragment_set.push((start, temp_end));
+        // Read start ensures our fragments are within the sequence block
+        fragment_set.push((start+read_start, temp_end+read_start));
         // Picks a number between zero and a quarter of a read length
         let wildcard: usize = (rng.rand_u32().unwrap() % 10) as usize;
         // adds to the start to give it some spice
@@ -126,7 +129,7 @@ fn cover_dataset(
     fragment_set.sort_by(
         |a, b| a.0.cmp(&b.0)
     );
-    fragment_set
+    Ok(fragment_set)
 }
 
 #[cfg(test)]
@@ -145,7 +148,14 @@ mod tests {
             "Cruel".to_string(),
             "World".to_string(),
         ]).unwrap();
-        let cover = cover_dataset(span_length, read_length, fragment_pool, coverage, &mut rng);
+        let cover = cover_dataset(
+            span_length, 
+            read_length, 
+            0,
+            fragment_pool, 
+            coverage, 
+            &mut rng
+        ).unwrap();
         assert_eq!(cover[0], (0, 10))
     }
 
@@ -160,7 +170,14 @@ mod tests {
             "Cruel".to_string(),
             "World".to_string(),
         ]).unwrap();
-        let cover = cover_dataset(span_length, read_length, fragment_pool, coverage, &mut rng);
+        let cover = cover_dataset(
+            span_length, 
+            read_length,
+            0,
+            fragment_pool, 
+            coverage, 
+            &mut rng
+        ).unwrap();
         assert_eq!(cover[0], (0, 300))
     }
 
@@ -178,6 +195,7 @@ mod tests {
         let reads = generate_fragments(
             2000,
             read_length,
+            0,
             coverage,
             paired_ended,
             &fragment_model,
@@ -203,6 +221,7 @@ mod tests {
         let run1 = generate_fragments(
             sequnce.len(),
             read_length,
+            0,
             coverage,
             paired_ended,
             &fragment_model,
@@ -213,6 +232,7 @@ mod tests {
         let run2 = generate_fragments(
             sequnce.len(),
             read_length,
+            0,
             coverage,
             paired_ended,
             &fragment_model,
@@ -237,6 +257,7 @@ mod tests {
         let reads = generate_fragments(
             sequence.len(),
             read_length,
+            0,
             coverage,
             paired_ended,
             &fragment_model,

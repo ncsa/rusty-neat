@@ -3,7 +3,7 @@
 //! this function is generic enough to work with the fragmented method we are implementing
 //! This one needs a major overhaul, it is autogenerating quality scores etc. 
 //! Will wait to get other things set up first
-use std::io::Write;
+use std::io::{BufWriter, Write};
 use log::{debug, error, warn};
 use std::path::PathBuf;
 use std::collections::HashMap;
@@ -17,7 +17,7 @@ use crate::structs::mutated_map::{MutatedMap, MutatedMapError};
 use crate::structs::fasta_map::{FastaMapError, SequenceBlock};
 use crate::models::quality_scores::{QualityScoreModel};
 use crate::structs::nucleotides::Nucleotide;
-use crate::file_tools::file_io::{create_output_file, read_lines};
+use crate::file_tools::file_io::{create_output_file, read_gzip_lines};
 use crate::models::sequencing_error_model::{SeqModelError, SequencingErrorModel, SequencingErrorType};
 use crate::structs::nucleotides::Nucleotide::N;
 use crate::structs::variants::{Genotypes, Variant};
@@ -166,18 +166,16 @@ pub fn combine_temp_fastqs(
         warn!("Fastq shuffle implementation not yet ready, proceeding with ordered fastq")
     }
     let final_file = create_output_file(final_filename, overwrite)?;
-    let mut buffer = GzEncoder::new(final_file, Compression::default());
+    let buffer = GzEncoder::new(final_file, Compression::default());
+    let mut writer = BufWriter::new(buffer);
     for file in files {
-        let in_buf = read_lines(&file)?;
-        for line in in_buf {
-            match line {
+        let reader = read_gzip_lines(&file)?;
+        for line_result in reader {
+            match line_result { 
                 Ok(l) => {
-                    buffer.write(l.as_bytes())?;
+                    writer.write(l.as_bytes())?;
                 },
-                Err(error) => {
-                    error!("Problems reading temp fastq file");
-                    return Err(FastqToolsError::FastqReadError(error.to_string()))
-                }
+                Err(error) => return Err(FastqToolsError::FastqReadError(error.to_string()))
             }
         }
     }

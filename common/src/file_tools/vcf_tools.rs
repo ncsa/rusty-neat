@@ -13,7 +13,7 @@ pub fn write_vcf(
     mutated_maps: &HashMap<String, Vec<MutatedMap>>,
     contig_order: &Vec<String>,
     fasta_lengths: &HashMap<String, usize>,
-    reference_path: &str,
+    reference_path: &PathBuf,
     overwrite_output: bool,
     output_vcf: &PathBuf,
 ) -> io::Result<()> {
@@ -35,7 +35,7 @@ pub fn write_vcf(
     )?;
     // add the vcf header
     writeln!(&mut outfile, "##fileformat=VCFv4.1")?;
-    writeln!(&mut outfile, "##reference={}", reference_path)?;
+    writeln!(&mut outfile, "##reference={}", reference_path.display())?;
     for contig in contig_order {
         let length = fasta_lengths[contig];
         writeln!(

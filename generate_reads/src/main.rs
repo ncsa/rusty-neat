@@ -19,9 +19,9 @@ use crate::{errors::GenerateReadsErrors, utils::config::RunConfiguration};
 use common::file_tools::folder_tools::check_parent;
 use utils::runner::run_neat;
 use simple_rng::NeatRng;
+use std::{thread, time};
 
 fn main() -> Result<(), GenerateReadsErrors> {
-    info!("Begin processing");
     // parse the arguments from the command line
     let args = cli::Cli::parse();
     if args.config.is_empty() && args.reference.is_empty() {
@@ -58,6 +58,8 @@ fn main() -> Result<(), GenerateReadsErrors> {
     ])
     .unwrap();
 
+    info!("////////////// Welcome to rusty-neat read generator! \\\\\\\\\\\\\\\\\\");
+    thread::sleep(time::Duration::from_millis(100));
     // set up the config struct based on whether there was an input config. Input config
     // overrides any other inputs.
     let config = if args.config != "" {
@@ -68,6 +70,8 @@ fn main() -> Result<(), GenerateReadsErrors> {
         debug!("Command line args: {:?}", &args);
         RunConfiguration::from_args(args)?
     };
+    info!("////////////// Configuration successuful! Ready to run! \\\\\\\\\\\\\\\\\\");
+    thread::sleep(time::Duration::from_millis(100));
     // Generate the RNG used for this run. If one was given in the config file, use that, or else
     // use thread_rng to generate a random seed, then seed using a SeedableRng based on StdRng
     let mut rng: NeatRng = NeatRng::new_from_seed(&config.seed_vec)

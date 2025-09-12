@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use thiserror::Error;
 use simple_rng::{NeatRng, NeatRngError};
-use log::{error, debug};
+use log::error;
 
 use crate::structs::{
     variants::{Variant, VariantError, VariantType},
@@ -162,7 +162,6 @@ impl MutationModel {
                     check_base(reference_sequence[variant_location]),
                     check_base(reference_sequence[variant_location+1]),
                 ];
-                debug!("Trinuc reference: {:?}", trinuc_reference);
                 let alternate_base = self.statistical_models.snp_model
                     .generate_snp(rng.random()?, &trinuc_reference)?;
 

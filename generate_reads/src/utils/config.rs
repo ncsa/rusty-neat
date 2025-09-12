@@ -39,7 +39,7 @@ pub struct RunConfiguration {
     // overwrite files with the same name.
     // output_dir: The directory, relative or absolute, path to the directory to place output.
     // output_prefix: The name to use for the output files.
-    pub reference: String,
+    pub reference: PathBuf,
     pub read_len: usize,
     pub coverage: usize,
     pub mutation_rate: f64,
@@ -90,9 +90,9 @@ impl ConfigBuilder {
         match self.reference {
             Some(reference) => {
                 info!("Running rusty-neat to generate reads on {:?} with...", &reference);
-
+                let ref_buf = PathBuf::from(reference);
                 RunConfiguration {
-                    reference,
+                    reference: ref_buf,
                     read_len: 151, 
                     coverage: 10, 
                     mutation_rate: 0.001, 
@@ -157,9 +157,9 @@ impl RunConfiguration {
         let ref_str = reference.as_str();
         match ref_str {
             Some(str) => {
-                let ref_path = Path::new(str);
-                if ref_path.is_file() {
-                    config_builder.reference = Some(ref_path.display().to_string());
+                let ref_buf = PathBuf::from(&str);
+                if ref_buf.is_file() {
+                    config_builder.reference = Some(str.to_string());
                 } else {
                     return Err(GenerateReadsErrors::FileNotFound(str.to_owned()))
                 }
@@ -458,12 +458,13 @@ impl RunConfiguration {
         // This does a final check of the configuration for valid items. It will print info
         // message of the items, to work as a record and to assist in debugging any issues that
         // come up.
-        if self.reference.is_empty() {
+        if !self.reference.is_file() {
+            error!("File not found: {}", &self.reference.display());
             return Err(GenerateReadsErrors::MissingReferenceError)
         }
         info!(
             "Running rusty-neat to generate reads on {} with...",
-            &self.reference
+            &self.reference.display()
         );
         info!("  >read length: {}", &self.read_len);
         info!("  >coverage: {}", &self.coverage);
@@ -572,7 +573,7 @@ mod tests {
     #[test]
     fn test_run_configuration() {
         let test_configuration = RunConfiguration {
-            reference: String::from("Hello.world"),
+            reference: PathBuf::from("Hello.world"),
             read_len: 100,
             coverage: 22,
             mutation_rate: 0.09,
@@ -600,7 +601,7 @@ mod tests {
         };
 
         println!("{:?}", test_configuration);
-        assert_eq!(test_configuration.reference, "Hello.world".to_string());
+        assert_eq!(test_configuration.reference, PathBuf::from("Hello.world"));
         assert_eq!(test_configuration.read_len, 100);
         assert_eq!(test_configuration.coverage, 22);
         assert_eq!(test_configuration.mutation_rate, 0.09);
@@ -623,14 +624,14 @@ mod tests {
         let mut x = ConfigBuilder::new();
         x.reference = Some("test_data/H1N1.fa".to_string());
         let config = x.build();
-        assert_eq!(config.reference, "test_data/H1N1.fa".to_string())
+        assert_eq!(config.reference, PathBuf::from("test_data/H1N1.fa"))
     }
 
     #[test]
     fn test_read_config_yaml() {
         let yaml = String::from("test_data/configs/neat_test.yml");
         let test_config = RunConfiguration::from_yaml_file(yaml).unwrap();
-        assert_eq!(test_config.reference, "test_data/references/ecoli.fa".to_string());
+        assert_eq!(test_config.reference, PathBuf::from("test_data/references/ecoli.fa"));
         assert_eq!(test_config.coverage, 3);
     }
 
@@ -670,7 +671,7 @@ mod tests {
         };
 
         let test_config = RunConfiguration::from_args(args).unwrap();
-        assert_eq!(test_config.reference, "test_data/references/ecoli.fa".to_string());
+        assert_eq!(test_config.reference, PathBuf::from("test_data/references/ecoli.fa"));
         fs::remove_dir("data").unwrap();
     }
 

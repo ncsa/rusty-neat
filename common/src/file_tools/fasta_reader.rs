@@ -60,7 +60,7 @@ impl From<FastaMapError> for FastaReaderError {
 
 
 pub fn read_fasta(
-    fasta_path: &str,
+    fasta_path: &PathBuf,
     nucleotide_selector: NucleotideSelector,
     overlap_len: usize,
     temp_dir: &TempDir,
@@ -454,7 +454,7 @@ mod tests {
 
     #[test]
     fn test_read_fasta() {
-        let test_fasta = "test_data/H1N1.fa";
+        let test_fasta = PathBuf::from("test_data/H1N1.fa");
         let temp_dir = tempfile::tempdir().unwrap();
         let nucleotide_selector = NucleotideSelector::new();
         let mut rng = NeatRng::new_from_seed(&vec![
@@ -463,7 +463,7 @@ mod tests {
             "World".to_string(),
         ]).unwrap();
         let test_map = read_fasta(
-            test_fasta,
+            &test_fasta,
             nucleotide_selector,
             350,
             &temp_dir,

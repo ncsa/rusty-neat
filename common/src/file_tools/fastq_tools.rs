@@ -173,7 +173,7 @@ pub fn combine_temp_fastqs(
         for line_result in reader {
             match line_result { 
                 Ok(l) => {
-                    writer.write(l.as_bytes())?;
+                    writer.write_fmt(format_args!("{}\n", l))?;
                 },
                 Err(error) => return Err(FastqToolsError::FastqReadError(error.to_string()))
             }

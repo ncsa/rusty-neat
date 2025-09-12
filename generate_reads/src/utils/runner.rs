@@ -158,10 +158,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
                 // This block is all N's so we can skip
                 continue
             }
-            let mut bias_map: Vec<f64> = Vec::with_capacity(current_block.get_len());
-            for _ in 0..current_block.get_len() {
-                bias_map.push(0.0);
-            }
+            let mut bias_map: Vec<f64> = vec![0.0; current_block.get_len()];
             for region in regions_of_interest {
                 // all of these have RegionType::NonNRegion
                 // This is where we might apply bias
@@ -215,11 +212,9 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
                 // Need a file name that helps us ID this fastq later
                 let mut file_to_write_1 = PathBuf::from(working_dir.path());
                 file_to_write_1
-                    .push(&config.output_filename);
-                file_to_write_1
                     .push(
                         format!(
-                            "_{}_{}_{}_r1_tmp.fastq.gz",
+                            "temp_{}_{:010}_{:010}_r1_tmp.fastq.gz",
                             contig_name,
                             current_block.get_start()?, 
                             current_block.get_end()?,
@@ -242,7 +237,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
                     file_to_write_2
                         .push(
                             format!(
-                                "_{}_{}_{}_r2_tmp.fastq.gz",
+                                "temp_{}_{:010}_{:010}_r2_tmp.fastq.gz",
                                 contig_name,
                                 current_block.get_start()?, 
                                 current_block.get_end()?

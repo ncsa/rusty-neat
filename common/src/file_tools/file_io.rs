@@ -10,29 +10,23 @@ pub fn read_lines<T: AsRef<Path> + ?Sized>(filename: &T) -> Result<Lines<BufRead
 }
 
 pub fn create_output_file<T: AsRef<Path>> (filename: &T, overwrite_file: bool) -> Result<File> {
-    if Path::new(filename.as_ref()).exists() && !overwrite_file {
+    if Path::new(filename.as_ref()).is_file() && !overwrite_file {
         // The file already exists and we're in non overwrite mode
         panic!("Attempting to overwrite an existing file: {}", filename.as_ref().display())
     } else {
-        File::options()
-            .create(true)
-            .write(true)
-            .open(&filename)
+        File::create(&filename)
     }
 }
 
 pub fn append_to_file<T: AsRef<Path>>(filename: &T) -> Result<File> {
     // if the file doesn't exist, we'll create it. If it does, we'll append to it
-    if Path::new(&filename.as_ref()).exists() {
+    if Path::new(&filename.as_ref()).is_file() {
         File::options()
             .write(true)
             .append(true)
             .open(&filename)
     } else {
-        File::options()
-            .create(true)
-            .write(true)
-            .open(&filename)
+        File::create(&filename)
     }
 }
 

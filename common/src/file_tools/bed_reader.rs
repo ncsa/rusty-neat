@@ -1,11 +1,7 @@
-use flate2::read::GzDecoder;
 use log::*;
 use thiserror::Error;
 use std::{ 
-    fs::File, io::{self, BufRead, BufReader}, num::ParseIntError, path::PathBuf
-};
-use bed_reader::{
-    sample_bed_file, Bed, ReadOptions
+    io, num::ParseIntError, path::PathBuf
 };
 use crate::{
     file_tools::file_io::{read_gzip_lines, read_lines}, 

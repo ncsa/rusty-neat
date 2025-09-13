@@ -13,15 +13,16 @@ pub struct BedRecord {
     contig: String,
     start: usize,
     end: usize,
+    other: Vec<String>,
 }
 
 impl BedRecord {
-    pub fn new(contig: String, start: usize, end: usize) -> Result<Self, BedErrors> {
+    pub fn new(contig: String, start: usize, end: usize, other: Vec<String>) -> Result<Self, BedErrors> {
         if start >= end {
             return Err(BedErrors::BedRecordError("Region with start pos >= end_pos".to_string()))
         }
 
-        Ok(BedRecord { contig, start, end })
+        Ok(BedRecord { contig, start, end, other })
     }
 
     pub fn len(&self) -> usize {
@@ -38,7 +39,8 @@ mod test {
         let contig = "chr1".to_string();
         let start = 0;
         let end = 900;
-        let result = BedRecord::new(contig, start, end).unwrap();
+        let other = vec!["b0001".to_string(), "65".to_string(), "+".to_string()];
+        let result = BedRecord::new(contig, start, end, other).unwrap();
         assert_eq!(result.start, 0);
         assert_eq!(result.end, 900)
     }
@@ -49,6 +51,7 @@ mod test {
         let contig = "chr1".to_string();
         let start = 900;
         let end = 0;
-        BedRecord::new(contig, start, end).unwrap();
+        let other = vec!["b0001".to_string(), "65".to_string(), "+".to_string()];
+        BedRecord::new(contig, start, end, other).unwrap();
     }
 }

@@ -1,5 +1,12 @@
 //! This contains only one function at the moment, a general opener and reader
-use std::io::{BufReader, BufRead, Result, Lines, self, Write};
+use std::io::{
+    BufReader, 
+    BufRead, 
+    Result, 
+    Lines, 
+    self, 
+    Write
+};
 use std::fs::File;
 use std::path::PathBuf;
 

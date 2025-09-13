@@ -45,19 +45,12 @@ pub enum FastaReaderError {
     #[error("IO error while reading fasta file")]
     IoError(#[from] io::Error),
     #[error("Error interfacing with FastaMap: {0}")]
-    FastaMapInterfaceError(FastaMapError),
+    FastaMapInterfaceError(#[from] FastaMapError),
     #[error("Error in fasta block name")]
     FastaBlockNameError,
     #[error("Error in random number generator: {0}")]
     RngError(#[from] NeatRngError),
 }
-
-impl From<FastaMapError> for FastaReaderError {
-    fn from(error: FastaMapError) -> Self {
-        FastaReaderError::FastaMapInterfaceError(error)
-    }
-}
-
 
 pub fn read_fasta(
     fasta_path: &PathBuf,

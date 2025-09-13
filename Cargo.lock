@@ -409,7 +409,7 @@ checksum = "b05b61dc5112cbb17e4b6cd61790d9845d13888356391624cbe7e41efeac1e75"
 
 [[package]]
 name = "common"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "bed-reader",
  "bincode",
@@ -1577,7 +1577,7 @@ dependencies = [
 
 [[package]]
 name = "neat"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "assert_fs",
  "chrono",
@@ -2601,7 +2601,7 @@ dependencies = [
 
 [[package]]
 name = "simple_rng"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "chrono",
  "thiserror 2.0.16",

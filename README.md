@@ -5,7 +5,7 @@ As of now, rusty-neat is still under development. This is our 1.0.0 version, but
 
 # How to use rusty-neat
 
-Download the executable in the release (current version 1.0.0).
+Download the executable in the release (current version 1.1.2).
 
 ```
 ./rusty-neat -h
@@ -51,7 +51,7 @@ or for a configuration file:
 ```
 If you record the output in the logs of Seed string to regenerate these exact results: XXXXXXX, you should be able to use that string as input with rng_seed and reproduce your results (untested as of yet).
 
-##Fastq Output
+Fastq Output
 ============
 the fastq output will have a key name that identifies the block where teh read was drawn from. This should allow you to asseses how well the aligner funcution. The name will have the format <contig short name>_<block start>_<block_end>
 

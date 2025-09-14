@@ -16,8 +16,6 @@ pub enum BedReaderError {
     IoError(#[from] io::Error),
     #[error("Error creating the bed record: {0}")]
     BedRecordError(#[from] BedErrors),
-    #[error("Error deserializing the CSV: {0}")]
-    CsvError(#[from] csv::Error),
     #[error("Error parsing ints from the bed file: {0}")]
     ParserError(#[from] ParseIntError),
     #[error("File has an unknown or missing file extension: {0}")]
@@ -74,7 +72,6 @@ fn process_gzip_bed (filename: &PathBuf) -> Result<Vec<BedRecord>, BedReaderErro
             end as usize, 
             other,
         )?;
-        println!("{:?}", record);
         file_records.push(record)
     }
     Ok(file_records)
@@ -104,7 +101,6 @@ fn process_bed (filename: &PathBuf) -> Result<Vec<BedRecord>, BedReaderError> {
             end as usize, 
             other,
         )?;
-        println!("{:?}", record);
         file_records.push(record)
     }
     Ok(file_records)

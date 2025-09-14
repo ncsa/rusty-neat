@@ -30,7 +30,7 @@ pub fn open_safe(filename: &PathBuf) -> Result<BufReader<File>> {
     Ok(BufReader::new(file))
 }
 
-pub fn create_output_file (filename: &PathBuf, overwrite_file: bool) -> Result<File> {
+pub fn create_output_file(filename: &PathBuf, overwrite_file: bool) -> Result<File> {
     if filename.is_file() && !overwrite_file {
         // The file already exists and we're in non overwrite mode
         panic!("Attempting to overwrite an existing file: {}", filename.display())

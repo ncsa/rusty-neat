@@ -65,6 +65,8 @@ pub struct RunConfiguration {
     pub mutation_model: Option<PathBuf>,
     pub fragment_model: Option<PathBuf>,
     pub sequence_error_model: Option<PathBuf>,
+    // bed files
+    pub inclusion_bed: Option<PathBuf>,
 }
 
 // The config builder allows us to construct a config in multiple different ways, depending
@@ -117,6 +119,7 @@ impl ConfigBuilder {
                     mutation_model: None,
                     fragment_model: None,
                     sequence_error_model: None,
+                    inclusion_bed: None,
                 }
             },
             None => {
@@ -175,6 +178,17 @@ impl RunConfiguration {
                 // Any item with a . for a value we keep the default
                 Some(".") => continue,
                 _ => match key.as_str() {
+                    "inclusion_bed" => {
+                        let bed_str = value.as_str();
+                        match bed_str {
+                            Some(bed_filename) => {
+                                configuration.inclusion_bed = Some(PathBuf::from(bed_filename));
+                            },
+                            None => {
+                                return Err(GenerateReadsErrors::ConfigReadError("inclusion_bed".to_string(), "path/to/file".to_string()))
+                            }
+                        }
+                    }
                     "read_len" => {
                         let rl_option = value.as_u64();
                         match rl_option {
@@ -598,6 +612,7 @@ mod tests {
             mutation_model: None,
             fragment_model: None,
             sequence_error_model: None,
+            inclusion_bed: None,
         };
 
         println!("{:?}", test_configuration);

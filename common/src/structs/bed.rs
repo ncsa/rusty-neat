@@ -28,6 +28,22 @@ impl BedRecord {
     pub fn len(&self) -> usize {
         self.end - self.start
     }
+
+    pub fn get_contig(&self) -> String {
+        self.contig.to_owned()
+    }
+
+    pub fn within(&self, contig: &str, position: &usize) -> bool {
+        if self.contig == contig {
+            if (*position >= self.start) && (*position < self.end) {
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    }
 }
 
 #[cfg(test)]

@@ -3,6 +3,7 @@
 //! this function is generic enough to work with the fragmented method we are implementing
 //! This one needs a major overhaul, it is autogenerating quality scores etc. 
 //! Will wait to get other things set up first
+use std::fs::File;
 use std::io::{BufWriter, Write};
 use log::{debug, error, warn};
 use std::path::PathBuf;
@@ -154,7 +155,6 @@ pub fn combine_temp_fastqs(
     files: Vec<PathBuf>, 
     final_filename: &PathBuf, 
     shuffle: bool, 
-    overwrite: bool
 ) -> Result<(), FastqToolsError> {
     // This will take all the temporary fastqs we wrote out on a per-block level and 
     // combine them into one fastq. An improvement here might be to randomize the order:
@@ -162,11 +162,6 @@ pub fn combine_temp_fastqs(
     // of indexes. We'll make that optional.
     if shuffle {
         warn!("Fastq shuffle implementation not yet ready, proceeding with ordered fastq")
-    }
-    if final_filename.is_file() && !overwrite {
-        return Err(FastqToolsError::FastqWriteError(
-            format!("Overwrite is false, but file with this name found. Please remove file: {:?}", final_filename)
-        ))
     }
     let final_file = append_to_file(final_filename)?;
     let buffer = GzEncoder::new(final_file, Compression::default());

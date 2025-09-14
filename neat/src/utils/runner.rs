@@ -1,4 +1,9 @@
+use common::file_tools::bed_reader::read_bed;
+use common::file_tools::fastq_tools::FastqToolsError;
+use common::file_tools::file_io::create_output_file;
+use common::structs::bed::BedRecord;
 use tempfile;
+use std::fs::File;
 use std::time;
 use log::{info, debug, error};
 use simple_rng::NeatRng;
@@ -117,15 +122,28 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
         NucleotideSelector::new()
     };
 
+    let mut inclusion_bed: Option<Vec<BedRecord>> = None;
+    match &config.inclusion_bed {
+        Some(filename) => {
+            info!("Reading in bed files: {:?}", filename);
+            inclusion_bed = Some(read_bed(&filename)?);
+        },
+        None => {
+            // No input bed, move along
+            debug!("No inclusion bed provided")
+        },
+    }
+
     // The FastaMap struct consists of a vector of Contig objects, each describing a
     // block of Sequence, broken up into chunks in the SequenceBlock objects. It also
     // holds a name_map hashmap that links tho contig name from the Fasta with the shortname
-    info!("Reading fasta file: {}", &config.reference.display());
+    info!("Reading fasta file: {}", &config.reference.display());    
     let fasta_map = read_fasta(
         &config.reference,
         nuc_sub_model,
         config.read_len,
         &working_dir,
+        inclusion_bed,
         rng,
     )?;
 
@@ -309,42 +327,53 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
         // to keep pairs together during this
         //
         let bar: ProgressBar = ProgressBar::new(all_fastq_files.len() as u64);
-        for (_contig, temp_fastqs) in all_fastq_files {
-            // read 1
-            match &config.output_fastq_1 {
-                Some(filename) => {
-                    combine_temp_fastqs(
-                        temp_fastqs.0, 
-                        &filename, 
-                        false,
-                        config.overwrite_output,
-                    )?;
-                },
-                None => {
-                    error!("Produce fastq true but output_fastq_1 was missing.");
-                    return Err(GenerateReadsErrors::ConfigError)
-                }
-            }
-            if config.paired_ended {
-                // read 2 - this will be empty for single-ended reads
-                match &config.output_fastq_2 {
-                    Some(filename) => {
+        match &config.output_fastq_1 {
+            Some(filename1) => {
+                // If this is already a file, this will clear it.
+                create_output_file(filename1, config.overwrite_output)?;
+                if config.paired_ended {
+                    match &config.output_fastq_2 {
+                        Some(filename2) => {
+                            // If this is already a file, this will clear it.
+                            create_output_file(filename2, config.overwrite_output)?;
+                            for (_contig, temp_fastqs) in all_fastq_files {
+                                combine_temp_fastqs(
+                                    temp_fastqs.0, 
+                                    &filename1, 
+                                    false
+                                )?;
+                                combine_temp_fastqs(
+                                    temp_fastqs.1,
+                                    &filename2,
+                                    false,
+                                )?;
+                                bar.inc(1);
+                            }
+                        },
+                        None => {
+                            error!("Produce fastq true and paired-ended true, but output_fastq_2 was missing.");
+                            return Err(GenerateReadsErrors::ConfigError)
+                        }
+                    }
+                } else {
+                    for (_contig, temp_fastqs) in all_fastq_files {
                         combine_temp_fastqs(
-                            temp_fastqs.1,
-                            &filename,
-                            false,
-                            config.overwrite_output,
+                            temp_fastqs.0, 
+                            &filename1, 
+                            false
                         )?;
-                    },
-                    None => {
-                        error!("Produce fastq true and paired-ended true, but output_fastq_2 was missing.");
-                        return Err(GenerateReadsErrors::ConfigError)
+                        bar.inc(1);
                     }
                 }
-            }
-            bar.inc(1);
-        }
+            },
+            None => {
+                error!("Produce fastq true but output_fastq_1 was missing.");
+                return Err(GenerateReadsErrors::ConfigError)
+            },
+        } 
     }
+
+    bar.finish_and_clear();
 
     if config.paired_ended {
         match &config.output_fastq_1 {

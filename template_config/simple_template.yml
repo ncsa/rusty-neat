@@ -32,6 +32,7 @@ output_filename: .
 mutation_model: .
 fragment_model: .
 sequence_error_model: .
+inclusion_bed: .
 
 # debug option (default false)
 debug: . 

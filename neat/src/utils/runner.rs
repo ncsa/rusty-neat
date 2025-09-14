@@ -1,9 +1,8 @@
 use common::file_tools::bed_reader::read_bed;
-use common::file_tools::fastq_tools::FastqToolsError;
+use common::file_tools::fasta_reader::filter_fasta_with_bed;
 use common::file_tools::file_io::create_output_file;
 use common::structs::bed::BedRecord;
 use tempfile;
-use std::fs::File;
 use std::time;
 use log::{info, debug, error};
 use simple_rng::NeatRng;
@@ -143,9 +142,24 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
         nuc_sub_model,
         config.read_len,
         &working_dir,
-        inclusion_bed,
         rng,
     )?;
+
+    let filtered_fasta_map = {
+    
+        match inclusion_bed {
+            Some(vector) => {
+                let new_map = filter_fasta_with_bed(fasta_map, vector)?;
+                new_map
+            },
+            None => {
+                // Nothing to do in this case
+                // We've instructed the function to give us an unmasked mask with no bed file.
+                let new_map = filter_fasta_with_bed(fasta_map, Vec::new())?;
+                new_map
+            }
+        }
+    };
 
     // Mutating the reference and recording the variant locations.
     info!("Generating simulated dataset");
@@ -154,11 +168,16 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
     let mut mutated_maps: HashMap<String, Vec<MutatedMap>> = HashMap::new();
     // All files written indexed by contig_name, separated by read1/read2
     let mut all_fastq_files: HashMap<String, (Vec<PathBuf>, Vec<PathBuf>)> = HashMap::new();
-    let bar: ProgressBar = ProgressBar::new(fasta_map.contigs.len() as u64);
+    let bar: ProgressBar = ProgressBar::new(filtered_fasta_map.contigs.len() as u64);
     // to display bar
     bar.tick();
-    // iterate over contigs
-    for contig in &fasta_map.contigs {
+    // iterate over contigs. 
+    // TODO redo this process with the bed filter. It will basically be 
+    //   unfiltered for regions in the bed file. But this will also mean
+    //   we may have to rethink the blocks. Might not get enough stuff in the reads?
+    //   maybe we'll try it the easy way first and see what it looks like
+    //   Just do reads for the bed regions, skip everything else?
+    for contig in &filtered_fasta_map.contigs {
         // Iterate over blocks within the contig
         // This is probably where we want to parallelize
         let contig_blocks = &contig.blocks;
@@ -399,13 +418,13 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
             info!("Writing output vcf file");
             // Maps contig to a total contig size, a required entry for a valid vcf file.
             let mut fasta_lengths: HashMap<String, usize> = HashMap::new();
-            let contigs = fasta_map.contigs.clone();
+            let contigs = filtered_fasta_map.contigs.clone();
             for contig in contigs {
                 fasta_lengths.insert(contig.name.clone(), contig.contig_len);
             }
             write_vcf(
                 &mutated_maps,
-                &fasta_map.contig_order,
+                &filtered_fasta_map.contig_order,
                 &fasta_lengths,
                 &config.reference,
                 config.overwrite_output,

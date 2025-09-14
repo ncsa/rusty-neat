@@ -56,6 +56,10 @@ pub enum Nucleotide {
     G = 3,
     N = 4,
     X = 5, // This is purely used to fill out buffers when writing files.
+    Maskeda,
+    Maskedc,
+    Maskedg,
+    Maskedt,
 }
 
 impl fmt::Display for Nucleotide {
@@ -68,10 +72,14 @@ impl fmt::Display for Nucleotide {
 impl From<char> for Nucleotide {
     fn from(c: char) -> Self {
         match c {
-            'A' | 'a' => Self::A,
-            'C' | 'c' => Self::C,
-            'G' | 'g' => Self::G,
-            'T' | 't' => Self::T,
+            'A' => Self::A,
+            'C' => Self::C,
+            'G' => Self::G,
+            'T' => Self::T,
+            'a' => Self::Maskeda,
+            'c' => Self::Maskedc,
+            'g' => Self::Maskedg,
+            't' => Self::Maskedt,
             _ => Self::N,
         }
     }
@@ -84,6 +92,10 @@ impl From<usize> for Nucleotide {
             1 => Self::C,
             2 => Self::G,
             3 => Self::T,
+            5 => Self::Maskeda,
+            6 => Self::Maskedc,
+            7 => Self::Maskedg,
+            8 => Self::Maskedt,
             _ => Self::N,
         }
     }
@@ -96,6 +108,10 @@ impl Into<usize> for Nucleotide {
             Self::C => 1,
             Self::G => 2,
             Self::T => 3,
+            Self::Maskeda => 5,
+            Self::Maskedc => 6,
+            Self::Maskedg => 7,
+            Self::Maskedt => 8,
             _ => 4,
         }
     }
@@ -108,6 +124,10 @@ impl Into<char> for Nucleotide {
             Self::C => 'C',
             Self::G => 'G',
             Self::T => 'T',
+            Self::Maskeda => 'a',
+            Self::Maskedc => 'c',
+            Self::Maskedg => 'g',
+            Self::Maskedt => 't',
             _ => 'N',
         }
     }
@@ -121,7 +141,45 @@ impl Nucleotide {
             Self::C => Self::G,
             Self::G => Self::C,
             Self::T => Self::A,
+            Self::Maskeda => Self::Maskedt,
+            Self::Maskedc => Self::Maskedg,
+            Self::Maskedg => Self::Maskedc,
+            Self::Maskedt => Self::Maskeda,
             _ => self.clone(),
+        }
+    }
+
+    pub fn get_unmasked_base(&self) -> Self {
+        match self {
+            Self::Maskeda => Nucleotide::A,
+            Self::Maskedc => Nucleotide::C,
+            Self::Maskedg => Nucleotide::G,
+            Self::Maskedt => Nucleotide::T,
+            Self::X => Self::N,
+            _ => return self.clone()
+        }
+    }
+
+    pub fn is_masked(&self) -> bool {
+        match self {
+            Self::Maskeda | 
+                Self::Maskedc | 
+                Self::Maskedg | 
+                Self::Maskedt | 
+                Self::X 
+              => true,
+            _ => return false,
+        }
+    }
+
+    pub fn get_masked(&self) -> Nucleotide {
+        match self {
+            Self::A => Self::Maskeda,
+            Self::C => Self::Maskedc,
+            Self::G => Self::Maskedg,
+            Self::T => Self::Maskedt,
+            Self::N => Self::X,
+            _ => return self.clone()
         }
     }
 }

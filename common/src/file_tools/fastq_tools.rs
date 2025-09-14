@@ -3,7 +3,6 @@
 //! this function is generic enough to work with the fragmented method we are implementing
 //! This one needs a major overhaul, it is autogenerating quality scores etc. 
 //! Will wait to get other things set up first
-use std::fs::File;
 use std::io::{BufWriter, Write};
 use log::{debug, error, warn};
 use std::path::PathBuf;
@@ -210,7 +209,11 @@ fn apply_variants_and_write_sequence<T: Write> (
     let mut seq = String::new();
     let mut quality_del_offset = 0;
     while (reference_position < sequence.len()) && (bases_written < read_length) {
-        let reference_base = sequence[reference_position];
+        let mut reference_base = sequence[reference_position];
+        if reference_base.is_masked() {
+            // We may end up grabbing a few masked bases. We'll unmask these.
+            reference_base = reference_base.get_unmasked_base();
+        }
         let mut base_to_write: Vec<Nucleotide> = vec![reference_base];
         // Figure out what to actually write at this position
         if reference_base == N {

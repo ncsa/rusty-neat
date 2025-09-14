@@ -8,11 +8,11 @@ pub enum BedErrors {
     BedRecordError(String)
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct BedRecord {
     contig: String,
-    start: usize,
-    end: usize,
+    pub start: usize,
+    pub end: usize,
     other: Vec<String>,
 }
 
@@ -33,7 +33,7 @@ impl BedRecord {
         self.contig.to_owned()
     }
 
-    pub fn within(&self, contig: &str, position: &usize) -> bool {
+    pub fn contains(&self, contig: &str, position: &usize) -> bool {
         if self.contig == contig {
             if (*position >= self.start) && (*position < self.end) {
                 true

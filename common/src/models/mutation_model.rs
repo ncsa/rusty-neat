@@ -262,6 +262,9 @@ fn pick_random_snp(ref_base: Nucleotide, rng: &mut NeatRng)-> Result<Vec<Nucleot
 
 fn check_base(nuc: Nucleotide) -> Nucleotide {
     // For now we'll replace occasional N's with A's.
+    if nuc.is_masked() {
+        return nuc.get_unmasked_base()
+    }
     match nuc {
         Nucleotide::N => Nucleotide::A,
         _ => nuc,

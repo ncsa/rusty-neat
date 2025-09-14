@@ -10,7 +10,7 @@
 //! Eventually, we will add a write fasta function to write out output fasta files, but there's 
 //! some simulation details to work out and it is low-priority.
 use std::collections::HashMap;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io;
 use log::*;
 use std::path::PathBuf;
@@ -31,7 +31,7 @@ use crate::structs::{
     bed::BedRecord,
     nucleotides::{
         Nucleotide,
-        Nucleotide::{N, X},
+        Nucleotide::{N, X, Maskeda, Maskedc, Maskedg, Maskedt},
         NucleotideSelector,
     },
 };
@@ -55,12 +55,150 @@ pub enum FastaReaderError {
     RngError(#[from] NeatRngError),
 }
 
+pub fn filter_fasta_with_bed(
+    fasta_map: Box<FastaMap>,
+    inculsion_bed: Vec<BedRecord>,
+) -> Result<Box<FastaMap>, FastaReaderError> {
+    let mut bed_mask: HashMap<String, Vec<bool>> = HashMap::new();
+    if !inculsion_bed.is_empty() {
+        let mut relevant_records: HashMap<String, Vec<BedRecord>> = HashMap::new();
+        let mut covered_contigs = Vec::new();
+        let mut record_lens = Vec::new();
+        for record in inculsion_bed {
+            if !relevant_records.contains_key(&record.get_contig()) {
+                relevant_records.insert(record.get_contig(), Vec::new());
+            }
+            if let Some(temp) = relevant_records.get_mut(&record.get_contig()) {
+                temp.push(record.clone())
+            };
+            // We're planning to write each bed block separately. This would seem to make more sense 
+            // than jamming disparate pieces together.
+            record_lens.push(record.len());
+
+            if !covered_contigs.contains(&record.get_contig()) {
+                covered_contigs.push(record.get_contig());
+            }
+        }
+        for contig in &fasta_map.contigs {
+            let vec_len = contig.contig_len;
+            // Since this in an inclusion bed, we will assume false unless it is 
+            // in the bed file
+            let mut mask = vec![false; vec_len];
+            if covered_contigs.contains(&contig.name) {
+                for bed_record in &relevant_records[&contig.name] {
+                    for i in bed_record.start..bed_record.end {
+                        mask[i] = true;
+                    }
+                }
+                bed_mask.insert(contig.name.clone(), mask.clone());
+            } else {
+                // Do not insert this contig in the bed mask at all.
+                debug!("Omitting contig {} from consideration due to bed filtering", &contig.name);
+            }
+        }
+    } else {
+        for contig in &fasta_map.contigs {
+            let vec_len = contig.contig_len;
+            let mask = vec![true; vec_len];
+            bed_mask.insert(contig.name.clone(), mask.clone());
+        }
+    }
+    
+    // Contigs are entire sequences in a fasta. This will vector will essentially be a map of the
+    // fasta file.
+    let mut new_contigs: Vec<Contig> = Vec::new();
+    // This is a vector of filenames from which we can reconstruct the sequence_block.
+    let mut new_block_filenames: Vec<PathBuf> = Vec::new();
+    // Process the file
+    for contig in &fasta_map.contigs {
+        if bed_mask.contains_key(&contig.name) {
+            let mask_vec = &bed_mask[&contig.name];
+            
+            for block in &contig.blocks {
+                let current_block = SequenceBlock::from(&block)?;
+                let mut masked_sequence = current_block.get_seq_clone()?;
+                let start = current_block.get_start()?;
+                let end = current_block.get_end()?;
+                for i in start..end {
+                    match mask_vec[i] {
+                        true => {
+                            // No change required
+                        },
+                        false => {
+                            // Change required. We need the coordinates relative to the sequence position,
+                            // so we subtract the start point of this block from the index.
+                            let block_loc = i - start;
+                            masked_sequence[block_loc] = {
+                                match current_block.sequence[block_loc] {
+                                    Nucleotide::A => Nucleotide::Maskeda,
+                                    Nucleotide::C => Nucleotide::Maskedc,
+                                    Nucleotide::G => Nucleotide::Maskedg,
+                                    Nucleotide::T => Nucleotide::Maskedt,
+                                    Nucleotide::N => Nucleotide::X,
+                                    _ => Nucleotide::X
+                                }
+                            }
+                        },
+                    }
+                }
+                // We need to check if we have masked the entire sequence block, 
+                // because if so we can remove it from consideration
+                let mut all_masked = true;
+                for element in &masked_sequence {
+                    if !element.is_masked() {
+                        all_masked = false;
+                        break
+                    }
+                }
+                if !all_masked {
+                    let sequence_map = map_sequence(&masked_sequence)?;
+                    let mut new_block = SequenceBlock {
+                        contig: current_block.contig,
+                        ref_start: current_block.ref_start,
+                        ref_end: current_block.ref_end,
+                        sequence: masked_sequence,
+                        sequence_map,
+                    };
+                    let sequence_file_path = block.clone();
+                    // obliterate the old file
+                    let tmp_file = File::create(&sequence_file_path)?;
+                    // Overwrite with new data
+                    new_block.write_block(tmp_file)?;
+                    new_block_filenames.push(sequence_file_path);
+                } else {
+                    debug!("Skipping sequence block because all were masked.");
+                    fs::remove_file(block)?;
+                }
+            }
+            if !new_block_filenames.is_empty() {
+                new_contigs.push(Contig::new(
+                    contig.name.clone(),
+                    contig.contig_len,
+                    new_block_filenames.clone(),
+                )?);
+                new_block_filenames = Vec::new();
+            }
+        } else {
+            // Skip this contig
+            debug!("Contig {:?} was filtered out by bed file", contig.name)
+        }
+    }
+
+    let return_map = FastaMap { 
+        contigs: new_contigs, 
+        name_map: fasta_map.name_map.clone(), 
+        contig_order: fasta_map.contig_order.clone(),
+    };
+    debug!("Original fasta map replaced by bed_masked fasta: {:?}", fasta_map);
+    Ok(Box::new(return_map))
+
+}
+
 pub fn read_fasta(
     fasta_path: &PathBuf,
     nucleotide_selector: NucleotideSelector,
     overlap_len: usize,
     temp_dir: &TempDir,
-    inculsion_bed: Option<Vec<BedRecord>>,
     rng: &mut NeatRng,
 ) -> Result<Box<FastaMap>, FastaReaderError> {
     // Here's the basic idea:
@@ -85,25 +223,6 @@ pub fn read_fasta(
         error!("fragment max {overlap_len} must be less than {BUFSIZE}.");
         return Err(FastaReaderError::ReadFastaError)
     }
-
-    let mut bed_input = false;
-    let mut relevant_records = Vec::new();
-    let mut covered_contigs = Vec::new();
-    match inculsion_bed {
-        Some(records) => {
-            bed_input = true;
-            relevant_records.extend(&records);
-            for record in records {
-                if !covered_contigs.contains(&record.get_contig()) {
-                    covered_contigs.push(record.get_contig())
-                }
-            }
-        },
-        None => {
-            debug!("No Bed file input.")
-        },
-    }
-    print!("{}", bed_input);
     // Contigs are entire sequences in a fasta. This will vector will essentially be a map of the
     // fasta file.
     let mut contigs: Vec<Contig> = Vec::new();
@@ -126,7 +245,6 @@ pub fn read_fasta(
     // counts up the bases in the contig
     let mut contig_length = 0;
     // Process the file
-    let mut skip_contig = false;
     for line in lines {
         match line {
             Ok(l) => {
@@ -141,19 +259,13 @@ pub fn read_fasta(
                     // After the first loop, then we need to log the previous contig
                     if contig_length == 0 && current_key.is_empty() {
                         // in this case, this is the first loop, skip this section
-                        skip_contig = false;
-                    } else if contig_length - block_start == 0 && !current_key.is_empty() && !skip_contig {
+                    } else if contig_length - block_start == 0 && !current_key.is_empty() {
                         // If skip_contig is true, then we don't throw an error
                         // in this case, we had two contig names in a row and no sequence, which is an invalid FASTA
                         let name = name_map[&current_key].clone();
                         error!("Read for contig {} is empty. Please check file for proper FASTA format.", name);
                         return Err(FastaReaderError::ReadFastaError)
-                    } else if skip_contig {
-                        // If we did skip the previous contig, we don't want to add this block to the fasta map, but we reset the flag.
-                        skip_contig = false;
-                        debug!("Skipped contig")
                     } else {
-                        skip_contig = false;
                         // We have read some data and are ready to dump this buffer
                         //
                         // the total number of valid bases of this buffer. We subtract our overall contig
@@ -200,54 +312,47 @@ pub fn read_fasta(
                     // grab the name from the string, omitting the initial '>' character
                     let long_name = l[1..].to_string();
                     let short_name = extract_key_name(&long_name);
-                    if bed_input && !covered_contigs.contains(&short_name) {
-                        // We only skip a contig if it isn't covered in the bed file, if there is
-                        // no bed file, we read in all contigs.
-                        skip_contig = true;
-                    } else {
-                        current_key = short_name;
-                        name_map.entry(current_key.clone()).or_insert(long_name);
-                        contig_order.push(current_key.clone());
-                    }
+                    current_key = short_name;
+                    name_map.entry(current_key.clone()).or_insert(long_name);
+                    contig_order.push(current_key.clone());
+
                 } else {
-                    if !skip_contig {
-                        for char in l.chars() {
-                            // If we have filled the buffer, time to write the file and clear the buffer
-                            if buffer_index == BUFSIZE {
-                                // grab the end of the buffer to create an overlap with the next section
-                                let overlap_buffer: Vec<Nucleotide> = buffer[buffer_index-overlap_len..].to_vec();
-                                // Encode the data and write to temporary file
-                                let sequence_block_filename = process_buffer_into_sequenceblock(
-                                    &buffer,
-                                    &current_key,
-                                    block_start,
-                                    temp_dir,
-                                    &nucleotide_selector,
-                                    rng,
-                                )?;
+                    for char in l.chars() {
+                        // If we have filled the buffer, time to write the file and clear the buffer
+                        if buffer_index == BUFSIZE {
+                            // grab the end of the buffer to create an overlap with the next section
+                            let overlap_buffer: Vec<Nucleotide> = buffer[buffer_index-overlap_len..].to_vec();
+                            // Encode the data and write to temporary file
+                            let sequence_block_filename = process_buffer_into_sequenceblock(
+                                &buffer,
+                                &current_key,
+                                block_start,
+                                temp_dir,
+                                &nucleotide_selector,
+                                rng,
+                            )?;
 
-                                // record sequence block filename for later retrieval
-                                block_filenames.push(sequence_block_filename);
+                            // record sequence block filename for later retrieval
+                            block_filenames.push(sequence_block_filename);
 
-                                // Set start point for recording next block, offset to account for the overlap
-                                block_start += BUFSIZE-overlap_len;
-                                // Reset primary buffer and index
-                                buffer = [X; BUFSIZE];
-                                // We checked above that overlap_len < BUFSIZE, so we are safe from overflowing the buffer
-                                buffer_index = 0;
-                                for i in 0..overlap_len {
-                                    buffer[i] = overlap_buffer[i];
-                                    // increment, which will leave buffer_index = overlap len < BUFSIZE so we are safe from 
-                                    // overflowing the buffer.
-                                    buffer_index += 1;
-                                    // Note that we are specifically NOT incrementing the contig length, as these bases
-                                    // have already been counted.
-                                }
+                            // Set start point for recording next block, offset to account for the overlap
+                            block_start += BUFSIZE-overlap_len;
+                            // Reset primary buffer and index
+                            buffer = [X; BUFSIZE];
+                            // We checked above that overlap_len < BUFSIZE, so we are safe from overflowing the buffer
+                            buffer_index = 0;
+                            for i in 0..overlap_len {
+                                buffer[i] = overlap_buffer[i];
+                                // increment, which will leave buffer_index = overlap len < BUFSIZE so we are safe from 
+                                // overflowing the buffer.
+                                buffer_index += 1;
+                                // Note that we are specifically NOT incrementing the contig length, as these bases
+                                // have already been counted.
                             }
-                            buffer[buffer_index] = Nucleotide::from(char);
-                            buffer_index += 1;
-                            contig_length += 1;
                         }
+                        buffer[buffer_index] = Nucleotide::from(char);
+                        buffer_index += 1;
+                        contig_length += 1;
                     }
                 }
             },
@@ -259,7 +364,6 @@ pub fn read_fasta(
     }
     if contig_order.is_empty() {
         error!("There were no contigs to read. Either all were filtered out or none were present in the fasta.");
-        debug!("Skip contig set to {}", skip_contig);
         return Err(FastaReaderError::ReadFastaError)
     }
     // End of file reached, write the last sequence and finish the final contig,
@@ -285,14 +389,11 @@ pub fn read_fasta(
 
     // any new data was written, now we add the final block to the contig
     // Add the contig to the list
-    if !skip_contig {
-        // If skip contig is true, then we skipped the last contig and there is nothing to write.
-        contigs.push(Contig::new(
-            current_key.clone(),
-            contig_length.clone(),
-            block_filenames.clone(),
-        )?);
-    }
+    contigs.push(Contig::new(
+        current_key.clone(),
+        contig_length.clone(),
+        block_filenames.clone(),
+    )?);
 
     // Return box object with final FastaMap object, which will be used for processing
     Ok(Box::new(
@@ -321,7 +422,6 @@ fn extract_key_name(full_name: &str) -> String {
     full_name[..delim_index].to_string()
 }
 
-
 fn map_sequence(sequence: &[Nucleotide]) -> Result<Vec<SequenceMap>, FastaReaderError> {
     // This is a 2D vector map representing the regions of the string of DNA.
     // example: If a DNA strand looks like this:
@@ -339,10 +439,11 @@ fn map_sequence(sequence: &[Nucleotide]) -> Result<Vec<SequenceMap>, FastaReader
     let first_base = sequence[0];
     // Many sequences start with unknown bases (telomeres), usually composed
     // of highly repetitive regions that are difficult to distinguish for the
-    // sequencer and difficult to align later. So we will try to skip those.
+    // sequencer and difficult to align later. These can be represented by N or sometimes lower
+    // case bases. So we will try to skip those.
     // Also, failing to check this was resulting in a first map element of (0, 0, NonNRegion)
     match first_base {
-        N => {
+        N | X | Maskeda | Maskedc | Maskedg | Maskedt => {
             // Process the N region
             // set the flag correctly to avoid issues later
             inside_n_region = true;
@@ -376,7 +477,7 @@ fn map_sequence(sequence: &[Nucleotide]) -> Result<Vec<SequenceMap>, FastaReader
     // Now we process the block
     for base in remainder {
         match base {
-            Nucleotide::N => {
+            N | X | Maskeda | Maskedc | Maskedg | Maskedt => {
                 if inside_n_region {
                     // We are already inside an n region, so we just need to increment
                     region_end += 1
@@ -431,7 +532,7 @@ fn process_buffer_into_sequenceblock(
     for item in buffer {
         match item {
             N => {
-                buffer_to_write.push(nucleotide_selector.sample_bases(rng.random()?));
+                buffer_to_write.push(nucleotide_selector.sample_bases(rng.random()?).get_masked());
             },
             X => {
                 //skip
@@ -534,7 +635,6 @@ mod tests {
             nucleotide_selector,
             350,
             &temp_dir,
-            None,
             &mut rng,
         ).unwrap();
         assert_eq!(test_map.contig_order[0], "H1N1_HA".to_string());

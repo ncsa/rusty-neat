@@ -255,7 +255,6 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
                         config.read_len,
                         frag_start,
                         config.coverage,
-                        config.paired_ended,
                         &fragment_length_model,
                         rng,
                     )?;

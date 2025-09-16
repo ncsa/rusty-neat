@@ -66,6 +66,8 @@ of a block read by the fasta reader. An improvement may be to give the exact coo
 
 Reading Bed Data
 ================
+Rusty-neat can now read bed data and filter the reads based on regions specified. This comes with some caveats. First is that rust can't handle any header lines or non-header rows. Second, the names must match what is in the fasta. Third, rusty-neat can only filter, and does not use the rest of the bed. If this is an issue please raise an issue and we will see about adding more features.
+
 Bed data will have some challenges. For example, if the contig names in the bed file don't match the assumed contig name from the fasta file, how will rust be able to know which is what? To make things work, we are going to assume, for now, that the bed file contig names match the names as derived by rusty-neat. To determine this:
 
 First, in a linux terminal, use your input fasta to find the names of the contigs like this:

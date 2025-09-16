@@ -7,7 +7,7 @@
 use crate::common::{
     models::fragment_length::FragmentLengthModel,
 };
-use log::debug;
+use log::*;
 use std::collections::VecDeque;
 use simple_rng::NeatRng;
 use crate::errors::GenerateReadsErrors;
@@ -15,6 +15,7 @@ use crate::errors::GenerateReadsErrors;
 pub fn generate_fragments(
     sequence_length: usize,
     read_length: usize,
+    max_del_len: usize,
     start: usize,
     coverage: usize,
     fragment_model: &FragmentLengthModel,
@@ -31,15 +32,25 @@ pub fn generate_fragments(
     // This takes a mutated sequence and produces a set of reads based on the mutated sequence. For
     // paired ended reads, this will generate a set of reads from each end, by taking the reverse
     // complement in the output
-
-    // todo We need to select for non-N areas for the reads, or at least have reads be more than 1/2
-    //  true bases, I think.
+    //
     let mut fragment_pool: Vec<usize> = Vec::new();
+    // First thing we'll do is throw out regions where we can't get a full read.
+    // Adding the 2 * max_del_len should ensure we are sufficiently padded.
+    if sequence_length <= (read_length + (max_del_len * 2)) {
+        debug!("Sequence length was too short, maybe because of a small bed region.");
+        return Ok(Vec::new())
+    }
+    
     let num_frags = (sequence_length / read_length) * coverage;
     // add fragments to the fragment pool
     for _ in 0..num_frags {
         let frag = fragment_model.generate_fragment(rng.random()?)?;
-        fragment_pool.push(frag);
+        // filter fragments
+        if frag < read_length {
+            continue
+        } else {
+            fragment_pool.push(frag);
+        }
     }
     // Generate a vector of read positions
     debug!("Generating read coordinates.");
@@ -90,6 +101,7 @@ fn cover_dataset(
     if fragment_pool.is_empty() {
         // Changing this from a default condition to an error condition. Let's just try
         // always generating the fragments.
+        error!("Bug: fragment pool was empty, exiting for debug.");
         return Err(GenerateReadsErrors::GenerateFragmentsError)
     } else {
         // shuffle the fragment pool
@@ -193,6 +205,7 @@ mod tests {
             2000,
             read_length,
             0,
+            0,
             coverage,
             &fragment_model,
             &mut rng,
@@ -217,6 +230,7 @@ mod tests {
             sequnce.len(),
             read_length,
             0,
+            0,
             coverage,
             &fragment_model,
             &mut rng,
@@ -226,6 +240,7 @@ mod tests {
         let run2 = generate_fragments(
             sequnce.len(),
             read_length,
+            0,
             0,
             coverage,
             &fragment_model,
@@ -249,6 +264,7 @@ mod tests {
         let reads = generate_fragments(
             sequence.len(),
             read_length,
+            0,
             0,
             coverage,
             &fragment_model,

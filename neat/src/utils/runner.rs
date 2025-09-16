@@ -2,6 +2,7 @@ use common::file_tools::bed_reader::read_bed;
 use common::file_tools::fasta_reader::filter_fasta_with_bed;
 use common::file_tools::file_io::create_output_file;
 use common::structs::bed::BedRecord;
+use common::structs::variants::VariantType;
 use tempfile;
 use std::time;
 use log::{info, debug, error};
@@ -215,6 +216,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
                 .trunc()
                 as usize;
             debug!("Adding {} mutations to block {:?}", num_mutations, block_filename);
+            let mut max_del_len = 0;
             // Generate any relevant mutations
             if num_mutations > 0 {
                 // first we generate variants for the block
@@ -229,7 +231,16 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
                 match result {
                     Some(vec) => {
                         // Add variants 
-                        block_variants.extend(vec);
+                        for variant in vec {
+                            if variant.variant_type == VariantType::Deletion {
+                                // -1 because we're ignoring the reference base
+                                if variant.reference.len() - 1 > max_del_len {
+                                    // This will get us the maximum del length.
+                                    max_del_len = variant.reference.len() - 1
+                                }
+                            }
+                            block_variants.push(variant);
+                        }
                     },
                     None => {
                         // No variants for this block
@@ -253,6 +264,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
                     let frags = generate_fragments(
                         frag_end-frag_start,
                         config.read_len,
+                        max_del_len,
                         frag_start,
                         config.coverage,
                         &fragment_length_model,

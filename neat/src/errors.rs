@@ -77,5 +77,7 @@ pub enum GenerateReadsErrors {
     #[error("FastqTools error: {0}")]
     FqToolsError(#[from] FastqToolsError),
     #[error("Bed reader error: {0}")]
-    BedError(#[from] BedReaderError)
+    BedError(#[from] BedReaderError),
+    #[error("Sequence too short to process")]
+    ShortSequence
 }

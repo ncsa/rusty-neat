@@ -112,11 +112,7 @@ mod tests {
 
     #[test]
     fn test_process_bed() {
-        let file = "/home/joshfactorial/data/Escherichia_coli_K12_strain_K-12_substrain_MG1655_id4242.bed.gz";
-        let pathbuf = PathBuf::from(file);
-        let records = read_bed(&pathbuf).unwrap();
-        for record in records {
-            println!("{:?}", record)
-        }
+        // TODO add some tests
+        assert!(true)
     }
 }

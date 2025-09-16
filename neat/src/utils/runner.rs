@@ -201,15 +201,17 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
                 continue
             }
             let mut bias_map: Vec<f64> = vec![0.0; current_block.get_len()];
-            for region in regions_of_interest {
+            let mut num_mutable_area = 0.0;
+            for region in &regions_of_interest {
                 // all of these have RegionType::NonNRegion
                 // This is where we might apply bias
                 for j in region.start..region.end {
                     bias_map[j] = 1.0;
+                    num_mutable_area += 1.0;
                 }
             }
             // determine the number of mutations for this segment
-            let num_mutations = (current_block.get_len() as f64 * config.mutation_rate)
+            let num_mutations = (num_mutable_area * config.mutation_rate)
                 .trunc()
                 as usize;
             debug!("Adding {} mutations to block {:?}", num_mutations, block_filename);
@@ -236,15 +238,33 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
             }
             
             // blocks get returned sorted
-            let block_fragments: Vec<(usize, usize)> = generate_fragments(
-                current_block.get_len(),
-                config.read_len,
-                current_block.get_start()?,
-                config.coverage,
-                config.paired_ended,
-                &fragment_length_model,
-                rng,
-            )?;
+            // We need to iterate over the bed map for this region to generate reads. 
+            // We can use the non-n regions map to find places, too
+
+            let block_fragments: Vec<(usize, usize)> = {
+                let mut temp_regions: Vec<(usize, usize)> = Vec::new();
+                // find matching region.
+                // if next region is within a read, maybe we'll use the whole thing.
+                for region in regions_of_interest {
+                    temp_regions.push((region.start, region.end));
+                }
+                let mut block_frags = Vec::new();
+                for (frag_start, frag_end) in temp_regions {
+                    let frags = generate_fragments(
+                        frag_end-frag_start,
+                        config.read_len,
+                        frag_start,
+                        config.coverage,
+                        config.paired_ended,
+                        &fragment_length_model,
+                        rng,
+                    )?;
+                    if !frags.is_empty() {
+                        block_frags.extend_from_slice(&frags);
+                    }
+                }
+                block_frags.clone()
+            };
 
             let mutated_map = MutatedMap::new(
                 block_filename.to_path_buf(),
@@ -269,10 +289,8 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
                     writer1, Compression::default()
                 );
                 let read_name_prefix = format!(
-                    "neat_generated_{}_{:010}_{:010}_",
+                    "neat_generated_{}_",
                     current_block.contig,
-                    current_block.get_start()?,
-                    current_block.get_end()?,
                 );
                 if config.paired_ended {
                     let mut file_to_write_2 = PathBuf::from(working_dir.path());

@@ -90,8 +90,8 @@ impl SequenceMap {
         }
     }
 
-    pub fn increment_end(&mut self) {
-        self.end += 1;
+    pub fn increment_end(&mut self, num: usize) {
+        self.end += num;
     }
 }
 

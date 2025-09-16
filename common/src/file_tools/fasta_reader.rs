@@ -449,7 +449,7 @@ fn map_sequence(sequence: &[Nucleotide]) -> Result<Vec<SequenceMap>, FastaReader
             inside_n_region = true;
             for base in &sequence[1..] {
                 match base {
-                    N => {
+                    N | X | Maskeda | Maskedc | Maskedg | Maskedt => {
                         region_end += 1;
                     },
                     _ => {

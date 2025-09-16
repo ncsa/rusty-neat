@@ -1,11 +1,6 @@
 //! This contains only one function at the moment, a general opener and reader
 use std::io::{
-    BufReader, 
-    BufRead, 
-    Result, 
-    Lines, 
-    self, 
-    Write
+    self, BufRead, BufReader, Lines, Read, Result, Write
 };
 use std::fs::File;
 use std::path::PathBuf;
@@ -72,5 +67,13 @@ impl Write for VectorBuffer {
         // In this case, flushing does nothing because
         // VectorBuffer only simulates buffering to stdout or other medium
         Ok(())
+    }
+}
+
+impl Read for VectorBuffer {
+    fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
+        let val = self.buffer[0];
+        self.buffer = Vec::from(&self.buffer[1..]);
+        Ok(val as usize)
     }
 }

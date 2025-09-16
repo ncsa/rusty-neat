@@ -94,6 +94,9 @@ fn main() -> Result<(), GenerateReadsErrors> {
     let result = run_neat(&Box::new(config), &mut rng);
     match result {
         Ok(()) => Ok(()),
-        Err(error) => return Err(GenerateReadsErrors::MainError(Box::new(error))),
+        Err(error) => {
+            error!("Main returned an error {:?}", error);
+            return Err(GenerateReadsErrors::MainError(Box::new(error)))
+        },
     }
 }

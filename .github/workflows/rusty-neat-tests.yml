@@ -3,9 +3,9 @@ name: rusty-neat-tests
 on:
   workflow_dispatch:
   push:
-    branches: [ "main", "feature/develop_tests" ]
-  pull_request:
     branches: [ "main" ]
+  pull_request:
+    branches: [ "main", "develop" ]
 
 env:
   CARGO_TERM_COLOR: always

@@ -49,6 +49,15 @@ pub enum FastqToolsError {
     MalformedReadError(String),
     #[error("Strand value must either be 1 or 2, received {0}")]
     StrandError(usize),
+    #[error("Truncated read {0}")]
+    TruncatedRead(String),
+    #[error("Reverse read with read_end > read_start")]
+    MalformedReverseRead,
+}
+
+pub enum Strand {
+    Forward,
+    Reverse,
 }
 
 fn reverse_complement(sequence: Vec<Nucleotide>) -> Vec<Nucleotide> {
@@ -114,36 +123,68 @@ pub fn write_block_fastq<T: Write, W: Write> (
         }
 
         let quality_scores_1 = quality_score_model.generate_quality_scores(read_length, rng)?;
-        apply_variants_and_write_sequence(
+        let result = apply_variants_and_write_sequence(
             &fragment,
             &reads1_flagged,
             &read1_variants,
             read_length,
             &read_name_prefix,
             counter,
-            1,
+            start,
+            end,
+            Strand::Forward,
             buffer1,
             quality_scores_1,
             sequencing_error_model,
             rng,
-        )?;
+        );
+        match result {
+            Ok(()) => {
+                // all good
+            },
+            Err(err) => {
+                match err {
+                    FastqToolsError::TruncatedRead(messg) => {
+                        debug!("{}", messg);
+                        continue
+                    },
+                    _ => return Err(err)
+                }
+            }
+        }
 
         if paired_ended {
             // open second buffer
             let quality_scores_2 = quality_score_model.generate_quality_scores(read_length, rng)?;
-            apply_variants_and_write_sequence(
-                &reverse_complement(fragment),
+            let result = apply_variants_and_write_sequence(
+                &(reverse_complement(fragment)),
                 &reads2_flagged,
                 &read2_variants,
                 read_length,
                 &read_name_prefix,
                 counter,
-                2,
+                start,
+                end,
+                Strand::Reverse,
                 buffer2,
                 quality_scores_2,
                 sequencing_error_model,
                 rng,
-            )?;
+            );
+            match result {
+                Ok(()) => {
+                    // all good
+                },
+                Err(err) => {
+                    match err {
+                        FastqToolsError::TruncatedRead(messg) => {
+                            debug!("{}", messg);
+                            continue
+                        },
+                        _ => return Err(err)
+                    }
+                }
+            }
         }
         counter += 1;
     }
@@ -154,7 +195,6 @@ pub fn combine_temp_fastqs(
     files: Vec<PathBuf>, 
     final_filename: &PathBuf, 
     shuffle: bool, 
-    overwrite: bool
 ) -> Result<(), FastqToolsError> {
     // This will take all the temporary fastqs we wrote out on a per-block level and 
     // combine them into one fastq. An improvement here might be to randomize the order:
@@ -162,11 +202,6 @@ pub fn combine_temp_fastqs(
     // of indexes. We'll make that optional.
     if shuffle {
         warn!("Fastq shuffle implementation not yet ready, proceeding with ordered fastq")
-    }
-    if final_filename.is_file() && !overwrite {
-        return Err(FastqToolsError::FastqWriteError(
-            format!("Overwrite is false, but file with this name found. Please remove file: {:?}", final_filename)
-        ))
     }
     let final_file = append_to_file(final_filename)?;
     let buffer = GzEncoder::new(final_file, Compression::default());
@@ -192,7 +227,9 @@ fn apply_variants_and_write_sequence<T: Write> (
     read_length: usize,
     read_name_prefix: &str,
     read_num: usize,
-    read_strand: usize,
+    fragment_start: usize,
+    fragment_end: usize,
+    read_strand: Strand,
     buffer: &mut GzEncoder<T>,
     quality_scores: Vec<usize>,
     sequencing_error_model: &SequencingErrorModel,
@@ -202,43 +239,90 @@ fn apply_variants_and_write_sequence<T: Write> (
     // as applicable.
     // we start by writing the read name:
     // Write read name
+    if sequence.len() < read_length {
+        // truncated read
+        return Err(FastqToolsError::TruncatedRead(format!("{:?}", sequence)))
+    }
+
+    let (name_start, name_end) = {
+        match read_strand {
+            Strand::Forward => {
+                (fragment_start, fragment_end)
+            },
+            Strand::Reverse => {
+                (fragment_end, fragment_start)
+            }
+        }
+    };
+    let name_strand = {
+        match read_strand {
+            Strand::Forward => 1,
+            Strand::Reverse => 2,
+        }
+    };
     buffer.write(
-        format!("@{}{}:{}\n", 
-        &read_name_prefix, 
+        format!("@{}_{:010}_{:010}_{}:{}\n", 
+        &read_name_prefix,
+        name_start,
+        name_end,
         &read_num, 
-        read_strand
+        name_strand,
     ).as_bytes())?;
     // Use a while loop so we can skip for deletions
     // To figure out where we are on the contig, we use the reference_read_position. This helps us find relevant variants
-    let mut reference_position = 0;
+    let index_remap = {
+        let mut temp_remap: HashMap<usize, usize> = HashMap::new();
+        match read_strand {
+            Strand::Forward => {
+                let read_coords: Vec<usize> = (0..fragment_end).collect();
+                for j in 0..fragment_end {
+                    temp_remap.insert(j, read_coords[j]);
+                }
+            },
+            Strand::Reverse => {
+                let read_coords: Vec<usize> = (0..fragment_end).rev().collect();
+                for j in 0..fragment_end {
+                    temp_remap.insert(j, read_coords[j]);
+                }
+            },
+        }
+        temp_remap
+    };
     let mut bases_written = 0;
-    let mut seq = String::new();
-    let mut quality_del_offset = 0;
-    while (reference_position < sequence.len()) && (bases_written < read_length) {
-        let reference_base = sequence[reference_position];
+    let mut out_seq = String::new();
+    let mut quality_index = 0;
+    // we'll need to keep track of thing forward-ways even though we are going reverse
+    let mut seq_index = 0;
+    'outer: while (seq_index < fragment_end) && (bases_written < read_length) {
+        let fragment_position = index_remap[&seq_index];
+        // if masked, this will give us an unmasked base. If not, it returns the original base
+        let reference_base = sequence[seq_index].get_unmasked_base();
         let mut base_to_write: Vec<Nucleotide> = vec![reference_base];
         // Figure out what to actually write at this position
         if reference_base == N {
-            // skip this block
-        } else if flagged_positions.contains(&reference_position) {
+            // Don't try to modify this base.
+        } else if flagged_positions.contains(&fragment_position) {
             // Potentially contains a mutation, so we will write that, if applicable
-            let variant = variant_map[&reference_position];
-            match variant.genotype {
-                Genotypes::Heterozygous => {
-                    // sequence splicing isn't going to work because if I change the sequence, then it throws off my positions.
-                    // 50/50 chance it gets applied
-                    if rng.random()? < 0.5 {
-                        base_to_write = variant.alternate.clone();
+            let variant = variant_map[&fragment_position];
+            // alwas apply homozygous mutations, but only half the time for heterozygous
+            if (variant.genotype == Genotypes::Homozygous) || (rng.random()? < 0.5) {
+                base_to_write = {
+                    match read_strand {
+                        Strand::Forward => variant.alternate.clone(),
+                        Strand::Reverse => {
+                            // We need the complement of each base
+                            let mut temp = Vec::new();
+                            for base in &variant.alternate {
+                                temp.push(base.complement())
+                            }
+                            temp
+                        },
                     }
-                },
-                Genotypes::Homozygous => {
-                    // Always applied
-                    base_to_write = variant.alternate.clone()
-                },
+                }
             }
         } else {
             // if no variant, test for an error
-            let score = quality_scores[reference_position - quality_del_offset];
+            let score = quality_scores[quality_index];
             let prob = sequencing_error_model.convert_score(score)?;
             if rng.random()? < prob {
                 // This position contains a sequencing error
@@ -249,49 +333,51 @@ fn apply_variants_and_write_sequence<T: Write> (
                     SequencingErrorType::SnpError(base) => {
                         debug!("Snp error");
                         // write out new base, keep quality scores unchanged 
-                        // We're converting this from our simplified representation to standard utf-8 character encoding to write to file
+                        // We're converting this from our simplified representation 
+                        // to standard utf-8 character encoding to write to file
                         base_to_write = vec![base];
                     },
                     SequencingErrorType::DeletionError(length) => {
                         debug!("Deletion error");
                         // skip `length` bases, leave quality scores untouched (because it's close enough)
                         // First we check to make sure we haven't deleted too many bases this read
-                        if reference_position + length >= sequence.len() {
+                        if seq_index + length >= fragment_end {
                             // In this case, we would be deleting too many bases, so we'll skip
                         } else {
-                            // for a deletion, we still writet the reference base, then we skip the next length bases
-                            // base_to_write remains unchanged
-                            quality_del_offset += length;
-                            reference_position += length;
+                            // for a deletion, we still write the reference base, then we skip the next 
+                            // length bases base_to_write remains unchanged
+                            seq_index += length;
                         }
                     },
                     SequencingErrorType::InsertionError(vec) => {
                         debug!("Insertion error");
                         // Write out current base, then insertion vec with low quality scores, but don't increment index,
                         // so the next base is the one originally following the current base
-                        let mut insert_len = vec.len();
+                        let insert_len = vec.len();
                         let mut insertion: Vec<Nucleotide> = Vec::new();
+                        // We push the complement here because we are planning to reverse complement the insertion
                         insertion.push(reference_base);
-                        // We have to be careful here not to write out more bases than a read length, for insertions
-                        // at the ends of the reads. The +1 signifies the reference_base already included
-                        if bases_written + insert_len >= read_length {
-                            // If the insertion takes us past the read_length, we'll trim the insertion
-                            insert_len = bases_written + insert_len - read_length;
-                        };
+                        // Create insertion
                         for i in 0..insert_len {
                             insertion.push(vec[i])
                         }
+                        base_to_write = insertion;
                     }
                 }
             }
         }
         for base in base_to_write {
-            seq.push(base.into());
+            out_seq.push(base.into());
             bases_written += 1;
+            if bases_written == read_length {
+                // this ensures we don't write too many bases, especially for an insertion
+                continue 'outer
+            }
         }
-        reference_position += 1;
+        seq_index += 1;
+        quality_index += 1;
     } 
-    buffer.write(&seq.into_bytes())?;
+    buffer.write(&out_seq.into_bytes())?;
     // Read has been written at this point
     
     // Write out the plus sign spacer
@@ -321,6 +407,67 @@ mod tests {
     use crate::structs::variants::{Variant, VariantType};
     use crate::structs::nucleotides::Nucleotide::*;
     use std::fs;
+  
+    #[test]
+    fn test_write_reverse() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut temp_file = PathBuf::from(temp_dir.path());
+        temp_file.push("test.fastq.gz");
+        let mut temp_writer = create_output_file(&temp_file, true).unwrap();
+        let original_seq = vec![A, C, C, G, A, A, T, G, A];
+        let rev_comp_seq = reverse_complement(original_seq);
+        let expected_rev_comp = vec![T, C, A, T, T, C, G, G, T];
+        assert_eq!(expected_rev_comp, rev_comp_seq);
+        // We won't have any variants
+        let flagged_positions: Vec<usize> = Vec::new();
+        let variant_map: HashMap<usize, &Variant> = HashMap::new();
+        let read_len = 4;
+        let read_name_prefix = "neat_gen_";
+        let read_num = 1;
+        let fragment_start = 0;
+        let fragment_end = 9;
+        let mut buffer = GzEncoder::new(&mut temp_writer, Compression::default());
+        let quality_scores = vec![32, 32, 32, 32];
+        let sequencing_error_model = SequencingErrorModel::default().unwrap();
+        let mut rng = NeatRng::new_from_seed(&vec![
+            "Hello".to_string(),
+            "Cruel".to_string(),
+            "World".to_string(),
+        ]).unwrap();
+        let result = apply_variants_and_write_sequence(
+            &rev_comp_seq,
+            &flagged_positions,
+            &variant_map,
+            read_len,
+            read_name_prefix,
+            read_num,
+            fragment_start,
+            fragment_end,
+            Strand::Reverse,
+            &mut buffer,
+            quality_scores,
+            &sequencing_error_model,
+            &mut rng,
+        );
+        assert!(result.unwrap() == ());
+        buffer.flush().unwrap();
+        let temp_reader = read_gzip_lines(&temp_file).unwrap();
+        let seq_line: String = {
+            let mut rtrn = String::new();
+            for line in temp_reader {
+                let l = line.unwrap().to_string();
+                if l.starts_with("@") {
+                    // skip name line
+                } else {
+                    rtrn = l;
+                    break
+                }
+            }
+            rtrn
+        };
+        let exp_rev_cmp_str = "TCAT".to_string();
+        assert_eq!(seq_line, exp_rev_cmp_str);
+    }
 
     #[test]
     fn test_qual_score_to_write() {
@@ -376,7 +523,9 @@ mod tests {
             8, 
             read_name_prefix, 
             1, 
-            1,
+            0,
+            8,
+            Strand::Forward,
             &mut buffer, 
             qual_scores, 
             &sequencing_error_model, 

@@ -5,7 +5,7 @@ As of now, rusty-neat is still under development. This is our 1.0.0 version, but
 
 # How to use rusty-neat
 
-Download the executable in the release (current version 1.0.0).
+Download the executable in the release (current version 1.1.2).
 
 ```
 ./rusty-neat -h
@@ -51,7 +51,7 @@ or for a configuration file:
 ```
 If you record the output in the logs of Seed string to regenerate these exact results: XXXXXXX, you should be able to use that string as input with rng_seed and reproduce your results (untested as of yet).
 
-##Fastq Output
+Fastq Output
 ============
 the fastq output will have a key name that identifies the block where teh read was drawn from. This should allow you to asseses how well the aligner funcution. The name will have the format <contig short name>_<block start>_<block_end>
 
@@ -63,5 +63,42 @@ CTTTTCATTCTGACTGCAACGGGCAATATGTCTCTGTGTGGATTAAAAAAAGAGTGTCTGATAGCAGCTTCTTAACTGGT
 ```
 For example, comes from the chromosome in the reference (which was simply named "Chromosome") between 0 and 131072, which is the size 
 of a block read by the fasta reader. An improvement may be to give the exact coordinates of the read. We will continue to think about bam creation, but this may be a good method as well to see how well the alignment worked. Perhaps we could write a processing script that took the output of GATK alignment and checked to see how well the reads were aligned relative to where they came from. That might be easier than writing bam tools.
+
+Reading Bed Data
+================
+Rusty-neat can now read bed data and filter the reads based on regions specified. This comes with some caveats. First is that rust can't handle any header lines or non-header rows. Second, the names must match what is in the fasta. Third, rusty-neat can only filter, and does not use the rest of the bed. If this is an issue please raise an issue and we will see about adding more features.
+
+Bed data will have some challenges. For example, if the contig names in the bed file don't match the assumed contig name from the fasta file, how will rust be able to know which is what? To make things work, we are going to assume, for now, that the bed file contig names match the names as derived by rusty-neat. To determine this:
+
+First, in a linux terminal, use your input fasta to find the names of the contigs like this:
+
+```angular2html
+$ grep "^>" input.fasta
+>NC_001133.9 Saccharomyces cerevisiae S288C chromosome I, complete sequence
+>NC_001134.8 Saccharomyces cerevisiae S288C chromosome II, complete sequence
+>NC_001135.5 Saccharomyces cerevisiae S288C chromosome III, complete sequence
+>etc
+```
+This will give you the fill fasta name. Rusty-neat determines the short name of the input fasta by skipping the initial '>' character, then taking the string up to the first delimiter (space or '|'). In the above example, the short names are "NC_001133.9", "NC_001134.8", etc. 
+
+Next, we check the bed. This example awk command will look for unique values in the first column of your bed file and print out what it finds. 
+
+```angular2html
+$ awk '!seen[$1]++ {print $1}' file.bed
+1
+2
+3
+etc
+```
+In this case, the bed file uses a simple numbering scheme to number the chromosomes. We can see a mapping with the roman numeral chromosomes in the name, but it's tricky to program. So, the following command will allow you, the user, to map these chromosomes and thus instruct NEAT. Yours will vary based on the inputs.
+
+```angular2html
+awk -F'\t' '{$1=($1=="1"?"NC_001133.9":$1); $1=($1=="2"?"NC_001134.8":$1); print}' OFS='\t' file.bed > file_renamed.bed
+```
+You will have to tailor this command to your dataset, but this will allow you to map the names from the bed to the fasta in a way rusty-neat will understand.
+
+Try it out and let us know if you run into any issues!
+
+We will continue to improve this process in the future. If you have suggestions for parsing names to facilitate this, let us know in the Issues section!
 
 That's it so far! Test out the features and let us know what you think!

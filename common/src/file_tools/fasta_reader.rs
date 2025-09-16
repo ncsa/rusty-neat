@@ -10,28 +10,31 @@
 //! Eventually, we will add a write fasta function to write out output fasta files, but there's 
 //! some simulation details to work out and it is low-priority.
 use std::collections::HashMap;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io;
+use log::*;
 use std::path::PathBuf;
 use tempfile::TempDir;
 use crate::file_tools::file_io::read_lines;
-use crate::structs::fasta_map::{
-    Contig,
-    FastaMap,
-    FastaMapError,
-    SequenceBlock,
-    SequenceMap,
-    RegionType::{
-        NRegion,
-        NonNRegion
+use crate::structs::{
+    fasta_map::{
+        Contig,
+        FastaMap,
+        FastaMapError,
+        SequenceBlock,
+        SequenceMap,
+        RegionType::{
+            NRegion,
+            NonNRegion
+        },
+    },
+    bed::BedRecord,
+    nucleotides::{
+        Nucleotide,
+        Nucleotide::{N, X, Maskeda, Maskedc, Maskedg, Maskedt},
+        NucleotideSelector,
     },
 };
-use crate::structs::nucleotides::{
-    Nucleotide,
-    Nucleotide::{N, X},
-    NucleotideSelector
-};
-use log::error;
 use simple_rng::{NeatRng, NeatRngError};
 use thiserror::Error;
 
@@ -45,19 +48,151 @@ pub enum FastaReaderError {
     #[error("IO error while reading fasta file")]
     IoError(#[from] io::Error),
     #[error("Error interfacing with FastaMap: {0}")]
-    FastaMapInterfaceError(FastaMapError),
+    FastaMapInterfaceError(#[from] FastaMapError),
     #[error("Error in fasta block name")]
     FastaBlockNameError,
     #[error("Error in random number generator: {0}")]
     RngError(#[from] NeatRngError),
 }
 
-impl From<FastaMapError> for FastaReaderError {
-    fn from(error: FastaMapError) -> Self {
-        FastaReaderError::FastaMapInterfaceError(error)
-    }
-}
+pub fn filter_fasta_with_bed(
+    fasta_map: Box<FastaMap>,
+    inculsion_bed: Vec<BedRecord>,
+) -> Result<Box<FastaMap>, FastaReaderError> {
+    let mut bed_mask: HashMap<String, Vec<bool>> = HashMap::new();
+    if !inculsion_bed.is_empty() {
+        let mut relevant_records: HashMap<String, Vec<BedRecord>> = HashMap::new();
+        let mut covered_contigs = Vec::new();
+        let mut record_lens = Vec::new();
+        for record in inculsion_bed {
+            if !relevant_records.contains_key(&record.get_contig()) {
+                relevant_records.insert(record.get_contig(), Vec::new());
+            }
+            if let Some(temp) = relevant_records.get_mut(&record.get_contig()) {
+                temp.push(record.clone())
+            };
+            // We're planning to write each bed block separately. This would seem to make more sense 
+            // than jamming disparate pieces together.
+            record_lens.push(record.len());
 
+            if !covered_contigs.contains(&record.get_contig()) {
+                covered_contigs.push(record.get_contig());
+            }
+        }
+        for contig in &fasta_map.contigs {
+            let vec_len = contig.contig_len;
+            // Since this in an inclusion bed, we will assume false unless it is 
+            // in the bed file
+            let mut mask = vec![false; vec_len];
+            if covered_contigs.contains(&contig.name) {
+                for bed_record in &relevant_records[&contig.name] {
+                    for i in bed_record.start..bed_record.end {
+                        mask[i] = true;
+                    }
+                }
+                bed_mask.insert(contig.name.clone(), mask.clone());
+            } else {
+                // Do not insert this contig in the bed mask at all.
+                debug!("Omitting contig {} from consideration due to bed filtering", &contig.name);
+            }
+        }
+    } else {
+        for contig in &fasta_map.contigs {
+            let vec_len = contig.contig_len;
+            let mask = vec![true; vec_len];
+            bed_mask.insert(contig.name.clone(), mask.clone());
+        }
+    }
+    
+    // Contigs are entire sequences in a fasta. This will vector will essentially be a map of the
+    // fasta file.
+    let mut new_contigs: Vec<Contig> = Vec::new();
+    // This is a vector of filenames from which we can reconstruct the sequence_block.
+    let mut new_block_filenames: Vec<PathBuf> = Vec::new();
+    // Process the file
+    for contig in &fasta_map.contigs {
+        if bed_mask.contains_key(&contig.name) {
+            let mask_vec = &bed_mask[&contig.name];
+            
+            for block in &contig.blocks {
+                let current_block = SequenceBlock::from(&block)?;
+                let mut masked_sequence = current_block.get_seq_clone()?;
+                let start = current_block.get_start()?;
+                let end = current_block.get_end()?;
+                for i in start..end {
+                    match mask_vec[i] {
+                        true => {
+                            // No change required
+                        },
+                        false => {
+                            // Change required. We need the coordinates relative to the sequence position,
+                            // so we subtract the start point of this block from the index.
+                            let block_loc = i - start;
+                            masked_sequence[block_loc] = {
+                                match current_block.sequence[block_loc] {
+                                    Nucleotide::A => Nucleotide::Maskeda,
+                                    Nucleotide::C => Nucleotide::Maskedc,
+                                    Nucleotide::G => Nucleotide::Maskedg,
+                                    Nucleotide::T => Nucleotide::Maskedt,
+                                    Nucleotide::N => Nucleotide::X,
+                                    _ => Nucleotide::X
+                                }
+                            }
+                        },
+                    }
+                }
+                // We need to check if we have masked the entire sequence block, 
+                // because if so we can remove it from consideration
+                let mut all_masked = true;
+                for element in &masked_sequence {
+                    if !element.is_masked() {
+                        all_masked = false;
+                        break
+                    }
+                }
+                if !all_masked {
+                    let sequence_map = map_sequence(&masked_sequence)?;
+                    let mut new_block = SequenceBlock {
+                        contig: current_block.contig,
+                        ref_start: current_block.ref_start,
+                        ref_end: current_block.ref_end,
+                        sequence: masked_sequence,
+                        sequence_map,
+                    };
+                    let sequence_file_path = block.clone();
+                    // obliterate the old file
+                    let tmp_file = File::create(&sequence_file_path)?;
+                    // Overwrite with new data
+                    new_block.write_block(tmp_file)?;
+                    new_block_filenames.push(sequence_file_path);
+                } else {
+                    debug!("Skipping sequence block because all were masked.");
+                    fs::remove_file(block)?;
+                }
+            }
+            if !new_block_filenames.is_empty() {
+                new_contigs.push(Contig::new(
+                    contig.name.clone(),
+                    contig.contig_len,
+                    new_block_filenames.clone(),
+                )?);
+                new_block_filenames = Vec::new();
+            }
+        } else {
+            // Skip this contig
+            debug!("Contig {:?} was filtered out by bed file", contig.name)
+        }
+    }
+
+    let return_map = FastaMap { 
+        contigs: new_contigs, 
+        name_map: fasta_map.name_map.clone(), 
+        contig_order: fasta_map.contig_order.clone(),
+    };
+    debug!("Original fasta map replaced by bed_masked fasta: {:?}", fasta_map);
+    Ok(Box::new(return_map))
+
+}
 
 pub fn read_fasta(
     fasta_path: &PathBuf,
@@ -125,6 +260,7 @@ pub fn read_fasta(
                     if contig_length == 0 && current_key.is_empty() {
                         // in this case, this is the first loop, skip this section
                     } else if contig_length - block_start == 0 && !current_key.is_empty() {
+                        // If skip_contig is true, then we don't throw an error
                         // in this case, we had two contig names in a row and no sequence, which is an invalid FASTA
                         let name = name_map[&current_key].clone();
                         error!("Read for contig {} is empty. Please check file for proper FASTA format.", name);
@@ -160,7 +296,7 @@ pub fn read_fasta(
 
                         // Add the contig to the list
                         contigs.push(Contig::new(
-                            current_key,
+                            current_key.clone(),
                             contig_length,
                             block_filenames,
                         )?);
@@ -175,9 +311,11 @@ pub fn read_fasta(
                     }
                     // grab the name from the string, omitting the initial '>' character
                     let long_name = l[1..].to_string();
-                    current_key = extract_key_name(&long_name);
+                    let short_name = extract_key_name(&long_name);
+                    current_key = short_name;
                     name_map.entry(current_key.clone()).or_insert(long_name);
                     contig_order.push(current_key.clone());
+
                 } else {
                     for char in l.chars() {
                         // If we have filled the buffer, time to write the file and clear the buffer
@@ -223,6 +361,10 @@ pub fn read_fasta(
                 return Err(FastaReaderError::ReadFastaError) 
             },
         }
+    }
+    if contig_order.is_empty() {
+        error!("There were no contigs to read. Either all were filtered out or none were present in the fasta.");
+        return Err(FastaReaderError::ReadFastaError)
     }
     // End of file reached, write the last sequence and finish the final contig,
     // same as above, but with no need to reset anything.
@@ -280,7 +422,6 @@ fn extract_key_name(full_name: &str) -> String {
     full_name[..delim_index].to_string()
 }
 
-
 fn map_sequence(sequence: &[Nucleotide]) -> Result<Vec<SequenceMap>, FastaReaderError> {
     // This is a 2D vector map representing the regions of the string of DNA.
     // example: If a DNA strand looks like this:
@@ -298,16 +439,17 @@ fn map_sequence(sequence: &[Nucleotide]) -> Result<Vec<SequenceMap>, FastaReader
     let first_base = sequence[0];
     // Many sequences start with unknown bases (telomeres), usually composed
     // of highly repetitive regions that are difficult to distinguish for the
-    // sequencer and difficult to align later. So we will try to skip those.
+    // sequencer and difficult to align later. These can be represented by N or sometimes lower
+    // case bases. So we will try to skip those.
     // Also, failing to check this was resulting in a first map element of (0, 0, NonNRegion)
     match first_base {
-        N => {
+        N | X | Maskeda | Maskedc | Maskedg | Maskedt => {
             // Process the N region
             // set the flag correctly to avoid issues later
             inside_n_region = true;
             for base in &sequence[1..] {
                 match base {
-                    N => {
+                    N | X | Maskeda | Maskedc | Maskedg | Maskedt => {
                         region_end += 1;
                     },
                     _ => {
@@ -335,7 +477,7 @@ fn map_sequence(sequence: &[Nucleotide]) -> Result<Vec<SequenceMap>, FastaReader
     // Now we process the block
     for base in remainder {
         match base {
-            Nucleotide::N => {
+            N | X | Maskeda | Maskedc | Maskedg | Maskedt => {
                 if inside_n_region {
                     // We are already inside an n region, so we just need to increment
                     region_end += 1
@@ -390,7 +532,7 @@ fn process_buffer_into_sequenceblock(
     for item in buffer {
         match item {
             N => {
-                buffer_to_write.push(nucleotide_selector.sample_bases(rng.random()?));
+                buffer_to_write.push(nucleotide_selector.sample_bases(rng.random()?).get_masked());
             },
             X => {
                 //skip
@@ -423,10 +565,36 @@ fn process_buffer_into_sequenceblock(
     Ok(sequence_file_path)
 }
 
+pub fn count_fasta(filename: &PathBuf) -> Result<usize, FastaReaderError> {
+    let open_file = read_lines(filename)?;
+    let mut count = 0;
+    for raw_line in open_file {
+        match raw_line {
+            Ok(l) => {
+                if l.starts_with(">") {
+                    count += 1;
+                }
+            },
+            Err(error) => {
+                error!("Error reading fasta file! {:?}", error);
+                return Err(FastaReaderError::ReadFastaError)
+            }
+        }
+
+    }
+    Ok(count)
+}
+
 #[cfg(test)]
 mod tests {
     use walkdir::WalkDir;
     use super::*;
+
+    #[test]
+    fn test_count_fasta() {
+        // TODO add test
+        assert!(true)
+    }
 
     #[test]
     fn test_process_buffer_into_sequenceblock() {

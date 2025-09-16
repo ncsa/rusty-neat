@@ -40,3 +40,10 @@ Moved the code from a brach under NEAT (https://github.com/ncsa/neat) to its own
 # rusty-neat v1.1.0
 - We have refactored the fastq code. Now a temporary fastq is written to file per block read in by the fasta reader. This should allow us to parallelize the temporary fastqs. Then it's simply a matter of concatenating them together. Works great! I got through single-ended E coli depth 10 in 36 seconds. I got through paired-ended E coli in 78 seconds. 
 - Caveats: the fastqs are sorted by read start. Included in each name is the exact location where the sequence was drawn from. Now, when you run an alignment, the reads will be named in such a way that will have <chromosome name>_start-pos_length in the name, so you can shuffle the reads and run an alignment, and easily check to see if your alignment is in the correct contig and location.
+
+=========
+9/13/2025
+
+# rust-neat v1.1.2
+- I missed an intermediate version. Basically, it was converting to the command `neat gen-reads` instead of `generate-reads`, which will allow us to add subcommands, similar to how python NEAT worked. I also fixed some bugs in the fastq generation and paired-ended creation.
+- In this release, we are adding a bed reader that can limit the fasta regions of interest. Basically, it will take an input bed and only generate reads over the sections in the bed.

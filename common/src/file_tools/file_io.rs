@@ -1,5 +1,7 @@
 //! This contains only one function at the moment, a general opener and reader
-use std::io::{BufReader, BufRead, Result, Lines, self, Write};
+use std::io::{
+    self, BufRead, BufReader, Lines, Read, Result, Write
+};
 use std::fs::File;
 use std::path::PathBuf;
 
@@ -23,7 +25,7 @@ pub fn open_safe(filename: &PathBuf) -> Result<BufReader<File>> {
     Ok(BufReader::new(file))
 }
 
-pub fn create_output_file (filename: &PathBuf, overwrite_file: bool) -> Result<File> {
+pub fn create_output_file(filename: &PathBuf, overwrite_file: bool) -> Result<File> {
     if filename.is_file() && !overwrite_file {
         // The file already exists and we're in non overwrite mode
         panic!("Attempting to overwrite an existing file: {}", filename.display())
@@ -65,5 +67,13 @@ impl Write for VectorBuffer {
         // In this case, flushing does nothing because
         // VectorBuffer only simulates buffering to stdout or other medium
         Ok(())
+    }
+}
+
+impl Read for VectorBuffer {
+    fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
+        let val = self.buffer[0];
+        self.buffer = Vec::from(&self.buffer[1..]);
+        Ok(val as usize)
     }
 }

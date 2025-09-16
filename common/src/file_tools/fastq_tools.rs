@@ -4,7 +4,6 @@
 //! This one needs a major overhaul, it is autogenerating quality scores etc. 
 //! Will wait to get other things set up first
 use std::io::{BufWriter, Write};
-use std::time::Instant;
 use log::{debug, error, warn};
 use std::path::PathBuf;
 use std::collections::HashMap;
@@ -158,7 +157,7 @@ pub fn write_block_fastq<T: Write, W: Write> (
             // open second buffer
             let quality_scores_2 = quality_score_model.generate_quality_scores(read_length, rng)?;
             let result = apply_variants_and_write_sequence(
-                &fragment,
+                &(reverse_complement(fragment)),
                 &reads2_flagged,
                 &read2_variants,
                 read_length,

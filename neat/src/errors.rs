@@ -34,8 +34,8 @@ pub enum GenerateReadsErrors {
     ConfigReadError(String, String),
     #[error("Error generating configuration!")]
     ConfigError,
-    #[error("Error generating reads!")]
-    GenerateReadsError,
+    #[error("Error generating fragments!")]
+    GenerateFragmentsError,
     #[error("Error generating variants!")]
     GenerateVariantsError,
     #[error("Error while mutating fasta!")]

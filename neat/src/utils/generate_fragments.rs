@@ -17,7 +17,6 @@ pub fn generate_fragments(
     read_length: usize,
     start: usize,
     coverage: usize,
-    paired_ended: bool,
     fragment_model: &FragmentLengthModel,
     rng: &mut NeatRng,
 ) -> Result<Vec<(usize, usize)>, GenerateReadsErrors> {
@@ -36,13 +35,11 @@ pub fn generate_fragments(
     // todo We need to select for non-N areas for the reads, or at least have reads be more than 1/2
     //  true bases, I think.
     let mut fragment_pool: Vec<usize> = Vec::new();
-    if paired_ended {
-        let num_frags = (sequence_length / read_length) * coverage;
-        // add fragments to the fragment pool
-        for _ in 0..num_frags {
-            let frag = fragment_model.generate_fragment(rng.random()?)?;
-            fragment_pool.push(frag);
-        }
+    let num_frags = (sequence_length / read_length) * coverage;
+    // add fragments to the fragment pool
+    for _ in 0..num_frags {
+        let frag = fragment_model.generate_fragment(rng.random()?)?;
+        fragment_pool.push(frag);
     }
     // Generate a vector of read positions
     debug!("Generating read coordinates.");
@@ -56,7 +53,7 @@ pub fn generate_fragments(
     )?;
 
     if fragments.is_empty() {
-        Err(GenerateReadsErrors::GenerateReadsError)
+        Err(GenerateReadsErrors::GenerateFragmentsError)
     } else {
         Ok(fragments)
     }
@@ -91,8 +88,9 @@ fn cover_dataset(
 
     let mut cover_fragment_pool: VecDeque<usize>;
     if fragment_pool.is_empty() {
-        // set the shuffled fragment pool just equal to an instance of read_length
-        cover_fragment_pool = VecDeque::from([read_length*2]);
+        // Changing this from a default condition to an error condition. Let's just try
+        // always generating the fragments.
+        return Err(GenerateReadsErrors::GenerateFragmentsError)
     } else {
         // shuffle the fragment pool
         rng.shuffle_in_place(&mut fragment_pool)?;
@@ -185,7 +183,6 @@ mod tests {
     fn test_generate_reads_single() {
         let read_length = 10;
         let coverage = 1;
-        let paired_ended = false;
         let mut rng = NeatRng::new_from_seed(&vec![
             "Hello".to_string(),
             "Cruel".to_string(),
@@ -197,7 +194,6 @@ mod tests {
             read_length,
             0,
             coverage,
-            paired_ended,
             &fragment_model,
             &mut rng,
         ).unwrap();
@@ -211,7 +207,6 @@ mod tests {
         ];
         let read_length = 10;
         let coverage = 1;
-        let paired_ended = false;
         let mut rng = NeatRng::new_from_seed(&vec![
             "Hello".to_string(),
             "Cruel".to_string(),
@@ -223,7 +218,6 @@ mod tests {
             read_length,
             0,
             coverage,
-            paired_ended,
             &fragment_model,
             &mut rng,
         ).unwrap();
@@ -234,7 +228,6 @@ mod tests {
             read_length,
             0,
             coverage,
-            paired_ended,
             &fragment_model,
             &mut rng,
         ).unwrap();
@@ -247,7 +240,6 @@ mod tests {
         let sequence: Vec<u8> = std::iter::repeat(0_u8).take(100_000).collect();
         let read_length = 100;
         let coverage = 1;
-        let paired_ended = true;
         let mut rng = NeatRng::new_from_seed(&vec![
             "Hello".to_string(),
             "Cruel".to_string(),
@@ -259,7 +251,6 @@ mod tests {
             read_length,
             0,
             coverage,
-            paired_ended,
             &fragment_model,
             &mut rng,
         ).unwrap();

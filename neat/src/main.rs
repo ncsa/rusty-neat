@@ -78,11 +78,13 @@ fn main() -> Result<(), GenerateReadsErrors> {
     // overrides any other inputs.
     let config = if args.config != "" {
         info!("Using Configuration file input: {}", &args.config);
-        RunConfiguration::from_yaml_file(args.config)?
+        RunConfiguration::from_yaml_file(args.config)
+            .expect("Error generating run configuration from input yaml")
     } else {
         info!("Using command line arguments.");
         debug!("Command line args: {:?}", &args);
-        RunConfiguration::from_args(args)?
+        RunConfiguration::from_args(args)
+            .expect("Error generating run configuration from input arguments.")
     };
     info!("////////////// Configuration successuful! Ready to run! \\\\\\\\\\\\\\\\\\");
     thread::sleep(time::Duration::from_millis(100));

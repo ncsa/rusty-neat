@@ -6,7 +6,7 @@ use chrono::Utc;
 use log::{info, warn, error};
 use serde_yml::Value;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::string::String;
 use std::{env, fs};
 use crate::gen_reads::errors::GenerateReadsErrors;
@@ -628,7 +628,7 @@ mod tests {
     fn test_creates_out_dir() {
         let yaml = PathBuf::from("test_data/configs/neat_test_bad.yml");
         RunConfiguration::from_yaml_file(&yaml).unwrap();
-        assert!(Path::new("fake").is_dir());
+        assert!(PathBuf::from("fake").is_dir());
         fs::remove_dir("fake").unwrap()
     }
 

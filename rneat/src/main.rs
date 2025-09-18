@@ -27,10 +27,11 @@ use clap::{value_parser, Arg, ArgAction, Command};
 use std::path::PathBuf;
 
 use crate::{
-    filter_reads::FilterReadsError, 
+    filter_reads::{
+        FilterReadsError,
+    }, 
     gen_reads::{
         errors::GenerateReadsErrors,
-        
     },
 };
 
@@ -110,6 +111,7 @@ fn neat_commands() -> [Command; 2] {
                     .action(ArgAction::Set)
                     .default_missing_value("")
                     .value_parser(value_parser!(PathBuf))
+                    .required(true)
             ),
     ]
 }
@@ -203,7 +205,7 @@ fn main() -> Result<(), NeatErrors> {
     .unwrap();
 
     match subcommand {
-        Some(("gen-reads", cmd)) => {
+        Some(("gen-reads", _)) => {
             if let Some(("gen-reads", cmd)) = subcommand {
                 if cmd.contains_id("configuration_yaml") {
                     let file = cmd.get_one::<PathBuf>("configuration_yaml")
@@ -220,17 +222,66 @@ fn main() -> Result<(), NeatErrors> {
             }
         },
         Some(("filter-reads", _)) => {
-            if let Some(("filter_reads", cmd)) = subcommand {
-                let file = cmd.get_one::<PathBuf>("configuration_yaml")
-                            .expect("Must provide a path with configuration-yaml")
-                            .to_path_buf();
-                    info!("Using configuration file: {:?}", file);
-                    info!("Running filter reads!");
-                    let result = gen_reads::main(&file);
-                    match result {
-                        Err(error) => return Err(NeatErrors::GenerateReadsError(error)),
-                        _ => {},
+            if let Some(("filter_reads", matches)) = subcommand {
+                // extract the flags and values
+                let bed_path: PathBuf = {
+                    if let Some(bed_file) = matches.get_one::<String>("bed_file") {
+                        info!("filter-reads bed file: {bed_file}");
+                        PathBuf::from(bed_file)
+                    } else {
+                        return Err(NeatErrors::FilterReadsError(FilterReadsError::FileNotFound("No bed file received.".to_string())))
                     }
+                };
+                let fastq1_file: Option<PathBuf> = {
+                    if let Some(fastq_file) = matches.get_one::<String>("fastq1_file") {
+                        info!("filter-reads fastq_r1 file: {fastq_file}");
+                        Some(PathBuf::from(fastq_file))
+                    } else {
+                        None
+                    }
+                };
+                let fastq2_file: Option<PathBuf> = {
+                    if let Some(fastq_file) = matches.get_one::<String>("fastq2_file") {
+                        info!("filter-reads fastq_r2 file: {fastq_file}");
+                        Some(PathBuf::from(fastq_file))
+                    } else {
+                        None
+                    }
+                };
+                let vcf_file: Option<PathBuf> = {
+                    if let Some(vcf_file) = matches.get_one::<String>("vcf_file") {
+                        info!("filter-reads fastq_r2 file: {vcf_file}");
+                        Some(PathBuf::from(vcf_file))
+                    } else {
+                        None
+                    }
+                };
+                if fastq1_file.is_none() && fastq2_file.is_none() && vcf_file.is_none() {
+                    warn!("Received no input files to filter. Exiting.");
+                    debug!("If this exit is unexpected, check input flags and paths for files. Use full paths when possible.");
+                    // Hard to say if this is an error or bad input.
+                    return Ok(())
+                }
+                let output_dir: PathBuf = {
+                    if let Some(otpt_dir) = matches.get_one::<String>("output_dir") {
+                        info!("filter-reads output dir: {otpt_dir}");
+                        PathBuf::from(otpt_dir)
+                    } else {
+                        return Err(NeatErrors::FilterReadsError(FilterReadsError::FileNotFound("No output dir received.".to_string())))
+                    }
+                };
+                info!("Running filter reads!");
+                let result: Result<(), FilterReadsError> = filter_reads::main(
+                    bed_path,
+                    fastq1_file,
+                    fastq2_file,
+                    vcf_file,
+                    output_dir,
+                );
+                match result {
+                    Err(error) => return Err(NeatErrors::FilterReadsError(error)),
+                    _ => {},
+                }
             }
         },
         _ => unreachable!("Parser should ensure no other subcommand choice is made.")

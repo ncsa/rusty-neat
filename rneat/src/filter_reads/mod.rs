@@ -20,7 +20,14 @@ pub enum FilterReadsError {
     CoordParseError(#[from] ParseIntError)
 }
 
-fn main(configuration: &PathBuf) -> Result<(), FilterReadsError> {
-    info!("Configuration file receieved: {:?}", configuration);
+pub fn main(
+    bed_file: PathBuf,
+    fastq1_file: Option<PathBuf>,
+    fastq2_file: Option<PathBuf>,
+    vcf_file: Option<PathBuf>,
+    output_dir: PathBuf,
+) -> Result<(), FilterReadsError> {
+    info!("values receieved: {:?}, {:?}, {:?}, {:?}, {:?}", bed_file, fastq1_file, fastq2_file, vcf_file, output_dir);
+    
     Ok(())
 }

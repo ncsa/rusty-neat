@@ -3,13 +3,9 @@ pub mod utils;
 use log::*;
 use errors::GenerateReadsErrors;
 
-use clap::Parser;
 use common::file_tools::bed_reader::read_bed;
 use common::structs::bed_record::BedRecord;
-use std::env;
-use simplelog::*;
 use std::collections::HashMap;
-use std::fs::File;
 use std::path::PathBuf;
 use crate::{
     filter_reads::utils::runner::{

@@ -1,7 +1,4 @@
-use common::file_tools::bed_reader::read_bed;
-use common::file_tools::fasta_reader::filter_fasta_with_bed;
 use common::file_tools::file_io::create_output_file;
-use common::structs::bed::BedRecord;
 use common::structs::variants::VariantType;
 use tempfile;
 use std::time;
@@ -16,34 +13,38 @@ use flate2::{
     write::GzEncoder
 };
 
-use crate::errors::GenerateReadsErrors;
-use crate::common::{
-    file_tools::{
-        fasta_reader::read_fasta,
-        vcf_tools::write_vcf,
-        fastq_tools::{write_block_fastq, combine_temp_fastqs},
-        file_io::{append_to_file, VectorBuffer}
-    },
-    structs::{
-        variants::Variant,
-        fasta_map::SequenceBlock,
-        mutated_map::MutatedMap,
-        nucleotides::NucleotideSelector
-    },
-    models::{
-        mutation_model::MutationModel,
-        fragment_length::FragmentLengthModel,
-        quality_scores::QualityScoreModel,
-        sequencing_error_model::{
-            SequencingErrorModel
+use crate::{
+    common::{
+        file_tools::{
+            fasta_reader::read_fasta, 
+            fastq_tools::{
+                combine_temp_fastqs, 
+                write_block_fastq
+            }, 
+            file_io::{append_to_file, VectorBuffer}, 
+            vcf_tools::write_vcf
+        }, models::{
+            fragment_length::FragmentLengthModel, 
+            mutation_model::MutationModel, 
+            quality_scores::QualityScoreModel, 
+            sequencing_error_model::SequencingErrorModel
+        }, structs::{
+            fasta_map::SequenceBlock, 
+            mutated_map::MutatedMap, 
+            nucleotides::NucleotideSelector, 
+            variants::Variant
         }
-    },
+    }, 
+    gen_reads::{
+        errors::GenerateReadsErrors, 
+        utils::{
+            config::RunConfiguration, 
+            generate_variants::generate_variants,
+            generate_fragments::generate_fragments,
+        }
+    }
 };
-use crate::utils::{
-    config::RunConfiguration,
-    generate_fragments::generate_fragments,
-    generate_variants::generate_variants,
-};
+
 
 pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(), GenerateReadsErrors> {
     let start = time::Instant::now();
@@ -122,18 +123,6 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
         NucleotideSelector::new()
     };
 
-    let mut inclusion_bed: Option<Vec<BedRecord>> = None;
-    match &config.inclusion_bed {
-        Some(filename) => {
-            info!("Reading in bed files: {:?}", filename);
-            inclusion_bed = Some(read_bed(&filename)?);
-        },
-        None => {
-            // No input bed, move along
-            debug!("No inclusion bed provided")
-        },
-    }
-
     // The FastaMap struct consists of a vector of Contig objects, each describing a
     // block of Sequence, broken up into chunks in the SequenceBlock objects. It also
     // holds a name_map hashmap that links tho contig name from the Fasta with the shortname
@@ -146,22 +135,6 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
         rng,
     )?;
 
-    let filtered_fasta_map = {
-    
-        match inclusion_bed {
-            Some(vector) => {
-                let new_map = filter_fasta_with_bed(fasta_map, vector)?;
-                new_map
-            },
-            None => {
-                // Nothing to do in this case
-                // We've instructed the function to give us an unmasked mask with no bed file.
-                let new_map = filter_fasta_with_bed(fasta_map, Vec::new())?;
-                new_map
-            }
-        }
-    };
-
     // Mutating the reference and recording the variant locations.
     info!("Generating simulated dataset");
 
@@ -169,16 +142,11 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
     let mut mutated_maps: HashMap<String, Vec<MutatedMap>> = HashMap::new();
     // All files written indexed by contig_name, separated by read1/read2
     let mut all_fastq_files: HashMap<String, (Vec<PathBuf>, Vec<PathBuf>)> = HashMap::new();
-    let bar: ProgressBar = ProgressBar::new(filtered_fasta_map.contigs.len() as u64);
+    let bar: ProgressBar = ProgressBar::new(fasta_map.contigs.len() as u64);
     // to display bar
     bar.tick();
     // iterate over contigs. 
-    // TODO redo this process with the bed filter. It will basically be 
-    //   unfiltered for regions in the bed file. But this will also mean
-    //   we may have to rethink the blocks. Might not get enough stuff in the reads?
-    //   maybe we'll try it the easy way first and see what it looks like
-    //   Just do reads for the bed regions, skip everything else?
-    for contig in &filtered_fasta_map.contigs {
+    for contig in &fasta_map.contigs {
         // Iterate over blocks within the contig
         // This is probably where we want to parallelize
         let contig_blocks = &contig.blocks;
@@ -220,7 +188,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
             // Generate any relevant mutations
             if num_mutations > 0 {
                 // first we generate variants for the block
-                let result = generate_variants(
+                let result: Option<Vec<Variant>> = generate_variants(
                     &current_block, 
                     &bias_map, 
                     &mutation_model, 
@@ -247,10 +215,6 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
                     }
                 }
             }
-            
-            // blocks get returned sorted
-            // We need to iterate over the bed map for this region to generate reads. 
-            // We can use the non-n regions map to find places, too
 
             let block_fragments: Vec<(usize, usize)> = {
                 let mut temp_regions: Vec<(usize, usize)> = Vec::new();
@@ -261,7 +225,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
                 }
                 let mut block_frags = Vec::new();
                 for (frag_start, frag_end) in temp_regions {
-                    let frags = generate_fragments(
+                    let result = generate_fragments(
                         frag_end-frag_start,
                         config.read_len,
                         max_del_len,
@@ -269,10 +233,16 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
                         config.coverage,
                         &fragment_length_model,
                         rng,
-                    )?;
-                    if !frags.is_empty() {
-                        block_frags.extend_from_slice(&frags);
+                    );
+                    match result {
+                        Ok(frags) => {
+                            if !frags.is_empty() {
+                                block_frags.extend_from_slice(&frags);
+                            }
+                        },
+                        Err(error) => return Err(error),
                     }
+                    
                 }
                 block_frags.clone()
             };
@@ -447,13 +417,13 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
             info!("Writing output vcf file");
             // Maps contig to a total contig size, a required entry for a valid vcf file.
             let mut fasta_lengths: HashMap<String, usize> = HashMap::new();
-            let contigs = filtered_fasta_map.contigs.clone();
+            let contigs = fasta_map.contigs.clone();
             for contig in contigs {
                 fasta_lengths.insert(contig.name.clone(), contig.contig_len);
             }
             write_vcf(
                 &mutated_maps,
-                &filtered_fasta_map.contig_order,
+                &fasta_map.contig_order,
                 &fasta_lengths,
                 &config.reference,
                 config.overwrite_output,

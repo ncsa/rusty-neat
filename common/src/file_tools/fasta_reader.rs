@@ -10,7 +10,7 @@
 //! Eventually, we will add a write fasta function to write out output fasta files, but there's 
 //! some simulation details to work out and it is low-priority.
 use std::collections::HashMap;
-use std::fs::{self, File};
+use std::fs::File;
 use std::io;
 use log::*;
 use std::path::PathBuf;
@@ -28,7 +28,6 @@ use crate::structs::{
             NonNRegion
         },
     },
-    bed::BedRecord,
     nucleotides::{
         Nucleotide,
         Nucleotide::{N, X, Maskeda, Maskedc, Maskedg, Maskedt},
@@ -53,145 +52,6 @@ pub enum FastaReaderError {
     FastaBlockNameError,
     #[error("Error in random number generator: {0}")]
     RngError(#[from] NeatRngError),
-}
-
-pub fn filter_fasta_with_bed(
-    fasta_map: Box<FastaMap>,
-    inculsion_bed: Vec<BedRecord>,
-) -> Result<Box<FastaMap>, FastaReaderError> {
-    let mut bed_mask: HashMap<String, Vec<bool>> = HashMap::new();
-    if !inculsion_bed.is_empty() {
-        let mut relevant_records: HashMap<String, Vec<BedRecord>> = HashMap::new();
-        let mut covered_contigs = Vec::new();
-        let mut record_lens = Vec::new();
-        for record in inculsion_bed {
-            if !relevant_records.contains_key(&record.get_contig()) {
-                relevant_records.insert(record.get_contig(), Vec::new());
-            }
-            if let Some(temp) = relevant_records.get_mut(&record.get_contig()) {
-                temp.push(record.clone())
-            };
-            // We're planning to write each bed block separately. This would seem to make more sense 
-            // than jamming disparate pieces together.
-            record_lens.push(record.len());
-
-            if !covered_contigs.contains(&record.get_contig()) {
-                covered_contigs.push(record.get_contig());
-            }
-        }
-        for contig in &fasta_map.contigs {
-            let vec_len = contig.contig_len;
-            // Since this in an inclusion bed, we will assume false unless it is 
-            // in the bed file
-            let mut mask = vec![false; vec_len];
-            if covered_contigs.contains(&contig.name) {
-                for bed_record in &relevant_records[&contig.name] {
-                    for i in bed_record.start..bed_record.end {
-                        mask[i] = true;
-                    }
-                }
-                bed_mask.insert(contig.name.clone(), mask.clone());
-            } else {
-                // Do not insert this contig in the bed mask at all.
-                debug!("Omitting contig {} from consideration due to bed filtering", &contig.name);
-            }
-        }
-    } else {
-        for contig in &fasta_map.contigs {
-            let vec_len = contig.contig_len;
-            let mask = vec![true; vec_len];
-            bed_mask.insert(contig.name.clone(), mask.clone());
-        }
-    }
-    
-    // Contigs are entire sequences in a fasta. This will vector will essentially be a map of the
-    // fasta file.
-    let mut new_contigs: Vec<Contig> = Vec::new();
-    // This is a vector of filenames from which we can reconstruct the sequence_block.
-    let mut new_block_filenames: Vec<PathBuf> = Vec::new();
-    // Process the file
-    for contig in &fasta_map.contigs {
-        if bed_mask.contains_key(&contig.name) {
-            let mask_vec = &bed_mask[&contig.name];
-            
-            for block in &contig.blocks {
-                let current_block = SequenceBlock::from(&block)?;
-                let mut masked_sequence = current_block.get_seq_clone()?;
-                let start = current_block.get_start()?;
-                let end = current_block.get_end()?;
-                for i in start..end {
-                    match mask_vec[i] {
-                        true => {
-                            // No change required
-                        },
-                        false => {
-                            // Change required. We need the coordinates relative to the sequence position,
-                            // so we subtract the start point of this block from the index.
-                            let block_loc = i - start;
-                            masked_sequence[block_loc] = {
-                                match current_block.sequence[block_loc] {
-                                    Nucleotide::A => Nucleotide::Maskeda,
-                                    Nucleotide::C => Nucleotide::Maskedc,
-                                    Nucleotide::G => Nucleotide::Maskedg,
-                                    Nucleotide::T => Nucleotide::Maskedt,
-                                    Nucleotide::N => Nucleotide::X,
-                                    _ => Nucleotide::X
-                                }
-                            }
-                        },
-                    }
-                }
-                // We need to check if we have masked the entire sequence block, 
-                // because if so we can remove it from consideration
-                let mut all_masked = true;
-                for element in &masked_sequence {
-                    if !element.is_masked() {
-                        all_masked = false;
-                        break
-                    }
-                }
-                if !all_masked {
-                    let sequence_map = map_sequence(&masked_sequence)?;
-                    let mut new_block = SequenceBlock {
-                        contig: current_block.contig,
-                        ref_start: current_block.ref_start,
-                        ref_end: current_block.ref_end,
-                        sequence: masked_sequence,
-                        sequence_map,
-                    };
-                    let sequence_file_path = block.clone();
-                    // obliterate the old file
-                    let tmp_file = File::create(&sequence_file_path)?;
-                    // Overwrite with new data
-                    new_block.write_block(tmp_file)?;
-                    new_block_filenames.push(sequence_file_path);
-                } else {
-                    debug!("Skipping sequence block because all were masked.");
-                    fs::remove_file(block)?;
-                }
-            }
-            if !new_block_filenames.is_empty() {
-                new_contigs.push(Contig::new(
-                    contig.name.clone(),
-                    contig.contig_len,
-                    new_block_filenames.clone(),
-                )?);
-                new_block_filenames = Vec::new();
-            }
-        } else {
-            // Skip this contig
-            debug!("Contig {:?} was filtered out by bed file", contig.name)
-        }
-    }
-
-    let return_map = FastaMap { 
-        contigs: new_contigs, 
-        name_map: fasta_map.name_map.clone(), 
-        contig_order: fasta_map.contig_order.clone(),
-    };
-    debug!("Original fasta map replaced by bed_masked fasta: {:?}", fasta_map);
-    Ok(Box::new(return_map))
-
 }
 
 pub fn read_fasta(

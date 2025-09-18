@@ -1,11 +1,14 @@
 use log::*;
 use thiserror::Error;
 use std::{ 
-    io, num::ParseIntError, path::PathBuf
+    collections::HashMap,
+    io::{self, BufReader, Lines, Read}, 
+    num::ParseIntError, 
+    path::PathBuf
 };
 use crate::{
     file_tools::file_io::{read_gzip_lines, read_lines}, 
-    structs::bed::{BedErrors, BedRecord}
+    structs::bed_record::{BedErrors, BedRecord}
 };
 
 #[derive(Debug, Error)]
@@ -24,7 +27,7 @@ pub enum BedReaderError {
 
 pub fn read_bed(
     bed_path: &PathBuf,
-) -> Result<Vec<BedRecord>, BedReaderError> {
+) -> Result<HashMap<String, Vec<BedRecord>>, BedReaderError> {
     if !bed_path.is_file() {
         return Err(BedReaderError::MalformedBed(format!(
             "Input bed file does not exist: {:?}", 
@@ -48,9 +51,18 @@ pub fn read_bed(
     }
 }
 
-fn process_gzip_bed (filename: &PathBuf) -> Result<Vec<BedRecord>, BedReaderError> {
+fn process_gzip_bed(filename: &PathBuf) -> Result<HashMap<String, Vec<BedRecord>>, BedReaderError> {
     let reader = read_gzip_lines(filename)?;
-    let mut file_records = Vec::new();
+    return Ok(read_open_bed(reader).expect("Problem processing lines of gzipped bed file"))
+}
+
+fn process_bed(filename: &PathBuf) -> Result<HashMap<String, Vec<BedRecord>>, BedReaderError> {
+    let reader = read_lines(filename)?;
+    return Ok(read_open_bed(reader).expect("Error processing bed file"))
+}
+    
+fn read_open_bed<P: Read> (reader: Lines<BufReader<P>>) -> Result<HashMap<String, Vec<BedRecord>>, BedReaderError> {
+    let mut file_records: HashMap<String, Vec<BedRecord>> = HashMap::new();
     for result in reader {
         let rec_str: String = result?;
         let mut fields: Vec<&str> = rec_str.split_whitespace().collect();
@@ -67,41 +79,17 @@ fn process_gzip_bed (filename: &PathBuf) -> Result<Vec<BedRecord>, BedReaderErro
             other.push(remainder.to_string());
         }
         let record = BedRecord::new(
-            contig, 
+            contig.clone(), 
             start as usize, 
             end as usize, 
             other,
         )?;
-        file_records.push(record)
-    }
-    Ok(file_records)
-}
-
-fn process_bed (filename: &PathBuf) -> Result<Vec<BedRecord>, BedReaderError> {
-    let open_file = read_lines(filename)?;
-    let mut file_records = Vec::new();
-    for result in open_file {
-        let rec_str: String = result?;
-        let mut fields: Vec<&str> = rec_str.split_whitespace().collect();
-        let contig: String = fields[0].to_string();
-        let start: isize = fields[1].parse()?;
-        let end: isize = fields[2].parse()?;
-        if start < 0 || end < 0{
-            // Skip this record
-            warn!("Not sure what to do with negative coordinates yet: {:?}", rec_str);
-            continue
+        if !file_records.contains_key(&contig) {
+            file_records.insert(contig.clone(), Vec::new());
         }
-        let mut other = Vec::new();
-        for remainder in &mut fields[3..] {
-            other.push(remainder.to_string());
-        }
-        let record = BedRecord::new(
-            contig, 
-            start as usize, 
-            end as usize, 
-            other,
-        )?;
-        file_records.push(record)
+        file_records.get_mut(&contig)
+            .expect(&format!("BUG: The contig was not found in file records {}", contig))
+            .push(record)
     }
     Ok(file_records)
 }

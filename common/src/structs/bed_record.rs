@@ -33,9 +33,9 @@ impl BedRecord {
         self.contig.to_owned()
     }
 
-    pub fn contains(&self, contig: &str, position: &usize) -> bool {
+    pub fn contains(&self, contig: &str, position: usize) -> bool {
         if self.contig == contig {
-            if (*position >= self.start) && (*position < self.end) {
+            if (position >= self.start) && (position < self.end) {
                 true
             } else {
                 false
@@ -44,11 +44,32 @@ impl BedRecord {
             false
         }
     }
+
+    pub fn overlaps(&self, tuple: (&str, usize, usize)) -> bool {
+        let (contig, start, end) = tuple;
+        // This if says if either start or end are in range, then it is an overlap.
+        if self.contains(contig, start) || self.contains(contig, end) {
+            return true
+        }
+        false
+    }
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn test_overlaps() {
+        // TODO Test this function
+        assert!(true)
+    }
+    
+    #[test]
+    fn test_contains() {
+        // TODO test this function
+        assert!(true)
+    }
 
     #[test]
     fn new_bedrecord() {

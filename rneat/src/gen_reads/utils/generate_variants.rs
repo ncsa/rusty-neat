@@ -1,14 +1,16 @@
 use log::{error, debug};
 use simple_rng::NeatRng;
-use crate::common::{
-    models::mutation_model::MutationModel,
-    structs::{
-        variants::Variant,
-        distributions::DiscreteDistribution,
-        fasta_map::SequenceBlock,
-    }
+use crate::{
+    common::{
+        models::mutation_model::MutationModel,
+        structs::{
+            distributions::DiscreteDistribution, 
+            fasta_map::SequenceBlock, 
+            variants::Variant
+        }
+    }, 
+    gen_reads::errors::GenerateReadsErrors
 };
-use crate::errors::GenerateReadsErrors;
 
 pub fn generate_variants(
     sequence_block: &SequenceBlock,

@@ -30,7 +30,9 @@ pub enum FragmentModelError {
     #[error("Fragment model reported a distribution initiation error: {0}")]
     DistributionInitError(#[from] DistributionErrors),
     #[error("Error building default model!")]
-    SerdeError(#[from] serde_json::Error)
+    SerdeError(#[from] serde_json::Error),
+    #[error("Error creating fragments of sufficient size. Check fragment length model.")]
+    FragGenerationError,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

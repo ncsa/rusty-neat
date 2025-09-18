@@ -4,13 +4,13 @@
 // read coverage. Generate reads uses this to create a list of coordinates to take slices from
 // the mutated fasta file. These will either be read-length fragments or fragment model length
 // fragments.
-use crate::common::{
-    models::fragment_length::FragmentLengthModel,
+use crate::{
+    common::models::fragment_length::FragmentLengthModel, 
+    gen_reads::errors::GenerateReadsErrors
 };
 use log::*;
 use std::collections::VecDeque;
 use simple_rng::NeatRng;
-use crate::errors::GenerateReadsErrors;
 
 pub fn generate_fragments(
     sequence_length: usize,
@@ -52,6 +52,12 @@ pub fn generate_fragments(
             fragment_pool.push(frag);
         }
     }
+    if fragment_pool.is_empty() {
+        // Not sure if this should be a recoverable error.
+        debug!("Fragment pool is empty.");
+        return Ok(Vec::new())
+    }
+
     // Generate a vector of read positions
     debug!("Generating read coordinates.");
     let fragments: Vec<(usize, usize)> = cover_dataset(
@@ -64,7 +70,8 @@ pub fn generate_fragments(
     )?;
 
     if fragments.is_empty() {
-        Err(GenerateReadsErrors::GenerateFragmentsError)
+        debug!("No fragments generated!");
+        return Ok(Vec::new())
     } else {
         Ok(fragments)
     }
@@ -98,26 +105,20 @@ fn cover_dataset(
     let mut fragment_set: Vec<(usize, usize)> = vec![];
 
     let mut cover_fragment_pool: VecDeque<usize>;
-    if fragment_pool.is_empty() {
-        // Changing this from a default condition to an error condition. Let's just try
-        // always generating the fragments.
-        error!("Bug: fragment pool was empty, exiting for debug.");
-        return Err(GenerateReadsErrors::GenerateFragmentsError)
-    } else {
-        // shuffle the fragment pool
-        rng.shuffle_in_place(&mut fragment_pool)?;
-        cover_fragment_pool = VecDeque::from(fragment_pool)
-    }
+    // shuffle the fragment pool
+    rng.shuffle_in_place(&mut fragment_pool)?;
+    cover_fragment_pool = VecDeque::from(fragment_pool);
     // Gap size to keep track of how many uncovered bases we have per layer, to help decide if we
     // need more layers
     let mut layer_count: usize = 0;
     // start this party off somewhere random.
     let mut start = ((rng.rand_int()?) as usize) % (read_length/4);
     // create coverage number of layers
+    // TODO - make sure this doesn't get caught in an infinite loop.
     while layer_count < coverage {
         let fragment_length = cover_fragment_pool.pop_front().unwrap();
         let temp_end = start + fragment_length;
-        cover_fragment_pool.push_back(fragment_length.clone());
+        cover_fragment_pool.push_back(fragment_length);
         if temp_end > span_length {
             // TODO some variation on this modulo idea will work for bacterial reads
             start = temp_end % span_length;
@@ -134,6 +135,7 @@ fn cover_dataset(
         if start >= span_length {
             // get us back in bounds
             start = start % span_length;
+            layer_count += 1;
         }
     }
     fragment_set.sort_by(

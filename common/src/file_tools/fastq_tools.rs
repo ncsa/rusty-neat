@@ -112,14 +112,17 @@ pub fn write_block_fastq<T: Write, W: Write> (
                 read1_variants.insert(var_pos, variant);
                 reads1_flagged.push(var_pos);
             }
-            // Not else if because we need to check both indpendently, they could overlap.
-            if paired_ended == true && ((end-read_length)..end).contains(&pos) {
-                // This gives the index within the reversed sequence vector
-                // This calculates the distance from the last element. The math seemed to work.
-                let var_pos = (end - 1) - pos;
-                read2_variants.insert(var_pos, variant);
-                reads2_flagged.push(var_pos);
+            if end > read_length {
+                // Not else if because we need to check both indpendently, they could overlap.
+                if paired_ended == true && ((end-read_length)..end).contains(&pos) {
+                    // This gives the index within the reversed sequence vector
+                    // This calculates the distance from the last element. The math seemed to work.
+                    let var_pos = (end - 1) - pos;
+                    read2_variants.insert(var_pos, variant);
+                    reads2_flagged.push(var_pos);
+                }
             }
+            
         }
 
         let quality_scores_1 = quality_score_model.generate_quality_scores(read_length, rng)?;
@@ -239,7 +242,7 @@ fn apply_variants_and_write_sequence<T: Write> (
     // as applicable.
     // we start by writing the read name:
     // Write read name
-    if sequence.len() < read_length {
+    if sequence.len() <= read_length {
         // truncated read
         return Err(FastqToolsError::TruncatedRead(format!("{:?}", sequence)))
     }
@@ -268,33 +271,23 @@ fn apply_variants_and_write_sequence<T: Write> (
         &read_num, 
         name_strand,
     ).as_bytes())?;
-    // Use a while loop so we can skip for deletions
-    // To figure out where we are on the contig, we use the reference_read_position. This helps us find relevant variants
-    let index_remap = {
-        let mut temp_remap: HashMap<usize, usize> = HashMap::new();
-        match read_strand {
-            Strand::Forward => {
-                let read_coords: Vec<usize> = (0..fragment_end).collect();
-                for j in 0..fragment_end {
-                    temp_remap.insert(j, read_coords[j]);
-                }
-            },
-            Strand::Reverse => {
-                let read_coords: Vec<usize> = (0..fragment_end).rev().collect();
-                for j in 0..fragment_end {
-                    temp_remap.insert(j, read_coords[j]);
-                }
-            },
-        }
-        temp_remap
-    };
+    
     let mut bases_written = 0;
     let mut out_seq = String::new();
     let mut quality_index = 0;
-    // we'll need to keep track of thing forward-ways even though we are going reverse
+    // Use a while loop so we can skip for deletions
     let mut seq_index = 0;
+    let frag_length = sequence.len();
     'outer: while (seq_index < fragment_end) && (bases_written < read_length) {
-        let fragment_position = index_remap[&seq_index];
+        let fragment_position = {
+            match read_strand {
+                // Forward strand is easy
+                Strand::Forward => seq_index,
+                // This is why we stop the loop before we go past the end.
+                // If this throws an overflow error, check that condition again.
+                Strand::Reverse => frag_length - seq_index,
+            }
+        };
         // if masked, this will give us an unmasked base. If not, it returns the original base
         let reference_base = sequence[seq_index].get_unmasked_base();
         let mut base_to_write: Vec<Nucleotide> = vec![reference_base];
@@ -371,12 +364,16 @@ fn apply_variants_and_write_sequence<T: Write> (
             bases_written += 1;
             if bases_written == read_length {
                 // this ensures we don't write too many bases, especially for an insertion
-                continue 'outer
+                break 'outer
             }
         }
         seq_index += 1;
         quality_index += 1;
-    } 
+    }
+    if bases_written < read_length {
+        // This read came up short.
+        return Err(FastqToolsError::TruncatedRead(format!("{:?}", sequence)))
+    }
     buffer.write(&out_seq.into_bytes())?;
     // Read has been written at this point
     
@@ -485,7 +482,7 @@ mod tests {
 
     #[test]
     fn test_apply_variants() {
-        let sequence = vec![A, C, G, T, T, A, T, G];
+        let sequence = vec![A, C, G, T, T, A, T, G, A, C, G, T, T, A, T, G];
         let variant1 = Variant::new(
                 VariantType::SNP,
                 1,

@@ -1,7 +1,7 @@
 [workspace]
 
 members = [
-    "neat",
+    "rneat",
     "common",
     "simple_rng",
 ]
@@ -9,7 +9,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = '1.1.2'
+version = '1.2.0'
 edition = '2024'
 authors = ["Joshua Allen"]
 description = "Generates a randomly mutated fastq file, along with golden vcf to compare results"

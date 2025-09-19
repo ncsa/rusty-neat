@@ -198,14 +198,17 @@ impl SequenceBlock {
     }
 
     pub fn get_subseq(&self, request_start: usize, request_end: usize) -> Result<Vec<Nucleotide>, FastaMapError> {
+        // We have to get our coordinates in scope for the sequence
+        let block_start = request_start + self.ref_start;
+        let block_end = request_end + self.ref_start;
         // Fetches a subsequence of the original sequence
         if request_start >= request_end {
             error!("Bad coordinates for sequence block retrieval - start: {} >= end: {}", request_start, request_end);
             Err(FastaMapError::BadCoordinatesError)
-        } else if (request_end <= self.ref_start) || 
-                  (request_start > self.ref_end) || 
-                  (request_end > self.ref_end) || 
-                  (request_start < self.ref_start) {
+        } else if (block_end <= self.ref_start) || 
+                  (block_start > self.ref_end) || 
+                  (block_end > self.ref_end) || 
+                  (block_start < self.ref_start) {
             error!(
                 "Requested coordinates out of bounds of sequence block -
                     request: ({}, {}), block ({}, {})",
@@ -216,9 +219,7 @@ impl SequenceBlock {
             // start for this function is expected to be a coordinate from the overall contig,
             // so we modify by the known start and end point of this block to get the final
             // coordinates
-            let block_start = request_start - self.ref_start;
-            let block_end = request_end - self.ref_start;
-            Ok(self.sequence[block_start..block_end].to_owned())
+            Ok(self.sequence[request_start..request_end].to_owned())
         }
     }
 }

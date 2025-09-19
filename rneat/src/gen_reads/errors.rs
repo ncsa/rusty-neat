@@ -34,8 +34,8 @@ pub enum GenerateReadsErrors {
     ConfigReadError(String, String),
     #[error("Error generating configuration!")]
     ConfigError,
-    #[error("Error generating reads!")]
-    GenerateReadsError,
+    #[error("Error generating fragments!")]
+    GenerateFragmentsError,
     #[error("Error generating variants!")]
     GenerateVariantsError,
     #[error("Error while mutating fasta!")]
@@ -77,5 +77,7 @@ pub enum GenerateReadsErrors {
     #[error("FastqTools error: {0}")]
     FqToolsError(#[from] FastqToolsError),
     #[error("Bed reader error: {0}")]
-    BedError(#[from] BedReaderError)
+    BedError(#[from] BedReaderError),
+    #[error("Sequence too short to process")]
+    ShortSequence
 }

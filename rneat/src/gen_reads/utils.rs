@@ -1,4 +1,3 @@
-pub mod cli;
 pub mod config;
 pub mod generate_fragments;
 pub mod runner;

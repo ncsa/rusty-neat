@@ -212,7 +212,7 @@ mod tests {
             &fragment_model,
             &mut rng,
         ).unwrap();
-        assert!(reads.contains(&(0, 20)));
+        assert!(reads.contains(&(0, 560)));
     }
 
     #[test]

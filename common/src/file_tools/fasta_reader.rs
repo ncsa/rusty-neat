@@ -223,7 +223,8 @@ pub fn read_fasta(
         }
     }
     if contig_order.is_empty() {
-        error!("There were no contigs to read. Either all were filtered out or none were present in the fasta.");
+        error!("There were no contigs to read.");
+        debug!("Check fasta for proper format.");
         return Err(FastaReaderError::ReadFastaError)
     }
     // End of file reached, write the last sequence and finish the final contig,

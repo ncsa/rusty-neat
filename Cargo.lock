@@ -946,6 +946,7 @@ dependencies = [
  "indicatif",
  "itertools",
  "log",
+ "same-file",
  "serde",
  "serde_json",
  "serde_yml",

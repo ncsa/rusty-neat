@@ -1,25 +1,19 @@
 use std::collections::HashMap;
-use std::fs::{self, File};
+use std::fs::File;
 use std::io::{BufReader, Lines, Write};
 use std::path::PathBuf;
-use tempfile::TempDir;
+use flate2::write::GzEncoder;
+use flate2::Compression;
 use common::structs::bed_record::BedRecord;
 use flate2::read::GzDecoder;
 use crate::filter_reads::FilterReadsError;
 
 use common::file_tools::file_io::{read_gzip_lines, read_lines, create_output_file};
-/// This is the post-hoc process that performs the same function as the `--filter-reads` flag, 
-/// but to existing fastqs. This would allow a user to produce a large fastq covering all reads,
-/// Then filter down to specific areas with different bed files.
-pub fn runner() {
-    // This is going to take inputs from rneat and apply filtering from an input bed.
-}
-
 /// The purpose of this module is to filter a rneat-generated fastq and vcf file, so that they only show regions
 /// of overlap with an input bed file.
 enum ReaderType {
     GzipReader(Lines<BufReader<GzDecoder<File>>>),
-    UnzipReader(Lines<BufReader<File>>),
+    NonZipReader(Lines<BufReader<File>>),
 }
 
 impl Iterator for ReaderType {
@@ -27,39 +21,40 @@ impl Iterator for ReaderType {
 
     fn next(&mut self) -> Option<Self::Item> {
         match self {
-            Self::GzipReader(iterator) => Some(iterator.next().unwrap().unwrap()),
-            Self::UnzipReader(iterator) => Some(iterator.next().unwrap().unwrap()),
+            Self::GzipReader(iterator) => {
+                let next = iterator.next();
+                match next {
+                    Some(result) => {
+                        Some(result.expect("Error reading gzipped file."))
+                    },
+                    None => None,
+                }
+            },
+            Self::NonZipReader(iterator) => {
+                let next = iterator.next();
+                match next {
+                    Some(result) => {
+                        Some(result.expect("Error reading non-zipped file."))
+                    },
+                    None => None,
+                }
+            },
         }
     }
 }
 
-fn prep_file_for_filtering(filename: &PathBuf) -> Result<(ReaderType, File), FilterReadsError> {
-    // Check file exists
-    if !filename.is_file() {
-        return Err(FilterReadsError::FileNotFound(filename.display().to_string()))
-    }
-    // Create temp dir
-    let temp_dir: TempDir = tempfile::tempdir().unwrap();
-    let mut temp_file: PathBuf = PathBuf::from(temp_dir.path());
-    temp_file.push(filename.file_name().unwrap());
-    // Move file to temp dir
-    fs::rename(filename, &temp_file).expect("Error trying to move file to temp location during bed filtering.");
-    // Open temp_dir file for reading.
+fn prep_files_for_filtering(file_in: &PathBuf, is_gzip: bool, file_out: &PathBuf) -> Result<(ReaderType, GzEncoder<File>), FilterReadsError> {
+    // Open file file for reading.
     let lines: ReaderType = {
-        match filename.extension() {
-            Some(ext) => {
-                if ext == "gz" {
-                    open_gzipped(&temp_file)
-                } else {
-                    open_unzipped(&temp_file)
-                }
-            },
-            _ => return Err(FilterReadsError::MalformedFileName(filename.display().to_string())),
+        if is_gzip {
+            open_gzipped(&file_in)
+        } else {
+            open_unzipped(&file_in)
         }
     };
-    // Open original filename for writing and clear
-    let out_file = create_output_file(filename, true)?;
-    Ok((lines, out_file))
+    let out_file = create_output_file(file_out, true)?;
+    let buffer = GzEncoder::new(out_file, Compression::default());
+    Ok((lines, buffer))
 }
 
 fn open_gzipped(filename: &PathBuf) -> ReaderType {
@@ -67,10 +62,10 @@ fn open_gzipped(filename: &PathBuf) -> ReaderType {
 }
 
 fn open_unzipped(filename: &PathBuf) -> ReaderType {
-    ReaderType::UnzipReader(read_lines(filename).expect("Error reading fastq file while filtering."))
+    ReaderType::NonZipReader(read_lines(filename).expect("Error reading fastq file while filtering."))
 }
 
-fn parse_record_name(line: &str) -> Result<(&str, usize, usize), FilterReadsError> {
+fn parse_fastq_record_name(line: &str) -> Result<(&str, usize, usize), FilterReadsError> {
     // The rneat-generated record will have the pattern 
     // "@neat_generated_<contig_name>_<10-digit first coord>_<10-digit second coord>_<read number>:<1 for Forward, 2 for Reverse>"
     // Our goal is to extract contig_name and the two coordinates
@@ -84,24 +79,31 @@ fn parse_record_name(line: &str) -> Result<(&str, usize, usize), FilterReadsErro
 
 pub fn filter_fastq(
     bed_table: &HashMap<String, Vec<BedRecord>>, 
-    fastq: &PathBuf, 
+    fastq_in: &PathBuf, 
+    is_gzip: bool,
+    fastq_out: &PathBuf,
 )-> Result<(), FilterReadsError> {
+    // bed_file: path to bed file to use for filtering
+    // fastq_in: fastq ready for filtering, can be gzipped or not
+    // is_gzip: whether the input file is gzipped or not
+    // output_file: will be gzipped.
     // Run prep for filtering to open fastq
-    let (infile, mut outfile) = prep_file_for_filtering(fastq)?;
+    let (in_file, mut out_file) = prep_files_for_filtering(fastq_in, is_gzip, fastq_out)?;
     // For each record in fastq, find name, parse, and check against bed records
     let mut include = false;
 
-    for line in infile {
-        if line.starts_with("@") {
+    for line in in_file {
+        // Technically a quality score can start with @
+        if line.starts_with("@neat") {
             // Record name found
-            let fragment_region = parse_record_name(&line)?;
+            let fragment_region = parse_fastq_record_name(&line)?;
             if bed_table.contains_key(fragment_region.0) {
                 let mut found = false;
                 for record in &bed_table[fragment_region.0] {
                     if record.overlaps(fragment_region) {
                         // Found a match
                         found = true;
-                        outfile.write(format!("{}\n", line).as_bytes())?;
+                        out_file.write(format!("{}\n", line).as_bytes())?;
                         break
                     }
                 }
@@ -127,7 +129,7 @@ pub fn filter_fastq(
             // So once we find a name we want, we need to read in the next three lines or we messed up the read
             // Once we hit the next name, we'll turn this off if that one is not included
             if include {
-                outfile.write(format!("{}\n", line).as_bytes())?;
+                out_file.write(format!("{}\n", line).as_bytes())?;
             }
         }
     }
@@ -136,10 +138,12 @@ pub fn filter_fastq(
 
 pub fn filter_vcf(
     bed_table: &HashMap<String, Vec<BedRecord>>, 
-    vcf: &PathBuf, 
+    vcf_in: &PathBuf, 
+    is_gzip: bool,
+    vcf_out: &PathBuf, 
 ) -> Result<(), FilterReadsError> {
     // Run prep for filtering to open vcf
-    let (infile, mut outfile) = prep_file_for_filtering(vcf)?;
+    let (infile, mut outfile) = prep_files_for_filtering(vcf_in, is_gzip, vcf_out)?;
     for line in infile {
         if line.starts_with("#") {
             // header line, skip
@@ -165,25 +169,10 @@ pub fn filter_vcf(
     Ok(())
 }
 
-pub fn filter_paird_fastqs(
-    bed_table: &HashMap<String, Vec<BedRecord>>, 
-    fastq_1: &PathBuf, 
-    fastq_2: &PathBuf
-) -> Result<(), FilterReadsError> {
-    filter_fastq(
-        bed_table,
-        fastq_1,
-    ).expect("Error while filtering fastq1");
-    filter_fastq(
-        bed_table,
-        fastq_2,
-    ).expect("Error while filtering fastq2");
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     #[test]
     fn test_prep_file_for_filtering() {
@@ -193,7 +182,12 @@ mod tests {
         let mut file_obj = create_output_file(&temp_file, true).unwrap();
         file_obj.write("Test data!\nThis is only a test\nPlease disregard all information within\nthe end".as_bytes()).unwrap();
         file_obj.flush().unwrap();
-        let result = prep_file_for_filtering(&temp_file);
+        let mut outfile = PathBuf::from(temp_dir.path());
+        outfile.push("test_data_filtered.txt");
+        let result = prep_files_for_filtering(
+            &temp_file, 
+            false, 
+            &outfile);
         match result {
             Ok(_tuple) => assert!(true),
             Err(_error) => assert!(false),
@@ -204,7 +198,7 @@ mod tests {
     fn test_parse_record_name() {
         let record_name = "@neat_generated_chrom1_001000_002000_223:1".to_string();
         assert_eq!(
-            parse_record_name(&record_name).unwrap(),
+            parse_fastq_record_name(&record_name).unwrap(),
             ("chrom1", 1000, 2000),
         );
     }

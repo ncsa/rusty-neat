@@ -482,7 +482,7 @@ mod tests {
 
     #[test]
     fn test_apply_variants() {
-        let sequence = vec![A, C, G, T, T, A, T, G];
+        let sequence = vec![A, C, G, T, T, A, T, G, A, C, G, T, T, A, T, G];
         let variant1 = Variant::new(
                 VariantType::SNP,
                 1,

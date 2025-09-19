@@ -182,8 +182,12 @@ impl QualityScoreModel {
         let mut score_list: Vec<usize> = Vec::with_capacity(length);
         // sample the scores list with the seed weights applied to generate the first score.
         // Samples an index based on the weights, which then selects the quality score.
-        let seed_score = self.seed_dist.sample(rng.random()?)?;
-        // Adding the seed score to the list. This is safe so long as the qual score max is <= 255
+        let mut seed_score = self.seed_dist.sample(rng.random()?)?;
+        // We don't want the first score to be 31. That throws off the parser, because it makes an @ symbol
+        if seed_score == 31 {
+            seed_score -= 1
+        }
+        // Adding the seed score to the list. This is safe so long as the qual score max is <= 255 (currently 40)
         score_list.push(seed_score);
         // To map from one length to another, we use the algorithm found in the original NEAT 2.0,
         // adapted to rust. See function for implementation details.

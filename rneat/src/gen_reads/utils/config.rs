@@ -501,7 +501,7 @@ impl RunConfiguration {
         }
         if self.produce_vcf {
             let mut vcf = self.output_dir.clone();
-            vcf.push(format!("{}.vcf", self.output_filename));
+            vcf.push(format!("{}.vcf.gz", self.output_filename));
             info!("\t> {:?}", &vcf);
             self.output_vcf = Some(vcf);
         }

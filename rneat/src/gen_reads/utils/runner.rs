@@ -270,7 +270,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
                     writer1, Compression::default()
                 );
                 let read_name_prefix = format!(
-                    "neat_generated_{}_",
+                    "neat_generated_{}",
                     current_block.contig,
                 );
                 if config.paired_ended {

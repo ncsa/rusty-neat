@@ -8,9 +8,8 @@ use common::structs::bed_record::BedRecord;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use crate::{
-    filter_reads::utils::runner::{
+    filter_reads::utils::filter_lib::{
         filter_fastq, 
-        filter_paird_fastqs, 
         filter_vcf,
     }, 
     gen_reads::utils::{
@@ -88,34 +87,54 @@ pub fn main(config: &PathBuf) -> Result<(), GenerateReadsErrors> {
         if let Some(bed_file) = bed_filename {
             info!("Filtering output based on input bed: {:?}", bed_file);
             let bed_table: HashMap<String, Vec<BedRecord>> = read_bed(&bed_file)?;
-            if config.produce_fastq {
-                if config.paired_ended {
-                    // filter both
-                    filter_paird_fastqs(
-                        &bed_table, 
-                        &PathBuf::from(files_created[0].clone()), 
-                        &PathBuf::from(files_created[1].clone()),
-                    ).expect("Error filtering fastq files");
-                    info!("Successfully filtered fastq files: {:?}, {:?}", files_created[0], files_created[1]);
-                } else {
-                    // filter only one
-                    filter_fastq(&bed_table, &PathBuf::from(files_created[0].clone()))
-                        .expect("Error filtering fastq file");
-                    info!("Successfully filtered fastq file: {:?}", files_created[0]);
+            for file_name in files_created {
+                let unfiltered_file = PathBuf::from(&file_name);
+                let mut outfile = PathBuf::from(file_name.clone());
+                // This gets us to <PREFIX>.vcf
+                outfile = outfile.with_extension("");
+                let extension = outfile.extension();
+                let mut is_fastq = true;
+                match extension {
+                    Some(ext) =>{
+                        if ext == "vcf" {
+                            is_fastq = false;
+                        }
+                    },
+                    None => { 
+                        unreachable!("Somehow a file made it to filtering with messed up extensions: {file_name}")
+                    },
                 }
+                // This gets us to <PREFIX>
+                outfile = outfile.with_extension("");
+                let mut out_file_str = outfile.display().to_string();
+                out_file_str.push_str("_filtered");
+                if is_fastq {
+                    out_file_str.push_str(".fastq.gz");
+                    info!("Filtering output: {}", out_file_str);
+                    filter_fastq(
+                        &bed_table,
+                        &unfiltered_file,
+                        true,
+                        &PathBuf::from(out_file_str.clone()),
+                    ).expect(
+                        &format!("Error filtering {file_name}")
+                    );
+                } else {
+                    out_file_str.push_str(".vcf.gz");
+                    filter_vcf(
+                        &bed_table,
+                        &unfiltered_file,
+                        true,
+                        &PathBuf::from(out_file_str.clone()),
+                    ).expect(
+                        &format!("Error filtering {file_name}")
+                    );
+                }
+        
+                info!("Filtered {file_name}, wrote: {}", out_file_str)
             }
-
-            if config.produce_vcf {
-                // filter vcf
-                let last_file = files_created.len() - 1;
-                filter_vcf(&bed_table, &PathBuf::from(files_created[last_file].clone()))
-                    .expect("Error filtering vcf file");
-                info!("Successfully filtered fastq file: {:?}", files_created[last_file]);
-            }
-
-        } else {
-            panic!("Bed filtering was enabled, but no bed file name specified")
         }
-    }
+        info!("All files successfully filtered")
+    };
     Ok(())
 }

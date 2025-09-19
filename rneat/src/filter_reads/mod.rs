@@ -3,6 +3,8 @@ use thiserror::Error;
 use std::num::ParseIntError;
 use std::path::PathBuf;
 use log::*;
+use common::{file_tools::bed_reader::{self, BedReaderError}};
+use utils::filter_lib::{filter_fastq, filter_vcf};
 
 #[derive(Error, Debug)]
 pub enum FilterReadsError {
@@ -17,17 +19,34 @@ pub enum FilterReadsError {
     #[error("I/O error during filtering of files")]
     IoError(#[from] std::io::Error),
     #[error("Error parsing coordinates from read name: {0}")]
-    CoordParseError(#[from] ParseIntError)
+    CoordParseError(#[from] ParseIntError),
+    #[error("The bed reader returned an error: {0}")]
+    BedReaderErr(#[from] BedReaderError),
 }
 
 pub fn main(
     bed_file: PathBuf,
-    fastq1_file: Option<PathBuf>,
-    fastq2_file: Option<PathBuf>,
-    vcf_file: Option<PathBuf>,
-    output_dir: PathBuf,
+    file_to_filter: PathBuf,
+    is_gzip: bool,
+    is_fastq: bool,
+    output_file: PathBuf,
 ) -> Result<(), FilterReadsError> {
-    info!("values receieved: {:?}, {:?}, {:?}, {:?}, {:?}", bed_file, fastq1_file, fastq2_file, vcf_file, output_dir);
+    // bed_file: path to bed file to use for filtering
+    // file_to_filter: fastq or vcf ready for filtering, can be gzipped or not
+    // is_gzip: whether the input file is gzipped or not
+    // is_fastq: wether the
+    // output_file: will be gzipped.
+    info!("filter-reads values receieved: {:?}, {:?}, {:?}", bed_file, file_to_filter, output_file);
+    let bed_table = bed_reader::read_bed(&bed_file)?;
+    info!("Running filter-reads on input file.");
+    if is_fastq {
+        info!("Filtering input fastq file: {:?}", file_to_filter);
+        filter_fastq(&bed_table, &file_to_filter, is_gzip, &output_file)?;
+    } else {
+        info!("Filtering input vcf file: {:?}", file_to_filter);
+        filter_vcf(&bed_table, &file_to_filter, is_gzip, &output_file)?;
+    }
+    info!("Successfully filtered input file {:?}, written to {:?}, with bed {:?}", file_to_filter, output_file, bed_file);
     
     Ok(())
 }

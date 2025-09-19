@@ -1,7 +1,7 @@
 //! Various file tools needed throughout the code.
-use log::warn;
+use log::*;
 use std::path::PathBuf;
-use std::{env, fs, io};
+use std::{fs, io};
 
 pub fn check_parent(filename: &PathBuf, create: bool) -> io::Result<&PathBuf> {
     // checks that the parent dir exists and then if so creates the Path object open
@@ -14,8 +14,8 @@ pub fn check_parent(filename: &PathBuf, create: bool) -> io::Result<&PathBuf> {
     if !parent.exists() && create {
         check_create_dir(&parent);
     } else if !parent.exists() {
-        println!("{}", env::current_dir().unwrap().to_str().unwrap());
-        panic!("Directory {} does not exist!", parent.to_str().unwrap());
+        error!("Directory {} does not exist!", parent.to_str().unwrap());
+        panic!("Error creating file log!");
     }
     Ok(file_path)
 }

@@ -9,10 +9,11 @@ extern crate simple_rng;
 pub mod filter_reads;
 pub mod gen_reads;
 
-use std::{env, fs::File};
-use common;
+use std::env;
+use same_file::is_same_file;
+use common::{self, file_tools::file_io::create_output_file};
 
-use common::file_tools::folder_tools::check_parent;
+use common::file_tools::folder_tools::{check_create_dir, check_parent};
 use simplelog::{
     ColorChoice, 
     CombinedLogger, 
@@ -66,48 +67,25 @@ fn neat_commands() -> [Command; 2] {
                     .long("bed-file")
                     .short('b')
                     .help("Path to bed file containing desired regions.")
-                    .exclusive(true)
                     .action(ArgAction::Set)
                     .default_missing_value("")
                     .value_parser(value_parser!(PathBuf))
                     .required(true)
             )
             .arg(
-                Arg::new("fastq1_file")
-                    .long("fastq1-file")
-                    .short('1')
+                Arg::new("file_to_filter")
+                    .long("file-to-filter")
+                    .short('f')
                     .help("Path to fastq_r1 file containing reads to filter.")
-                    .exclusive(true)
                     .action(ArgAction::Set)
                     .default_missing_value("")
-                    .value_parser(value_parser!(PathBuf))
+                    .value_parser(value_parser!(String))
             )
             .arg(
-                Arg::new("fastq2_file")
-                    .long("fastq2-file")
-                    .short('2')
-                    .help("Path to fastq_r2 file containing reads to filter.")
-                    .exclusive(true)
-                    .action(ArgAction::Set)
-                    .default_missing_value("")
-                    .value_parser(value_parser!(PathBuf))
-            )
-            .arg(
-                Arg::new("vcf_file")
-                    .long("vcf-file")
-                    .short('v')
-                    .help("Path to vcf file containing variants to filter.")
-                    .exclusive(true)
-                    .action(ArgAction::Set)
-                    .default_missing_value("")
-                    .value_parser(value_parser!(PathBuf))
-            )
-            .arg(
-                Arg::new("output_dir")
-                    .long("output-dir")
+                Arg::new("output_file")
+                    .long("output-file")
                     .short('o')
-                    .help("Path to output dir where to write files.")
-                    .exclusive(true)
+                    .help("File (including path) to output file where to write files.")
                     .action(ArgAction::Set)
                     .default_missing_value("")
                     .value_parser(value_parser!(PathBuf))
@@ -129,10 +107,8 @@ fn main() -> Result<(), NeatErrors> {
                     Arg::new("log_level")
                         .long("log-level")
                         .help("Sets the log level for the display log.")
-                        .exclusive(true)
                         .action(ArgAction::Set)
                         .num_args(0..=1)
-                        .require_equals(true)
                         .value_parser(["trace", "debug", "info", "warn", "error", "off"])
                         .default_value("trace")
                         .default_missing_value("trace")
@@ -141,8 +117,8 @@ fn main() -> Result<(), NeatErrors> {
                     Arg::new("log_dest")
                         .long("log-dest")
                         .help("Sets the log destination (full path with full filename) for the written log")
-                        .exclusive(true)
                         .action(ArgAction::Set)
+                        .value_parser(value_parser!(PathBuf))
                         .default_missing_value("")
                 )
                 .subcommands(neat_commands())
@@ -152,8 +128,9 @@ fn main() -> Result<(), NeatErrors> {
 
     let matches = cmd.get_matches();
     let mut subcommand = matches.subcommand();
-    let mut level_filter = String::new();
-    let mut log_dest = env::current_dir().unwrap().with_file_name(".neat.log");
+    let mut level_filter = "trace".to_string();
+    let mut log_dest = env::current_dir().unwrap();
+    log_dest.push(".neat.log");
     println!("log dest = {:?}", log_dest.display());
     if let Some(("rneat", cmd)) = subcommand {
         if cmd.contains_id("log_level") {
@@ -187,7 +164,9 @@ fn main() -> Result<(), NeatErrors> {
     };
     
     // Check that the parent dir exists
-    let log_destination = check_parent(&log_dest, true).unwrap();
+    let log_destination = check_parent(&log_dest, true).expect("Log destination parent path doesn't exist");
+    let log_file = create_output_file(log_destination, true)
+        .expect(&format!("Error creating log file: {:?}", log_destination));
     // Set up the logger for the run
     CombinedLogger::init(vec![
         TermLogger::new(
@@ -199,10 +178,10 @@ fn main() -> Result<(), NeatErrors> {
         WriteLogger::new(
             lev_filter_choice,
             Config::default(),
-            File::create(log_destination).unwrap(),
+            log_file,
         ),
-    ])
-    .unwrap();
+    ]).expect("Error creating log file!");
+    info!("////////////// Welcome to rusty-neat! \\\\\\\\\\\\\\\\\\\\\\\\");
 
     match subcommand {
         Some(("gen-reads", _)) => {
@@ -216,71 +195,108 @@ fn main() -> Result<(), NeatErrors> {
                     let result = gen_reads::main(&file);
                     match result {
                         Err(error) => return Err(NeatErrors::GenerateReadsError(error)),
-                        _ => {},
+                        _ => info!("rneat gen-reads completed successfully"),
                     }
                 } 
             }
         },
         Some(("filter-reads", _)) => {
-            if let Some(("filter_reads", matches)) = subcommand {
+            if let Some(("filter-reads", matches)) = subcommand {
                 // extract the flags and values
+                let mut is_fastq = true;
+                let mut is_gzip = false;
                 let bed_path: PathBuf = {
-                    if let Some(bed_file) = matches.get_one::<String>("bed_file") {
-                        info!("filter-reads bed file: {bed_file}");
-                        PathBuf::from(bed_file)
+                    if let Some(bed_file) = matches.get_one::<PathBuf>("bed_file") {
+                        info!("filter-reads bed file: {:?}", bed_file);
+                        if !bed_file.is_file() {
+                            return Err(NeatErrors::FilterReadsError(FilterReadsError::FileNotFound(format!("{:?}", bed_file))))
+                        }
+                        bed_file.to_path_buf()
                     } else {
                         return Err(NeatErrors::FilterReadsError(FilterReadsError::FileNotFound("No bed file received.".to_string())))
                     }
                 };
-                let fastq1_file: Option<PathBuf> = {
-                    if let Some(fastq_file) = matches.get_one::<String>("fastq1_file") {
-                        info!("filter-reads fastq_r1 file: {fastq_file}");
-                        Some(PathBuf::from(fastq_file))
+                let file_to_filter: PathBuf = {
+                    if let Some(input_file) = matches.get_one::<String>("file_to_filter") {
+                        info!("filter-reads file to filter: {:?}", input_file);
+                        let file_path = PathBuf::from(input_file);
+                        let extension = file_path.extension();
+                        match extension {
+                            Some(ext) => {
+                                if ext != "gz" {
+                                    is_gzip = true;
+                                    let shorter_fn = file_path.with_extension("");
+                                    let extension2 = shorter_fn.extension();
+                                    match extension2 {
+                                        Some(ext2) => {
+                                            if ext2 == "vcf" {
+                                                is_fastq = false;
+                                            }
+                                        },
+                                        None => {
+                                            panic!("No file extension for gzipped file. Filetype not recognized")
+                                        },
+                                    }
+                                } else if ext == "vcf" {
+                                    is_fastq = false;
+                                }
+                            },
+                            None => return Err(
+                                NeatErrors::FilterReadsError(
+                                    FilterReadsError::MalformedFileName(
+                                        "Input file has no valid extensions.".to_string()
+                                    )
+                                )
+                            ),
+                        }
+                        PathBuf::from(input_file)
                     } else {
-                        None
+                        return Err(
+                            NeatErrors::FilterReadsError(
+                                FilterReadsError::FileNotFound(
+                                    "Input file not received.".to_string()
+                                )
+                            )
+                        )
                     }
                 };
-                let fastq2_file: Option<PathBuf> = {
-                    if let Some(fastq_file) = matches.get_one::<String>("fastq2_file") {
-                        info!("filter-reads fastq_r2 file: {fastq_file}");
-                        Some(PathBuf::from(fastq_file))
+                let output_file: PathBuf = {
+                    if let Some(output_opt) = matches.get_one::<PathBuf>("output_file") {
+                        info!("filter-reads output dir: {:?}", output_opt);
+                        check_create_dir(output_opt);
+                        output_opt.to_path_buf()
                     } else {
-                        None
+                        return Err(
+                            NeatErrors::FilterReadsError(
+                                FilterReadsError::FileNotFound(
+                                    "No output file received.".to_string()
+                                )
+                            )
+                        )
                     }
                 };
-                let vcf_file: Option<PathBuf> = {
-                    if let Some(vcf_file) = matches.get_one::<String>("vcf_file") {
-                        info!("filter-reads fastq_r2 file: {vcf_file}");
-                        Some(PathBuf::from(vcf_file))
-                    } else {
-                        None
-                    }
-                };
-                if fastq1_file.is_none() && fastq2_file.is_none() && vcf_file.is_none() {
-                    warn!("Received no input files to filter. Exiting.");
-                    debug!("If this exit is unexpected, check input flags and paths for files. Use full paths when possible.");
-                    // Hard to say if this is an error or bad input.
-                    return Ok(())
+                if is_same_file(&file_to_filter, &output_file).unwrap() {
+                    return Err(
+                        NeatErrors::FilterReadsError(
+                            FilterReadsError::FileNotFound(
+                                "Output and input files are the same. Cannot read and write the same file".to_string()
+                            )
+                        )
+                    )
                 }
-                let output_dir: PathBuf = {
-                    if let Some(otpt_dir) = matches.get_one::<String>("output_dir") {
-                        info!("filter-reads output dir: {otpt_dir}");
-                        PathBuf::from(otpt_dir)
-                    } else {
-                        return Err(NeatErrors::FilterReadsError(FilterReadsError::FileNotFound("No output dir received.".to_string())))
-                    }
-                };
                 info!("Running filter reads!");
                 let result: Result<(), FilterReadsError> = filter_reads::main(
                     bed_path,
-                    fastq1_file,
-                    fastq2_file,
-                    vcf_file,
-                    output_dir,
+                    file_to_filter,
+                    is_gzip,
+                    is_fastq,
+                    output_file,
                 );
                 match result {
                     Err(error) => return Err(NeatErrors::FilterReadsError(error)),
-                    _ => {},
+                    _ => {
+                        info!("rneat filter-reads completed successfully!");
+                    },
                 }
             }
         },

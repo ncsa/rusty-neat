@@ -277,15 +277,15 @@ fn apply_variants_and_write_sequence<T: Write> (
     let mut quality_index = 0;
     // Use a while loop so we can skip for deletions
     let mut seq_index = 0;
-    let frag_length = sequence.len();
-    'outer: while (seq_index < fragment_end) && (bases_written < read_length) {
+    let fragment_length = sequence.len();
+    'outer: while (seq_index < fragment_length) && (bases_written < read_length) {
         let fragment_position = {
             match read_strand {
                 // Forward strand is easy
                 Strand::Forward => seq_index,
                 // This is why we stop the loop before we go past the end.
                 // If this throws an overflow error, check that condition again.
-                Strand::Reverse => frag_length - seq_index,
+                Strand::Reverse => fragment_length - seq_index,
             }
         };
         // if masked, this will give us an unmasked base. If not, it returns the original base

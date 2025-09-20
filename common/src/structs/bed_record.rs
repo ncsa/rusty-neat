@@ -45,8 +45,7 @@ impl BedRecord {
         }
     }
 
-    pub fn overlaps(&self, tuple: (&str, usize, usize)) -> bool {
-        let (contig, start, end) = tuple;
+    pub fn overlaps(&self, contig: &str, start: usize, end: usize) -> bool {
         // This if says if either start or end are in range, then it is an overlap.
         if self.contains(contig, start) || self.contains(contig, end) {
             return true

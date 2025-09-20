@@ -10,6 +10,7 @@ pub mod filter_reads;
 pub mod gen_reads;
 
 use std::env;
+use std::time;
 use same_file::is_same_file;
 use common::{self, file_tools::file_io::create_output_file};
 
@@ -35,9 +36,12 @@ use crate::{
         errors::GenerateReadsErrors,
     },
 };
-
+/// This script parses arguments and checks them before submitting to the submodules, which currently 
+/// include `gen-reads` and `filter-files`. As more are added, this can be expanded or refactored
+/// argument parsing, timing, and other concerns will occur here.
 #[derive(Error, Debug)]
 pub enum NeatErrors {
+	// Errors specific to each submodule
     #[error("Error while generating read dataset")]
     GenerateReadsError(#[from] GenerateReadsErrors),
     #[error("Error while filtering reads with bed file")]
@@ -45,6 +49,7 @@ pub enum NeatErrors {
 }
 
 fn neat_commands() -> [Command; 2] {
+	// These are the submodule commands. Any new commands added should go here.
     [
         Command::new("gen-reads")
             .about("Generates reads for an input dataset")
@@ -54,10 +59,11 @@ fn neat_commands() -> [Command; 2] {
                     .long("configuration-yaml")
                     .short('c')
                     .help("Path to configuration file.")
-                    .exclusive(true)
                     .action(ArgAction::Set)
+                    .exclusive(true)
                     .default_missing_value("")
                     .value_parser(value_parser!(PathBuf))
+                    .required(true)
             ),
         Command::new("filter-reads")
             .about("Filters the output of gen-reads")
@@ -104,6 +110,7 @@ fn main() -> Result<(), NeatErrors> {
                 .subcommand_value_name("SUB-COMMAND")
                 .subcommand_help_heading("SUB-COMMANDS")
                 .arg(
+					// This arg controls the amount of stuff shown in the display log.
                     Arg::new("log_level")
                         .long("log-level")
                         .help("Sets the log level for the display log.")
@@ -114,6 +121,7 @@ fn main() -> Result<(), NeatErrors> {
                         .default_missing_value("trace")
                 )
                 .arg(
+					// This arg controls where the log is written. The default is <current_working_dir>/.neat.log
                     Arg::new("log_dest")
                         .long("log-dest")
                         .help("Sets the log destination (full path with full filename) for the written log")
@@ -125,7 +133,7 @@ fn main() -> Result<(), NeatErrors> {
         )
         .subcommands(neat_commands());
         
-
+	// This parses the command arguments
     let matches = cmd.get_matches();
     let mut subcommand = matches.subcommand();
     let mut level_filter = "trace".to_string();
@@ -181,8 +189,8 @@ fn main() -> Result<(), NeatErrors> {
             log_file,
         ),
     ]).expect("Error creating log file!");
-    info!("////////////// Welcome to rusty-neat! \\\\\\\\\\\\\\\\\\\\\\\\");
-
+    info!("////////////// Welcome to rneat! \\\\\\\\\\\\\\\\\\\\\\\\\\\\");
+    let start = time::Instant::now();
     match subcommand {
         Some(("gen-reads", _)) => {
             if let Some(("gen-reads", cmd)) = subcommand {
@@ -190,18 +198,18 @@ fn main() -> Result<(), NeatErrors> {
                     let file = cmd.get_one::<PathBuf>("configuration_yaml")
                             .expect("Must provide a path with configuration-yaml")
                             .to_path_buf();
-                    info!("Using configuration file: {:?}", file);
-                    info!("Running Generate Reads.");
+                    info!("Running gen-reads to generate read data.");
                     let result = gen_reads::main(&file);
                     match result {
                         Err(error) => return Err(NeatErrors::GenerateReadsError(error)),
-                        _ => info!("rneat gen-reads completed successfully"),
+                        Ok(()) => info!("rneat gen-reads completed succesfully"),
                     }
                 } 
             }
         },
         Some(("filter-reads", _)) => {
             if let Some(("filter-reads", matches)) = subcommand {
+				info!("Running rneat filter-reads");
                 // extract the flags and values
                 let mut is_fastq = true;
                 let mut is_gzip = false;
@@ -303,6 +311,14 @@ fn main() -> Result<(), NeatErrors> {
         _ => unreachable!("Parser should ensure no other subcommand choice is made.")
     }
 
+    let elapsed_time = time::Instant::now() - start;
+    info!("Processing finished in {} milliseconds", elapsed_time.as_millis());
+    if elapsed_time.as_millis() < 1000 {
+        info!("Processing finished in {} milliseconds", elapsed_time.as_millis());
+    } else if elapsed_time.as_secs() > 300 {
+        info!("Processing finished in {} minutes", ((elapsed_time.as_secs() as f64)/60.0))
+    } else {
+        info!("Processing finished in {} seconds", elapsed_time.as_secs());
+    }
     Ok(())
 }
-

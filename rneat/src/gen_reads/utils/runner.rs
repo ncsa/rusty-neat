@@ -1,12 +1,12 @@
 use common::file_tools::file_io::create_output_file;
 use common::structs::variants::VariantType;
 use tempfile;
-use std::time;
 use log::{info, debug, error};
 use simple_rng::NeatRng;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::io::BufWriter;
+
 use indicatif::ProgressBar;
 use flate2::{ 
     Compression,
@@ -46,8 +46,7 @@ use crate::{
 };
 
 
-pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(), GenerateReadsErrors> {
-    let start = time::Instant::now();
+pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec<PathBuf>, GenerateReadsErrors> {
     // We'll need a temp dir to store file fragments
     let working_dir = tempfile::tempdir().unwrap();
     info!("Created temp dir at {:?}", working_dir);
@@ -344,6 +343,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
         // The original filename: read number to a final read number. Will need
         // to keep pairs together during this
         //
+        info!("Producing final fastq(s) file(s)");
         let bar: ProgressBar = ProgressBar::new(all_fastq_files.len() as u64);
         match &config.output_fastq_1 {
             Some(filename1) => {
@@ -393,56 +393,44 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
 
     bar.finish_and_clear();
 
+    let mut files_written = Vec::new();
     if config.paired_ended {
-        match &config.output_fastq_1 {
-            Some(filename1) => {
-                match &config.output_fastq_2 {
-                    Some(filename2) => info!("Successfully wrote fastq files: {:?}, {:?}", &filename1, &filename2),
-                    None => {},
-                }
-            },
-            None => {},
-        }
-    } else {
-        match &config.output_fastq_1 {
-            Some(filename1) => {
-                info!("Successfully wrote fastq files: {:?}", &filename1)
-            },
-            None => {},
-        }
-    }
-
-    match &config.output_vcf {
-        Some(filename) => {
-            info!("Writing output vcf file");
-            // Maps contig to a total contig size, a required entry for a valid vcf file.
-            let mut fasta_lengths: HashMap<String, usize> = HashMap::new();
-            let contigs = fasta_map.contigs.clone();
-            for contig in contigs {
-                fasta_lengths.insert(contig.name.clone(), contig.contig_len);
+        if let Some(filename1) = &config.output_fastq_1 {
+            info!("Successfully wrote fastq file: {:?}", &filename1);
+            files_written.push(filename1.clone());
+            if let Some(filename2) = &config.output_fastq_2 {
+                info!("Successfully wrote fastq file: {:?}", &filename2);
+                files_written.push(filename2.clone());
             }
-            write_vcf(
-                &mutated_maps,
-                &fasta_map.contig_order,
-                &fasta_lengths,
-                &config.reference,
-                config.overwrite_output,
-                &filename,
-            )?
-        },
-        None => {
-            info!("Skipping vcf creation")
         }
     }
 
-    let elapsed_time = time::Instant::now() - start;
-    info!("Processing finished in {} milliseconds", elapsed_time.as_millis());
-    if elapsed_time.as_millis() < 1000 {
-        info!("Processing finished in {} milliseconds", elapsed_time.as_millis());
-    } else if elapsed_time.as_secs() > 300 {
-        info!("Processing finished in {} minutes", ((elapsed_time.as_secs() as f64)/60.0))
-    } else {
-        info!("Processing finished in {} seconds", elapsed_time.as_secs());
+    if let Some(filename) = &config.output_vcf {
+        info!("Writing output vcf file");
+        // Maps contig to a total contig size, a required entry for a valid vcf file.
+        let mut fasta_lengths: HashMap<String, usize> = HashMap::new();
+        let contigs = fasta_map.contigs.clone();
+        for contig in contigs {
+            fasta_lengths.insert(contig.name.clone(), contig.contig_len);
+        }
+        let result = write_vcf(
+            &mutated_maps,
+            &fasta_map.contig_order,
+            &fasta_lengths,
+            &config.reference,
+            config.overwrite_output,
+            &filename,
+        );
+        match result {
+            Ok(()) => {
+                info!("Successfully wrote vcf file: {:?}", filename);
+                files_written.push(filename.clone());
+            },
+            Err(error) => {
+                error!("Error writing vcf file!");
+                return Err(GenerateReadsErrors::IoError(error))
+            },
+        }
     }
-    Ok(())
+    Ok(files_written.clone())
 }

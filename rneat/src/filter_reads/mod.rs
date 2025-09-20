@@ -22,6 +22,8 @@ pub enum FilterReadsError {
     CoordParseError(#[from] ParseIntError),
     #[error("The bed reader returned an error: {0}")]
     BedReaderErr(#[from] BedReaderError),
+    #[error("Unknown char while parsing suspected read name")]
+    UnknownChar,
 }
 
 pub fn main(

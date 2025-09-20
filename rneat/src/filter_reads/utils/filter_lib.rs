@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use log::*;
 use std::fs::File;
 use std::io::{BufReader, Lines, Write};
 use std::path::PathBuf;
@@ -7,6 +8,7 @@ use flate2::Compression;
 use common::structs::bed_record::BedRecord;
 use flate2::read::GzDecoder;
 use crate::filter_reads::FilterReadsError;
+use thiserror::Error;
 
 use common::file_tools::file_io::{read_gzip_lines, read_lines, create_output_file};
 /// The purpose of this module is to filter a rneat-generated fastq and vcf file, so that they only show regions
@@ -14,6 +16,15 @@ use common::file_tools::file_io::{read_gzip_lines, read_lines, create_output_fil
 enum ReaderType {
     GzipReader(Lines<BufReader<GzDecoder<File>>>),
     NonZipReader(Lines<BufReader<File>>),
+}
+
+
+#[derive(Debug, Error)]
+enum FilterLibError {
+    #[error("Possible Q score")]
+    InvalidReadName,
+    #[error("Line parsing was not understood: {0}")]
+    MalformedLine(String)
 }
 
 impl Iterator for ReaderType {
@@ -65,16 +76,53 @@ fn open_unzipped(filename: &PathBuf) -> ReaderType {
     ReaderType::NonZipReader(read_lines(filename).expect("Error reading fastq file while filtering."))
 }
 
-fn parse_fastq_record_name(line: &str) -> Result<(&str, usize, usize), FilterReadsError> {
+fn parse_fastq_record_name(line: &str) -> Result<(String, usize, usize), FilterLibError> {
     // The rneat-generated record will have the pattern 
     // "@neat_generated_<contig_name>_<10-digit first coord>_<10-digit second coord>_<read number>:<1 for Forward, 2 for Reverse>"
     // Our goal is to extract contig_name and the two coordinates
-    let split_line: Vec<&str> = line.split('_').collect();
-    // [0: @neat, 1: generated, 2: contig_name, etc]
-    let contig_name = split_line[2];
-    let start: usize = split_line[3].parse()?;
-    let end: usize = split_line[4].parse()?;
-    Ok((contig_name, start, end))
+    //
+    // Start by checking if this is even a read
+    let result = line.find("@neat_generated_");
+    match result {
+        Some(index) => {
+            if index == 0 {
+                // valid read name
+            } else {
+                // We don't know what this is, calling it an error.
+                return Err(FilterLibError::MalformedLine(line.to_string()))
+            }
+        },
+        None => {
+            // This is probably just a quality score
+            return Err(FilterLibError::InvalidReadName)
+        }
+    }
+    let end = line.len();
+    // We can remove the strand number
+    let mut trimmed_line = line[..(end - 2)].to_string();
+    trimmed_line = trimmed_line[16..].to_string();
+    // What we have left should be <name_parts>_<start>_<end>_<read_number>
+    let split_line: Vec<&str> = trimmed_line.split('_').collect();
+    let length = split_line.len();
+    // start is 2 from the end
+    let start: usize = split_line[length-3].parse().unwrap();
+    // end is 1 from the end
+    let end: usize = split_line[length-2].parse().unwrap();
+    // However "contig_name" might contain an underscore, so we make sure we have the right coordinates
+    // Grab everything up to the start
+    let mut contig = String::new();
+    for i in 0..(length-3) {
+        // No underscore in the last loop
+        if i == (length-4) {
+            contig.push_str(split_line[i])
+        } else {
+            contig.push_str(split_line[i]);
+            // replace what "split" removed
+            contig.push('_');
+        }
+    }
+    Ok((contig, start, end))
+
 }
 
 pub fn filter_fastq(
@@ -94,13 +142,36 @@ pub fn filter_fastq(
 
     for line in in_file {
         // Technically a quality score can start with @
-        if line.starts_with("@neat") {
-            // Record name found
-            let fragment_region = parse_fastq_record_name(&line)?;
-            if bed_table.contains_key(fragment_region.0) {
+        if line.starts_with("@") {
+            // Record name candidate found
+            let candidate_result = parse_fastq_record_name(&line);
+            // It's possible that this is not a read name, but rather a quality score starting with @
+            let (contig, start, end) = match candidate_result {
+                Ok(region) => {
+                    Some(region)
+                },
+                Err(error) => {
+                    // If this is a quality score and we need to write it, we do, then we run the next loop
+                    debug!("Had a weird record: {line}");
+                    match error {
+                        FilterLibError::MalformedLine(line) => {
+                            return Err(FilterReadsError::FastqFilterError(format!("Filter error with line: {}", line)))
+                        },
+                        FilterLibError::InvalidReadName => {
+                            // In this case this is a q-score and, if included, we should write it
+                            if include {
+                                out_file.write(format!("{}\n", line).as_bytes())?;
+                            };
+                        },
+                    }
+                    // That line is processed and we can move on
+                    continue
+                },
+            }.unwrap(); // This unwrap will either continue us or be a region, so this is good to go.
+            if bed_table.contains_key(&contig) {
                 let mut found = false;
-                for record in &bed_table[fragment_region.0] {
-                    if record.overlaps(fragment_region) {
+                for record in &bed_table[&contig] {
+                    if record.overlaps(&contig, start, end) {
                         // Found a match
                         found = true;
                         out_file.write(format!("{}\n", line).as_bytes())?;
@@ -196,10 +267,10 @@ mod tests {
 
     #[test]
     fn test_parse_record_name() {
-        let record_name = "@neat_generated_chrom1_001000_002000_223:1".to_string();
+        let record_name = "@neat_generated_chrom_1_0000001000_0000002000_223:1".to_string();
         assert_eq!(
             parse_fastq_record_name(&record_name).unwrap(),
-            ("chrom1", 1000, 2000),
+            ("chrom_1".to_string(), 1000, 2000),
         );
     }
 }

@@ -12,5 +12,5 @@ resolver = "2"
 version = '1.2.0'
 edition = '2024'
 authors = ["Joshua Allen"]
-description = "Generates a randomly mutated fastq file, along with golden vcf to compare results"
+description = "Toolkit"
 repository = "https://github.com/ncsa/rusty-neat"

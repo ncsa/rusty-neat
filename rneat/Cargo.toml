@@ -23,3 +23,4 @@ thiserror = "2.0.16"
 indicatif = {version = "0.18.0", features = ["rayon"]}
 flate2 = { version = "1.1.2", features = ['zlib-ng'], default-features = false }
 same-file = "1.0.6"
+rust_search = "2.1.0"

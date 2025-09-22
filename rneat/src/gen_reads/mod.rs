@@ -14,15 +14,7 @@ use simple_rng::NeatRng;
 use std::{thread, time};
 
 /// gen-reads is the primary read generation function of rneat. It reads a fasta file and generates a set of fastqs and/or a set of variants. It can now also filter reads by bed file.
-pub fn main(config: &PathBuf) -> Result<(), GenerateReadsErrors> {  
-    if !config.is_file() {
-        return Err(
-            GenerateReadsErrors::CliError(
-                "Must supply either a configuration file or a reference file to run NEAT!".to_string()
-            )
-        )
-    }
-    
+pub fn main(config: &PathBuf) -> Result<(), GenerateReadsErrors> {   
     info!("////////////// Welcome to rusty-neat read generator! \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\");
     thread::sleep(time::Duration::from_millis(1000));
     // set up the config struct based on whether there was an input config. Input config

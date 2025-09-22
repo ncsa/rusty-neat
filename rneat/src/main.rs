@@ -11,7 +11,6 @@ pub mod gen_reads;
 
 use std::env;
 use std::time;
-use same_file::is_same_file;
 use common::{self, file_tools::file_io::create_output_file};
 
 use common::file_tools::folder_tools::{check_create_dir, check_parent};
@@ -69,34 +68,16 @@ fn neat_commands() -> [Command; 2] {
             .about("Filters the output of gen-reads")
             .arg_required_else_help(true)
             .arg(
-                Arg::new("bed_file")
-                    .long("bed-file")
-                    .short('b')
-                    .help("Path to bed file containing desired regions.")
+                Arg::new("configuration_yaml")
+                    .long("configuration-yaml")
+                    .short('c')
+                    .help("Path to configuration file.")
                     .action(ArgAction::Set)
+                    .exclusive(true)
                     .default_missing_value("")
                     .value_parser(value_parser!(PathBuf))
                     .required(true)
             )
-            .arg(
-                Arg::new("file_to_filter")
-                    .long("file-to-filter")
-                    .short('f')
-                    .help("Path to fastq_r1 file containing reads to filter.")
-                    .action(ArgAction::Set)
-                    .default_missing_value("")
-                    .value_parser(value_parser!(String))
-            )
-            .arg(
-                Arg::new("output_file")
-                    .long("output-file")
-                    .short('o')
-                    .help("File (including path) to output file where to write files.")
-                    .action(ArgAction::Set)
-                    .default_missing_value("")
-                    .value_parser(value_parser!(PathBuf))
-                    .required(true)
-            ),
     ]
 }
 
@@ -198,6 +179,16 @@ fn main() -> Result<(), NeatErrors> {
                     let file = cmd.get_one::<PathBuf>("configuration_yaml")
                             .expect("Must provide a path with configuration-yaml")
                             .to_path_buf();
+
+                    if !file.is_file() {
+                        return Err(
+                            NeatErrors::FilterReadsError(
+                                FilterReadsError::CliError(
+                                    "Must supply either a configuration file or a reference file to run NEAT!".to_string()
+                                )
+                            )
+                        )
+                    }
                     info!("Running gen-reads to generate read data.");
                     let result = gen_reads::main(&file);
                     match result {
@@ -207,104 +198,30 @@ fn main() -> Result<(), NeatErrors> {
                 } 
             }
         },
-        Some(("filter-reads", _)) => {
+        Some(("filter-reads", cmd)) => {
             if let Some(("filter-reads", matches)) = subcommand {
 				info!("Running rneat filter-reads");
                 // extract the flags and values
-                let mut is_fastq = true;
-                let mut is_gzip = false;
-                let bed_path: PathBuf = {
-                    if let Some(bed_file) = matches.get_one::<PathBuf>("bed_file") {
-                        info!("filter-reads bed file: {:?}", bed_file);
-                        if !bed_file.is_file() {
-                            return Err(NeatErrors::FilterReadsError(FilterReadsError::FileNotFound(format!("{:?}", bed_file))))
-                        }
-                        bed_file.to_path_buf()
-                    } else {
-                        return Err(NeatErrors::FilterReadsError(FilterReadsError::FileNotFound("No bed file received.".to_string())))
-                    }
-                };
-                let file_to_filter: PathBuf = {
-                    if let Some(input_file) = matches.get_one::<String>("file_to_filter") {
-                        info!("filter-reads file to filter: {:?}", input_file);
-                        let file_path = PathBuf::from(input_file);
-                        let extension = file_path.extension();
-                        match extension {
-                            Some(ext) => {
-                                if ext != "gz" {
-                                    is_gzip = true;
-                                    let shorter_fn = file_path.with_extension("");
-                                    let extension2 = shorter_fn.extension();
-                                    match extension2 {
-                                        Some(ext2) => {
-                                            if ext2 == "vcf" {
-                                                is_fastq = false;
-                                            }
-                                        },
-                                        None => {
-                                            panic!("No file extension for gzipped file. Filetype not recognized")
-                                        },
-                                    }
-                                } else if ext == "vcf" {
-                                    is_fastq = false;
-                                }
-                            },
-                            None => return Err(
-                                NeatErrors::FilterReadsError(
-                                    FilterReadsError::MalformedFileName(
-                                        "Input file has no valid extensions.".to_string()
-                                    )
-                                )
-                            ),
-                        }
-                        PathBuf::from(input_file)
-                    } else {
+                if cmd.contains_id("configuration_yaml") {
+                    let file = cmd.get_one::<PathBuf>("configuration_yaml")
+                            .expect("Must provide a path with configuration-yaml")
+                            .to_path_buf();
+
+                    if !file.is_file() {
                         return Err(
                             NeatErrors::FilterReadsError(
-                                FilterReadsError::FileNotFound(
-                                    "Input file not received.".to_string()
+                                FilterReadsError::CliError(
+                                    "Must supply either a configuration file or a reference file to run NEAT!".to_string()
                                 )
                             )
                         )
                     }
-                };
-                let output_file: PathBuf = {
-                    if let Some(output_opt) = matches.get_one::<PathBuf>("output_file") {
-                        info!("filter-reads output dir: {:?}", output_opt);
-                        check_create_dir(output_opt);
-                        output_opt.to_path_buf()
-                    } else {
-                        return Err(
-                            NeatErrors::FilterReadsError(
-                                FilterReadsError::FileNotFound(
-                                    "No output file received.".to_string()
-                                )
-                            )
-                        )
+                    info!("Running filter-reads to filter rneat-generated read data.");
+                    let result = filter_reads::main(&file);
+                    match result {
+                        Err(error) => return Err(NeatErrors::FilterReadsError(error)),
+                        Ok(()) => info!("rneat filter-reads completed succesfully"),
                     }
-                };
-                if is_same_file(&file_to_filter, &output_file).unwrap() {
-                    return Err(
-                        NeatErrors::FilterReadsError(
-                            FilterReadsError::FileNotFound(
-                                "Output and input files are the same. Cannot read and write the same file".to_string()
-                            )
-                        )
-                    )
-                }
-                info!("Running filter reads!");
-                let result: Result<(), FilterReadsError> = filter_reads::main(
-                    bed_path,
-                    file_to_filter,
-                    is_gzip,
-                    is_fastq,
-                    output_file,
-                );
-                match result {
-                    Err(error) => return Err(NeatErrors::FilterReadsError(error)),
-                    _ => {
-                        info!("rneat filter-reads completed successfully!");
-                    },
                 }
             }
         },

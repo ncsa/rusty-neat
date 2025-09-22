@@ -218,7 +218,7 @@ pub fn filter_vcf(
     for line in infile {
         if line.starts_with("#") {
             // header line, write out with no changes
-            outfile.write(format!("{}\n", line).as_bytes())?;;
+            outfile.write(format!("{}\n", line).as_bytes())?;
         } else {
             // break the line into a vector by tabs
             let line_vec: Vec<&str> = line.split('\t').collect();

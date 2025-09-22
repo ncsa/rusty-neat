@@ -13,7 +13,7 @@ use std::env;
 use std::time;
 use common::{self, file_tools::file_io::create_output_file};
 
-use common::file_tools::folder_tools::{check_create_dir, check_parent};
+use common::file_tools::folder_tools::check_parent;
 use simplelog::{
     ColorChoice, 
     CombinedLogger, 
@@ -198,8 +198,8 @@ fn main() -> Result<(), NeatErrors> {
                 } 
             }
         },
-        Some(("filter-reads", cmd)) => {
-            if let Some(("filter-reads", matches)) = subcommand {
+        Some(("filter-reads", _)) => {
+            if let Some(("filter-reads", cmd)) = subcommand {
 				info!("Running rneat filter-reads");
                 // extract the flags and values
                 if cmd.contains_id("configuration_yaml") {

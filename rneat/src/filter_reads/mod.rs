@@ -3,8 +3,12 @@ use thiserror::Error;
 use std::num::ParseIntError;
 use std::path::PathBuf;
 use log::*;
+use std::{thread, time};
+
 use common::{file_tools::bed_reader::{self, BedReaderError}};
 use utils::filter_lib::{filter_fastq, filter_vcf};
+
+use crate::filter_reads::utils::config::RunConfiguration;
 
 #[derive(Error, Debug)]
 pub enum FilterReadsError {
@@ -24,31 +28,36 @@ pub enum FilterReadsError {
     BedReaderErr(#[from] BedReaderError),
     #[error("Unknown char while parsing suspected read name")]
     UnknownChar,
+    #[error("Cannot overwrite existing file: {0}")]
+    OverwriteFileError(String),
+    #[error("Invalid CLI inputs: {0}")]
+    CliError(String),
+    #[error("Invalid Configuration inputs: {0}")]
+    ConfigurationError(String),
 }
 
-pub fn main(
-    bed_file: PathBuf,
-    file_to_filter: PathBuf,
-    is_gzip: bool,
-    is_fastq: bool,
-    output_file: PathBuf,
-) -> Result<(), FilterReadsError> {
+pub fn main(config: &PathBuf) -> Result<(), FilterReadsError> {
+    info!("////////////// Welcome to rusty-neat read generator! \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\");
+    thread::sleep(time::Duration::from_millis(1000));
+    info!("Using Configuration file input: {:?}", &config);
+    let run_config = RunConfiguration::from(config);
     // bed_file: path to bed file to use for filtering
     // file_to_filter: fastq or vcf ready for filtering, can be gzipped or not
     // is_gzip: whether the input file is gzipped or not
     // is_fastq: wether the
     // output_file: will be gzipped.
-    info!("filter-reads values receieved: {:?}, {:?}, {:?}", bed_file, file_to_filter, output_file);
-    let bed_table = bed_reader::read_bed(&bed_file)?;
+    let bed_table = bed_reader::read_bed(&run_config.bed_file)?;
     info!("Running filter-reads on input file.");
-    if is_fastq {
-        info!("Filtering input fastq file: {:?}", file_to_filter);
-        filter_fastq(&bed_table, &file_to_filter, is_gzip, &output_file)?;
-    } else {
-        info!("Filtering input vcf file: {:?}", file_to_filter);
-        filter_vcf(&bed_table, &file_to_filter, is_gzip, &output_file)?;
+    for input_file in run_config.file_map.keys() {
+        let (output_file, is_gzip, is_fastq) = run_config.file_map[input_file].clone();
+        if is_fastq {
+            info!("Filtering input fastq file: {:?}", &input_file);
+            filter_fastq(&bed_table, &input_file, is_gzip, &output_file)?;
+        } else {
+            info!("Filtering input vcf file: {:?}", &input_file);
+            filter_vcf(&bed_table, &input_file, is_gzip, &output_file)?;
+        }
+        info!("Successfully filtered input file {:?}, written to {:?}", input_file, output_file);
     }
-    info!("Successfully filtered input file {:?}, written to {:?}, with bed {:?}", file_to_filter, output_file, bed_file);
-    
     Ok(())
 }

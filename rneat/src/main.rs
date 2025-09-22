@@ -10,10 +10,10 @@ pub mod filter_reads;
 pub mod gen_reads;
 
 use std::env;
-use same_file::is_same_file;
+use std::time;
 use common::{self, file_tools::file_io::create_output_file};
 
-use common::file_tools::folder_tools::{check_create_dir, check_parent};
+use common::file_tools::folder_tools::check_parent;
 use simplelog::{
     ColorChoice, 
     CombinedLogger, 
@@ -35,9 +35,12 @@ use crate::{
         errors::GenerateReadsErrors,
     },
 };
-
+/// This script parses arguments and checks them before submitting to the submodules, which currently 
+/// include `gen-reads` and `filter-files`. As more are added, this can be expanded or refactored
+/// argument parsing, timing, and other concerns will occur here.
 #[derive(Error, Debug)]
 pub enum NeatErrors {
+	// Errors specific to each submodule
     #[error("Error while generating read dataset")]
     GenerateReadsError(#[from] GenerateReadsErrors),
     #[error("Error while filtering reads with bed file")]
@@ -45,6 +48,7 @@ pub enum NeatErrors {
 }
 
 fn neat_commands() -> [Command; 2] {
+	// These are the submodule commands. Any new commands added should go here.
     [
         Command::new("gen-reads")
             .about("Generates reads for an input dataset")
@@ -54,43 +58,26 @@ fn neat_commands() -> [Command; 2] {
                     .long("configuration-yaml")
                     .short('c')
                     .help("Path to configuration file.")
-                    .exclusive(true)
                     .action(ArgAction::Set)
+                    .exclusive(true)
                     .default_missing_value("")
                     .value_parser(value_parser!(PathBuf))
+                    .required(true)
             ),
         Command::new("filter-reads")
             .about("Filters the output of gen-reads")
             .arg_required_else_help(true)
             .arg(
-                Arg::new("bed_file")
-                    .long("bed-file")
-                    .short('b')
-                    .help("Path to bed file containing desired regions.")
+                Arg::new("configuration_yaml")
+                    .long("configuration-yaml")
+                    .short('c')
+                    .help("Path to configuration file.")
                     .action(ArgAction::Set)
+                    .exclusive(true)
                     .default_missing_value("")
                     .value_parser(value_parser!(PathBuf))
                     .required(true)
             )
-            .arg(
-                Arg::new("file_to_filter")
-                    .long("file-to-filter")
-                    .short('f')
-                    .help("Path to fastq_r1 file containing reads to filter.")
-                    .action(ArgAction::Set)
-                    .default_missing_value("")
-                    .value_parser(value_parser!(String))
-            )
-            .arg(
-                Arg::new("output_file")
-                    .long("output-file")
-                    .short('o')
-                    .help("File (including path) to output file where to write files.")
-                    .action(ArgAction::Set)
-                    .default_missing_value("")
-                    .value_parser(value_parser!(PathBuf))
-                    .required(true)
-            ),
     ]
 }
 
@@ -104,6 +91,7 @@ fn main() -> Result<(), NeatErrors> {
                 .subcommand_value_name("SUB-COMMAND")
                 .subcommand_help_heading("SUB-COMMANDS")
                 .arg(
+					// This arg controls the amount of stuff shown in the display log.
                     Arg::new("log_level")
                         .long("log-level")
                         .help("Sets the log level for the display log.")
@@ -114,6 +102,7 @@ fn main() -> Result<(), NeatErrors> {
                         .default_missing_value("trace")
                 )
                 .arg(
+					// This arg controls where the log is written. The default is <current_working_dir>/.neat.log
                     Arg::new("log_dest")
                         .long("log-dest")
                         .help("Sets the log destination (full path with full filename) for the written log")
@@ -125,7 +114,7 @@ fn main() -> Result<(), NeatErrors> {
         )
         .subcommands(neat_commands());
         
-
+	// This parses the command arguments
     let matches = cmd.get_matches();
     let mut subcommand = matches.subcommand();
     let mut level_filter = "trace".to_string();
@@ -181,8 +170,8 @@ fn main() -> Result<(), NeatErrors> {
             log_file,
         ),
     ]).expect("Error creating log file!");
-    info!("////////////// Welcome to rusty-neat! \\\\\\\\\\\\\\\\\\\\\\\\");
-
+    info!("////////////// Welcome to rneat! \\\\\\\\\\\\\\\\\\\\\\\\\\\\");
+    let start = time::Instant::now();
     match subcommand {
         Some(("gen-reads", _)) => {
             if let Some(("gen-reads", cmd)) = subcommand {
@@ -190,119 +179,63 @@ fn main() -> Result<(), NeatErrors> {
                     let file = cmd.get_one::<PathBuf>("configuration_yaml")
                             .expect("Must provide a path with configuration-yaml")
                             .to_path_buf();
-                    info!("Using configuration file: {:?}", file);
-                    info!("Running Generate Reads.");
+
+                    if !file.is_file() {
+                        return Err(
+                            NeatErrors::FilterReadsError(
+                                FilterReadsError::CliError(
+                                    "Must supply either a configuration file or a reference file to run NEAT!".to_string()
+                                )
+                            )
+                        )
+                    }
+                    info!("Running gen-reads to generate read data.");
                     let result = gen_reads::main(&file);
                     match result {
                         Err(error) => return Err(NeatErrors::GenerateReadsError(error)),
-                        _ => info!("rneat gen-reads completed successfully"),
+                        Ok(()) => info!("rneat gen-reads completed succesfully"),
                     }
                 } 
             }
         },
         Some(("filter-reads", _)) => {
-            if let Some(("filter-reads", matches)) = subcommand {
+            if let Some(("filter-reads", cmd)) = subcommand {
+				info!("Running rneat filter-reads");
                 // extract the flags and values
-                let mut is_fastq = true;
-                let mut is_gzip = false;
-                let bed_path: PathBuf = {
-                    if let Some(bed_file) = matches.get_one::<PathBuf>("bed_file") {
-                        info!("filter-reads bed file: {:?}", bed_file);
-                        if !bed_file.is_file() {
-                            return Err(NeatErrors::FilterReadsError(FilterReadsError::FileNotFound(format!("{:?}", bed_file))))
-                        }
-                        bed_file.to_path_buf()
-                    } else {
-                        return Err(NeatErrors::FilterReadsError(FilterReadsError::FileNotFound("No bed file received.".to_string())))
-                    }
-                };
-                let file_to_filter: PathBuf = {
-                    if let Some(input_file) = matches.get_one::<String>("file_to_filter") {
-                        info!("filter-reads file to filter: {:?}", input_file);
-                        let file_path = PathBuf::from(input_file);
-                        let extension = file_path.extension();
-                        match extension {
-                            Some(ext) => {
-                                if ext != "gz" {
-                                    is_gzip = true;
-                                    let shorter_fn = file_path.with_extension("");
-                                    let extension2 = shorter_fn.extension();
-                                    match extension2 {
-                                        Some(ext2) => {
-                                            if ext2 == "vcf" {
-                                                is_fastq = false;
-                                            }
-                                        },
-                                        None => {
-                                            panic!("No file extension for gzipped file. Filetype not recognized")
-                                        },
-                                    }
-                                } else if ext == "vcf" {
-                                    is_fastq = false;
-                                }
-                            },
-                            None => return Err(
-                                NeatErrors::FilterReadsError(
-                                    FilterReadsError::MalformedFileName(
-                                        "Input file has no valid extensions.".to_string()
-                                    )
-                                )
-                            ),
-                        }
-                        PathBuf::from(input_file)
-                    } else {
+                if cmd.contains_id("configuration_yaml") {
+                    let file = cmd.get_one::<PathBuf>("configuration_yaml")
+                            .expect("Must provide a path with configuration-yaml")
+                            .to_path_buf();
+
+                    if !file.is_file() {
                         return Err(
                             NeatErrors::FilterReadsError(
-                                FilterReadsError::FileNotFound(
-                                    "Input file not received.".to_string()
+                                FilterReadsError::CliError(
+                                    "Must supply either a configuration file or a reference file to run NEAT!".to_string()
                                 )
                             )
                         )
                     }
-                };
-                let output_file: PathBuf = {
-                    if let Some(output_opt) = matches.get_one::<PathBuf>("output_file") {
-                        info!("filter-reads output dir: {:?}", output_opt);
-                        check_create_dir(output_opt);
-                        output_opt.to_path_buf()
-                    } else {
-                        return Err(
-                            NeatErrors::FilterReadsError(
-                                FilterReadsError::FileNotFound(
-                                    "No output file received.".to_string()
-                                )
-                            )
-                        )
+                    info!("Running filter-reads to filter rneat-generated read data.");
+                    let result = filter_reads::main(&file);
+                    match result {
+                        Err(error) => return Err(NeatErrors::FilterReadsError(error)),
+                        Ok(()) => info!("rneat filter-reads completed succesfully"),
                     }
-                };
-                if is_same_file(&file_to_filter, &output_file).unwrap() {
-                    return Err(
-                        NeatErrors::FilterReadsError(
-                            FilterReadsError::FileNotFound(
-                                "Output and input files are the same. Cannot read and write the same file".to_string()
-                            )
-                        )
-                    )
-                }
-                info!("Running filter reads!");
-                let result: Result<(), FilterReadsError> = filter_reads::main(
-                    bed_path,
-                    file_to_filter,
-                    is_gzip,
-                    is_fastq,
-                    output_file,
-                );
-                match result {
-                    Err(error) => return Err(NeatErrors::FilterReadsError(error)),
-                    _ => {
-                        info!("rneat filter-reads completed successfully!");
-                    },
                 }
             }
         },
         _ => unreachable!("Parser should ensure no other subcommand choice is made.")
     }
 
+    let elapsed_time = time::Instant::now() - start;
+    info!("Processing finished in {} milliseconds", elapsed_time.as_millis());
+    if elapsed_time.as_millis() < 1000 {
+        info!("Processing finished in {} milliseconds", elapsed_time.as_millis());
+    } else if elapsed_time.as_secs() > 300 {
+        info!("Processing finished in {} minutes", ((elapsed_time.as_secs() as f64)/60.0))
+    } else {
+        info!("Processing finished in {} seconds", elapsed_time.as_secs());
+    }
     Ok(())
 }
-

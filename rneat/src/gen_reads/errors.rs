@@ -79,5 +79,5 @@ pub enum GenerateReadsErrors {
     #[error("Bed reader error: {0}")]
     BedError(#[from] BedReaderError),
     #[error("Sequence too short to process")]
-    ShortSequence
+    ShortSequence,
 }

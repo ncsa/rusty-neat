@@ -1,0 +1,12 @@
+# You must input a bed file with valid regions 
+# for the fastq and/or vcf files to be filtered
+bed_file: # required
+# You must input a list of files to filter. 
+# The list can be one file.
+files_to_filter: [
+  # required, in list form
+]
+# This is the filter key that will be appended to the end of the filename
+# before the extensions. The default is "_filtered" i.e., 
+# "output_file.vcf.gz" becomes "output_file_filtered.vcf.gz"
+filter_key: .

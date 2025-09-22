@@ -217,8 +217,8 @@ pub fn filter_vcf(
     let (infile, mut outfile) = prep_files_for_filtering(vcf_in, is_gzip, vcf_out)?;
     for line in infile {
         if line.starts_with("#") {
-            // header line, skip
-            continue;
+            // header line, write out with no changes
+            outfile.write(format!("{}\n", line).as_bytes())?;;
         } else {
             // break the line into a vector by tabs
             let line_vec: Vec<&str> = line.split('\t').collect();

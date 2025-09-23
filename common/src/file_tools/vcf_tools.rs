@@ -2,15 +2,32 @@
 extern crate log;
 
 use std::collections::HashMap;
-use std::io;
+use std::io::{self, BufReader, Lines, Read};
+use std::num::ParseIntError;
 use std::path::PathBuf;
 use std::io::Write;
 use flate2::write::GzEncoder;
 use flate2::Compression;
+use itertools::Itertools;
+use thiserror::Error;
+use log::*;
 
-use crate::file_tools::file_io::create_output_file;
-use crate::structs::nucleotides::sequence_array_to_string;
+use crate::file_tools::file_io::{create_output_file, read_gzip_lines, read_lines};
+use crate::structs::nucleotides::{sequence_array_to_string, Nucleotide};
 use crate::structs::mutated_map::MutatedMap;
+use crate::structs::variants::{Variant, VariantType};
+
+#[derive(Debug, Error)]
+pub enum VcfToolsError {
+    #[error("Error reading the vcf file. Check file format: {0}")]
+    MalformedVcf(String),
+    #[error("IO error from the bed reader: {0}")]
+    IoError(#[from] io::Error),
+    #[error("Error parsing ints from the bed file: {0}")]
+    ParserError(#[from] ParseIntError),
+    #[error("File has an unknown or missing file extension: {0}")]
+    FileExtensionUnknown(String)
+}
 
 pub fn write_vcf(
     mutated_maps: &HashMap<String, Vec<MutatedMap>>,
@@ -85,6 +102,103 @@ pub fn write_vcf(
         }
     }
     Ok(())
+}
+
+pub fn read_vcf(vcf_file: PathBuf) -> Result<Vec<Variant>, VcfToolsError> {
+    let ext = vcf_file.extension();
+    match ext {
+        Some(ext) => {
+            if ext == "gz" {
+                return process_gzip_vcf(&vcf_file)
+            } else {
+                return process_vcf(&vcf_file)
+            }
+        },
+        None => panic!("file extonsion unknown! {:?}", vcf_file),
+    }
+}
+
+fn process_gzip_vcf(filename: &PathBuf) -> Result<Vec<Variant>, VcfToolsError> {
+    let reader = read_gzip_lines(filename)?;
+    return Ok(read_open_vcf(reader).expect("Problem processing lines of gzipped bed file"))
+}
+
+fn process_vcf(filename: &PathBuf) -> Result<Vec<Variant>, VcfToolsError> {
+    let reader = read_lines(filename)?;
+    return Ok(read_open_vcf(reader).expect("Error processing bed file"))
+}
+
+fn read_open_vcf<P: Read> (reader: Lines<BufReader<P>>) -> Result<Vec<Variant>, VcfToolsError> {
+    let mut file_records: Vec<Variant> = Vec::new();
+    for result in reader {
+        match result {
+            Ok(line) => {
+                if line.starts_with("#") {
+                    continue
+                } else {
+                    let split_line: Vec<&str> = line.split("\t").collect();
+                    let chrom = split_line[0];
+                    let pos = split_line[1].parse();
+                    let location: usize = {
+                        match pos {
+                            Ok(num) => num,
+                            Err(error) => return Err(VcfToolsError::ParserError(error))
+                        }
+                    };
+                    let id = split_line[2];
+                    let vcf_reference = split_line[3];
+                    let vcf_alternate = split_line[4];
+                    let qual = split_line[5].parse();
+                    let quality_score: Option<usize> = {
+                        match qual {
+                            Ok(num) => Some(num),
+                            Err(error) => return Err(VcfToolsError::ParserError(error))
+                        }
+                    };
+                    let filter = split_line[6];
+                    let info = split_line[7];
+                    let mut format: Vec<String> = Vec::new();
+                    let mut sample: Vec<String> = Vec::new();
+                    if split_line.len() > 7 {
+                        if split_line.len() < 9 {
+                            return Err(
+                                VcfToolsError::MalformedVcf(
+                                "FORMAT field present with no Sample field, invalid VCF".to_string()
+                                )
+                            )
+                        }
+                        // This is a FORMAT field, if it exists
+                        let format_split: Vec<&str> = split_line[8].split(":").collect();
+                        let sample_split: Vec<&str> = split_line[9].split(":").collect();
+                        let format_len = format_split.len();
+                        if sample_split.len() != format_len {
+                            return Err(
+                                VcfToolsError::MalformedVcf(
+                                    "FORMAT list and sample list different lengths, invalid VCF".to_string()
+                                )
+                            )
+                        }
+                        for i in 0..format_len {
+                            // Look for GT
+
+                            format.push(format_split[i].to_string());
+                            sample.push(sample_split[i].to_string());
+                        }
+                    }
+                    if split_line.len() > 9 {
+                        warn!("Currently rneat can only read one sample per record")
+                    }
+                    
+
+
+                }
+            },
+            Err(error) => {
+                return Err(VcfToolsError::IoError(error))
+            },
+        }
+    }
+    Ok(file_records)
 }
 
 #[cfg(test)]

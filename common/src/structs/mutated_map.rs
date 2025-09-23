@@ -6,7 +6,7 @@
 use crate::structs::{
     fasta_map::{FastaMapError, decode_block_filename}, 
     nucleotides::Nucleotide, 
-    variants::{Genotypes, Variant, VariantError},
+    variants::{Genotype, Variant, VariantError},
 };
 use std::collections::HashMap;
 use simple_rng::NeatRng;
@@ -80,8 +80,8 @@ impl MutatedMap {
         // the calling function has already checked thath position is within variant_map, or else
         // this will throw an index out of range error.
         match self.variant_map[&position].genotype {
-            Genotypes::Homozygous => return Ok(self.variant_map[&position].alternate.clone()),
-            Genotypes::Heterozygous => {
+            Genotype::Homozygous => return Ok(self.variant_map[&position].alternate.clone()),
+            Genotype::Heterozygous => {
                 // 50/50 chance we mutate
                 if rng.gen_bool(0.5).unwrap() {
                     return Ok(self.variant_map[&position].reference.clone())

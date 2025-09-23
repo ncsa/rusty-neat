@@ -19,7 +19,7 @@ use crate::structs::nucleotides::Nucleotide;
 use crate::file_tools::file_io::{append_to_file, read_gzip_lines};
 use crate::models::sequencing_error_model::{SeqModelError, SequencingErrorModel, SequencingErrorType};
 use crate::structs::nucleotides::Nucleotide::N;
-use crate::structs::variants::{Genotypes, Variant};
+use crate::structs::variants::{Genotype, Variant};
 
 #[derive(Error, Debug)]
 pub enum FastqToolsError {
@@ -298,7 +298,7 @@ fn apply_variants_and_write_sequence<T: Write> (
             // Potentially contains a mutation, so we will write that, if applicable
             let variant = variant_map[&fragment_position];
             // alwas apply homozygous mutations, but only half the time for heterozygous
-            if (variant.genotype == Genotypes::Homozygous) || (rng.random()? < 0.5) {
+            if (variant.genotype == Genotype::Homozygous) || (rng.random()? < 0.5) {
                 base_to_write = {
                     match read_strand {
                         Strand::Forward => variant.alternate.clone(),

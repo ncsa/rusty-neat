@@ -8,6 +8,7 @@ extern crate simple_rng;
 
 pub mod filter_reads;
 pub mod gen_reads;
+pub mod create_mutation_model;
 
 use std::env;
 use std::time;
@@ -28,12 +29,8 @@ use clap::{value_parser, Arg, ArgAction, Command};
 use std::path::PathBuf;
 
 use crate::{
-    filter_reads::{
-        FilterReadsError,
-    }, 
-    gen_reads::{
-        errors::GenerateReadsErrors,
-    },
+    filter_reads::errors::FilterReadsError, 
+    gen_reads::errors::GenerateReadsErrors,
 };
 /// This script parses arguments and checks them before submitting to the submodules, which currently 
 /// include `gen-reads` and `filter-files`. As more are added, this can be expanded or refactored

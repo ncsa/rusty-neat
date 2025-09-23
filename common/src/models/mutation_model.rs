@@ -200,6 +200,9 @@ impl MutationModel {
                         .to_vec();
                 }
             },
+            _ => {
+                panic!("Unsupported option for generating mutation")
+            }
         };
         
         if reference.is_empty() || alternate.is_empty() || reference == alternate {

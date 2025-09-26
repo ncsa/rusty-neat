@@ -12,5 +12,5 @@ resolver = "2"
 version = '1.2.0'
 edition = '2024'
 authors = ["Joshua Allen"]
-description = "Toolkit"
+description = "Toolkit for generating simulated NGS read data in fastq and vcf formats. Feature set under development."
 repository = "https://github.com/ncsa/rusty-neat"

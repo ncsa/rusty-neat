@@ -1,11 +1,11 @@
 # The rusty-neat project
 Weclome to `rneat`, a Rust port of NEAT (https://github.com/ncsa/neat), a genetic simulation program that creates next-gen-looking fastq files along with an accompanying golden vcf file showing all of the variants inserted by NEAT. It also generates "noise" in the form of sequencing errors as it is writing out files. These features can help you hone in your alignment software to your data. 
 
-As of now, `rneat` is still under development. This is our 1.3.0 version, but it is still in beta. There are several features yet to be completed. One of which is the ability to read data from real data, to hone NEAT's statistics. There are other features we hope to add too. Check the changelog for more information. 
+As of now, `rneat` is still under development. We are working toward the goal of the original NEAT of being able to read user data and construct a model based on that data. We do however, have functional reads being generated, with variants tracked in a vcf file. This is our 1.2.0 version.
 
 # How to use `rneat`
 
-Download the executable in the release (current version 1.3.0).
+Download the executable in the release (current version 1.2.0).
 
 ```
 $ rneat --help
@@ -21,7 +21,9 @@ Options:
       --log-dest <log_dest>      Sets the log destination (full path with full filename) for the written log
   -h, --help                     Print help
 ```
+
 To check options for a subcommand:
+
 ```
 $ rneat gen-reads --help
 Generates reads for an input dataset
@@ -32,20 +34,21 @@ Options:
   -c, --configuration-yaml <configuration_yaml>  Path to configuration file.
   -h, --help                                     Print help
 ```
+
+To run filter reads, check the help menu.
+
 ```
 $ rneat filter-reads --help
 Filters the output of gen-reads
 
-Usage: rneat filter-reads [OPTIONS] --bed-file <bed_file> --output-file <output_file>
+Usage: rneat filter-reads --configuration-yaml <configuration_yaml>
 
 Options:
-  -b, --bed-file <bed_file>              Path to bed file containing desired regions.
-  -f, --file-to-filter <file_to_filter>  Path to fastq_r1 file containing reads to filter.
-  -o, --output-file <output_file>        File (including path) to output file where to write files.
-  -h, --help                             Print help
+  -c, --configuration-yaml <configuration_yaml>  Path to configuration file.
+  -h, --help                                     Print help
 ```
 
-Use the help menu to see the available options and leave an issue if you find something bad happening. This data is not currently considered usable for anything requiring real rigor, but this is the first iteration toward a final product. 
+Use the help menu to see the available options and leave an issue if you find something bad happening.
 
 To compile and run `rneat` yourself, you will need the Rust environment (https://www.rust-lang.org/tools/install), with cargo. You will also need git installed for your operating system. You will then need to git clone and cd into the repo directory. From your home directory in Linux the process might look something like:
 
@@ -62,10 +65,12 @@ Once in the repo, you can build the program either in debug (default) or release
 ```angular2html
 ~/rusty-neat/$ cargo build --release
 ```
+
 If you prefer to run the package directly without using the binary, you can also use
 ```angular2html
 ~/rusty-neat/$ cargo run
 ```
+
 Rust will download any required packages. Compiling Rust code is the slowest part of the process. The final binary will be built and the program run immediately after in the second case. To run the program manually, from the repo main dir, run
 
 ```angular2html
@@ -77,20 +82,21 @@ Rust will download any required packages. Compiling Rust code is the slowest par
 ```angular2html
 ~/rusty-neat/$ ./target/release/rneat -C /path/to/filled/in/config.yml
 ```
-If you record the output in the logs of Seed string to regenerate these exact results: XXXXXXX, you should be able to use that string as input with rng_seed and reproduce your results (untested as of yet).
+
+If you record the output in the logs of Seed string to regenerate these exact results: XXXXXXX, you should be able to use that string as input with rng_seed and reproduce your results (needs more thorough testing).
 
 Fastq Output
 ============
-the fastq output will have a key name that identifies the block where teh read was drawn from. This should allow you to asseses how well the aligner funcution. The name will have the format `<contig short name>_<fragment_start>_<fragment_end>`
+The fastq output will have a key name that identifies the fragment where teh read was drawn from. This should allow you to asseses how well the aligner funcution. The name will have the format `<contig short name>_<fragment_start>_<fragment_end>`
 
 ```angular2html
-@neat_generated_Chromosome_0000000000_0000131072_1:1
+@neat_generated_Chromosome_0000000000_0000353_1:1
 CTTTTCATTCTGACTGCAACGGGCAATATGTCTCTGTGTGGATTAAAAAAAGAGTGTCTGATAGCAGCTTCTTAACTGGTTACCTGCCGTGAGTAAATTAAAATTTTATTGACTTAGGTCACTAAATACTTTAACCAATATAGGCATAGC
 +
 >AC7<GDEGGGGEFGA<GFCGG;GGGGGF>GEGGEGGGFGFEFGCEGGGGGGCG:AEFGFFGG>FG;GDGA9$GGAGF=GFG=EFFCGGGFGGGGGC$BFGEFFAGGG9F7E@>?GFGGGG>EBFGFDG)DGC6DEDFA2EG:EGG%FFB
 ```
-For example, comes from the chromosome in the reference (which was simply named "Chromosome") between 0 and 131072, which is the size 
-of a block read by the fasta reader. An improvement may be to give the exact coordinates of the read. We will continue to think about bam creation, but this may be a good method as well to see how well the alignment worked. Perhaps we could write a processing script that took the output of GATK alignment and checked to see how well the reads were aligned relative to where they came from. That might be easier than writing bam tools.
+For example, comes from the chromosome in the reference (which was simply named "Chromosome") between 0 and 353, which is the size 
+of a fragment in the simulated DNA. If there is a pair with this read, it will have the same coordinates, though it started at index 352 instead.
 
 Reading Bed Data
 ================
@@ -107,6 +113,7 @@ $ grep "^>" input.fasta
 >NC_001135.5 Saccharomyces cerevisiae S288C chromosome III, complete sequence
 >etc
 ```
+
 This will give you the fill fasta name. `rneat` determines the short name of the input fasta by skipping the initial '>' character, then taking the string up to the first delimiter (space or '|'). In the above example, the short names are "NC_001133.9", "NC_001134.8", etc. 
 
 Next, we check the bed. This example awk command will look for unique values in the first column of your bed file and print out what it finds. 
@@ -118,35 +125,52 @@ $ awk '!seen[$1]++ {print $1}' file.bed
 3
 etc
 ```
+
 In this case, the bed file uses a simple numbering scheme to number the chromosomes. We can see a mapping with the roman numeral chromosomes in the name, but it's tricky to program. So, the following command will allow you, the user, to map these chromosomes and thus instruct NEAT. Yours will vary based on the inputs.
 
 ```angular2html
 awk -F'\t' '{$1=($1=="1"?"NC_001133.9":$1); $1=($1=="2"?"NC_001134.8":$1); print}' OFS='\t' file.bed > file_renamed.bed
 ```
+
 You will have to tailor this command to your dataset, but this will allow you to map the names from the bed to the fasta in a way `rneat` will understand.
 
 Filtering Your Data
 ====================
 
-There are two ways to filter with `rneat`. The first is to add a path to a bed in the config with the keyword `filter_output`
+To run filter-reads, you must first copy the filter_reads_template.yml file from rusty-neat/template_config/ to a directory of your choosing. Then you can edit the  file in your favorite editor. The configuration only has three fields:
 
-In configuration:
 ```
-filter-output: /path/to/my.bed
+bed_file: # required
 ```
+A filename (full path is best) for a bed file with regions to target for filtering. It should be tab-separated in standard bed format.
 
-Now, calling `rneat gen-reads`:
 ```
-$ rneat gen-reads -c simple.yml
+files_to_filter: [
+  # required, in list form
+]
 ```
+Filenames (full path is best) for files to filter by the bed file. For example, if you ran paired-ended fastqs with the vcf, your list would look like:
 
-Will produce normal fastq and vcfs, alongside filtered fastq and vcfs, all in gzip format.
+```
+files_to_filter: [
+   /my/home/output/bacteria_r1.fastq.gz,
+   /my/home/output/bacteria_r2.fastq.gz,
+   /my/home/output/bacteria.vcf.gz,
+]
+```
+Note the full extension is important, but filter-reads should be able to handle both gzipped and unzipped files, if you decide to unzip them.
 
-The second way is directly on existing files:
 ```
-$ rneat gen-reads -b /path/to/my.bed -f myfastq_r1.fastq.gz -o myfastq_r1_filtered.fastq.gz
+filter_key: .
 ```
-Will filter myfastq_r1.fastq into myfastq_r1_filtered.fastq.gz. This should work seamlessly for both fastq and vcf, whether it is gzipped or not. 
+This is the key appended to the filename, before extensions. For example, if your filename is "miscanthus_r1.fast.gz", and you set the key as "_only_genes", the output file would be "miscanthus_r1_only_genes.fastq.gz. The default is "_filtered".
+
+Once your files are entered and your config is saved, you can run rneat:
+
+```
+$ rneat filter-reads -c my_config.yml
+```
+Your output will give you the filenames and success status.
 
 IMPORTANT: This feature only works on fastq files generated by `rneat`. It is untested on generic VCF files, but should work. The reason it only works with `rneat`-generated fastq files is that `rneat` uses a naming scheme that the parser can use to identify where the read is located (enabling filtering), whereas an average fastq will not have that info.
 

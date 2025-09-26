@@ -135,7 +135,6 @@ fn read_open_vcf<P: Read> (reader: Lines<BufReader<P>>) -> Result<HashMap<String
         match result {
             Ok(line) => {
                 if line.starts_with("#") {
-                    // Skip for now. We may, at some point, want to parse the header for important info
                     continue
                 } else {
                     let split_line: Vec<&str> = line.split("\t").collect();
@@ -190,7 +189,7 @@ fn read_open_vcf<P: Read> (reader: Lines<BufReader<P>>) -> Result<HashMap<String
                     if split_line.len() > 9 {
                         warn!("Currently rneat can only read one sample per record")
                     }
-                    let variant = Variant::from_file_params(
+                    let variant = Variant::from_file(
                         location,
                         id,
                         filter,

@@ -88,8 +88,8 @@ pub fn read_fasta(
     // This will keep our sequence maps stored at a higher level, so that we don't have to
     // read the entire sequence from file just to know where the N-regions are
     let mut block_sequence_maps: HashMap<PathBuf, Vec<SequenceMap>> = HashMap::new();
-    // This hashmap maps the short name to a description.
-    let mut name_map: HashMap<String, Option<String>> = HashMap::new();
+    // This hashmap maps the short name to a long name.
+    let mut name_map: HashMap<String, String> = HashMap::new();
     // This will give us the write order for the bam and vcf
     let mut contig_order: Vec<String> = Vec::new();
     // current contig
@@ -122,15 +122,7 @@ pub fn read_fasta(
                     } else if contig_length - block_start == 0 && !current_key.is_empty() {
                         // If skip_contig is true, then we don't throw an error
                         // in this case, we had two contig names in a row and no sequence, which is an invalid FASTA
-                        let desc = name_map[&current_key].clone();
-                        let mut name = current_key.to_owned();
-                        match desc {
-                            // reinsert space
-                            Some(description) => name.push_str(&format!(" {}", &description)),
-                            None => {
-                                // name = current_key
-                            },
-                        }
+                        let name = name_map[&current_key].clone();
                         error!("Read for contig {} is empty. Please check file for proper FASTA format.", name);
                         return Err(FastaReaderError::ReadFastaError)
                     } else {
@@ -165,12 +157,10 @@ pub fn read_fasta(
                         // Store the sequence_maps
                         block_sequence_maps.insert(block_file, sequence_maps);
 
-                        let desc = name_map[&current_key].clone();
                         // Add the contig to the list
                         contigs.push(
                             Contig::new(
-                                &current_key.clone(),
-                                &desc,
+                                current_key.clone(),
                                 contig_length,
                                 block_filenames,
                                 block_sequence_maps,
@@ -187,24 +177,10 @@ pub fn read_fasta(
                         block_start = 0;
                     }
                     // grab the name from the string, omitting the initial '>' character
-                    let long_name = line_str[1..].trim_end().to_string();
-                    let (id, desc) = extract_key_name(&long_name);
-                    current_key = id;
-                    if name_map.contains_key(&current_key) {
-                        // name collision
-                        let desc_orig = name_map[&current_key].clone();
-                        let mut orig_name = current_key.clone();
-                        match desc_orig {
-                            // reinsert space
-                            Some(desc) => orig_name.push_str(&format!(" {}", desc)),
-                            None => {
-                                // Do nothing
-                            },
-                        }
-                        error!("Name collision in fasta file, two entries with identical key names: {current_key} from {} {}", orig_name, long_name);
-                        return Err(FastaReaderError::ReadFastaError)
-                    }
-                    name_map.insert(current_key.clone(), desc);
+                    let long_name = line_str[1..].to_string();
+                    let short_name = extract_key_name(&long_name);
+                    current_key = short_name;
+                    name_map.entry(current_key.clone()).or_insert(long_name);
                     contig_order.push(current_key.clone());
 
                 } else {
@@ -287,35 +263,38 @@ pub fn read_fasta(
 
     // any new data was written, now we add the final block to the contig
     // Add the contig to the list
-    contigs.push(
-        Contig::new(
-            &current_key,
-            &name_map[&current_key],
-            contig_length,
-            block_filenames,
-            block_sequence_maps,
-        )?
-    );
+    contigs.push(Contig::new(
+        current_key,
+        contig_length,
+        block_filenames,
+        block_sequence_maps,
+    )?);
 
     // Return box object with final FastaMap object, which will be used for processing
     Ok(Box::new(
         FastaMap {
             contigs,
+            name_map,
             contig_order,
         }
     ))
 }
 
-fn extract_key_name(full_name: &str) -> (String, Option<String>) {
-    // Fasta names can have a variety of formats. Our assumption here is that 
-    // everything before the first space is a unique ID field, and everything after is 
-    // a description. Oftentimes, the "common" name ends up in the description, which
-    // can cause problems in the vcf. We may need to add a way to search both id
-    // and description.
-    let mut fields = full_name.splitn(2, char::is_whitespace);
-    let id = fields.next().map(|s| s.to_owned()).unwrap();
-    let desc = fields.next().map(|s| s.to_owned());
-    (id, desc)
+fn extract_key_name(full_name: &str) -> String {
+    // Fasta names can have a variety of formats. Attempt to parse the format.
+    // may need to add more delimiters, but these are the most common.
+    // This helper function can be expanded as needed in the future
+    let delimiters = ['|', ' '];
+    let mut delim_index = full_name.len();
+    for (index, char) in full_name.chars().enumerate() {
+        if delimiters.contains(&char) {
+            // Look for a delimiter
+            delim_index = index;
+            break;
+        }
+    };
+    // Returns full name if no delimiter found
+    full_name[..delim_index].to_string()
 }
 
 fn map_buffer(sequence: &[Nucleotide]) -> Result<Vec<SequenceMap>, FastaReaderError> {
@@ -588,9 +567,9 @@ mod tests {
         let name1 = "BBB|AAA|CCC";
         let name2 = "BBB AAA CCC";
         let name3 = "BBBAAACCC";
-        assert_eq!(extract_key_name(name1), ("BBB|AAA|CCC".to_string(), None));
-        assert_eq!(extract_key_name(name2), ("BBB".to_string(), Some("AAA CCC".to_string())));
-        assert_eq!(extract_key_name(name3), ("BBBAAACCC".to_string(), None));
+        assert_eq!(extract_key_name(name1), "BBB".to_string());
+        assert_eq!(extract_key_name(name2), "BBB".to_string());
+        assert_eq!(extract_key_name(name3), "BBBAAACCC".to_string());
     }
 
     #[test]

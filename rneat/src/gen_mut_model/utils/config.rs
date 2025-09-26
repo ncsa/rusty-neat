@@ -16,7 +16,7 @@ use common::{
         variants::Variant
     }
 };
-use crate::gen_mut_model::errors::GenMutationModelError;
+use crate::create_mutation_model::errors::CreateMutationModelError;
 
 #[derive(Debug, Clone)]
 pub struct RunConfiguration {
@@ -34,7 +34,7 @@ pub struct RunConfiguration {
 }
 
 impl RunConfiguration {
-    pub fn from(yml_file: &PathBuf) -> Result<Self, GenMutationModelError> {
+    pub fn from(yml_file: &PathBuf) -> Result<Self, CreateMutationModelError> {
         // Reads an input configuration file from yaml using the serde package. Then sets the
         // parameters based on the inputs. A "." value means to use the default value.
         //

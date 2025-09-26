@@ -1,6 +1,5 @@
 //! These enums and structs help us keep track of variants added to the reference
 //! It stores all the necessary data to write a variant out.
-use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use crate::structs::nucleotides::Nucleotide;
 use log::*;
@@ -47,7 +46,7 @@ fn gt_from_str(input: &str) -> Genotype {
     }
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub enum VariantType {
     SNP,
     Insertion,
@@ -107,7 +106,7 @@ pub struct Variant {
 
 impl Variant {
 
-    pub fn from_file_params(
+    pub fn from_file(
         location: usize,
         id: &str,
         filter: &str,

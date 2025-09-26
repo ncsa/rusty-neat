@@ -10,11 +10,7 @@ use log::{error, debug};
 use vectorize;
 use serde;
 use std::hash::Hash;
-use std::{
-    fmt::{self, Debug}, 
-    io, 
-    path::PathBuf
-};
+use std::{fmt, io, path::PathBuf};
 use std::ops::Index;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -22,10 +18,7 @@ use std::collections::HashMap;
 use simple_rng::NeatRngError;
 use lazy_static::lazy_static;
 use crate::models::lib::{model_reader, model_writer};
-use crate::structs::transition_matrix::{
-    TransitionMatrix, 
-    TransitionMatrixError
-};
+use crate::structs::transition_matrix::{TransitionMatrix, TransitionMatrixError};
 use crate::structs::distributions::{DiscreteDistribution, DistributionErrors};
 use crate::structs::nucleotides::Nucleotide::{A, C, G, T, N};
 use crate::structs::nucleotides::Nucleotide;
@@ -118,7 +111,7 @@ const SNP_TRINUCS: [(Nucleotide, Nucleotide, Nucleotide); 64] = [
 ];
 
 lazy_static! {
-    pub static ref ALL_FRAMES: Vec<TrinucFrame> = {
+    static ref ALL_FRAMES: Vec<TrinucFrame> = {
         let mut all_frames = Vec::new();
         for trinuc in SNP_TRINUCS {
             all_frames.push(TrinucFrame::from(trinuc))
@@ -144,7 +137,7 @@ lazy_static! {
         alias_map
     };
 
-    pub static ref ALL_CONTEXTS: Vec<TrinucFrame> = {
+    static ref ALL_CONTEXTS: Vec<TrinucFrame> = {
         let alias_map = ALIAS_MAP.clone();
         let frames: Vec<TrinucFrame> = alias_map
             .values()
@@ -183,7 +176,7 @@ lazy_static! {
 }
 
 // We need all these derivations to write these out to file
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Copy, Serialize, Deserialize)]
+#[derive(Debug, Eq, PartialEq, Hash, Clone, Copy, Serialize, Deserialize)]
 pub enum TrinucFrame {
     Frame(Nucleotide, Nucleotide, Nucleotide),
 }
@@ -240,83 +233,19 @@ impl Index<usize> for TrinucFrame {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SnpTrinucModel {
     // Relative weights given to each SNP frame. Ultimately this will be imputed from data.
-    pub snp_trinuc_distro: DiscreteDistribution<TrinucFrame>,
+    snp_distro: DiscreteDistribution,
     // The transition matrix is the chance of mutating the middle base from A, C, T, or G to a
     // different base (4x4 matrix with 0s on the diagonal).
-    // Each Trinuc index is a context index, with a middle "N".
-    // Each row is a from base, and each corresponding column is the to base, with the intersecting
-    //    f64 being the probability of transitioning from...to.
     #[serde(with = "vectorize")]
-    pub trinuc_context_distros: HashMap<TrinucFrame, TransitionMatrix>,
+    trinuc_distros: HashMap<TrinucFrame, TransitionMatrix>,
 }
 
 static DATA_FILE: &'static [u8] = include_bytes!("model_data/default_trinuc_model.json.gz");
 
 impl SnpTrinucModel {
-    pub fn from_raw_data(
-        snp_trinuc_weights_raw: HashMap<TrinucFrame, f64>,
-        trinuc_transition_frequency: HashMap<(TrinucFrame, TrinucFrame), f64>,
+    pub fn from(
     ) -> Result<Self, SnpTrinucError> {
-        // Inputs:
-        // snp_trinuc_weights: This is the probability that the trinucleotide combination mutates
-        //    at all. A 0.0 value here indicates the trinucleotide was not observed in the data.
-        // trinuc_transition_frequency: This is the probability that Trinucleotide combination A
-        //    transitions into trinucleotide combination B. There may be 0s here where we did not
-        //    observe one transitioning to the other.
-        // To account for potential zeroes in the data, we will add in a 0.001 in place of each
-        //    zero. This should get ensmallated when normalization happens, making them even less
-        //    likely. We can adjust this epsilon in response to user input.
-        let epsilon = 0.001;
-        let all_contexts = ALL_CONTEXTS.clone();
-        let context_frame_map = CONTEXT_FRAME_MAP.clone();
-        let mut trinuc_context_distros: HashMap<TrinucFrame, TransitionMatrix> = HashMap::new();
-        for context in &all_contexts {
-            let mut temp_trans_matrix: [[f64; 4] ;4] = [
-                [0.0, 0.0, 0.0, 0.0],
-                [0.0, 0.0, 0.0, 0.0],
-                [0.0, 0.0, 0.0, 0.0],
-                [0.0, 0.0, 0.0, 0.0],
-            ];
-            let frames = &context_frame_map[context];
-            for from_frame in frames {
-                for nuc2 in 0..4 {
-                    let to_frame = TrinucFrame::from(
-                        &[context[0], Nucleotide::from(nuc2), context[2]]
-                    );
-                    temp_trans_matrix[from_frame[1] as usize][nuc2] = trinuc_transition_frequency[
-                        &(*from_frame, to_frame)
-                    ];
-                }
-            }
-            let trans_matrix = TransitionMatrix::from(
-                temp_trans_matrix[A as usize],
-                temp_trans_matrix[C as usize],
-                temp_trans_matrix[G as usize],
-                temp_trans_matrix[T as usize],
-            )?;
-
-            trinuc_context_distros.insert(context.clone(), trans_matrix);
-        }
-        let (snp_trinuc_weights, snp_trinuc_values) = {
-            let mut temp_weights: Vec<f64> = Vec::new();
-            let all_frames = ALL_FRAMES.clone();
-            for frame in &all_frames {
-                if snp_trinuc_weights_raw.contains_key(&frame) {
-                    temp_weights.push(snp_trinuc_weights_raw[&frame] + epsilon);
-                } else {
-                    temp_weights.push(epsilon);
-                }
-            }
-            (temp_weights, all_frames)
-        };
-        let snp_trinuc_distro = DiscreteDistribution::new(
-            &snp_trinuc_weights,
-            &snp_trinuc_values,
-        )?;
-        Ok(Self {
-            snp_trinuc_distro,
-            trinuc_context_distros,
-        })
+        todo!()
     }
 
     pub fn default_minimal() -> Result<Self, SnpTrinucError> {
@@ -332,19 +261,16 @@ impl SnpTrinucModel {
         let all_frames = ALL_FRAMES.clone();
         for frame in &all_contexts {
             trinuc_distros.insert(frame.clone() ,TransitionMatrix::default()?);
-
-        }
-        for _ in &all_frames {
             snp_weights.push(1.0);
         }
         let snp_distr = DiscreteDistribution::new(
             &snp_weights,
             // Instead of enumerating all those frames, we will just use the index here
-            &all_frames,
+            &(0..all_frames.len()).collect(),
         )?;
         Ok(SnpTrinucModel {
-            snp_trinuc_distro: snp_distr,
-            trinuc_context_distros: trinuc_distros,
+            snp_distro: snp_distr,
+            trinuc_distros,
         })
     }
 
@@ -393,7 +319,7 @@ impl SnpTrinucModel {
         let trinuc = TrinucFrame::from(trinuc_reference);
         let alias_map = &ALIAS_MAP.clone();
         let alias_trinuc = alias_map[&trinuc].clone();
-        let matrix = self.trinuc_context_distros[&alias_trinuc].clone();
+        let matrix = self.trinuc_distros[&alias_trinuc].clone();
 
         let nuc: Nucleotide = matrix[&trinuc[1]].sample(rand)?.into();
         Ok(nuc)
@@ -407,18 +333,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_default_minimal_snp_trinuc_model() {
-        let snp_trinuc_model = SnpTrinucModel::default_minimal().unwrap();
-        assert_eq!(snp_trinuc_model.snp_trinuc_distro.values.len(), snp_trinuc_model.snp_trinuc_distro.weights.len());
-        assert_eq!(snp_trinuc_model.trinuc_context_distros.keys().len(), 16)
-    }
-
-    #[test]
     fn test_model_write_read() {
         let output_file: PathBuf = PathBuf::from("test.json.gz");
-        let model = SnpTrinucModel::default_minimal().unwrap();
+        let model = SnpTrinucModel::default().unwrap();
         let frame = TrinucFrame::from((A, N, G));
-        assert!(model.trinuc_context_distros.contains_key(&frame));
+        assert!(model.trinuc_distros.contains_key(&frame));
         let result = model.write_out(&output_file);
         assert_eq!(result.unwrap(), ());
         fs::remove_file(output_file).unwrap();

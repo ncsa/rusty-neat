@@ -12,14 +12,14 @@ use common::{
     }
 };
 
-use crate::gen_mut_model::errors::CreateMutationModelError;
+use crate::gen_mut_model::errors::GenMutationModelError;
 
 pub fn runner(
-    fasta_map: FastaMap,
+    fasta_map: Box<FastaMap>,
     filtered_mutations: HashMap<String, Vec<Variant>>,
     bed_table: HashMap<String, Vec<BedRecord>>,
     output_file: &PathBuf,
-) -> Result<(), CreateMutationModelError> {
+) -> Result<(), GenMutationModelError> {
     // This will generate a MutationModel and write it to the output file 
     // provided.
     // params:
@@ -46,7 +46,7 @@ pub fn runner(
     if trinuc_count.is_empty() {
         error!("Trinucleotide counts were empty");
         return Err(
-            CreateMutationModelError::TrinucCountError(
+            GenMutationModelError::TrinucCountError(
                 "Trinuc counts are empty. Unkown error".to_string()
             )
         )
@@ -78,7 +78,7 @@ pub fn runner(
                     let alt_array = [ref_array[0], &variant.alternate[0], ref_array[2]];
                     let alt_frame = TrinucFrame::from(alt_array);
                     if *ref_array[1] != variant.reference[0] {
-                        return Err(CreateMutationModelError::BaseMismatch(format!("{:?}", variant)))
+                        return Err(GenMutationModelError::BaseMismatch(format!("{:?}", variant)))
                     }
                     *trinuc_transition_count.entry((ref_frame, alt_frame)).or_default() += 1;
                     *snp_transition_count.entry((variant.reference[0], variant.alternate[0])).or_default() += 1;
@@ -100,7 +100,7 @@ pub fn runner(
     Ok(())
 }
 
-fn find_caf(alt: &Vec<Nucleotide>) -> Result<f64, CreateMutationModelError> {
+fn find_caf(alt: &Vec<Nucleotide>) -> Result<f64, GenMutationModelError> {
     // Python:
     // info_split = [a.split('=') for a in candidate_field.split(';')]
     // for item in info_split:
@@ -114,7 +114,7 @@ fn find_caf(alt: &Vec<Nucleotide>) -> Result<f64, CreateMutationModelError> {
 fn count_trinculeotides(
     fasta_map: &FastaMap,
     bed_table: HashMap<String, Vec<BedRecord>>,
-) -> Result<HashMap<TrinucFrame, usize>, CreateMutationModelError> {
+) -> Result<HashMap<TrinucFrame, usize>, GenMutationModelError> {
     // Counts the frequency of the various trinucleotide combinations in the dataset
     // fasta_map - Database for reading back the sequenced data.
     // bed_table - A table for the bed records

@@ -13,12 +13,12 @@ use common::{
     structs::variants::Variant,
 };
 use crate::gen_mut_model::{
-    errors::CreateMutationModelError, 
+    errors::GenMutationModelError, 
     utils::config::RunConfiguration,
     utils::runner::runner,
 };
 
-pub fn main(config_file: &PathBuf) -> Result<(), CreateMutationModelError> {
+pub fn main(config_file: &PathBuf) -> Result<(), GenMutationModelError> {
     let run_config = RunConfiguration::from(config_file)?;
     // filter the variants with the bed_table, if applicable
     let mut filtered_mutations: HashMap<String, Vec<Variant>> = HashMap::new();
@@ -59,13 +59,14 @@ pub fn main(config_file: &PathBuf) -> Result<(), CreateMutationModelError> {
         0,
         &temp_dir,
         None,
-    );
+    ).expect("Error reading fasta file");
 
     let result = runner(
         fasta_map,
-        
-    )
-
+        filtered_mutations,
+        run_config.bed_table,
+        &run_config.output_file,
+    ).unwrap();
 
     Ok(())
 }

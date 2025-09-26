@@ -3,7 +3,7 @@ use std::num::ParseIntError;
 use common::{file_tools::{bed_reader::BedReaderError, fasta_reader::FastaReaderError, vcf_tools::VcfToolsError}, models::snp_trinuc_model::SnpTrinucError, structs::fasta_map::FastaMapError};
 
 #[derive(Error, Debug)]
-pub enum CreateMutationModelError {
+pub enum GenMutationModelError {
     #[error("Error while filtering the vcf file {0}")]
     VcfFilterError(String),
     #[error("Error while filtering the fastq file {0}")]

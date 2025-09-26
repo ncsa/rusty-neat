@@ -96,7 +96,7 @@ fn read_open_bed<P: Read> (reader: Lines<BufReader<P>>) -> Result<HashMap<String
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    // use super::*;
 
     #[test]
     fn test_process_bed() {

@@ -128,10 +128,10 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
     info!("Reading fasta file: {}", &config.reference.display());    
     let fasta_map = read_fasta(
         &config.reference,
-        nuc_sub_model,
+        Some(&nuc_sub_model),
         config.read_len,
         &working_dir,
-        rng,
+        Some(rng),
     )?;
 
     // Mutating the reference and recording the variant locations.

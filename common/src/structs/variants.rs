@@ -107,7 +107,6 @@ pub struct Variant {
 impl Variant {
 
     pub fn from_file(
-        chrom: &str,
         location: usize,
         id: &str,
         filter: &str,
@@ -123,6 +122,7 @@ impl Variant {
             if format.contains(&String::from("GT")) {
                 info!("Found genotype in vcf file");
                 let gt_pos = format
+                    .clone()
                     .into_iter()
                     .position(|x| x == String::from("GT"))
                     .unwrap();
@@ -248,7 +248,7 @@ impl Variant {
     }
 
     pub fn get_loc(&self) -> Result<usize, VariantError> {
-        Ok(self.location.clone())
+        Ok(self.location)
     }
 }
 

@@ -1,17 +1,22 @@
 // This is the run configuration for this particular run, which holds the parameters needed by the
 // various side functions. It is build with a ConfigurationBuilder, which can take either a
 // config yaml file or command line arguments and turn them into the configuration.
-
-use log::*;
 use serde_yml::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::string::String;
 use std::fs;
-use common::{file_tools::bed_reader::read_bed, structs::{
-    bed_record::BedRecord, 
-    variants::Variant
-}};
+use common::{
+    file_tools::{
+        bed_reader::read_bed, 
+        vcf_tools::read_vcf
+    }, 
+    structs::{
+        bed_record::BedRecord, 
+        variants::Variant
+    }
+};
+use crate::create_mutation_model::errors::CreateMutationModelError;
 
 #[derive(Debug, Clone)]
 pub struct RunConfiguration {
@@ -22,17 +27,17 @@ pub struct RunConfiguration {
     // files_to_filter: The list of files to filter.
     // filter_key: The key to add to the filtered file names so you know they have been filtered.
     pub reference: PathBuf,
-    pub mutations: Vec<Variant>,
+    pub mutations: HashMap<String, Vec<Variant>>,
     pub bed_table: HashMap<String, Vec<BedRecord>>,
     pub output_file: PathBuf,
     pub overwrite_output: bool,
 }
 
 impl RunConfiguration {
-    pub fn from(yml_file: &PathBuf) -> Self {
+    pub fn from(yml_file: &PathBuf) -> Result<Self, CreateMutationModelError> {
         // Reads an input configuration file from yaml using the serde package. Then sets the
         // parameters based on the inputs. A "." value means to use the default value.
-
+        //
         // Opens file for reading
         let f = fs::File::open(&yml_file);
         let file = match f {
@@ -80,24 +85,15 @@ impl RunConfiguration {
         // Generate the configuration from inputs
         let bed_table = read_bed(&bed_file)
             .expect("Error reading bed file!");
-
+        let mutations = read_vcf(vcf_file)?;
         
-        
-        RunConfiguration { 
+        Ok(RunConfiguration { 
             reference,
             mutations,
             bed_table,
             output_file,
             overwrite_output,
-        }
-    }
-
-    pub fn log(&mut self) {
-        info!("Using bed file to filter the input files: {:?}", self.bed_file);
-        for key in self.file_map.keys() {
-            info!("Filtering: {:?}", key);
-            info!("Producing: {:?}", self.file_map[key].0);
-        }
+        })
     }
 }
 

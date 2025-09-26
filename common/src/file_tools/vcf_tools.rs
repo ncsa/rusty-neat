@@ -8,14 +8,13 @@ use std::path::PathBuf;
 use std::io::Write;
 use flate2::write::GzEncoder;
 use flate2::Compression;
-use itertools::Itertools;
 use thiserror::Error;
 use log::*;
 
 use crate::file_tools::file_io::{create_output_file, read_gzip_lines, read_lines};
-use crate::structs::nucleotides::{sequence_array_to_string, Nucleotide};
+use crate::structs::nucleotides::{sequence_array_to_string};
 use crate::structs::mutated_map::MutatedMap;
-use crate::structs::variants::{Variant, VariantType};
+use crate::structs::variants::{Variant, VariantError};
 
 #[derive(Debug, Error)]
 pub enum VcfToolsError {
@@ -26,7 +25,9 @@ pub enum VcfToolsError {
     #[error("Error parsing ints from the bed file: {0}")]
     ParserError(#[from] ParseIntError),
     #[error("File has an unknown or missing file extension: {0}")]
-    FileExtensionUnknown(String)
+    FileExtensionUnknown(String),
+    #[error("Error creating a variant from file: {0}")]
+    VariantError(#[from] VariantError)
 }
 
 pub fn write_vcf(
@@ -104,7 +105,7 @@ pub fn write_vcf(
     Ok(())
 }
 
-pub fn read_vcf(vcf_file: PathBuf) -> Result<Vec<Variant>, VcfToolsError> {
+pub fn read_vcf(vcf_file: PathBuf) -> Result<HashMap<String, Vec<Variant>>, VcfToolsError> {
     let ext = vcf_file.extension();
     match ext {
         Some(ext) => {
@@ -118,18 +119,18 @@ pub fn read_vcf(vcf_file: PathBuf) -> Result<Vec<Variant>, VcfToolsError> {
     }
 }
 
-fn process_gzip_vcf(filename: &PathBuf) -> Result<Vec<Variant>, VcfToolsError> {
+fn process_gzip_vcf(filename: &PathBuf) -> Result<HashMap<String, Vec<Variant>>, VcfToolsError> {
     let reader = read_gzip_lines(filename)?;
     return Ok(read_open_vcf(reader).expect("Problem processing lines of gzipped bed file"))
 }
 
-fn process_vcf(filename: &PathBuf) -> Result<Vec<Variant>, VcfToolsError> {
+fn process_vcf(filename: &PathBuf) -> Result<HashMap<String, Vec<Variant>>, VcfToolsError> {
     let reader = read_lines(filename)?;
     return Ok(read_open_vcf(reader).expect("Error processing bed file"))
 }
 
-fn read_open_vcf<P: Read> (reader: Lines<BufReader<P>>) -> Result<Vec<Variant>, VcfToolsError> {
-    let mut file_records: Vec<Variant> = Vec::new();
+fn read_open_vcf<P: Read> (reader: Lines<BufReader<P>>) -> Result<HashMap<String, Vec<Variant>>, VcfToolsError> {
+    let mut file_records: HashMap<String, Vec<Variant>> = HashMap::new();
     for result in reader {
         match result {
             Ok(line) => {
@@ -149,14 +150,14 @@ fn read_open_vcf<P: Read> (reader: Lines<BufReader<P>>) -> Result<Vec<Variant>, 
                     let vcf_reference = split_line[3];
                     let vcf_alternate = split_line[4];
                     let qual = split_line[5].parse();
-                    let quality_score: Option<usize> = {
+                    let quality_score: usize = {
                         match qual {
-                            Ok(num) => Some(num),
+                            Ok(num) => num,
                             Err(error) => return Err(VcfToolsError::ParserError(error))
                         }
                     };
                     let filter = split_line[6];
-                    let info = split_line[7];
+                    let info_field = split_line[7];
                     let mut format: Vec<String> = Vec::new();
                     let mut sample: Vec<String> = Vec::new();
                     if split_line.len() > 7 {
@@ -188,9 +189,25 @@ fn read_open_vcf<P: Read> (reader: Lines<BufReader<P>>) -> Result<Vec<Variant>, 
                     if split_line.len() > 9 {
                         warn!("Currently rneat can only read one sample per record")
                     }
-                    
-
-
+                    let variant = Variant::from_file(
+                        location,
+                        id,
+                        filter,
+                        info_field,
+                        vcf_reference,
+                        vcf_alternate,
+                        quality_score,
+                        format,
+                        sample,
+                    )?;
+                    // Standard hashmap safety check
+                    if !file_records.contains_key(chrom) {
+                        file_records.insert(chrom.to_string(), Vec::new());
+                    }
+                    file_records
+                        .get_mut(chrom)
+                        .unwrap()
+                        .push(variant);
                 }
             },
             Err(error) => {

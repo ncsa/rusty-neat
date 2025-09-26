@@ -1,6 +1,6 @@
 use thiserror::Error;
 use std::num::ParseIntError;
-use common::file_tools::bed_reader::BedReaderError;
+use common::{file_tools::{bed_reader::BedReaderError, fasta_reader::FastaReaderError, vcf_tools::VcfToolsError}, models::snp_trinuc_model::SnpTrinucError, structs::fasta_map::FastaMapError};
 
 #[derive(Error, Debug)]
 pub enum CreateMutationModelError {
@@ -26,4 +26,14 @@ pub enum CreateMutationModelError {
     CliError(String),
     #[error("Invalid Configuration inputs: {0}")]
     ConfigurationError(String),
+    #[error("Error reading the vcf file: {0}")]
+    VcfReaderError(#[from] VcfToolsError),
+    #[error("Error generating trinucleotide counts: {0}")]
+    TrinucCountError(String),
+    #[error("Error reading data from FastaMap: {0}")]
+    FastaMapError(#[from] FastaMapError),
+    #[error("Error while reading in fasta file: {0}")]
+    FastaReaderError(#[from] FastaReaderError),
+    #[error("Variant location did not match reference: {0}")]
+    BaseMismatch(String),
 }

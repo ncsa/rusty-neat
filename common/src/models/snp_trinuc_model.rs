@@ -27,49 +27,19 @@ use crate::structs::nucleotides::Nucleotide;
 #[derive(Error, Debug)]
 pub enum SnpTrinucError {
     #[error("SNP variant model reported an RNG error: {0}")]
-    RngError(NeatRngError),
+    RngError(#[from] NeatRngError),
     #[error("SNP variant model reported an error from Distributions: {0}")]
-    DistributionError(DistributionErrors),
+    DistributionError(#[from] DistributionErrors),
     #[error("SNP variant model reported an error with transition matrices: {0}")]
-    TransMatrixError(TransitionMatrixError),
+    TransMatrixError(#[from] TransitionMatrixError),
     #[error("SNP variant model reported an error generating a SNP.")]
     GenerateSnpError,
     #[error("SNP Trinuc model return an IO error: {0}")]
-    IoError(io::Error),
+    IoError(#[from] io::Error),
     #[error("Error Indexing the trinucleotide: {0}")]
     IndexError(usize),
     #[error("Serde error building default model: {0}")]
-    SerdeError(serde_json::Error),
-}
-
-impl From<serde_json::Error> for SnpTrinucError {
-    fn from(error: serde_json::Error) -> Self {
-        SnpTrinucError::SerdeError(error)
-    }
-}
-
-impl From<io::Error> for SnpTrinucError {
-    fn from(error: io::Error) -> Self {
-        SnpTrinucError::IoError(error)
-    }
-}
-
-impl From<DistributionErrors> for SnpTrinucError {
-    fn from(error: DistributionErrors) -> Self {
-        SnpTrinucError::DistributionError(error)
-    }
-}
-
-impl From<NeatRngError> for SnpTrinucError {
-    fn from(error: NeatRngError) -> Self {
-        SnpTrinucError::RngError(error)
-    }
-}
-
-impl From<TransitionMatrixError> for SnpTrinucError {
-    fn from(error: TransitionMatrixError) -> Self {
-        SnpTrinucError::TransMatrixError(error)
-    }
+    SerdeError(#[from] serde_json::Error),
 }
 
 /// These are all the trinucleotide combinations.
@@ -235,6 +205,12 @@ impl TrinucFrame {
     }
 }
 
+impl From<[&Nucleotide; 3]> for TrinucFrame {
+    fn from(trinuc: [&Nucleotide; 3]) -> Self {
+        Self::Frame(*trinuc[0], *trinuc[1], *trinuc[2])
+    }
+}
+
 impl From<&[Nucleotide; 3]> for TrinucFrame {
     fn from(trinuc: &[Nucleotide; 3]) -> Self {
         Self::Frame(trinuc[0], trinuc[1], trinuc[2])
@@ -267,6 +243,11 @@ pub struct SnpTrinucModel {
 static DATA_FILE: &'static [u8] = include_bytes!("model_data/default_trinuc_model.json.gz");
 
 impl SnpTrinucModel {
+    pub fn from(
+    ) -> Result<Self, SnpTrinucError> {
+        todo!()
+    }
+
     pub fn default_minimal() -> Result<Self, SnpTrinucError> {
         // Creating the default trinuc bias model for snps. In this model, all trinucleotides
         // mutate with equal probability and middle base mutates with the same probability no matter

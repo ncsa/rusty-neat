@@ -27,12 +27,6 @@ output_dir: .
 # the common name given to all output files (e.g., "TEST" => TEST_r1.fastq, TEST.vcf, TEST.bam)
 output_filename: .
 
-# If you desire to output only filtered fastqs and cfs, then supplying a bed file
-# to the filter_output option will enable this feature. Note that data not overlapping 
-# a bed region will be lost. If you wish to output full fastqs and then filter, use the
-# neat filter-reads package.
-filter_output: .
-
 # input files (full paths to files)
 # Note that these are not yet active
 # mutation_model: .

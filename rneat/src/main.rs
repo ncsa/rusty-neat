@@ -193,7 +193,7 @@ fn main() -> Result<(), NeatErrors> {
                     let result = gen_reads::main(&file);
                     match result {
                         Err(error) => return Err(NeatErrors::GenerateReadsError(error)),
-                        Ok(()) => info!("rneat gen-reads completed succesfully"),
+                        Ok(()) => info!("rneat gen-reads completed successfully"),
                     }
                 } 
             }

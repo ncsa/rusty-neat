@@ -6,14 +6,13 @@ use chrono::Utc;
 use log::{info, warn, error};
 use serde_yml::Value;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::string::String;
 use std::{env, fs};
+use crate::gen_reads::errors::GenerateReadsErrors;
 use crate::{
     common::file_tools::folder_tools::check_create_dir,
-    utils::cli::Cli
 };
-use crate::errors::GenerateReadsErrors;
 
 #[derive(Debug, Clone)]
 pub struct RunConfiguration {
@@ -134,7 +133,7 @@ impl RunConfiguration {
         ConfigBuilder::new()
     }
 
-    pub fn from_yaml_file(yaml_file: String) -> Result<RunConfiguration, GenerateReadsErrors> {
+    pub fn from_yaml_file(yaml_file: &PathBuf) -> Result<RunConfiguration, GenerateReadsErrors> {
         // Reads an input configuration file from yaml using the serde package. Then sets the
         // parameters based on the inputs. A "." value means to use the default value.
 
@@ -143,7 +142,7 @@ impl RunConfiguration {
         let file = match f {
             Ok(l) => l,
             Err(error) => panic!(
-                "Problem reading the config file: {}. System error: {}",
+                "Problem reading the config file: {:?}. System error: {}",
                 &yaml_file,
                 error,
             ),
@@ -415,45 +414,6 @@ impl RunConfiguration {
         Ok(configuration)
     }
 
-    pub fn from_args(args: Cli) -> Result<RunConfiguration, GenerateReadsErrors> {
-        // Takes in a bunch of args from a clap CLI and builds a config based on that. More CLI options
-        // will need additional items entered here. To add them to the config, so they can be implemented.
-
-        // Create the ConfigBuilder object with default values
-        let mut config_builder = ConfigBuilder::new();
-        // Can't do a run without a reference
-        if !args.reference.is_empty() {
-            let reference: String = args.reference.into();
-            let ref_path = Path::new(&reference);
-            if ref_path.is_file() {
-                config_builder.reference = Some(ref_path.display().to_string());
-            } else {
-                return Err(GenerateReadsErrors::FileNotFound(reference))
-            }
-        } else {
-            return Err(GenerateReadsErrors::MissingReferenceError);
-        }
-        // We confirmed the reference is a valid file, proceed with the rest of the CLI
-        let mut configuration = config_builder.build();
-
-        // The default value works directly for the config builder and CLI handles the type checking
-        configuration.read_len = args.read_length;
-        configuration.coverage = args.coverage;
-        // default is empty string, in which case the config builder controls the default
-        if args.output_dir == "" {
-            configuration.output_dir = env::current_dir()?
-        } else {
-            let output_path = Path::new(&args.output_dir);
-            check_create_dir(output_path);
-            configuration.output_dir = PathBuf::from(output_path);
-        };
-        // If this is unset, sets the default value of "neat_out" by CLI
-        configuration.output_filename = args.output_filename;
-        // Wraps things in a Box to move this object to the heap
-        configuration.update_and_log()?;
-        Ok(configuration)
-    }
-
     pub fn update_and_log(&mut self) -> Result<(), GenerateReadsErrors> {
         // This does a final check of the configuration for valid items. It will print info
         // message of the items, to work as a record and to assist in debugging any issues that
@@ -527,7 +487,7 @@ impl RunConfiguration {
         }
         if self.produce_vcf {
             let mut vcf = self.output_dir.clone();
-            vcf.push(format!("{}.vcf", self.output_filename));
+            vcf.push(format!("{}.vcf.gz", self.output_filename));
             info!("\t> {:?}", &vcf);
             self.output_vcf = Some(vcf);
         }
@@ -629,8 +589,8 @@ mod tests {
 
     #[test]
     fn test_read_config_yaml() {
-        let yaml = String::from("test_data/configs/neat_test.yml");
-        let test_config = RunConfiguration::from_yaml_file(yaml).unwrap();
+        let yaml = PathBuf::from("test_data/configs/neat_test.yml");
+        let test_config = RunConfiguration::from_yaml_file(&yaml).unwrap();
         assert_eq!(test_config.reference, PathBuf::from("test_data/references/ecoli.fa"));
         assert_eq!(test_config.coverage, 3);
     }
@@ -638,67 +598,29 @@ mod tests {
     #[test]
     #[should_panic]
     fn test_bad_yaml() {
-        let yaml = String::from("test_data/fake_file.yml");
-        RunConfiguration::from_yaml_file(yaml).unwrap();
+        let yaml = PathBuf::from("test_data/fake_file.yml");
+        RunConfiguration::from_yaml_file(&yaml).unwrap();
     }
 
     #[test]
     #[should_panic]
     fn test_missing_ref() {
-        let yaml = String::from("test_data/configs/simple_template.yml");
-        RunConfiguration::from_yaml_file(yaml).unwrap();
+        let yaml = PathBuf::from("test_data/configs/simple_template.yml");
+        RunConfiguration::from_yaml_file(&yaml).unwrap();
     }
 
     #[test]
     fn test_creates_out_dir() {
-        let yaml = String::from("test_data/configs/neat_test_bad.yml");
-        RunConfiguration::from_yaml_file(yaml).unwrap();
-        assert!(Path::new("fake").is_dir());
+        let yaml = PathBuf::from("test_data/configs/neat_test_bad.yml");
+        RunConfiguration::from_yaml_file(&yaml).unwrap();
+        assert!(PathBuf::from("fake").is_dir());
         fs::remove_dir("fake").unwrap()
-    }
-
-    #[test]
-    fn test_command_line_inputs() {
-        let args: Cli = Cli {
-            submodule: "gen-reads".to_string(),
-            config: String::new(),
-            reference: String::from("test_data/references/ecoli.fa"),
-            output_dir: String::from("data"),
-            log_level: String::from("Trace"),
-            log_dest: String::new(),
-            output_filename: String::from("test"),
-            read_length: 150,
-            coverage: 10,
-        };
-
-        let test_config = RunConfiguration::from_args(args).unwrap();
-        assert_eq!(test_config.reference, PathBuf::from("test_data/references/ecoli.fa"));
-        fs::remove_dir("data").unwrap();
     }
 
     #[test]
     fn test_no_config_builder() {
         let config = RunConfiguration::build();
         assert_eq!(config.reference, None)
-    }
-
-    #[test]
-    #[should_panic]
-    fn test_cl_missing_ref() {
-        let args: Cli = Cli {
-            submodule: "gen-reads".to_string(),
-            config: String::new(),
-            reference: String::from(""),
-            output_dir: String::from("test_dir"),
-            log_level: String::from("Trace"),
-            log_dest: String::new(),
-            output_filename: String::from("test"),
-            read_length: 150,
-            coverage: 10,
-        };
-
-        RunConfiguration::from_args(args).unwrap();
-        fs::remove_dir("test_dir").unwrap()
     }
 
     #[test]
@@ -768,42 +690,5 @@ mod tests {
         config.paired_ended = true;
         config.fragment_mean = Some(100.0);
         config.update_and_log().unwrap();
-    }
-
-    #[test]
-    fn no_output_dir_given() {
-        let args: Cli = Cli {
-            submodule: "gen-reads".to_string(),
-            config: String::new(),
-            reference: String::from("test_data/references/H1N1.fa"),
-            output_dir: String::new(),
-            log_level: String::from("Trace"),
-            log_dest: String::new(),
-            output_filename: String::from("test"),
-            read_length: 150,
-            coverage: 10,
-        };
-
-        let config = RunConfiguration::from_args(args).unwrap();
-        assert_eq!(env::current_dir().unwrap().as_path(), config.output_dir);
-    }
-
-    #[test]
-    fn test_minimum_mutations_and_others() {
-        let args: Cli = Cli {
-            submodule: "gen-reads".to_string(),
-            config: String::new(),
-            reference: String::from("test_data/references/H1N1.fa"),
-            output_dir: String::new(),
-            log_level: String::from("Trace"),
-            log_dest: String::new(),
-            output_filename: String::from("test"),
-            read_length: 120,
-            coverage: 13,
-        };
-
-        let config = RunConfiguration::from_args(args).unwrap();
-        assert_eq!(120, config.read_len);
-        assert_eq!(13, config.coverage);
     }
 }

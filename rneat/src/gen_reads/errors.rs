@@ -1,7 +1,7 @@
 use std::{num::{ParseFloatError, ParseIntError}, str::ParseBoolError};
 
 use common::{
-    file_tools::{fasta_reader::FastaReaderError, fastq_tools::FastqToolsError}, 
+    file_tools::{bed_reader::BedReaderError, fasta_reader::FastaReaderError, fastq_tools::FastqToolsError}, 
     
     models::{
         fragment_length::FragmentModelError, 
@@ -34,8 +34,8 @@ pub enum GenerateReadsErrors {
     ConfigReadError(String, String),
     #[error("Error generating configuration!")]
     ConfigError,
-    #[error("Error generating reads!")]
-    GenerateReadsError,
+    #[error("Error generating fragments!")]
+    GenerateFragmentsError,
     #[error("Error generating variants!")]
     GenerateVariantsError,
     #[error("Error while mutating fasta!")]
@@ -75,5 +75,9 @@ pub enum GenerateReadsErrors {
     #[error("Main threw an error: {0}")]
     MainError(#[from] Box<dyn std::error::Error>),
     #[error("FastqTools error: {0}")]
-    FqToolsError(#[from] FastqToolsError)
+    FqToolsError(#[from] FastqToolsError),
+    #[error("Bed reader error: {0}")]
+    BedError(#[from] BedReaderError),
+    #[error("Sequence too short to process")]
+    ShortSequence,
 }

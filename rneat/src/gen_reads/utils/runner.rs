@@ -1,47 +1,52 @@
+use common::file_tools::file_io::create_output_file;
+use common::structs::variants::VariantType;
 use tempfile;
-use std::time;
 use log::{info, debug, error};
 use simple_rng::NeatRng;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::io::BufWriter;
+
 use indicatif::ProgressBar;
 use flate2::{ 
     Compression,
     write::GzEncoder
 };
 
-use crate::errors::GenerateReadsErrors;
-use crate::common::{
-    file_tools::{
-        fasta_reader::read_fasta,
-        vcf_tools::write_vcf,
-        fastq_tools::{write_block_fastq, combine_temp_fastqs},
-        file_io::{append_to_file, VectorBuffer}
-    },
-    structs::{
-        variants::Variant,
-        fasta_map::SequenceBlock,
-        mutated_map::MutatedMap,
-        nucleotides::NucleotideSelector
-    },
-    models::{
-        mutation_model::MutationModel,
-        fragment_length::FragmentLengthModel,
-        quality_scores::QualityScoreModel,
-        sequencing_error_model::{
-            SequencingErrorModel
+use crate::{
+    common::{
+        file_tools::{
+            fasta_reader::read_fasta, 
+            fastq_tools::{
+                combine_temp_fastqs, 
+                write_block_fastq
+            }, 
+            file_io::{append_to_file, VectorBuffer}, 
+            vcf_tools::write_vcf
+        }, models::{
+            fragment_length::FragmentLengthModel, 
+            mutation_model::MutationModel, 
+            quality_scores::QualityScoreModel, 
+            sequencing_error_model::SequencingErrorModel
+        }, structs::{
+            fasta_map::SequenceBlock, 
+            mutated_map::MutatedMap, 
+            nucleotides::NucleotideSelector, 
+            variants::Variant
         }
-    },
-};
-use crate::utils::{
-    config::RunConfiguration,
-    generate_fragments::generate_fragments,
-    generate_variants::generate_variants,
+    }, 
+    gen_reads::{
+        errors::GenerateReadsErrors, 
+        utils::{
+            config::RunConfiguration, 
+            generate_variants::generate_variants,
+            generate_fragments::generate_fragments,
+        }
+    }
 };
 
-pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(), GenerateReadsErrors> {
-    let start = time::Instant::now();
+
+pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec<PathBuf>, GenerateReadsErrors> {
     // We'll need a temp dir to store file fragments
     let working_dir = tempfile::tempdir().unwrap();
     info!("Created temp dir at {:?}", working_dir);
@@ -120,7 +125,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
     // The FastaMap struct consists of a vector of Contig objects, each describing a
     // block of Sequence, broken up into chunks in the SequenceBlock objects. It also
     // holds a name_map hashmap that links tho contig name from the Fasta with the shortname
-    info!("Reading fasta file: {}", &config.reference.display());
+    info!("Reading fasta file: {}", &config.reference.display());    
     let fasta_map = read_fasta(
         &config.reference,
         nuc_sub_model,
@@ -139,7 +144,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
     let bar: ProgressBar = ProgressBar::new(fasta_map.contigs.len() as u64);
     // to display bar
     bar.tick();
-    // iterate over contigs
+    // iterate over contigs. 
     for contig in &fasta_map.contigs {
         // Iterate over blocks within the contig
         // This is probably where we want to parallelize
@@ -164,22 +169,25 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
                 continue
             }
             let mut bias_map: Vec<f64> = vec![0.0; current_block.get_len()];
-            for region in regions_of_interest {
+            let mut num_mutable_area = 0.0;
+            for region in &regions_of_interest {
                 // all of these have RegionType::NonNRegion
                 // This is where we might apply bias
                 for j in region.start..region.end {
                     bias_map[j] = 1.0;
+                    num_mutable_area += 1.0;
                 }
             }
             // determine the number of mutations for this segment
-            let num_mutations = (current_block.get_len() as f64 * config.mutation_rate)
+            let num_mutations = (num_mutable_area * config.mutation_rate)
                 .trunc()
                 as usize;
             debug!("Adding {} mutations to block {:?}", num_mutations, block_filename);
+            let mut max_del_len = 0;
             // Generate any relevant mutations
             if num_mutations > 0 {
                 // first we generate variants for the block
-                let result = generate_variants(
+                let result: Option<Vec<Variant>> = generate_variants(
                     &current_block, 
                     &bias_map, 
                     &mutation_model, 
@@ -190,24 +198,53 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
                 match result {
                     Some(vec) => {
                         // Add variants 
-                        block_variants.extend(vec);
+                        for variant in vec {
+                            if variant.variant_type == VariantType::Deletion {
+                                // -1 because we're ignoring the reference base
+                                if variant.reference.len() - 1 > max_del_len {
+                                    // This will get us the maximum del length.
+                                    max_del_len = variant.reference.len() - 1
+                                }
+                            }
+                            block_variants.push(variant);
+                        }
                     },
                     None => {
                         // No variants for this block
                     }
                 }
             }
-            
-            // blocks get returned sorted
-            let block_fragments: Vec<(usize, usize)> = generate_fragments(
-                current_block.get_len(),
-                config.read_len,
-                current_block.get_start()?,
-                config.coverage,
-                config.paired_ended,
-                &fragment_length_model,
-                rng,
-            )?;
+
+            let block_fragments: Vec<(usize, usize)> = {
+                let mut temp_regions: Vec<(usize, usize)> = Vec::new();
+                // find matching region.
+                // if next region is within a read, maybe we'll use the whole thing.
+                for region in regions_of_interest {
+                    temp_regions.push((region.start, region.end));
+                }
+                let mut block_frags = Vec::new();
+                for (frag_start, frag_end) in temp_regions {
+                    let result = generate_fragments(
+                        frag_end-frag_start,
+                        config.read_len,
+                        max_del_len,
+                        frag_start,
+                        config.coverage,
+                        &fragment_length_model,
+                        rng,
+                    );
+                    match result {
+                        Ok(frags) => {
+                            if !frags.is_empty() {
+                                block_frags.extend_from_slice(&frags);
+                            }
+                        },
+                        Err(error) => return Err(error),
+                    }
+                    
+                }
+                block_frags.clone()
+            };
 
             let mutated_map = MutatedMap::new(
                 block_filename.to_path_buf(),
@@ -232,10 +269,8 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
                     writer1, Compression::default()
                 );
                 let read_name_prefix = format!(
-                    "neat_generated_{}_{:010}_{:010}_",
+                    "neat_generated_{}",
                     current_block.contig,
-                    current_block.get_start()?,
-                    current_block.get_end()?,
                 );
                 if config.paired_ended {
                     let mut file_to_write_2 = PathBuf::from(working_dir.path());
@@ -308,94 +343,99 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<(),
         // The original filename: read number to a final read number. Will need
         // to keep pairs together during this
         //
+        info!("Producing final fastq(s) file(s)");
         let bar: ProgressBar = ProgressBar::new(all_fastq_files.len() as u64);
-        for (_contig, temp_fastqs) in all_fastq_files {
-            // read 1
-            match &config.output_fastq_1 {
-                Some(filename) => {
-                    combine_temp_fastqs(
-                        temp_fastqs.0, 
-                        &filename, 
-                        false,
-                        config.overwrite_output,
-                    )?;
-                },
-                None => {
-                    error!("Produce fastq true but output_fastq_1 was missing.");
-                    return Err(GenerateReadsErrors::ConfigError)
-                }
-            }
-            if config.paired_ended {
-                // read 2 - this will be empty for single-ended reads
-                match &config.output_fastq_2 {
-                    Some(filename) => {
+        match &config.output_fastq_1 {
+            Some(filename1) => {
+                // If this is already a file, this will clear it.
+                create_output_file(filename1, config.overwrite_output)?;
+                if config.paired_ended {
+                    match &config.output_fastq_2 {
+                        Some(filename2) => {
+                            // If this is already a file, this will clear it.
+                            create_output_file(filename2, config.overwrite_output)?;
+                            for (_contig, temp_fastqs) in all_fastq_files {
+                                combine_temp_fastqs(
+                                    temp_fastqs.0, 
+                                    &filename1, 
+                                    false
+                                )?;
+                                combine_temp_fastqs(
+                                    temp_fastqs.1,
+                                    &filename2,
+                                    false,
+                                )?;
+                                bar.inc(1);
+                            }
+                        },
+                        None => {
+                            error!("Produce fastq true and paired-ended true, but output_fastq_2 was missing.");
+                            return Err(GenerateReadsErrors::ConfigError)
+                        }
+                    }
+                } else {
+                    for (_contig, temp_fastqs) in all_fastq_files {
                         combine_temp_fastqs(
-                            temp_fastqs.1,
-                            &filename,
-                            false,
-                            config.overwrite_output,
+                            temp_fastqs.0, 
+                            &filename1, 
+                            false
                         )?;
-                    },
-                    None => {
-                        error!("Produce fastq true and paired-ended true, but output_fastq_2 was missing.");
-                        return Err(GenerateReadsErrors::ConfigError)
+                        bar.inc(1);
                     }
                 }
-            }
-            bar.inc(1);
-        }
+            },
+            None => {
+                error!("Produce fastq true but output_fastq_1 was missing.");
+                return Err(GenerateReadsErrors::ConfigError)
+            },
+        } 
     }
 
+    bar.finish_and_clear();
+
+    let mut files_written = Vec::new();
     if config.paired_ended {
-        match &config.output_fastq_1 {
-            Some(filename1) => {
-                match &config.output_fastq_2 {
-                    Some(filename2) => info!("Successfully wrote fastq files: {:?}, {:?}", &filename1, &filename2),
-                    None => {},
-                }
-            },
-            None => {},
-        }
-    } else {
-        match &config.output_fastq_1 {
-            Some(filename1) => {
-                info!("Successfully wrote fastq files: {:?}", &filename1)
-            },
-            None => {},
-        }
-    }
-
-    match &config.output_vcf {
-        Some(filename) => {
-            info!("Writing output vcf file");
-            // Maps contig to a total contig size, a required entry for a valid vcf file.
-            let mut fasta_lengths: HashMap<String, usize> = HashMap::new();
-            let contigs = fasta_map.contigs.clone();
-            for contig in contigs {
-                fasta_lengths.insert(contig.name.clone(), contig.contig_len);
+        if let Some(filename1) = &config.output_fastq_1 {
+            info!("Successfully wrote fastq file: {:?}", &filename1);
+            files_written.push(filename1.clone());
+            if let Some(filename2) = &config.output_fastq_2 {
+                info!("Successfully wrote fastq file: {:?}", &filename2);
+                files_written.push(filename2.clone());
             }
-            write_vcf(
-                &mutated_maps,
-                &fasta_map.contig_order,
-                &fasta_lengths,
-                &config.reference,
-                config.overwrite_output,
-                &filename,
-            )?
-        },
-        None => {
-            info!("Skipping vcf creation")
+        }
+    } else {
+        if let Some(filename1) = &config.output_fastq_1 {
+            info!("Successfully wrote fastq file: {:?}", &filename1);
+            files_written.push(filename1.clone());
         }
     }
 
-    let elapsed_time = time::Instant::now() - start;
-    info!("Processing finished in {} milliseconds", elapsed_time.as_millis());
-    if elapsed_time.as_millis() < 1000 {
-        info!("Processing finished in {} milliseconds", elapsed_time.as_millis());
-    } else if elapsed_time.as_secs() > 300 {
-        info!("Processing finished in {} minutes", ((elapsed_time.as_secs() as f64)/60.0))
-    } else {
-        info!("Processing finished in {} seconds", elapsed_time.as_secs());
+    if let Some(filename) = &config.output_vcf {
+        info!("Writing output vcf file");
+        // Maps contig to a total contig size, a required entry for a valid vcf file.
+        let mut fasta_lengths: HashMap<String, usize> = HashMap::new();
+        let contigs = fasta_map.contigs.clone();
+        for contig in contigs {
+            fasta_lengths.insert(contig.name.clone(), contig.contig_len);
+        }
+        let result = write_vcf(
+            &mutated_maps,
+            &fasta_map.contig_order,
+            &fasta_lengths,
+            &config.reference,
+            config.overwrite_output,
+            &filename,
+        );
+        match result {
+            Ok(()) => {
+                info!("Successfully wrote vcf file: {:?}", filename);
+                files_written.push(filename.clone());
+            },
+            Err(error) => {
+                error!("Error writing vcf file!");
+                return Err(GenerateReadsErrors::IoError(error))
+            },
+        }
     }
-    Ok(())
+    Ok(files_written.clone())
 }

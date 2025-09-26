@@ -12,26 +12,28 @@
 use std::collections::HashMap;
 use std::fs::File;
 use std::io;
+use log::*;
 use std::path::PathBuf;
 use tempfile::TempDir;
 use crate::file_tools::file_io::read_lines;
-use crate::structs::fasta_map::{
-    Contig,
-    FastaMap,
-    FastaMapError,
-    SequenceBlock,
-    SequenceMap,
-    RegionType::{
-        NRegion,
-        NonNRegion
+use crate::structs::{
+    fasta_map::{
+        Contig,
+        FastaMap,
+        FastaMapError,
+        SequenceBlock,
+        SequenceMap,
+        RegionType::{
+            NRegion,
+            NonNRegion
+        },
+    },
+    nucleotides::{
+        Nucleotide,
+        Nucleotide::{N, X, Maskeda, Maskedc, Maskedg, Maskedt},
+        NucleotideSelector,
     },
 };
-use crate::structs::nucleotides::{
-    Nucleotide,
-    Nucleotide::{N, X},
-    NucleotideSelector
-};
-use log::error;
 use simple_rng::{NeatRng, NeatRngError};
 use thiserror::Error;
 
@@ -45,19 +47,12 @@ pub enum FastaReaderError {
     #[error("IO error while reading fasta file")]
     IoError(#[from] io::Error),
     #[error("Error interfacing with FastaMap: {0}")]
-    FastaMapInterfaceError(FastaMapError),
+    FastaMapInterfaceError(#[from] FastaMapError),
     #[error("Error in fasta block name")]
     FastaBlockNameError,
     #[error("Error in random number generator: {0}")]
     RngError(#[from] NeatRngError),
 }
-
-impl From<FastaMapError> for FastaReaderError {
-    fn from(error: FastaMapError) -> Self {
-        FastaReaderError::FastaMapInterfaceError(error)
-    }
-}
-
 
 pub fn read_fasta(
     fasta_path: &PathBuf,
@@ -125,6 +120,7 @@ pub fn read_fasta(
                     if contig_length == 0 && current_key.is_empty() {
                         // in this case, this is the first loop, skip this section
                     } else if contig_length - block_start == 0 && !current_key.is_empty() {
+                        // If skip_contig is true, then we don't throw an error
                         // in this case, we had two contig names in a row and no sequence, which is an invalid FASTA
                         let name = name_map[&current_key].clone();
                         error!("Read for contig {} is empty. Please check file for proper FASTA format.", name);
@@ -160,7 +156,7 @@ pub fn read_fasta(
 
                         // Add the contig to the list
                         contigs.push(Contig::new(
-                            current_key,
+                            current_key.clone(),
                             contig_length,
                             block_filenames,
                         )?);
@@ -175,9 +171,11 @@ pub fn read_fasta(
                     }
                     // grab the name from the string, omitting the initial '>' character
                     let long_name = l[1..].to_string();
-                    current_key = extract_key_name(&long_name);
+                    let short_name = extract_key_name(&long_name);
+                    current_key = short_name;
                     name_map.entry(current_key.clone()).or_insert(long_name);
                     contig_order.push(current_key.clone());
+
                 } else {
                     for char in l.chars() {
                         // If we have filled the buffer, time to write the file and clear the buffer
@@ -223,6 +221,11 @@ pub fn read_fasta(
                 return Err(FastaReaderError::ReadFastaError) 
             },
         }
+    }
+    if contig_order.is_empty() {
+        error!("There were no contigs to read.");
+        debug!("Check fasta for proper format.");
+        return Err(FastaReaderError::ReadFastaError)
     }
     // End of file reached, write the last sequence and finish the final contig,
     // same as above, but with no need to reset anything.
@@ -280,7 +283,6 @@ fn extract_key_name(full_name: &str) -> String {
     full_name[..delim_index].to_string()
 }
 
-
 fn map_sequence(sequence: &[Nucleotide]) -> Result<Vec<SequenceMap>, FastaReaderError> {
     // This is a 2D vector map representing the regions of the string of DNA.
     // example: If a DNA strand looks like this:
@@ -298,16 +300,17 @@ fn map_sequence(sequence: &[Nucleotide]) -> Result<Vec<SequenceMap>, FastaReader
     let first_base = sequence[0];
     // Many sequences start with unknown bases (telomeres), usually composed
     // of highly repetitive regions that are difficult to distinguish for the
-    // sequencer and difficult to align later. So we will try to skip those.
+    // sequencer and difficult to align later. These can be represented by N or sometimes lower
+    // case bases. So we will try to skip those.
     // Also, failing to check this was resulting in a first map element of (0, 0, NonNRegion)
     match first_base {
-        N => {
+        N | X | Maskeda | Maskedc | Maskedg | Maskedt => {
             // Process the N region
             // set the flag correctly to avoid issues later
             inside_n_region = true;
             for base in &sequence[1..] {
                 match base {
-                    N => {
+                    N | X | Maskeda | Maskedc | Maskedg | Maskedt => {
                         region_end += 1;
                     },
                     _ => {
@@ -335,7 +338,7 @@ fn map_sequence(sequence: &[Nucleotide]) -> Result<Vec<SequenceMap>, FastaReader
     // Now we process the block
     for base in remainder {
         match base {
-            Nucleotide::N => {
+            N | X | Maskeda | Maskedc | Maskedg | Maskedt => {
                 if inside_n_region {
                     // We are already inside an n region, so we just need to increment
                     region_end += 1
@@ -390,7 +393,7 @@ fn process_buffer_into_sequenceblock(
     for item in buffer {
         match item {
             N => {
-                buffer_to_write.push(nucleotide_selector.sample_bases(rng.random()?));
+                buffer_to_write.push(nucleotide_selector.sample_bases(rng.random()?).get_masked());
             },
             X => {
                 //skip
@@ -423,10 +426,36 @@ fn process_buffer_into_sequenceblock(
     Ok(sequence_file_path)
 }
 
+pub fn count_fasta(filename: &PathBuf) -> Result<usize, FastaReaderError> {
+    let open_file = read_lines(filename)?;
+    let mut count = 0;
+    for raw_line in open_file {
+        match raw_line {
+            Ok(l) => {
+                if l.starts_with(">") {
+                    count += 1;
+                }
+            },
+            Err(error) => {
+                error!("Error reading fasta file! {:?}", error);
+                return Err(FastaReaderError::ReadFastaError)
+            }
+        }
+
+    }
+    Ok(count)
+}
+
 #[cfg(test)]
 mod tests {
     use walkdir::WalkDir;
     use super::*;
+
+    #[test]
+    fn test_count_fasta() {
+        // TODO add test
+        assert!(true)
+    }
 
     #[test]
     fn test_process_buffer_into_sequenceblock() {

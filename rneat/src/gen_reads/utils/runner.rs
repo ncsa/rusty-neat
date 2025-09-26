@@ -403,6 +403,11 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
                 files_written.push(filename2.clone());
             }
         }
+    } else {
+        if let Some(filename1) = &config.output_fastq_1 {
+            info!("Successfully wrote fastq file: {:?}", &filename1);
+            files_written.push(filename1.clone());
+        }
     }
 
     if let Some(filename) = &config.output_vcf {

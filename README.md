@@ -55,7 +55,7 @@ Use the help menu to see the available options and leave an issue if you find so
 
 To compile and run `rneat` yourself, you will need the Rust environment (https://www.rust-lang.org/tools/install), with cargo. You will also need git installed for your operating system. You will then need to git clone and cd into the repo directory. From your home directory in Linux the process might look something like:
 
-```
+```angular2html
 ~/$ git clone git@github.com:ncsa/rusty-neat.git
 ~/$ cd rusty-neat
 ~/rusty-neat/$
@@ -65,24 +65,24 @@ For Windows users, you're probably going to want to use WSL, but go ahead and te
 
 Once in the repo, you can build the program either in debug (default) or release mode. The main difference is how much info it gives you if there is an error. Release mode also has some optimizations to run it faster.
 
-```
+```angular2html
 ~/rusty-neat/$ cargo build --release
 ```
 
 If you prefer to run the package directly without using the binary, you can also use
-```
+```angular2html
 ~/rusty-neat/$ cargo run
 ```
 
 Rust will download any required packages. Compiling Rust code is the slowest part of the process. The final binary will be built and the program run immediately after in the second case. To run the program manually, from the repo main dir, run
 
-```
+```angular2html
 ~/rusty-neat/$ ./target/release/rneat -h
 ```
 
 `rneat` uses a configuration file to read values it needs for the run. Most of these features should be active, but there is currently no way to generate your own data, so stick with default models for now. Also, there is not yet a way to create bams. A command line execution might look like this:
 
-```
+```angular2html
 ~/rusty-neat/$ ./target/release/rneat -C /path/to/filled/in/config.yml
 ```
 
@@ -109,7 +109,7 @@ Bed data will have some challenges. For example, if the contig names in the bed 
 
 First, in a linux terminal, use your input fasta to find the names of the contigs like this:
 
-```
+```angular2html
 $ grep "^>" input.fasta
 >NC_001133.9 Saccharomyces cerevisiae S288C chromosome I, complete sequence
 >NC_001134.8 Saccharomyces cerevisiae S288C chromosome II, complete sequence
@@ -121,7 +121,7 @@ This will give you the fill fasta name. `rneat` determines the short name of the
 
 Next, we check the bed. This example awk command will look for unique values in the first column of your bed file and print out what it finds. 
 
-```
+```angular2html
 $ awk '!seen[$1]++ {print $1}' file.bed
 1
 2
@@ -131,7 +131,7 @@ etc
 
 In this case, the bed file uses a simple numbering scheme to number the chromosomes. We can see a mapping with the roman numeral chromosomes in the name, but it's tricky to program. So, the following command will allow you, the user, to map these chromosomes and thus instruct NEAT. Yours will vary based on the inputs.
 
-```
+```angular2html
 awk -F'\t' '{$1=($1=="1"?"NC_001133.9":$1); $1=($1=="2"?"NC_001134.8":$1); print}' OFS='\t' file.bed > file_renamed.bed
 ```
 

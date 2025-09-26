@@ -8,7 +8,7 @@ extern crate simple_rng;
 
 pub mod filter_reads;
 pub mod gen_reads;
-pub mod create_mutation_model;
+pub mod gen_mut_model;
 
 use std::env;
 use std::time;

@@ -1,5 +1,7 @@
 //! These enums and structs help us keep track of variants added to the reference
 //! It stores all the necessary data to write a variant out.
+use std::collections::HashMap;
+
 use thiserror::Error;
 use crate::structs::nucleotides::Nucleotide;
 use log::*;
@@ -106,7 +108,7 @@ pub struct Variant {
 
 impl Variant {
 
-    pub fn from_file(
+    pub fn from_file_params(
         location: usize,
         id: &str,
         filter: &str,

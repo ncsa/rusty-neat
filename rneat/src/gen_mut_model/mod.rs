@@ -61,7 +61,7 @@ pub fn main(config_file: &PathBuf) -> Result<(), GenMutationModelError> {
         None,
     ).expect("Error reading fasta file");
 
-    let result = runner(
+    runner(
         fasta_map,
         filtered_mutations,
         run_config.bed_table,

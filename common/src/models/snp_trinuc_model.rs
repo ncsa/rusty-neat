@@ -111,7 +111,7 @@ const SNP_TRINUCS: [(Nucleotide, Nucleotide, Nucleotide); 64] = [
 ];
 
 lazy_static! {
-    static ref ALL_FRAMES: Vec<TrinucFrame> = {
+    pub static ref ALL_FRAMES: Vec<TrinucFrame> = {
         let mut all_frames = Vec::new();
         for trinuc in SNP_TRINUCS {
             all_frames.push(TrinucFrame::from(trinuc))

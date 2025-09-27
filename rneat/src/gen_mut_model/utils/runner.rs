@@ -3,12 +3,12 @@ use itertools::Itertools;
 use log::*;
 
 use common::{
-    models::snp_trinuc_model::TrinucFrame, 
+    models::snp_trinuc_model::{TrinucFrame, ALL_FRAMES}, 
     structs::{
         bed_record::BedRecord, 
         fasta_map::{FastaMap, RegionType, SequenceBlock}, 
-        nucleotides::Nucleotide, 
-        variants::{Variant, VariantType}
+        nucleotides::{Nucleotide, ALLOWED_NUCS}, 
+        variants::{Genotype, Variant, VariantType}
     }
 };
 
@@ -38,7 +38,6 @@ pub fn runner(
     let mut insertion_count: HashMap<usize, usize> = HashMap::new();
     let mut deletion_count: HashMap<usize, usize> = HashMap::new();
     let mut homozygous_count = 0;
-    let mut common_variants: Vec<(String, Variant, f64)> = Vec::new();
     let trinuc_count = count_trinculeotides (
         &fasta_map,
         bed_table,
@@ -53,7 +52,6 @@ pub fn runner(
     }
     let mut total_reflen = 0;
     for contig in &fasta_map.contigs{
-        let mut non_n_region_count: usize = 0;
         let countable_regions = contig.get_non_n_regions()?;
         for region in countable_regions {
             // I think the coordinates are forward on all regions
@@ -93,22 +91,88 @@ pub fn runner(
                 },
                 _ => debug!("Unknown variant type, skipping for this analyis."),
             }
-            let var_pop_freq = find_caf(&variant.alternate);
-
+            // here we could get the variant population frequency from info extracted from the VCF
+            // let var_pop_freq = find_caf(&variant.alternate);
+            match variant.genotype {
+                Genotype::Homozygous => {
+                    homozygous_count += 1
+                }
+                Genotype::Heterozygous => {
+                    // Do nothing
+                }
+            }
         }
     }
+    // Compute probabilities
+    let mut trinuc_mut_prob: HashMap<TrinucFrame, f64> = HashMap::new();
+    let mut trinuc_trans_prob: HashMap<(TrinucFrame, TrinucFrame), f64> = HashMap::new();
+    let mut snp_trans_frequency: HashMap<(Nucleotide, Nucleotide), f64> = HashMap::new();
+    for (frame, count) in trinuc_count {
+        // No need to run this loop if we never saw this frame in the first place
+        if count == 0 {
+            trinuc_mut_prob.insert(frame, 0.0);
+            // nothing to look for
+            continue;
+        }
+        // Thi number of times this frame appeared in any transition in the dataset.
+        let mut frame_count = 0;
+        for (key, value) in &trinuc_transition_count {
+            if key.0 == frame {
+                frame_count += *value;
+            }
+        }
+        // The probability that this particular frame mutates.
+        if count > 0 {
+            trinuc_mut_prob.insert(frame, (frame_count as f64) / (count as f64));
+        } else {
+            // No dividsies by zeroesies. A count of zero means this particular trinucleotide did not appear in the dataset.
+            trinuc_mut_prob.insert(frame, 0.0);
+        }
+        // So now we caluclate the transition, based on the probability that this trinuc
+        // mutated, from this frame to each particular frame that it mutated to.
+        if frame_count > 0 {
+            // No need to run this loop if we never saw the trinuc.
+            for (frame_tuple, count,) in trinuc_transition_count{
+                if frame_tuple.0 == frame {
+                    // We already checked that frame_count > 0, so we're good to divide here.
+                    trinuc_trans_prob.insert(
+                        frame_tuple.clone(), 
+                        (count as f64)/(frame_count as f64),
+                    );
+                }
+            }
+        }
+    }
+    // Now we check just the middle of the frame, to see the base chance of that base transitioning
+    for nuc1 in ALLOWED_NUCS.clone() {
+        // this could probably be condensed into a mapping plus .iter().sum()
+        let rolling_total = {
+            let mut sub_tot = 0;
+            for nuc2 in ALLOWED_NUCS.clone() {
+                if snp_transition_count.contains_key(&(nuc1, nuc2)) {
+                    sub_tot += snp_transition_count[&(nuc1, nuc2)]
+                }
+            };
+            sub_tot
+        };
+        // Sucks we have to loop this twice. Maybe if we structure the map better?
+        // but it's only O(4) so it's not bad.
+        if rolling_total > 0 {
+            // No divide by zero
+            for nuc2 in ALLOWED_NUCS.clone() {
+                if snp_transition_count.contains_key(&(nuc1, nuc2)) {
+                    // probability that if nuc1 mutates into anything, it mutates into nuc2.
+                    snp_trans_frequency.insert(
+                        (nuc1, nuc2).clone(),
+                        (snp_transition_count[&(nuc1, nuc2)] as f64) / (rolling_total as f64)
+                    );
+                }
+            }
+        }
+    }
+    // compute average snp and indel frequencies
+    
     Ok(())
-}
-
-fn find_caf(alt: &Vec<Nucleotide>) -> Result<f64, GenMutationModelError> {
-    // Python:
-    // info_split = [a.split('=') for a in candidate_field.split(';')]
-    // for item in info_split:
-    //     if item[0].upper() == 'CAF':
-    //         if ',' in item[1]:
-    //             return float(item[1].split(',')[1])
-    // return VCF_DEFAULT_POP_FREQ
-    todo!()
 }
 
 fn count_trinculeotides(

@@ -7,18 +7,36 @@ use simple_rng::{NeatRng, NeatRngError};
 use log::error;
 
 use crate::structs::{
-    distributions::{DiscreteDistribution, DistributionErrors}, nucleotides::{allowed_vec, Nucleotide}, transition_matrix::{TransitionMatrix, TransitionMatrixError}, variants::{Variant, VariantError, VariantType}
+    distributions::{
+        DiscreteDistribution, 
+        DistributionErrors
+    }, 
+    nucleotides::{
+        allowed_vec, 
+        Nucleotide
+    }, 
+    transition_matrix::{
+        TransitionMatrix, 
+        TransitionMatrixError
+    }, 
+    variants::{
+        Variant, 
+        VariantError, 
+        VariantType
+    }
 };
 use crate::models::{
     indel_model::{IndelModel, IndelModelError},
-    quality_scores::{QualityModelError, QualityScoreModel},
-    sequencing_error_model::{SeqModelError, SequencingErrorModel},
+    quality_scores::{QualityModelError},
+    sequencing_error_model::{SeqModelError},
     snp_trinuc_model::{SnpTrinucModel, SnpTrinucError},
     lib::{model_reader, model_writer},
 };
 
 #[derive(Error, Debug)]
 pub enum MutationModelError {
+    #[error("Error in inputs to MutationModel")]
+    InputError,
     #[error("Mutation model returned RNG error: {0}")]
     RngError(#[from] NeatRngError),
     #[error("Error retrieving reference sequence block")]
@@ -70,6 +88,45 @@ pub struct MutationModel {
 }
 
 impl MutationModel {
+    pub fn from_raw_data(
+        average_mutation_rate: f64,
+        homozygous_frequency: f64,
+        variant_probs: Vec<f64>,
+    ) -> Result<Self, MutationModelError> {
+        // future improvement: allow for custom transition matrix for different species
+        // Current is tailored to humans
+        let transition_matrix = TransitionMatrix::default()?;
+        // build tranisition matrices from data for snps and trinucs
+        let snp_model = SnpTrinucModel {
+            // TODO
+        };
+        // Should be easier than the snp models 
+        let indel_model = IndelModel {
+            // TODO
+        };
+        let statistical_models = StatisticalModels {
+            transition_matrix,
+            snp_model,
+            indel_model,
+        };
+        // SNP, Insertion, Deletion, respectively.
+        let variant_indexes = vec![0, 1, 2];
+        if variant_probs.len() != 3 {
+            error!("Input to mutation model from raw incorrect. Variant probs should have a length of 3: SNP, INS, DEL")
+            return Err(MutationModelError::InputError)
+        }
+        let variant_distribution = DiscreteDistribution::new(
+            &variant_probs,
+            &variant_indexes,
+        );
+        MutationModel {
+            mutation_rate: average_mutation_rate,
+            variant_dist,
+            homozygous_frequency,
+            statistical_models,
+        }
+        MutationModel::default()
+    }
     pub fn default() -> Result<Self, MutationModelError> {
         // Creating the default model based on the default for the original NEAT.
         let statistical_models = StatisticalModels::default()?;
@@ -225,8 +282,6 @@ struct StatisticalModels {
     // variant types. If new variant types are added, then we will need to expand this struct to
     // include them.
     transition_matrix: TransitionMatrix,
-    quality_score_model: QualityScoreModel,
-    sequencing_error_model: SequencingErrorModel,
     indel_model: IndelModel,
     snp_model: SnpTrinucModel,
 }
@@ -238,15 +293,11 @@ impl StatisticalModels {
         let snp_model = SnpTrinucModel::default_minimal()?;
         let indel_model = IndelModel::default()?;
         // todo update this line:
-        let quality_score_model = QualityScoreModel::default()?;
-        let sequencing_error_model = SequencingErrorModel::default()?;
 
         Ok(StatisticalModels {
             transition_matrix,
-            quality_score_model,
             snp_model,
             indel_model,
-            sequencing_error_model,
         })
     }
 }

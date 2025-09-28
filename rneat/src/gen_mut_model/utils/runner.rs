@@ -3,12 +3,12 @@ use itertools::Itertools;
 use log::*;
 
 use common::{
-    models::snp_trinuc_model::{TrinucFrame, ALL_FRAMES}, 
+    models::{mutation_model::MutationModel, snp_trinuc_model::{TrinucFrame, ALL_FRAMES}}, 
     structs::{
         bed_record::BedRecord, 
         fasta_map::{FastaMap, RegionType, SequenceBlock}, 
         nucleotides::{Nucleotide, ALLOWED_NUCS}, 
-        variants::{Genotype, Variant, VariantType}
+        variants::{self, Genotype, Variant, VariantType}
     }
 };
 
@@ -27,7 +27,7 @@ pub fn runner(
     //      original sequences
     //   filtered_mutations: The mutations from the original VCF, after any 
     //      appropriate bed filtering has been applied
-    //   bed_table: The hash map representing thi input bed
+    //   bed_table: The hash map representing the input bed
     //   output_file: Where to write the output model
     //
     // This will store the count of trinucleotide combo A transitioning to combo B
@@ -38,9 +38,9 @@ pub fn runner(
     let mut insertion_count: HashMap<usize, usize> = HashMap::new();
     let mut deletion_count: HashMap<usize, usize> = HashMap::new();
     let mut homozygous_count = 0;
-    let trinuc_count = count_trinculeotides (
+    let (trinuc_count, bed_track_len) = count_trinculeotides (
         &fasta_map,
-        bed_table,
+        &bed_table,
     )?;
     if trinuc_count.is_empty() {
         error!("Trinucleotide counts were empty");
@@ -132,12 +132,12 @@ pub fn runner(
         // mutated, from this frame to each particular frame that it mutated to.
         if frame_count > 0 {
             // No need to run this loop if we never saw the trinuc.
-            for (frame_tuple, count,) in trinuc_transition_count{
+            for (frame_tuple, count,) in &trinuc_transition_count{
                 if frame_tuple.0 == frame {
                     // We already checked that frame_count > 0, so we're good to divide here.
                     trinuc_trans_prob.insert(
                         frame_tuple.clone(), 
-                        (count as f64)/(frame_count as f64),
+                        (*count as f64)/(frame_count as f64),
                     );
                 }
             }
@@ -171,26 +171,88 @@ pub fn runner(
         }
     }
     // compute average snp and indel frequencies
-    
+    let avg_snp_frequency = (snp_count as f64) / (filtered_mutations.len() as f64);
+    let total_insertions = {
+        let mut subtotal = 0;
+        for (_, v) in insertion_count {
+            subtotal += v;
+        }
+        subtotal
+    };
+    let total_deletions = {
+        let mut subtotal = 0;
+        for (_, v) in deletion_count {
+            subtotal += v;
+        }
+        subtotal
+    };
+    // There may have been unknown variants in our dataset
+    let allowed_variant_count: f64 = (snp_count + total_insertions + total_deletions) as f64;
+    let average_snp_frequency = (snp_count as f64) / allowed_variant_count;
+    let average_deletion_frequency = (total_deletions as f64) / allowed_variant_count;
+    let average_insertion_frequency = (total_insertions as f64) / allowed_variant_count;
+    let homozygous_frequency = {
+        if homozygous_count > 0 {
+            (homozygous_count as f64) / allowed_variant_count
+        } else {
+            // A very small percentage allowed. Maybe this could be a parameter.
+            0.001 
+            // This number comes from the original NEAT
+        }
+    };
+    let average_mutation_rate = {
+        if !bed_table.is_empty() {
+            allowed_variant_count / (bed_track_len as f64)
+        } else {
+            allowed_variant_count / (total_reflen as f64)
+        }
+    };
+    let mutation_model = MutationModel::from(
+        
+    )
+
     Ok(())
 }
 
 fn count_trinculeotides(
     fasta_map: &FastaMap,
-    bed_table: HashMap<String, Vec<BedRecord>>,
-) -> Result<HashMap<TrinucFrame, usize>, GenMutationModelError> {
+    bed_table: &HashMap<String, Vec<BedRecord>>,
+) -> Result<(HashMap<TrinucFrame, usize>, usize), GenMutationModelError> {
     // Counts the frequency of the various trinucleotide combinations in the dataset
     // fasta_map - Database for reading back the sequenced data.
     // bed_table - A table for the bed records
 
     // HashMap of trinuce to count, e.g., "AAA": 12
     let mut trinuc_count: HashMap<TrinucFrame, usize> = HashMap::new();
+    let mut bed_track_len: usize = 0;
     if !bed_table.is_empty() {
         // There is actual bed input
         info!("Counting trinucleotide combinations in bed regions");
         for (chrom, bed_vec) in bed_table {
-            let contig_block = fasta_map.retrieve_contig(chrom.clone())
+            let contig_block = fasta_map.retrieve_contig(&chrom)
                 .expect(&format!("Error retrieving contig {}", chrom));
+            let regions_of_interest = bed_vec;
+            for region in regions_of_interest {
+                // Make sure our region is long enough. We need at least 3 bases to get any trinucleotides.
+                if (region.end - region.start) >= 3 {
+                    // Add to track length
+                    bed_track_len += region.end - region.start;
+                    // iterate over the regions, grab trinucleotides, profit
+                    // The first trincu is one base in. The last is one base from the end
+                    for i in (region.start+1)..(region.end-1) {
+                        let trinuc = contig_block.get_block_subseq(i-1, i+1)?;
+                        let frame = TrinucFrame::from((trinuc[0], trinuc[1], trinuc[2]));
+                        *trinuc_count.entry(frame.to_owned()).or_default() += 1;
+                    }
+                } 
+            }
+        }
+    } else {
+        // No bed input
+        info!("Counting trinucleotide combinations in bed regions");
+        for contig in &fasta_map.contigs {
+            let contig_block = fasta_map.retrieve_contig(&contig.name)
+                .expect(&format!("Error retrieving contig {}", &contig.name));
             let regions_of_interest = contig_block.get_non_n_regions()
                 .expect("Error retrieving non-n regions!");
             for region in regions_of_interest {
@@ -203,8 +265,6 @@ fn count_trinculeotides(
                 }
             }
         }
-    } else {
-        // No bed input
     }
-    Ok(trinuc_count)
+    Ok((trinuc_count, bed_track_len))
 }

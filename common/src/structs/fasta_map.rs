@@ -4,7 +4,7 @@
 //! sequences to file (encoded as Nucleotide) and retreiving them only as needed
 //! We need to use the Variants struct to add variants to the contigs, making this a sort of second
 //! level struct
-use std::io;
+use std::{io, string};
 use thiserror::Error;
 use std::num::ParseIntError;
 use std::{collections::HashMap, io::Write};
@@ -27,7 +27,7 @@ pub enum FastaMapError {
     #[error("FastaMap failed to validate the sequence map")]
     SeqMapValidationError,
     #[error("FastaMap reported a ContigNotFoundError")]
-    ContigNotFoundError(&'static str),
+    ContigNotFoundError(String),
     #[error("FastaMap reported a serde error: {0}")]
     SerdeValueError(#[from] serde::de::value::Error),
     #[error("FastaMap reported an error from serde_json: {0}")]
@@ -385,13 +385,13 @@ impl FastaMap {
         FastaMap { contigs, name_map, contig_order }
     }
 
-    pub fn retrieve_contig(&self, request_name: String) -> Result<&Contig, FastaMapError> {
+    pub fn retrieve_contig(&self, request_name: &str) -> Result<&Contig, FastaMapError> {
         for contig in self.contigs.iter() {
             if contig.name == request_name {
                 return Ok(contig)
             }
         }
-        Err(FastaMapError::ContigNotFoundError("Contig not found: {contig}"))
+        return Err(FastaMapError::ContigNotFoundError(format!("Contig not found: {}", request_name)))
     }
 }
 

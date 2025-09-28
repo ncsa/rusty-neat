@@ -243,10 +243,6 @@ pub struct SnpTrinucModel {
 static DATA_FILE: &'static [u8] = include_bytes!("model_data/default_trinuc_model.json.gz");
 
 impl SnpTrinucModel {
-    pub fn from(
-    ) -> Result<Self, SnpTrinucError> {
-        todo!()
-    }
 
     pub fn default_minimal() -> Result<Self, SnpTrinucError> {
         // Creating the default trinuc bias model for snps. In this model, all trinucleotides

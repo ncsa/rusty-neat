@@ -1,12 +1,12 @@
 //! The mutation model
-use std;
+use std::{self, collections::HashMap};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use thiserror::Error;
 use simple_rng::{NeatRng, NeatRngError};
 use log::error;
 
-use crate::structs::{
+use crate::{models::snp_trinuc_model::TrinucFrame, structs::{
     distributions::{
         DiscreteDistribution, 
         DistributionErrors
@@ -24,7 +24,7 @@ use crate::structs::{
         VariantError, 
         VariantType
     }
-};
+}};
 use crate::models::{
     indel_model::{IndelModel, IndelModelError},
     quality_scores::{QualityModelError},
@@ -63,7 +63,15 @@ pub enum MutationModelError {
     ModelInitiationError(&'static str),
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+fn allowed_variant_types() -> Vec<VariantType> { 
+    vec![
+        VariantType::SNP,
+        VariantType::Insertion,
+        VariantType::Deletion,
+    ]
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MutationModel {
     // This is the model for mutations, the same construct used by the python version, basically.
     // The idea is to store all the data we need to create mutations in one construct.
@@ -81,7 +89,7 @@ pub struct MutationModel {
     //    1. SNP
     //    2. Insertion
     //    3. Deletion
-    pub variant_dist: DiscreteDistribution,
+    pub variant_dist: DiscreteDistribution<VariantType>,
     // These hold all the statistical model data we need to apply the mutations with this model
     statistical_models: StatisticalModels,
     // Store a reference to the NeatRng for this run
@@ -92,41 +100,81 @@ impl MutationModel {
         average_mutation_rate: f64,
         homozygous_frequency: f64,
         variant_probs: Vec<f64>,
+        snp_transition_frequency: HashMap<(Nucleotide, Nucleotide), f64>,
+        trinuc_frequency: HashMap<TrinucFrame, f64>,
+        trinuc_transition_frequency: HashMap<(TrinucFrame, TrinucFrame), f64>,
+        ins_lengths: Vec<usize>,
+        ins_weights: Vec<f64>,
+        del_lengths: Vec<usize>,
+        del_weights: Vec<f64>,
     ) -> Result<Self, MutationModelError> {
-        // future improvement: allow for custom transition matrix for different species
-        // Current is tailored to humans
-        let transition_matrix = TransitionMatrix::default()?;
-        // build tranisition matrices from data for snps and trinucs
-        let snp_model = SnpTrinucModel {
-            // TODO
-        };
+        // Inputs:
+        // average_mutation_rate: Average rate by total reference (or bed track) length
+        //    of a base mutating
+        // homozygous_frequency: Average rate that, if a mutation occurs, it is homozygous
+        // variant_probs: Relative probabilities of each type of allowed variant (SNP, INS, DEL)
+        // snp_transition_frequency: Probability that one base mutates to another, 
+        //    independent of context
+        // trinuc_frequency: The relative frequency of each trinucleotide in the dataset
+        //    mutating to anything else (to help detect if some trinucs are more volatile 
+        //    than others)
+        // trinuc_transition_frequency: The probability of trinuc A mutating into trinuc B,
+        //    as seen in data. Some may not have been observed and will be assigned a very
+        //    low probability.
+        //
+        // custom tranisition matrix for snps
+        let mut temp_trans_matrix: [[f64; 4]; 4] = [
+            [0.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 0.0],
+        ];
+        for (key, value) in snp_transition_frequency {
+            temp_trans_matrix[key.0 as usize][key.1 as usize] = value;
+        }
+        let transition_matrix = TransitionMatrix::from(
+            temp_trans_matrix[Nucleotide::A as usize],
+            temp_trans_matrix[Nucleotide::C as usize],
+            temp_trans_matrix[Nucleotide::G as usize],
+            temp_trans_matrix[Nucleotide::T as usize],
+        )?;
+        // build transition matrices from data for snps and trinucs
+        let snp_trinuc_model = SnpTrinucModel::from_raw_data(
+            trinuc_frequency,
+            trinuc_transition_frequency,
+        )?;
         // Should be easier than the snp models 
-        let indel_model = IndelModel {
-            // TODO
-        };
+        // Probability, given that it is an indel, that it is an insertion
+        let insertion_probability = variant_probs[1] / (variant_probs[1] + variant_probs[2]);
+        let indel_model = IndelModel::from_raw_data(
+            insertion_probability,
+            ins_lengths,
+            ins_weights,
+            del_lengths,
+            del_weights,
+        )?;
         let statistical_models = StatisticalModels {
             transition_matrix,
-            snp_model,
             indel_model,
+            snp_trinuc_model,
         };
         // SNP, Insertion, Deletion, respectively.
-        let variant_indexes = vec![0, 1, 2];
         if variant_probs.len() != 3 {
-            error!("Input to mutation model from raw incorrect. Variant probs should have a length of 3: SNP, INS, DEL")
+            error!("Input to mutation model from raw incorrect. Variant probs should have a length of 3: SNP, INS, DEL");
             return Err(MutationModelError::InputError)
         }
         let variant_distribution = DiscreteDistribution::new(
             &variant_probs,
-            &variant_indexes,
-        );
-        MutationModel {
+            &(allowed_variant_types()),
+        )?;
+        Ok(MutationModel {
             mutation_rate: average_mutation_rate,
-            variant_dist,
+            variant_dist: variant_distribution,
             homozygous_frequency,
             statistical_models,
-        }
-        MutationModel::default()
+        })
     }
+
     pub fn default() -> Result<Self, MutationModelError> {
         // Creating the default model based on the default for the original NEAT.
         let statistical_models = StatisticalModels::default()?;
@@ -154,10 +202,9 @@ impl MutationModel {
         ];
 
         // We'll use the inex to find the variant
-        let variant_index = vec![0, 1, 2];
         let variant_dist = DiscreteDistribution::new(
             &Vec::from(variant_weights),
-            &variant_index,
+            &allowed_variant_types(),
         )?;
 
         Ok(MutationModel {
@@ -227,7 +274,7 @@ impl MutationModel {
                         check_base(reference_sequence[variant_location]),
                         check_base(reference_sequence[variant_location+1]),
                     ];
-                    let alternate_base = self.statistical_models.snp_model
+                    let alternate_base = self.statistical_models.snp_trinuc_model
                         .generate_snp(rng.random()?, &trinuc_reference)?;
 
                     alternate = vec![alternate_base];
@@ -276,27 +323,27 @@ impl MutationModel {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct StatisticalModels {
     // This struct links the Mutation model to the other statistical models for modeling different
     // variant types. If new variant types are added, then we will need to expand this struct to
     // include them.
     transition_matrix: TransitionMatrix,
     indel_model: IndelModel,
-    snp_model: SnpTrinucModel,
+    snp_trinuc_model: SnpTrinucModel,
 }
 
 impl StatisticalModels {
     pub fn default() -> Result<Self, MutationModelError> {
         // use the default transition matrix, snp model and indel model
         let transition_matrix = TransitionMatrix::default()?;
-        let snp_model = SnpTrinucModel::default_minimal()?;
+        let snp_trinuc_model = SnpTrinucModel::default_minimal()?;
         let indel_model = IndelModel::default()?;
         // todo update this line:
 
         Ok(StatisticalModels {
             transition_matrix,
-            snp_model,
+            snp_trinuc_model,
             indel_model,
         })
     }

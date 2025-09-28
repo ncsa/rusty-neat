@@ -5,7 +5,7 @@ use thiserror::Error;
 use crate::{
     models::lib::{model_reader, model_writer}, 
     structs::{distributions::{DiscreteDistribution, DistributionErrors}, 
-    nucleotides::{Nucleotide, ALLOWED_USIZE}, 
+    nucleotides::{Nucleotide, ALLOWED_NUCS}, 
     transition_matrix::{TransitionMatrix, TransitionMatrixError}}
 };
 use simple_rng::{NeatRng, NeatRngError};
@@ -38,10 +38,10 @@ pub struct SequencingErrorModel {
     // Neat only dealt with 2 types of sequencing errors: snps and small indels.
     // We will retain that idea and assume it is accurate.
     error_rate: f64,
-    del_length_distribution: DiscreteDistribution,
-    ins_length_distribution: DiscreteDistribution,
+    del_length_distribution: DiscreteDistribution<usize>,
+    ins_length_distribution: DiscreteDistribution<usize>,
     indel_probability: f64,
-    insertion_bias: DiscreteDistribution,
+    insertion_bias: DiscreteDistribution<Nucleotide>,
     transition_distros: TransitionMatrix,
 }
 
@@ -51,10 +51,10 @@ impl SequencingErrorModel {
         // Note that this was originally in a file, and we could have done it the way we did
         // the other defaults, but it was so small, I just included it in full here.
         let default_transition_distros = TransitionMatrix::from(
-            vec![0.0, 0.4918, 0.3377, 0.1705],
-            vec![0.5238, 0.0, 0.2661, 0.2101],
-            vec![0.3754, 0.2355, 0.0, 0.389],
-            vec![0.2505, 0.2552, 0.4942, 0.0],
+            [0.0, 0.4918, 0.3377, 0.1705],
+            [0.5238, 0.0, 0.2661, 0.2101],
+            [0.3754, 0.2355, 0.0, 0.389],
+            [0.2505, 0.2552, 0.4942, 0.0],
         )?;
         let default_error_rate = 0.006638164688495656;
         let default_lengths = vec![1, 2];
@@ -67,7 +67,7 @@ impl SequencingErrorModel {
         // default is no bias
         let default_insertion_bias = DiscreteDistribution::new(
             &vec![1.0, 1.0, 1.0, 1.0],
-            &Vec::from(ALLOWED_USIZE.clone()),
+            &ALLOWED_NUCS.to_vec(),
         )?;
 
         Ok(SequencingErrorModel {

@@ -2,6 +2,7 @@
 //! It stores all the necessary data to write a variant out.
 use std::collections::HashMap;
 
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use crate::structs::nucleotides::Nucleotide;
 use log::*;
@@ -48,7 +49,7 @@ fn gt_from_str(input: &str) -> Genotype {
     }
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
 pub enum VariantType {
     SNP,
     Insertion,

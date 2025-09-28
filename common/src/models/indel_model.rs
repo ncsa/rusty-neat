@@ -33,13 +33,34 @@ pub enum IndelModelError {
 pub struct IndelModel {
     // Based what was in the original NEAT
     pub (crate) insertion_probability: f64,
-    ins_dist: DiscreteDistribution,
-    del_dist: DiscreteDistribution,
+    ins_dist: DiscreteDistribution<usize>,
+    del_dist: DiscreteDistribution<usize>,
 }
 
 static DATA_FILE: &'static [u8] = include_bytes!("model_data/default_indel_model.json.gz");
 
 impl IndelModel {
+    pub fn from_raw_data(
+        insertion_probability: f64,
+        ins_lens: Vec<usize>,
+        ins_weights: Vec<f64>,
+        del_lens: Vec<usize>,
+        del_weights: Vec<f64>,
+    ) -> Result<Self, IndelModelError> {
+        let ins_dist = DiscreteDistribution::new(
+            &ins_weights,
+            &ins_lens,
+        )?;
+        let del_dist = DiscreteDistribution::new(
+            &del_weights,
+            &del_lens,
+        )?;
+        Ok(IndelModel {
+            insertion_probability,
+            ins_dist,
+            del_dist,
+        })
+    }
     pub fn default() -> Result<Self, IndelModelError> {
         // Default Indel model from the original NEAT, scaled by the lowest value and rounded.
         let reader = GzDecoder::new(DATA_FILE);

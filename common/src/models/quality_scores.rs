@@ -82,14 +82,14 @@ pub struct QualityScoreModel {
     // on a per-run basis in a deterministic way (doubling positional weight arrays)
     pub assumed_read_length: usize,
     // Weights for the first position in the read length.
-    pub seed_dist: DiscreteDistribution,
+    pub seed_dist: DiscreteDistribution<usize>,
     // A matrix for each subsequent position along the read length after the first. Each row is a
     // discrete distribution, keyed the previous score. For example, for possible scores 0-41,
     // inclusive, there would be 42 vectors (one for each possible previous score), each giving the
     // distribution for the current position (one weight for each of 42 scores). This is based on
     // the original design in NEAT. Previous attempts to simplify this have not been able to
     // successfully reproduce quality scores.
-    pub distros_from_one: Vec<Vec<DiscreteDistribution>>,
+    pub distros_from_one: Vec<Vec<DiscreteDistribution<usize>>>,
 }
 
 impl Display for QualityScoreModel {

@@ -3,12 +3,12 @@ use itertools::Itertools;
 use log::*;
 
 use common::{
-    models::{mutation_model::MutationModel, snp_trinuc_model::{TrinucFrame, ALL_FRAMES}}, 
+    models::{mutation_model::MutationModel, snp_trinuc_model::{TrinucFrame}}, 
     structs::{
         bed_record::BedRecord, 
-        fasta_map::{FastaMap, RegionType, SequenceBlock}, 
+        fasta_map::{FastaMap}, 
         nucleotides::{Nucleotide, ALLOWED_NUCS}, 
-        variants::{self, Genotype, Variant, VariantType}
+        variants::{Genotype, Variant, VariantType}
     }
 };
 
@@ -171,18 +171,17 @@ pub fn runner(
         }
     }
     // compute average snp and indel frequencies
-    let avg_snp_frequency = (snp_count as f64) / (filtered_mutations.len() as f64);
     let total_insertions = {
         let mut subtotal = 0;
-        for (_, v) in insertion_count {
-            subtotal += v;
+        for (_, v) in &insertion_count {
+            subtotal += *v;
         }
         subtotal
     };
     let total_deletions = {
         let mut subtotal = 0;
-        for (_, v) in deletion_count {
-            subtotal += v;
+        for (_, v) in &deletion_count {
+            subtotal += *v;
         }
         subtotal
     };
@@ -191,12 +190,17 @@ pub fn runner(
     let average_snp_frequency = (snp_count as f64) / allowed_variant_count;
     let average_deletion_frequency = (total_deletions as f64) / allowed_variant_count;
     let average_insertion_frequency = (total_insertions as f64) / allowed_variant_count;
+    let variant_probs = vec![
+        average_snp_frequency, 
+        average_insertion_frequency, 
+        average_deletion_frequency
+    ];
     let homozygous_frequency = {
         if homozygous_count > 0 {
             (homozygous_count as f64) / allowed_variant_count
         } else {
             // A very small percentage allowed. Maybe this could be a parameter.
-            0.001 
+            0.001 / allowed_variant_count
             // This number comes from the original NEAT
         }
     };
@@ -207,11 +211,43 @@ pub fn runner(
             allowed_variant_count / (total_reflen as f64)
         }
     };
-    let mutation_model = MutationModel::from(
-        
-    )
 
-    Ok(())
+    let ins_lengths: Vec<usize> = insertion_count.keys().cloned().collect();
+    let ins_weights: Vec<f64> = insertion_count
+        .values()
+        .cloned()
+        .map(|x| x as f64)
+        .collect();
+    let del_lengths: Vec<usize> = deletion_count.keys().cloned().collect();
+    let del_weights: Vec<f64> = deletion_count
+        .values()
+        .cloned()
+        .map(|x| x as f64)
+        .collect();
+
+    let result = MutationModel::from_raw_data(
+        average_mutation_rate,
+        homozygous_frequency,
+        variant_probs,
+        snp_trans_frequency,
+        trinuc_mut_prob,
+        trinuc_trans_prob,
+        ins_lengths,
+        ins_weights,
+        del_lengths,
+        del_weights,
+    );
+
+    match result {
+        Ok(mut_model) => {
+            mut_model.write_to_file(output_file)?;
+            info!("Mutation model success! Wrote model to {:?}", output_file);
+            Ok(())
+        },
+        Err(error) => {
+            return Err(GenMutationModelError::MutModelError(error))
+        }
+    }
 }
 
 fn count_trinculeotides(

@@ -5,6 +5,7 @@
 use simple_rng::NeatRngError;
 use log::debug;
 use thiserror::Error;
+use std::fmt::Debug;
 use serde::{
     Deserialize, 
     Serialize
@@ -25,13 +26,13 @@ pub enum DistributionErrors {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DiscreteDistribution {
-    pub(crate) values: Vec<usize>,
+pub struct DiscreteDistribution<T> {
+    pub(crate) values: Vec<T>,
     pub(crate) weights: Vec<f64>,
 }
 
-impl DiscreteDistribution {
-    pub fn new(w_vec: &Vec<f64>, v_vec: &Vec<usize>) -> Result<Self, DistributionErrors> {
+impl<T: Clone + Debug + Serialize + for<'de> Deserialize<'de>> DiscreteDistribution<T> {
+    pub fn new(w_vec: &Vec<f64>, v_vec: &Vec<T>) -> Result<Self, DistributionErrors> {
         let cumulative_probability = {
             let sum_weights: f64 = w_vec.iter().sum();
             if sum_weights > 0.0 {
@@ -49,12 +50,12 @@ impl DiscreteDistribution {
         };
 
         Ok(DiscreteDistribution {
-            values: v_vec.to_owned(),
+            values: v_vec.to_vec(),
             weights: cumulative_probability,
         })
     }
 
-    pub fn values(&self) -> Result<Vec<usize>, DistributionErrors> {
+    pub fn values(&self) -> Result<Vec<T>, DistributionErrors> {
         // fetches the value matrix
         Ok(self.values.clone())
     }
@@ -64,7 +65,7 @@ impl DiscreteDistribution {
         Ok(self.weights.to_vec())
     }
 
-    pub fn sample(&self, rand: f64) -> Result<usize, DistributionErrors> {
+    pub fn sample(&self, rand: f64) -> Result<T, DistributionErrors> {
         // returns a random value for the distribution, based on cumulative probability
         // This is basically an icdf for a discrete distribution
         // We take a random number as an input to avoid copying the RNG around the program.

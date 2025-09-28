@@ -3,10 +3,11 @@
 //! matrices. Indexing is now implemented for the Tranisition matrix, which should make the code more straightforward.
 use crate::structs::{
     distributions::{DiscreteDistribution, DistributionErrors}, 
-    nucleotides::{Nucleotide, ALLOWED_USIZE}
+    nucleotides::{Nucleotide, ALLOWED_NUCS}
 };
 use thiserror::Error;
 use std::ops::Index;
+use std::fmt::Debug;
 use serde::{Serialize, Deserialize};
 
 #[derive(Debug, Error)]
@@ -30,15 +31,15 @@ pub struct TransitionMatrix {
     // fundamental to the others and to the mutation model in general.
     //
     // This defines a transition from one Nucleotide to another.
-    a: DiscreteDistribution,
-    c: DiscreteDistribution,
-    g: DiscreteDistribution,
-    t: DiscreteDistribution,
+    a: DiscreteDistribution<Nucleotide>,
+    c: DiscreteDistribution<Nucleotide>,
+    g: DiscreteDistribution<Nucleotide>,
+    t: DiscreteDistribution<Nucleotide>,
 }
 
 impl Index<usize> for TransitionMatrix {
-    type Output = DiscreteDistribution;
-    fn index(&self, i: usize) -> &DiscreteDistribution {
+    type Output = DiscreteDistribution<Nucleotide>;
+    fn index(&self, i: usize) -> &DiscreteDistribution<Nucleotide> {
         match i {
             0 => &self.a,
             1 => &self.c,
@@ -50,8 +51,8 @@ impl Index<usize> for TransitionMatrix {
 }
 
 impl Index<&Nucleotide> for TransitionMatrix {
-    type Output = DiscreteDistribution;
-    fn index(&self, n: &Nucleotide) -> &DiscreteDistribution {
+    type Output = DiscreteDistribution<Nucleotide>;
+    fn index(&self, n: &Nucleotide) -> &DiscreteDistribution<Nucleotide> {
         match n {
             Nucleotide::A => &self.a,
             Nucleotide::C => &self.c,
@@ -68,28 +69,28 @@ impl TransitionMatrix where {
         Ok(Self {
             a: DiscreteDistribution::new(
                 &vec![0.0, 0.16952785544157142, 0.6878218371885525,  0.1426503073698761],
-                &Vec::from(ALLOWED_USIZE),
+                &Vec::from(ALLOWED_NUCS),
             )?,
             c: DiscreteDistribution::new(
                 &vec![0.1615595177675533, 0.0, 0.1664600510853558, 0.6719804311470908],
-                &Vec::from(ALLOWED_USIZE),
+                &Vec::from(ALLOWED_NUCS),
             )?,
             g: DiscreteDistribution::new(
                 &vec![0.6704692217289652, 0.16706325641014994, 0.0, 0.1624675218608849],
-                &Vec::from(ALLOWED_USIZE),
+                &Vec::from(ALLOWED_NUCS),
             )?,
             t: DiscreteDistribution::new(
                 &vec![0.14281397280584493, 0.6885459433549382, 0.16864008383921686, 0.0],
-                &Vec::from(ALLOWED_USIZE),
+                &Vec::from(ALLOWED_NUCS),
             )?,
         })
     }
 
     pub fn from(
-        a_weights: Vec<f64>,
-        c_weights: Vec<f64>,
-        g_weights: Vec<f64>,
-        t_weights: Vec<f64>
+        a_weights: [f64; 4],
+        c_weights: [f64; 4],
+        g_weights: [f64; 4],
+        t_weights: [f64; 4],
     ) -> Result<Self, TransitionMatrixError> {
         let weights_test = vec![
             a_weights.clone(), c_weights.clone(), g_weights.clone(), t_weights.clone()
@@ -101,20 +102,20 @@ impl TransitionMatrix where {
         }
         Ok(Self {
             a: DiscreteDistribution::new(
-                &a_weights,
-                &Vec::from(ALLOWED_USIZE),
+                &a_weights.to_vec(),
+                &Vec::from(ALLOWED_NUCS),
             )?,
             c: DiscreteDistribution::new(
-                &c_weights,
-                &Vec::from(ALLOWED_USIZE),
+                &c_weights.to_vec(),
+                &Vec::from(ALLOWED_NUCS),
             )?,
             g: DiscreteDistribution::new(
-                &g_weights,
-                &Vec::from(ALLOWED_USIZE),
+                &g_weights.to_vec(),
+                &Vec::from(ALLOWED_NUCS),
             )?,
             t: DiscreteDistribution::new(
-                &t_weights,
-                &Vec::from(ALLOWED_USIZE),
+                &t_weights.to_vec(),
+                &Vec::from(ALLOWED_NUCS),
             )?,
         })
     }
@@ -128,10 +129,10 @@ mod tests {
     #[test]
     fn test_transition_matrix_build() {
         // todo fix test
-        let a_weights = vec![0.0, 20.0, 1.0, 20.0];
-        let c_weights = vec![20.0, 0.0, 1.0, 1.0];
-        let g_weights = vec![1.0, 1.0, 0.0, 20.0];
-        let t_weights = vec![20.0, 1.0, 20.0, 0.0];
+        let a_weights = [0.0, 20.0, 1.0, 20.0];
+        let c_weights = [20.0, 0.0, 1.0, 1.0];
+        let g_weights = [1.0, 1.0, 0.0, 20.0];
+        let t_weights = [20.0, 1.0, 20.0, 0.0];
 
         let model = TransitionMatrix::from(
             a_weights,
@@ -142,15 +143,5 @@ mod tests {
 
         println!("{:?}", model);
         // assert_eq!(model.a_dist, a_weights);
-    }
-
-    #[test]
-    #[should_panic]
-    fn test_transition_matrix_too_many_bases() {
-        let a_weights = vec![0.0, 20.0, 1.0, 20.0, 1.0];
-        let c_weights = vec![20.0, 0.0, 1.0, 1.0];
-        let g_weights = vec![1.0, 1.0, 0.0, 20.0];
-        let t_weights = vec![20.0, 1.0, 20.0, 0.0];
-        TransitionMatrix::from(a_weights, c_weights, g_weights, t_weights).unwrap();
     }
 }

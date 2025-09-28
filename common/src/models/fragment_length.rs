@@ -37,7 +37,7 @@ pub enum FragmentModelError {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum FragmentLengthModel {
-    Discrete { distribution: DiscreteDistribution },
+    Discrete { distribution: DiscreteDistribution<usize> },
     Normal { mean: f64, st_dev: f64 },
 }
 

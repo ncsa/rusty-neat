@@ -1,7 +1,5 @@
 //! These enums and structs help us keep track of variants added to the reference
 //! It stores all the necessary data to write a variant out.
-use std::collections::HashMap;
-
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use crate::structs::nucleotides::Nucleotide;

@@ -26,7 +26,6 @@ use crate::{
         }, models::{
             fragment_length::FragmentLengthModel, 
             mutation_model::MutationModel, 
-            quality_scores::QualityScoreModel, 
             sequencing_error_model::SequencingErrorModel
         }, structs::{
             fasta_map::SequenceBlock, 
@@ -50,21 +49,8 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
     // We'll need a temp dir to store file fragments
     let working_dir = tempfile::tempdir().unwrap();
     info!("Created temp dir at {:?}", working_dir);
-    // Load models that will be used for the runs.
+    // Load models that will be used for the runs
     //
-    // Quality score model
-    info!("Generate quality score model");
-    let quality_score_model = {
-        match &config.quality_score_model {
-            Some(filename) => {
-                 QualityScoreModel::from_file(&filename)?
-            },
-            None => {
-                QualityScoreModel::default()?
-            }
-        }
-    };
-
     // load mutation model
     info!("Generate mutation model");
     let mutation_model = {
@@ -117,7 +103,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
     };
 
     // This model provides an alternate base for N based on a simple equal weight distribution.
-    info!("Generate quality score model");
+    info!("Initialize Nucleotide selector");
     let nuc_sub_model: NucleotideSelector = {
         NucleotideSelector::new()
     };
@@ -297,7 +283,6 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
                         &mut buffer2,
                         config.read_len,
                         &read_name_prefix,
-                        &quality_score_model,
                         &seq_error_model,
                         rng,
                     )?;
@@ -321,7 +306,6 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
                         &mut buffer2,
                         config.read_len,
                         &read_name_prefix,
-                        &quality_score_model,
                         &seq_error_model,
                         rng,
                     )?;

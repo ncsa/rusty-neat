@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use simple_rng::NeatRngError;
 use lazy_static::lazy_static;
 use crate::models::lib::{model_reader, model_writer};
-use crate::structs::transition_matrix::{TransitionMatrix, TransitionMatrixError};
+use crate::structs::transition_matrix::{TransitionMatrix, TransitionMatrixError, TransitionMatrixOld};
 use crate::structs::distributions::{DiscreteDistribution, DistributionErrors};
 use crate::structs::nucleotides::Nucleotide::{A, C, G, T, N};
 use crate::structs::nucleotides::Nucleotide;
@@ -141,7 +141,7 @@ lazy_static! {
         alias_map
     };
 
-    static ref ALL_CONTEXTS: Vec<TrinucFrame> = {
+    pub static ref ALL_CONTEXTS: Vec<TrinucFrame> = {
         let alias_map = ALIAS_MAP.clone();
         let frames: Vec<TrinucFrame> = alias_map
             .values()
@@ -235,16 +235,28 @@ impl Index<usize> for TrinucFrame {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SnpTrinucModel {
-    // Relative weights given to each SNP frame. Ultimately this will be imputed from data.
-    snp_trinuc_distro: DiscreteDistribution<TrinucFrame>,
+pub struct SnpTrinucModelOld {
+    pub snp_distro: DiscreteDistribution<usize>,
     // The transition matrix is the chance of mutating the middle base from A, C, T, or G to a
     // different base (4x4 matrix with 0s on the diagonal).
     // Each Trinuc index is a context index, with a middle "N".
     // Each row is a from base, and each corresponding column is the to base, with the intersecting
     //    f64 being the probability of transitioning from...to.
     #[serde(with = "vectorize")]
-    trinuc_context_distros: HashMap<TrinucFrame, TransitionMatrix>,
+    pub trinuc_distros: HashMap<TrinucFrame, TransitionMatrixOld>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SnpTrinucModel {
+    // Relative weights given to each SNP frame. Ultimately this will be imputed from data.
+    pub snp_trinuc_distro: DiscreteDistribution<TrinucFrame>,
+    // The transition matrix is the chance of mutating the middle base from A, C, T, or G to a
+    // different base (4x4 matrix with 0s on the diagonal).
+    // Each Trinuc index is a context index, with a middle "N".
+    // Each row is a from base, and each corresponding column is the to base, with the intersecting
+    //    f64 being the probability of transitioning from...to.
+    #[serde(with = "vectorize")]
+    pub trinuc_context_distros: HashMap<TrinucFrame, TransitionMatrix>,
 }
 
 static DATA_FILE: &'static [u8] = include_bytes!("model_data/default_trinuc_model.json.gz");
@@ -286,10 +298,10 @@ impl SnpTrinucModel {
                 }
             }
             let trans_matrix = TransitionMatrix::from(
-                temp_trans_matrix[Nucleotide::A as usize],
-                temp_trans_matrix[Nucleotide::C as usize],
-                temp_trans_matrix[Nucleotide::G as usize],
-                temp_trans_matrix[Nucleotide::T as usize],
+                temp_trans_matrix[A as usize],
+                temp_trans_matrix[C as usize],
+                temp_trans_matrix[G as usize],
+                temp_trans_matrix[T as usize],
             )?;
 
             trinuc_context_distros.insert(context.clone(), trans_matrix);
@@ -329,6 +341,9 @@ impl SnpTrinucModel {
         let all_frames = ALL_FRAMES.clone();
         for frame in &all_contexts {
             trinuc_distros.insert(frame.clone() ,TransitionMatrix::default()?);
+
+        }
+        for frames in &all_frames {
             snp_weights.push(1.0);
         }
         let snp_distr = DiscreteDistribution::new(
@@ -401,9 +416,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_default_minimal_snp_trinuc_model() {
+        let snp_trinuc_model = SnpTrinucModel::default_minimal().unwrap();
+        assert_eq!(snp_trinuc_model.snp_trinuc_distro.values.len(), snp_trinuc_model.snp_trinuc_distro.weights.len());
+        assert_eq!(snp_trinuc_model.trinuc_context_distros.keys().len(), 16)
+    }
+
+    #[test]
     fn test_model_write_read() {
         let output_file: PathBuf = PathBuf::from("test.json.gz");
-        let model = SnpTrinucModel::default().unwrap();
+        let model = SnpTrinucModel::default_minimal().unwrap();
         let frame = TrinucFrame::from((A, N, G));
         assert!(model.trinuc_context_distros.contains_key(&frame));
         let result = model.write_out(&output_file);

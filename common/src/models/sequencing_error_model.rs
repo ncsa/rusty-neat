@@ -3,7 +3,7 @@ use std::{io, path::PathBuf};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use crate::{
-    models::lib::{model_reader, model_writer}, 
+    models::{lib::{model_reader, model_writer}, quality_scores::{QualityModelError, QualityScoreModel}}, 
     structs::{distributions::{DiscreteDistribution, DistributionErrors}, 
     nucleotides::{Nucleotide, ALLOWED_NUCS}, 
     transition_matrix::{TransitionMatrix, TransitionMatrixError}}
@@ -24,6 +24,8 @@ pub enum SeqModelError{
     MissingRngError,
     #[error("Sequencing Error model return an IO error: {0}")]
     IoError(#[from] io::Error),
+    #[error("Error initializing Quality Score model: {0}")]
+    QualModelError(#[from] QualityModelError)
 }
 
 #[derive(Debug)]
@@ -43,6 +45,7 @@ pub struct SequencingErrorModel {
     indel_probability: f64,
     insertion_bias: DiscreteDistribution<Nucleotide>,
     transition_distros: TransitionMatrix,
+    quality_score_model: QualityScoreModel,
 }
 
 impl SequencingErrorModel {
@@ -69,6 +72,7 @@ impl SequencingErrorModel {
             &vec![1.0, 1.0, 1.0, 1.0],
             &ALLOWED_NUCS.to_vec(),
         )?;
+        let quality_score_model = QualityScoreModel::default()?;
 
         Ok(SequencingErrorModel {
             error_rate: default_error_rate,
@@ -77,6 +81,7 @@ impl SequencingErrorModel {
             indel_probability: default_indel_probability,
             insertion_bias: default_insertion_bias,
             transition_distros: default_transition_distros,
+            quality_score_model,
         })
     }
 
@@ -139,6 +144,14 @@ impl SequencingErrorModel {
             let length = self.del_length_distribution.sample(rng.random()?)?;
             Ok(SequencingErrorType::DeletionError(length))
         }
+    }
+
+    pub fn generate_quality_scores(
+        &self, 
+        read_length: usize, 
+        rng: &mut NeatRng
+    ) -> Result<Vec<usize>, SeqModelError> {
+        self.quality_score_model.generate_quality_scores(read_length, rng)
     }
 }
 

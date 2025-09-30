@@ -23,6 +23,8 @@ pub enum DistributionErrors {
     RngError(#[from] NeatRngError),
     #[error("Requested a value vector from an index-only model")]
     VectorNotFound,
+    #[error("Input values and weights vector must be of the same length")]
+    InputMismatchError
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,6 +35,9 @@ pub struct DiscreteDistribution<T> {
 
 impl<T: Clone + Debug + Serialize + for<'de> Deserialize<'de>> DiscreteDistribution<T> {
     pub fn new(w_vec: &Vec<f64>, v_vec: &Vec<T>) -> Result<Self, DistributionErrors> {
+        if w_vec.len() != v_vec.len() {
+            return Err(DistributionErrors::InputMismatchError)
+        }
         let cumulative_probability = {
             let sum_weights: f64 = w_vec.iter().sum();
             if sum_weights > 0.0 {
@@ -41,7 +46,7 @@ impl<T: Clone + Debug + Serialize + for<'de> Deserialize<'de>> DiscreteDistribut
                 for weight in w_vec{
                     normalized_weights.push(weight / sum_weights);
                 }
-                cumulative_sum(&mut normalized_weights).unwrap()
+                cumulative_sum(&mut normalized_weights)?
             } else {
                 // Edge case. Really, this shouldn't be allowed in the data. We'll fix it when 
                 // we rebuild the models.

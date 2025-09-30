@@ -4,7 +4,7 @@
 //! sequences to file (encoded as Nucleotide) and retreiving them only as needed
 //! We need to use the Variants struct to add variants to the contigs, making this a sort of second
 //! level struct
-use std::{io, string};
+use std::io;
 use thiserror::Error;
 use std::num::ParseIntError;
 use std::{collections::HashMap, io::Write};

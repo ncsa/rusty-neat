@@ -306,22 +306,6 @@ struct StatisticalModels {
     snp_trinuc_model: SnpTrinucModel,
 }
 
-impl StatisticalModels {
-    pub fn default() -> Result<Self, MutationModelError> {
-        // use the default transition matrix, snp model and indel model
-        let transition_matrix = TransitionMatrix::default()?;
-        let snp_trinuc_model = SnpTrinucModel::default_minimal()?;
-        let indel_model = IndelModel::default()?;
-        // todo update this line:
-
-        Ok(StatisticalModels {
-            transition_matrix,
-            snp_trinuc_model,
-            indel_model,
-        })
-    }
-}
-
 fn pick_random_snp(ref_base: Nucleotide, rng: &mut NeatRng)-> Result<Vec<Nucleotide>, MutationModelError> {
     // Grab allowed nucs
     let mut allowed: Vec<Nucleotide> = allowed_vec();
@@ -347,101 +331,8 @@ fn check_base(nuc: Nucleotide) -> Nucleotide {
 
 #[cfg(test)]
 mod tests {
-    use flate2::read::GzDecoder;
-    use serde_json::{json, Value};
     use super::*;
-    use std::{fs::{self, File}, io::BufReader};
-    use std::hint::unreachable_unchecked;
-    use crate::models::snp_trinuc_model::{SnpTrinucModelOld, ALL_CONTEXTS, ALL_FRAMES};
-    use crate::structs::transition_matrix::TransitionMatrixOld;
-
-    fn test_rewrite_model() {
-        let output_file: PathBuf = PathBuf::from("/home/joshfactorial/code/rusty-neat/common/src/models/model_data/new_mutation_model.json.gz");
-        let input_model: PathBuf = PathBuf::from("/home/joshfactorial/code/rusty-neat/common/src/models/model_data/default_mutation_model.json.gz");
-        let file_in = File::open(&input_model).unwrap();
-        let reader = GzDecoder::new(BufReader::new(file_in));
-        let object: Value = serde_json::from_reader(reader).unwrap();
-        // Get the easy ones first
-        let mutation_rate = object.get("mutation_rate").unwrap().as_f64().unwrap();
-        let homozygous_frequency = object.get("homozygous_frequency").unwrap().as_f64().unwrap();
-        // Recast the variant dist.
-        let variant_dist_old = object.get("variant_dist").unwrap().clone();
-        let old_variant_dist: DiscreteDistribution<usize> = serde_json::from_value(variant_dist_old)
-            .unwrap();
-        let new_values = allowed_variant_types();
-        let new_variant_dist: DiscreteDistribution<VariantType> = DiscreteDistribution::new(
-            &old_variant_dist.weights,
-            &new_values,
-        ).unwrap();
-        // Now we dig out the stats models
-        let old_stat_mods_raw = object.get("statistical_models").unwrap();
-        let old_transition_matrix: TransitionMatrixOld = serde_json::from_value(
-            old_stat_mods_raw.get("transition_matrix").unwrap().clone()
-        ).unwrap();
-        let a_transitions: [f64; 4] = old_transition_matrix.a.weights.try_into().unwrap();
-        let c_transitions: [f64; 4] = old_transition_matrix.c.weights.try_into().unwrap();
-        let g_transitions: [f64; 4] = old_transition_matrix.g.weights.try_into().unwrap();
-        let t_transitions: [f64; 4] = old_transition_matrix.t.weights.try_into().unwrap();
-        let transition_matrix = TransitionMatrix::from(
-            a_transitions,
-            c_transitions,
-            g_transitions,
-            t_transitions,
-        ).unwrap();
-
-        let indel_model: IndelModel = serde_json::from_value(
-            old_stat_mods_raw.get("indel_model").unwrap().clone()
-        ).unwrap();
-
-        let default_trinuc_filename = PathBuf::from("/home/joshfactorial/code/rusty-neat/common/src/models/model_data/default_trinuc_model.json.gz");
-        let trinuc_file = File::open(&default_trinuc_filename).unwrap();
-        let trinuc_reader = GzDecoder::new(BufReader::new(trinuc_file));
-        let snp_trinuc_model_old: SnpTrinucModelOld = serde_json::from_reader(trinuc_reader).unwrap();
-
-        let snp_distro_weights = snp_trinuc_model_old.snp_distro.weights;
-        let all_frames = ALL_FRAMES.clone();
-        let snp_trinuc_distro = DiscreteDistribution::new(
-            &snp_distro_weights,
-            &all_frames,
-        ).unwrap();
-
-        let mut trinuc_context_distros: HashMap<TrinucFrame, TransitionMatrix> = HashMap::new();
-        let all_contexts = ALL_CONTEXTS.clone();
-        for context in all_contexts {
-            let old_snp_trinuc_maxtrix = snp_trinuc_model_old.trinuc_distros[&context].clone();
-            let a_transitions: [f64; 4] = old_snp_trinuc_maxtrix.a.weights.try_into().unwrap();
-            let c_transitions: [f64; 4] = old_snp_trinuc_maxtrix.c.weights.try_into().unwrap();
-            let g_transitions: [f64; 4] = old_snp_trinuc_maxtrix.g.weights.try_into().unwrap();
-            let t_transitions: [f64; 4] = old_snp_trinuc_maxtrix.t.weights.try_into().unwrap();
-            let transition_matrix = TransitionMatrix::from(
-                a_transitions,
-                c_transitions,
-                g_transitions,
-                t_transitions,
-            ).unwrap();
-            trinuc_context_distros.insert(context.clone(), transition_matrix.clone());
-        }
-        let snp_trinuc_model = SnpTrinucModel {
-            snp_trinuc_distro,
-            trinuc_context_distros,
-        };
-        let statistical_models = StatisticalModels {
-            transition_matrix,
-            indel_model,
-            snp_trinuc_model,
-        };
-        //repeat above with mutation model parts
-        let rewritten_mutation_model = MutationModel {
-            mutation_rate,
-            homozygous_frequency,
-            variant_dist: new_variant_dist,
-            statistical_models,
-        };
-
-        rewritten_mutation_model.write_to_file(&output_file).unwrap();
-
-    }
-
+    use std::fs;
 
     #[test]
     fn test_model_read_write() {

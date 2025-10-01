@@ -22,7 +22,10 @@ use std::collections::HashMap;
 use simple_rng::NeatRngError;
 use lazy_static::lazy_static;
 use crate::models::lib::{model_reader, model_writer};
-use crate::structs::transition_matrix::{TransitionMatrix, TransitionMatrixError, TransitionMatrixOld};
+use crate::structs::transition_matrix::{
+    TransitionMatrix, 
+    TransitionMatrixError
+};
 use crate::structs::distributions::{DiscreteDistribution, DistributionErrors};
 use crate::structs::nucleotides::Nucleotide::{A, C, G, T, N};
 use crate::structs::nucleotides::Nucleotide;
@@ -235,18 +238,6 @@ impl Index<usize> for TrinucFrame {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SnpTrinucModelOld {
-    pub snp_distro: DiscreteDistribution<usize>,
-    // The transition matrix is the chance of mutating the middle base from A, C, T, or G to a
-    // different base (4x4 matrix with 0s on the diagonal).
-    // Each Trinuc index is a context index, with a middle "N".
-    // Each row is a from base, and each corresponding column is the to base, with the intersecting
-    //    f64 being the probability of transitioning from...to.
-    #[serde(with = "vectorize")]
-    pub trinuc_distros: HashMap<TrinucFrame, TransitionMatrixOld>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SnpTrinucModel {
     // Relative weights given to each SNP frame. Ultimately this will be imputed from data.
     pub snp_trinuc_distro: DiscreteDistribution<TrinucFrame>,
@@ -343,7 +334,7 @@ impl SnpTrinucModel {
             trinuc_distros.insert(frame.clone() ,TransitionMatrix::default()?);
 
         }
-        for frames in &all_frames {
+        for _ in &all_frames {
             snp_weights.push(1.0);
         }
         let snp_distr = DiscreteDistribution::new(

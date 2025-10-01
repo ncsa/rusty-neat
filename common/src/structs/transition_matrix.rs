@@ -25,19 +25,6 @@ impl From<DistributionErrors> for TransitionMatrixError {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TransitionMatrixOld {
-    // Nucleotide transition matrix. Rows represent the base we are mutating and the weights are
-    // in the standard nucleotide order (in the same a, c, g, t order). This structure is
-    // fundamental to the others and to the mutation model in general.
-    //
-    // This defines a transition from one Nucleotide to another.
-    pub a: DiscreteDistribution<usize>,
-    pub c: DiscreteDistribution<usize>,
-    pub g: DiscreteDistribution<usize>,
-    pub t: DiscreteDistribution<usize>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransitionMatrix {
     // Nucleotide transition matrix. Rows represent the base we are mutating and the weights are
     // in the standard nucleotide order (in the same a, c, g, t order). This structure is

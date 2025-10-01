@@ -28,6 +28,7 @@ use log::*;
 use clap::{value_parser, Arg, ArgAction, Command};
 use std::path::PathBuf;
 
+use crate::gen_mut_model::errors::GenMutationModelError;
 use crate::{
     filter_reads::errors::FilterReadsError, 
     gen_reads::errors::GenerateReadsErrors,
@@ -38,13 +39,15 @@ use crate::{
 #[derive(Error, Debug)]
 pub enum NeatErrors {
 	// Errors specific to each submodule
-    #[error("Error while generating read dataset")]
+    #[error("Error while generating read dataset {0}")]
     GenerateReadsError(#[from] GenerateReadsErrors),
-    #[error("Error while filtering reads with bed file")]
+    #[error("Error while filtering reads with bed file {0}")]
     FilterReadsError(#[from] FilterReadsError),
+    #[error("Error while generating mutation model {0}")]
+    GenMutModelError(#[from] GenMutationModelError),
 }
 
-fn neat_commands() -> [Command; 2] {
+fn neat_commands() -> [Command; 3] {
 	// These are the submodule commands. Any new commands added should go here.
     [
         Command::new("gen-reads")
@@ -74,6 +77,19 @@ fn neat_commands() -> [Command; 2] {
                     .default_missing_value("")
                     .value_parser(value_parser!(PathBuf))
                     .required(true)
+            ),
+        Command::new("gen-mut-model")
+            .about("Generate a mutation model based on an input mutations file")
+            .arg_required_else_help(true)
+            .arg(
+                Arg::new("configuration_yaml")
+                .short('c')
+                .help("Path to configuration file.")
+                .action(ArgAction::Set)
+                .exclusive(true)
+                .default_missing_value("")
+                .value_parser(value_parser!(PathBuf))
+                .required(true)
             )
     ]
 }
@@ -218,6 +234,33 @@ fn main() -> Result<(), NeatErrors> {
                     match result {
                         Err(error) => return Err(NeatErrors::FilterReadsError(error)),
                         Ok(()) => info!("rneat filter-reads completed succesfully"),
+                    }
+                }
+            }
+        },
+        Some(("gen-mut-model", _)) => {
+            if let Some(("gen-mut-model", cmd)) = subcommand {
+				info!("Running rneat filter-reads");
+                // extract the flags and values
+                if cmd.contains_id("configuration_yaml") {
+                    let file = cmd.get_one::<PathBuf>("configuration_yaml")
+                            .expect("Must provide a path with configuration-yaml")
+                            .to_path_buf();
+
+                    if !file.is_file() {
+                        return Err(
+                            NeatErrors::FilterReadsError(
+                                FilterReadsError::CliError(
+                                    "Must supply either a configuration file or a reference file to run NEAT!".to_string()
+                                )
+                            )
+                        )
+                    }
+                    info!("Running gen-mut-model to generate a model for use in rneat.");
+                    let result = gen_mut_model::main(&file);
+                    match result {
+                        Err(error) => return Err(NeatErrors::GenMutModelError(error)),
+                        Ok(()) => info!("rneat gen-mut-model completed succesfully"),
                     }
                 }
             }

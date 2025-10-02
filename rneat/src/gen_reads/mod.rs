@@ -57,12 +57,11 @@ pub fn main(config: &PathBuf) -> Result<(), GenerateReadsErrors> {
     match result {
         Ok(files_created) => {
             // Continue on for bed filtering
-            info!("Successfully produced unfiltered output file: {:?}", &files_created);
             Ok(())
         },
         Err(error) => {
             error!("runner returned an error {:?}", error);
-            return Err(GenerateReadsErrors::RunnerError)
+            Err(GenerateReadsErrors::RunnerError)
         },
     }
 }

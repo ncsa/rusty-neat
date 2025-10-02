@@ -5,6 +5,9 @@ As of now, `rneat` is still under development. We are working toward the goal of
 
 # How to use `rneat`
 
+## Prerequisites
+One of the packages requires cmake to use. For Debian/Ubuntu this should be a simple `sudo apt install cmake` and for RHEL/Rocky type distros this should be `sudo dnf install cmake`
+
 Download the executable in the release (current version 1.3.0).
 
 ```

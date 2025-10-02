@@ -234,8 +234,14 @@ pub enum RegionType {
 // Each Contig contains a vector of filenames, each containing a sequence block in json format.
 // The contig level keeps things organized
 pub struct Contig {
-    // This is the short name of the contig
-    pub name: String,
+    // This is the short name of the contig. We will assume the fasta naming convention of:
+    // >unique_key description
+    // the unique_key becomes the ID. If there is no whitespace in the name, then the entire
+    // line after ">" is the key.
+    pub id: String,
+    // Adding a field for description, kind of based on the bio-3.0.0 version of fasta reader.
+    // This is the second part of the name, as defined above, and may not exist.
+    pub desc: Option<String>,
     // The overall length of the contig in bases
     pub contig_len: usize,
     // This is a vector of filenames. Each filename represents a sequence block and can be accessed via the contig block
@@ -250,14 +256,15 @@ pub struct Contig {
 
 impl Contig {
     pub fn new(
-        name: String,
+        id: &str,
+        desc: &Option<String>,
         len: usize,
         blocks: Vec<PathBuf>,
         block_maps: HashMap<PathBuf, Vec<SequenceMap>>,
     ) -> Result<Self, FastaMapError> {
         match Self::verify_regions(&block_maps) {
             Ok(()) => {
-                debug!("Block maps verified for {name}")
+                debug!("Block maps verified for {id}")
             },
             Err(err) => {
                 error!("Error verifying sequence maps: {err}");
@@ -266,8 +273,11 @@ impl Contig {
                 )
             }
         }
+        // Straight up stole this from bio-3.0.0 fasta reader. Get the owned string 
+        // without having to do the full matching process.
         Ok(Contig {
-            name,
+            id: id.to_owned(),
+            desc: desc.to_owned(),
             contig_len: len,
             blocks,
             block_maps,
@@ -370,8 +380,6 @@ impl Contig {
 pub struct FastaMap {
     // A vector of Contig objects, one for each contig in the fasta file
     pub contigs: Vec<Contig>,
-    // This maps the short contig name, used throughout, to the full name from the fasta file
-    pub name_map: HashMap<String, String>,
     // This is a Vec with the contig short names in the order they appeared in the fasta
     pub contig_order: Vec<String>,
 }
@@ -379,15 +387,14 @@ pub struct FastaMap {
 impl FastaMap {
     pub fn new(
         contigs: Vec<Contig>, 
-        name_map: HashMap<String, String>, 
         contig_order: Vec<String>
     ) -> Self {
-        FastaMap { contigs, name_map, contig_order }
+        FastaMap { contigs, contig_order }
     }
 
     pub fn retrieve_contig(&self, request_name: &str) -> Result<&Contig, FastaMapError> {
         for contig in self.contigs.iter() {
-            if contig.name == request_name {
+            if contig.id == request_name {
                 return Ok(contig)
             }
         }
@@ -443,32 +450,29 @@ mod tests {
         ];
         let block_maps = HashMap::from([(filename, sequence_maps)]);
         let contig = Contig {
-            name: "chrom1".to_string(),
+            id: "chrom1".to_string(),
+            desc: None,
             contig_len: 20,
             blocks: sequences,
             block_maps,
         };
-        let name_map = HashMap::from([
-            ("chrom1".to_string(), ">chrom1 foo bar\n".to_string())
-        ]);
         let contigs = Vec::from([contig]);
         let contig_order = Vec::from(["chrom1".to_string()]);
         let fasta_map = FastaMap::new(
             contigs,
-            name_map,
             contig_order,
         );
 
         let expected_output = "FastaMap { \
         contigs: [Contig { \
-            name: \"chrom1\", \
+            id: \"chrom1\", \
+            desc: None, \
             contig_len: 20, \
             blocks: [\
                 \"chrom1_0000000000_0000000020.json\"], \
             block_maps: {\"chrom1_0000000000_0000000020.json\": \
             [SequenceMap { region_type: NonNRegion, start: 0, end: 10 }, \
             SequenceMap { region_type: NRegion, start: 10, end: 20 }]} }], \
-            name_map: {\"chrom1\": \">chrom1 foo bar\\n\"}, \
             contig_order: [\"chrom1\"] }";
 
         let test_out = format!("{:?}", fasta_map);

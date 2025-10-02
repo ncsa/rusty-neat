@@ -135,7 +135,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
         // Iterate over blocks within the contig
         // This is probably where we want to parallelize
         let contig_blocks = &contig.blocks;
-        let contig_name = &contig.name;
+        let contig_name = &contig.id;
         let mut contig_files_r1: Vec<PathBuf> = Vec::new();
         let mut contig_files_r2: Vec<PathBuf> = Vec::new();
         let mut contig_maps: Vec<MutatedMap> = Vec::new();
@@ -400,7 +400,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
         let mut fasta_lengths: HashMap<String, usize> = HashMap::new();
         let contigs = fasta_map.contigs.clone();
         for contig in contigs {
-            fasta_lengths.insert(contig.name.clone(), contig.contig_len);
+            fasta_lengths.insert(contig.id.clone(), contig.contig_len);
         }
         let result = write_vcf(
             &mutated_maps,

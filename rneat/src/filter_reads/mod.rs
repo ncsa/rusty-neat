@@ -16,7 +16,6 @@ use crate::filter_reads::{
 
 pub fn main(config: &PathBuf) -> Result<(), FilterReadsError> {
     info!("////////////// Welcome to rusty-neat read generator! \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\");
-    thread::sleep(time::Duration::from_millis(1000));
     info!("Using Configuration file input: {:?}", &config);
     let run_config = RunConfiguration::from(config);
     // bed_file: path to bed file to use for filtering

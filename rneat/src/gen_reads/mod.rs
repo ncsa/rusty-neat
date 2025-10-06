@@ -11,7 +11,6 @@ use crate::{
     }
 };
 use simple_rng::NeatRng;
-use std::{thread, time};
 
 /// gen-reads is the primary read generation function of rneat. It reads a fasta file and generates a set of fastqs and/or a set of variants. It can now also filter reads by bed file.
 pub fn main(config: &PathBuf) -> Result<(), GenerateReadsErrors> {   
@@ -53,7 +52,7 @@ pub fn main(config: &PathBuf) -> Result<(), GenerateReadsErrors> {
     // run the generate reads main script
     let result = run_neat(&Box::new(config.clone()), &mut rng);
     match result {
-        Ok(files_created) => {
+        Ok(_) => {
             // Continue on for bed filtering
             Ok(())
         },

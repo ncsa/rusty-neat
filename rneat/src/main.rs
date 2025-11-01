@@ -49,47 +49,33 @@ pub enum NeatErrors {
 
 fn neat_commands() -> [Command; 3] {
 	// These are the submodule commands. Any new commands added should go here.
+    let configuration_arg = Arg::new("configuration_yaml")
+        .long("configuration-yaml")
+        .short('c')
+        .help("Path to configuration file.")
+        .action(ArgAction::Set)
+        .exclusive(true)
+        .default_missing_value("")
+        .value_parser(value_parser!(PathBuf))
+        .required(true);
     [
         Command::new("gen-reads")
             .about("Generates reads for an input dataset")
             .arg_required_else_help(true)
             .arg(
-                Arg::new("configuration_yaml")
-                    .long("configuration-yaml")
-                    .short('c')
-                    .help("Path to configuration file.")
-                    .action(ArgAction::Set)
-                    .exclusive(true)
-                    .default_missing_value("")
-                    .value_parser(value_parser!(PathBuf))
-                    .required(true)
+                &configuration_arg
             ),
         Command::new("filter-reads")
             .about("Filters the output of gen-reads")
             .arg_required_else_help(true)
             .arg(
-                Arg::new("configuration_yaml")
-                    .long("configuration-yaml")
-                    .short('c')
-                    .help("Path to configuration file.")
-                    .action(ArgAction::Set)
-                    .exclusive(true)
-                    .default_missing_value("")
-                    .value_parser(value_parser!(PathBuf))
-                    .required(true)
+                &configuration_arg
             ),
         Command::new("gen-mut-model")
             .about("Generate a mutation model based on an input mutations file")
             .arg_required_else_help(true)
             .arg(
-                Arg::new("configuration_yaml")
-                .short('c')
-                .help("Path to configuration file.")
-                .action(ArgAction::Set)
-                .exclusive(true)
-                .default_missing_value("")
-                .value_parser(value_parser!(PathBuf))
-                .required(true)
+                &configuration_arg
             )
     ]
 }

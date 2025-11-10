@@ -8,9 +8,9 @@ As of now, `rneat` is still under development. We are working toward the goal of
 ## Prerequisites
 One of the packages requires cmake to use. For Debian/Ubuntu this should be a simple `sudo apt install cmake` and for RHEL/Rocky type distros this should be `sudo dnf install cmake`
 
-Download the executable in the release (current version 1.3.0).
+Download the executable in the release (current version 1.2.1).
 
-```
+```bash
 $ rneat --help
 Usage: rneat [OPTIONS] [SUB-COMMAND]
 
@@ -27,7 +27,7 @@ Options:
 
 To check options for a subcommand:
 
-```
+```bash
 $ rneat gen-reads --help
 Generates reads for an input dataset
 
@@ -40,7 +40,7 @@ Options:
 
 To run filter reads, check the help menu.
 
-```
+```bash
 $ rneat filter-reads --help
 Filters the output of gen-reads
 
@@ -91,7 +91,7 @@ Fastq Output
 ============
 the fastq output will have a key name that identifies the block where teh read was drawn from. This should allow you to asseses how well the aligner funcution. The name will have the format `<contig short name>_<fragment_start>_<fragment_end>`
 
-```angular2html
+```bash
 @neat_generated_Chromosome_0000000000_0000353_1:1
 CTTTTCATTCTGACTGCAACGGGCAATATGTCTCTGTGTGGATTAAAAAAAGAGTGTCTGATAGCAGCTTCTTAACTGGTTACCTGCCGTGAGTAAATTAAAATTTTATTGACTTAGGTCACTAAATACTTTAACCAATATAGGCATAGC
 +
@@ -138,20 +138,20 @@ Filtering Your Data
 
 To run filter-reads, you must first copy the filter_reads_template.yml file from rusty-neat/template_config/ to a directory of your choosing. Then you can edit the  file in your favorite editor. The configuration only has three fields:
 
-```
+```bash
 bed-file: /path/to/my.bed # required
 ```
 A filename (full path is best) for a bed file with regions to target for filtering. It should be tab-separated in standard bed format.
 
 In configuration:
-```
+```bash
 files_to_filter: [
   # required, in list form
 ]
 ```
 Filenames (full path is best) for files to filter by the bed file. For example, if you ran paired-ended fastqs with the vcf, your list would look like:
 
-```
+```bash
 files_to_filter: [
    /my/home/output/bacteria_r1.fastq.gz,
    /my/home/output/bacteria_r2.fastq.gz,
@@ -160,14 +160,14 @@ files_to_filter: [
 ```
 Note the full extension is important, but filter-reads should be able to handle both gzipped and unzipped files, if you decide to unzip them.
 
-```
+```bash
 filter_key: .
 ```
 This is the key appended to the filename, before extensions. For example, if your filename is "miscanthus_r1.fast.gz", and you set the key as "_only_genes", the output file would be "miscanthus_r1_only_genes.fastq.gz. The default is "_filtered".
 
 Once your files are entered and your config is saved, you can run rneat:
 
-```
+```bash
 $ rneat filter-reads -c my_config.yml
 ```
 Your output will give you the filenames and success status.
@@ -178,7 +178,7 @@ Generating a Mutation Model
 ====================
 `rneat` now includes the ability to read in real data and learn the parameters to reproduce it in a simulation run. So far, this is limited to the mutation model, usinge the `rneat gen-mut-model` subcommand. 
 
-```
+```bash
 $ rneat gen-mut-model -c gen_mut_model_config.yml
 ```
 The inputs for this are an arbitrary VCF file with a list of mutations on a single individual and the original fasta file that the vcf was built from. `rneat` will compute statistics for indels and snps and build the trinucleotide model of SNP generation, as in the original NEAT. Please submit any feature requests you have for expanding this feature.

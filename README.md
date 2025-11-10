@@ -139,7 +139,7 @@ Filtering Your Data
 To run filter-reads, you must first copy the filter_reads_template.yml file from rusty-neat/template_config/ to a directory of your choosing. Then you can edit the  file in your favorite editor. The configuration only has three fields:
 
 ```
-bed_file: # required
+bed-file: /path/to/my.bed # required
 ```
 A filename (full path is best) for a bed file with regions to target for filtering. It should be tab-separated in standard bed format.
 

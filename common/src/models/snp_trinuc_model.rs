@@ -233,7 +233,7 @@ impl Index<usize> for TrinucFrame {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SnpTrinucModel {
     // Relative weights given to each SNP frame. Ultimately this will be imputed from data.
-    snp_distro: DiscreteDistribution,
+    snp_distro: DiscreteDistribution<usize>,
     // The transition matrix is the chance of mutating the middle base from A, C, T, or G to a
     // different base (4x4 matrix with 0s on the diagonal).
     #[serde(with = "vectorize")]
@@ -243,9 +243,54 @@ pub struct SnpTrinucModel {
 static DATA_FILE: &'static [u8] = include_bytes!("model_data/default_trinuc_model.json.gz");
 
 impl SnpTrinucModel {
-    pub fn from(
+    pub fn from_raw_data(
+        trinuc_frequency: HashMap<TrinucFrame, f64>,
+        trinuc_transition_frequency: HashMap<(TrinucFrame, TrinucFrame), f64>,
     ) -> Result<Self, SnpTrinucError> {
-        todo!()
+        let all_contexts = ALL_CONTEXTS.clone();
+        let alias_map = ALIAS_MAP.clone();
+        let all_frames = ALL_FRAMES.clone();
+
+        // Per-context 4x4 accumulators: [from_base_idx][to_base_idx] += prob
+        let mut accum: HashMap<TrinucFrame, [[f64; 4]; 4]> = HashMap::new();
+        for context in &all_contexts {
+            accum.insert(*context, [[0.0f64; 4]; 4]);
+        }
+
+        for ((from_trinuc, to_trinuc), &prob) in &trinuc_transition_frequency {
+            if let Some(&context) = alias_map.get(from_trinuc) {
+                let row: usize = from_trinuc[1].into();
+                let col: usize = to_trinuc[1].into();
+                if row < 4 && col < 4 {
+                    if let Some(matrix) = accum.get_mut(&context) {
+                        matrix[row][col] += prob;
+                    }
+                }
+            }
+        }
+
+        let mut trinuc_distros: HashMap<TrinucFrame, TransitionMatrix> = HashMap::new();
+        for context in &all_contexts {
+            let w = accum[context];
+            let has_data = w.iter().any(|row| row.iter().sum::<f64>() > 0.0);
+            let matrix = if has_data {
+                TransitionMatrix::from(w[0], w[1], w[2], w[3])?
+            } else {
+                TransitionMatrix::default()?
+            };
+            trinuc_distros.insert(*context, matrix);
+        }
+
+        // Weight each of the 64 frames by its observed mutation frequency
+        let snp_weights: Vec<f64> = all_frames.iter()
+            .map(|frame| *trinuc_frequency.get(frame).unwrap_or(&1e-6f64))
+            .collect();
+        let snp_distro = DiscreteDistribution::new(
+            &snp_weights,
+            &(0..all_frames.len()).collect(),
+        )?;
+
+        Ok(SnpTrinucModel { snp_distro, trinuc_distros })
     }
 
     pub fn default_minimal() -> Result<Self, SnpTrinucError> {
@@ -265,8 +310,7 @@ impl SnpTrinucModel {
         }
         let snp_distr = DiscreteDistribution::new(
             &snp_weights,
-            // Instead of enumerating all those frames, we will just use the index here
-            &(0..all_frames.len()).collect(),
+            &(0..all_contexts.len()).collect(),
         )?;
         Ok(SnpTrinucModel {
             snp_distro: snp_distr,

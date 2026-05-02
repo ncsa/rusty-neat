@@ -88,7 +88,7 @@ mod tests {
     #[test]
     fn test_generate_variants_success() {
         let (sequence_block, mut rng) = setup();
-        let region_weights = vec![1.0; 8];
+        let region_weights = vec![1.0; 10];
         let mutation_model = MutationModel::default().unwrap();
         let num_mutations = 3;
         let ploidy = 2;
@@ -133,7 +133,7 @@ mod tests {
     #[test]
     fn test_generate_variants_zero_mutations() {
         let (sequence_block, mut rng) = setup();
-        let region_weights = vec![1.0; 8];
+        let region_weights = vec![1.0; 10];
         let mutation_model = MutationModel::default().unwrap();
         let num_mutations = 0;
         let ploidy = 2;

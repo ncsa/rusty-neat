@@ -57,9 +57,9 @@ pub fn runner(
             // I think the coordinates are forward on all regions
             total_reflen += region.end - region.start;
         }
-        let matching_variants = &filtered_mutations[&contig.id];
+        let matching_variants = &filtered_mutations[&contig.name];
         if matching_variants.is_empty() {
-            debug!("No variants found for {}", contig.id);
+            debug!("No variants found for {}", contig.name);
             continue
         }
         for variant in matching_variants {
@@ -265,7 +265,7 @@ fn count_trinculeotides(
         // There is actual bed input
         info!("Counting trinucleotide combinations in bed regions");
         for (chrom, bed_vec) in bed_table {
-            let contig_block = fasta_map.retrieve_contig(&chrom)
+            let contig_block = fasta_map.retrieve_contig(chrom.to_string())
                 .expect(&format!("Error retrieving contig {}", chrom));
             let regions_of_interest = bed_vec;
             for region in regions_of_interest {
@@ -287,8 +287,8 @@ fn count_trinculeotides(
         // No bed input
         info!("Counting trinucleotide combinations in bed regions");
         for contig in &fasta_map.contigs {
-            let contig_block = fasta_map.retrieve_contig(&contig.id)
-                .expect(&format!("Error retrieving contig {}", &contig.id));
+            let contig_block = fasta_map.retrieve_contig(contig.name.clone())
+                .expect(&format!("Error retrieving contig {}", &contig.name));
             let regions_of_interest = contig_block.get_non_n_regions()
                 .expect("Error retrieving non-n regions!");
             for region in regions_of_interest {

@@ -1,4 +1,5 @@
-/// This file will create a mutation model based on input data. 
+
+/// This file will create a mutation model based on input data.
 ///
 pub mod errors;
 pub mod utils;
@@ -29,7 +30,7 @@ pub fn main(config_file: &PathBuf) -> Result<(), GenMutationModelError> {
                 let contig_mutations = &run_config.mutations[chrom];
                 for variant in contig_mutations {
                     for record in search_region {
-                        if record.contains(chrom, variant.location) {
+                        if record.contains(chrom.as_str(), variant.location) {
                             if !filtered_mutations.contains_key(chrom) {
                                 filtered_mutations.insert(chrom.clone(), Vec::new());
                             }

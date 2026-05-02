@@ -140,4 +140,52 @@ mod tests {
         assert_eq!(map.contains((1003, 1300)).unwrap(), true);
         assert_eq!(map.contains((1900, 2100)).unwrap(), false);
     }
+
+    #[test]
+    fn test_mutate_position_homozygous_always_returns_alt() {
+        let sequence_block = PathBuf::from("chr1_0001000_0002000.fa");
+        let variant = Variant::new(
+            VariantType::SNP,
+            1003,
+            &vec![A],
+            &vec![G],
+            &mut vec![1, 1], // homozygous
+        ).unwrap();
+        let map = MutatedMap::new(sequence_block, vec![variant]).unwrap();
+        let mut rng = simple_rng::NeatRng::new_from_seed(&vec![
+            "test".to_string()
+        ]).unwrap();
+        // Homozygous must always return the alternate
+        for _ in 0..10 {
+            let result = map.mutate_position(1003, &mut rng).unwrap();
+            assert_eq!(result, vec![G]);
+        }
+    }
+
+    #[test]
+    fn test_mutate_position_heterozygous_returns_ref_or_alt() {
+        let sequence_block = PathBuf::from("chr1_0001000_0002000.fa");
+        let variant = Variant::new(
+            VariantType::SNP,
+            1003,
+            &vec![A],
+            &vec![G],
+            &mut vec![1, 0], // heterozygous
+        ).unwrap();
+        let map = MutatedMap::new(sequence_block, vec![variant]).unwrap();
+        let mut rng = simple_rng::NeatRng::new_from_seed(&vec![
+            "test".to_string()
+        ]).unwrap();
+        // Heterozygous must return either ref or alt, never anything else
+        let mut saw_ref = false;
+        let mut saw_alt = false;
+        for _ in 0..20 {
+            let result = map.mutate_position(1003, &mut rng).unwrap();
+            assert!(result == vec![A] || result == vec![G]);
+            if result == vec![A] { saw_ref = true; }
+            if result == vec![G] { saw_alt = true; }
+        }
+        assert!(saw_ref, "expected at least one ref result in 20 trials");
+        assert!(saw_alt, "expected at least one alt result in 20 trials");
+    }
 }

@@ -6,7 +6,7 @@
 //! deletions, since they are treated similarly by variant calling software.
 use flate2::read::GzDecoder;
 use itertools::Itertools;
-use log::{error, debug};
+use log::debug;
 use vectorize;
 use serde;
 use std::hash::Hash;

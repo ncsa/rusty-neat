@@ -144,11 +144,55 @@ impl SequencingErrorModel {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use simple_rng::NeatRng;
+
+    fn make_rng() -> NeatRng {
+        NeatRng::new_from_seed(&vec![
+            "Hello".to_string(),
+            "Cruel".to_string(),
+            "World".to_string(),
+        ]).unwrap()
+    }
 
     #[test]
     fn test_sequencing_error_model() {
-        // todo needs tests
-        println!("TODO");
-        assert_eq!(1, 1)
+        let model = SequencingErrorModel::default().unwrap();
+        let mut rng = make_rng();
+        let result = model.generate_sequencing_error(Nucleotide::A, &mut rng).unwrap();
+        match result {
+            SequencingErrorType::SnpError(base) => assert_ne!(base, Nucleotide::A),
+            SequencingErrorType::InsertionError(seq) => assert!(!seq.is_empty()),
+            SequencingErrorType::DeletionError(len) => assert!(len > 0),
+        }
+    }
+
+    #[test]
+    fn test_convert_score() {
+        let model = SequencingErrorModel::default().unwrap();
+        // Q20 → error prob 0.01
+        assert!((model.convert_score(20).unwrap() - 0.01).abs() < 1e-10);
+        // Q30 → error prob 0.001
+        assert!((model.convert_score(30).unwrap() - 0.001).abs() < 1e-10);
+        // Q0 → error prob 1.0
+        assert!((model.convert_score(0).unwrap() - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_sequencing_error_deterministic() {
+        let model = SequencingErrorModel::default().unwrap();
+        let error1 = model.generate_sequencing_error(Nucleotide::C, &mut make_rng()).unwrap();
+        let error2 = model.generate_sequencing_error(Nucleotide::C, &mut make_rng()).unwrap();
+        let type1 = match error1 {
+            SequencingErrorType::SnpError(_) => 0,
+            SequencingErrorType::InsertionError(_) => 1,
+            SequencingErrorType::DeletionError(_) => 2,
+        };
+        let type2 = match error2 {
+            SequencingErrorType::SnpError(_) => 0,
+            SequencingErrorType::InsertionError(_) => 1,
+            SequencingErrorType::DeletionError(_) => 2,
+        };
+        assert_eq!(type1, type2);
     }
 }

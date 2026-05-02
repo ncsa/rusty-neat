@@ -180,10 +180,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "MalformedSnp")]
     fn test_bad_variant_creation() {
         Variant::new(
-            // with new it should catch this error
             SNP,
             22,
             &vec![Nucleotide::A, Nucleotide::C, Nucleotide::T, Nucleotide::G],

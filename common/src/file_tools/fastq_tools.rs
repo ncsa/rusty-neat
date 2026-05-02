@@ -4,7 +4,7 @@
 //! This one needs a major overhaul, it is autogenerating quality scores etc. 
 //! Will wait to get other things set up first
 use std::io::{BufWriter, Write};
-use log::{debug, error, warn};
+use log::{debug, warn};
 use std::path::PathBuf;
 use std::collections::HashMap;
 use simple_rng::{NeatRng, NeatRngError};
@@ -400,10 +400,38 @@ pub fn quality_scores_to_char_vec(array: Vec<usize>) -> Result<Vec<u8>, FastqToo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::file_tools::file_io::create_output_file;
+    use crate::file_tools::file_io::{create_output_file, read_gzip_lines};
     use crate::structs::variants::{Variant, VariantType};
     use crate::structs::nucleotides::Nucleotide::*;
-    use std::fs;
+    use std::io::Write;
+
+    #[test]
+    fn test_combine_temp_fastqs() {
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        let write_fastq_gz = |name: &str, content: &[u8]| -> PathBuf {
+            let path = temp_dir.path().join(name);
+            let f = std::fs::File::create(&path).unwrap();
+            let mut enc = GzEncoder::new(f, Compression::default());
+            enc.write_all(content).unwrap();
+            enc.finish().unwrap();
+            path
+        };
+
+        let file1 = write_fastq_gz("r1.fastq.gz", b"@read1\nACGT\n+\nIIII\n");
+        let file2 = write_fastq_gz("r2.fastq.gz", b"@read2\nTTTT\n+\nIIII\n");
+        let output = temp_dir.path().join("combined.fastq.gz");
+
+        combine_temp_fastqs(vec![file1, file2], &output, false).unwrap();
+
+        let lines: Vec<String> = read_gzip_lines(&output)
+            .unwrap()
+            .map(|l| l.unwrap())
+            .collect();
+        assert_eq!(lines.len(), 8, "Combined file should have 8 lines (2 records × 4 lines)");
+        assert_eq!(lines[0], "@read1");
+        assert_eq!(lines[4], "@read2");
+    }
   
     #[test]
     fn test_write_reverse() {
@@ -503,7 +531,8 @@ mod tests {
         ]);
         let flagged_positions = vec![1,3];
         let read_name_prefix = "neat_generated_";
-        let file = PathBuf::from("fake.fq");
+        let temp_dir = tempfile::tempdir().unwrap();
+        let file = temp_dir.path().join("test.fq");
         let outfile = create_output_file(&file, true).unwrap();
         let mut buffer = GzEncoder::new(outfile, Compression::default());
         let qual_scores = vec![33, 25, 37, 28, 15, 33, 33, 37];
@@ -529,11 +558,7 @@ mod tests {
             &mut rng
         );
 
-        match result {
-            Ok(()) => assert!(true),
-            Err(_) => assert!(false),
-        }
-        fs::remove_file(file).unwrap();
+        assert!(result.is_ok());
     }
 
 }

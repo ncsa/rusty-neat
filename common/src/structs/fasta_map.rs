@@ -292,13 +292,13 @@ impl FastaMap {
 
 #[cfg(test)]
 mod tests {
-    use std::fs::remove_file;
     use crate::structs::fasta_map::RegionType::NonNRegion;
     use crate::structs::nucleotides::Nucleotide::*;
     use super::*;
 
     #[test]
     fn test_sequence_block() {
+        let temp_dir = tempfile::tempdir().unwrap();
         let mut seq_block = SequenceBlock {
             contig: "chrom1".to_string(),
             ref_start: 0,
@@ -306,17 +306,14 @@ mod tests {
             sequence: vec![A,A,A,A,A,A,A,A,A,A,A,A,T,T,T,A,A,A,T,A],
             sequence_map: vec![SequenceMap::from(NonNRegion, 0, 20)]
         };
-        let filename = PathBuf::from("chrom1_000_020.json");
-        // Test write works
+        let filename = temp_dir.path().join("chrom1_000_020.json");
         let file = File::create(&filename).unwrap();
         seq_block.write_block(file).unwrap();
-        // let's read the file we just made and check the contents
         let seq_block_read = SequenceBlock::from(&filename).unwrap();
         assert_eq!(seq_block.contig, seq_block_read.contig);
         assert_eq!(seq_block.ref_start, seq_block_read.ref_start);
         assert_eq!(seq_block.ref_end, seq_block_read.ref_end);
         assert_eq!(seq_block.sequence, seq_block_read.sequence);
-        remove_file(filename).unwrap();
     }
 
     #[test]

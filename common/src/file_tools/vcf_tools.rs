@@ -89,14 +89,12 @@ pub fn write_vcf(
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-
     use super::*;
     use crate::structs::{nucleotides::Nucleotide, variants::{Variant, VariantType}};
-    use std::fs;
 
     #[test]
     pub fn test_write_vcf() {
+        let temp_dir = tempfile::tempdir().unwrap();
         let variant1 = Variant::new(
             VariantType::SNP,
             3,
@@ -120,18 +118,16 @@ mod tests {
         let fasta_order = Vec::from(["chr1".to_string()]);
         let fasta_length = HashMap::from([("chr1".to_string(), 20)]);
         let reference_path = PathBuf::from("test_data/references/H1N1.fa");
-        let overwrite_output = false;
-        let output_filename = PathBuf::from("good_test.vcf");
+        let output_filename = temp_dir.path().join("good_test.vcf");
         let result = write_vcf(
             &mutated_maps,
             &fasta_order,
             &fasta_length,
             &reference_path,
-            overwrite_output,
+            false,
             &output_filename,
         );
         result.unwrap();
-        assert!(Path::new("good_test.vcf").exists());
-        fs::remove_file("good_test.vcf").unwrap();
+        assert!(output_filename.exists());
     }
 }

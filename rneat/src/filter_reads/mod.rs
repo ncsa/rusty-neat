@@ -3,8 +3,6 @@ use thiserror::Error;
 use std::num::ParseIntError;
 use std::path::PathBuf;
 use log::*;
-use std::{thread, time};
-
 use common::{file_tools::bed_reader::{self, BedReaderError}};
 use utils::filter_lib::{filter_fastq, filter_vcf};
 
@@ -37,8 +35,7 @@ pub enum FilterReadsError {
 }
 
 pub fn main(config: &PathBuf) -> Result<(), FilterReadsError> {
-    info!("////////////// Welcome to rusty-neat read generator! \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\");
-    thread::sleep(time::Duration::from_millis(1000));
+    info!("////////////// Welcome to rusty-neat filter reads! \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\");
     info!("Using Configuration file input: {:?}", &config);
     let run_config = RunConfiguration::from(config);
     // bed_file: path to bed file to use for filtering

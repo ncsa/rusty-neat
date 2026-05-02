@@ -450,7 +450,7 @@ impl RunConfiguration {
         // No point in running if we aren't producing files
         if !(self.produce_fastq | self.produce_vcf | self.produce_bam) {
             error!("All file types set to false, no files would be produced.");
-            return Err(GenerateReadsErrors::MissingReferenceError)
+            return Err(GenerateReadsErrors::ConfigError)
         }
 
         if self.paired_ended {
@@ -459,7 +459,7 @@ impl RunConfiguration {
                     "Paired ended is set to true, but fragment mean \
                     and standard deviation were not set."
                 );
-                return Err(GenerateReadsErrors::MissingReferenceError)
+                return Err(GenerateReadsErrors::ConfigError)
             }
             if self.produce_fastq {
                 info!("\t> fragment mean: {}", self.fragment_mean.unwrap());

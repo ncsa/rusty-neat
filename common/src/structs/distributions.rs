@@ -203,4 +203,39 @@ mod test {
         let x = d.sample(rand).unwrap();
         assert_eq!(x, 3);
     }
+
+    #[test]
+    fn test_normal_distribution_params() {
+        let nd = NormalDistribution::new(100.0, 15.0).unwrap();
+        let (mean, std_dev) = nd.params().unwrap();
+        assert_eq!(mean, 100.0);
+        assert_eq!(std_dev, 15.0);
+    }
+
+    #[test]
+    fn test_normal_distribution_sample_median() {
+        // At p=0.5 the inverse CDF returns the mean exactly
+        let nd = NormalDistribution::new(200.0, 30.0).unwrap();
+        let median = nd.sample(0.5).unwrap();
+        assert!((median - 200.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_normal_distribution_sample_range() {
+        // Samples between 0 and 1 should all land within ±4 standard deviations
+        let nd = NormalDistribution::new(0.0, 1.0).unwrap();
+        for p in [0.001, 0.01, 0.1, 0.5, 0.9, 0.99, 0.999] {
+            let val = nd.sample(p).unwrap();
+            assert!(val.abs() < 4.0, "sample({}) = {} is outside ±4 sigma", p, val);
+        }
+    }
+
+    #[test]
+    fn test_normal_distribution_inverse_cdf_symmetry() {
+        // inverse_cdf(p) and inverse_cdf(1-p) should be symmetric around the mean
+        let nd = NormalDistribution::new(50.0, 10.0).unwrap();
+        let lo = nd.inverse_cdf(0.1).unwrap();
+        let hi = nd.inverse_cdf(0.9).unwrap();
+        assert!((lo + hi - 100.0).abs() < 1e-9);
+    }
 }

@@ -124,33 +124,42 @@ impl TransitionMatrix where {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use simple_rng::NeatRng;
 
     #[test]
     fn test_transition_matrix_build() {
-        // todo fix test
         let a_weights = vec![0.0, 20.0, 1.0, 20.0];
         let c_weights = vec![20.0, 0.0, 1.0, 1.0];
         let g_weights = vec![1.0, 1.0, 0.0, 20.0];
         let t_weights = vec![20.0, 1.0, 20.0, 0.0];
-
         let model = TransitionMatrix::from(
-            a_weights,
-            c_weights,
-            g_weights,
-            t_weights,
-        );
-
-        println!("{:?}", model);
-        // assert_eq!(model.a_dist, a_weights);
+            a_weights, c_weights, g_weights, t_weights,
+        ).unwrap();
+        // Index by usize and Nucleotide must reference the same distribution
+        assert_eq!(model[0].values().unwrap(), model[&Nucleotide::A].values().unwrap());
+        assert_eq!(model[1].values().unwrap(), model[&Nucleotide::C].values().unwrap());
+        assert_eq!(model[2].values().unwrap(), model[&Nucleotide::G].values().unwrap());
+        assert_eq!(model[3].values().unwrap(), model[&Nucleotide::T].values().unwrap());
+        // Each row's values should be the four ACGT indices
+        assert_eq!(model[&Nucleotide::A].values().unwrap(), Vec::from(ALLOWED_USIZE));
     }
 
     #[test]
-    #[should_panic]
+    fn test_transition_matrix_default() {
+        let model = TransitionMatrix::default().unwrap();
+        // Spot-check: sampling from A row should return one of [0,1,2,3]
+        let mut rng = NeatRng::new_from_seed(&vec!["seed".to_string()]).unwrap();
+        let sample = model[&Nucleotide::A].sample(rng.random().unwrap()).unwrap();
+        assert!(ALLOWED_USIZE.contains(&sample));
+    }
+
+    #[test]
     fn test_transition_matrix_too_many_bases() {
         let a_weights = vec![0.0, 20.0, 1.0, 20.0, 1.0];
         let c_weights = vec![20.0, 0.0, 1.0, 1.0];
         let g_weights = vec![1.0, 1.0, 0.0, 20.0];
         let t_weights = vec![20.0, 1.0, 20.0, 0.0];
-        TransitionMatrix::from(a_weights, c_weights, g_weights, t_weights).unwrap();
+        let result = TransitionMatrix::from(a_weights, c_weights, g_weights, t_weights);
+        assert!(matches!(result, Err(TransitionMatrixError::UnequalWeightsError)));
     }
 }

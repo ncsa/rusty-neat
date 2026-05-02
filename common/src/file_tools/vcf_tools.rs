@@ -152,4 +152,57 @@ mod tests {
             "missing hom SNP line; got: {:?}", lines
         );
     }
+
+    #[test]
+    pub fn test_write_vcf_multi_contig() {
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        let map1 = MutatedMap::new(
+            PathBuf::from("chr1_000100_000200.fa"),
+            vec![Variant::new(VariantType::SNP, 5, &vec![Nucleotide::A], &vec![Nucleotide::C], &mut vec![0, 1]).unwrap()],
+        ).unwrap();
+        let map2 = MutatedMap::new(
+            PathBuf::from("chr2_000100_000200.fa"),
+            vec![Variant::new(VariantType::SNP, 10, &vec![Nucleotide::G], &vec![Nucleotide::T], &mut vec![1, 1]).unwrap()],
+        ).unwrap();
+
+        let mut mutated_maps = HashMap::new();
+        mutated_maps.insert("chr1".to_string(), vec![map1]);
+        mutated_maps.insert("chr2".to_string(), vec![map2]);
+
+        let contig_order = vec!["chr1".to_string(), "chr2".to_string()];
+        let fasta_lengths = HashMap::from([
+            ("chr1".to_string(), 300usize),
+            ("chr2".to_string(), 500usize),
+        ]);
+
+        let output_path = temp_dir.path().join("multi_contig.vcf");
+        write_vcf(
+            &mutated_maps,
+            &contig_order,
+            &fasta_lengths,
+            &PathBuf::from("ref.fa"),
+            false,
+            &output_path,
+        ).unwrap();
+
+        let lines: Vec<String> = crate::file_tools::file_io::read_gzip_lines(&output_path)
+            .unwrap()
+            .map(|l| l.unwrap())
+            .collect();
+
+        // Both contigs must appear in the header
+        assert!(lines.iter().any(|l| l.contains("##contig=<ID=chr1,length=300>")));
+        assert!(lines.iter().any(|l| l.contains("##contig=<ID=chr2,length=500>")));
+
+        // Variant lines for both contigs must be present
+        assert!(
+            lines.iter().any(|l| l.starts_with("chr1\t6\t")),
+            "missing chr1 variant; got: {:?}", lines
+        );
+        assert!(
+            lines.iter().any(|l| l.starts_with("chr2\t11\t")),
+            "missing chr2 variant; got: {:?}", lines
+        );
+    }
 }

@@ -195,4 +195,65 @@ mod tests {
         };
         assert_eq!(type1, type2);
     }
+
+    #[test]
+    fn test_indel_forced_path_types() {
+        // With indel_probability=1.0 every call must produce an insertion or deletion, never a SNP.
+        let model = SequencingErrorModel {
+            error_rate: 0.1,
+            del_length_distribution: DiscreteDistribution::new(&vec![1.0], &vec![1]).unwrap(),
+            ins_length_distribution: DiscreteDistribution::new(&vec![1.0], &vec![1]).unwrap(),
+            indel_probability: 1.0,
+            insertion_bias: DiscreteDistribution::new(
+                &vec![1.0, 1.0, 1.0, 1.0],
+                &Vec::from(ALLOWED_USIZE.clone()),
+            ).unwrap(),
+            transition_distros: TransitionMatrix::from(
+                vec![0.0, 0.5, 0.25, 0.25],
+                vec![0.5, 0.0, 0.25, 0.25],
+                vec![0.25, 0.25, 0.0, 0.5],
+                vec![0.25, 0.25, 0.5, 0.0],
+            ).unwrap(),
+        };
+        let mut rng = make_rng();
+        let mut saw_insertion = false;
+        let mut saw_deletion = false;
+        for _ in 0..20 {
+            match model.generate_sequencing_error(Nucleotide::A, &mut rng).unwrap() {
+                SequencingErrorType::SnpError(_) => panic!("should not produce SNP when indel_probability=1.0"),
+                SequencingErrorType::InsertionError(seq) => {
+                    assert!(!seq.is_empty());
+                    saw_insertion = true;
+                }
+                SequencingErrorType::DeletionError(len) => {
+                    assert!(len > 0);
+                    saw_deletion = true;
+                }
+            }
+            if saw_insertion && saw_deletion { break; }
+        }
+        assert!(saw_insertion, "should have seen at least one insertion in 20 calls");
+        assert!(saw_deletion, "should have seen at least one deletion in 20 calls");
+    }
+
+    #[test]
+    fn test_sequencing_error_model_file_round_trip() {
+        use tempfile::tempdir;
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("seq_error_model.json.gz");
+        let model = SequencingErrorModel::default().unwrap();
+        model.write_model(&path).unwrap();
+        let loaded = SequencingErrorModel::from_file(&path).unwrap();
+        assert!((loaded.error_rate - model.error_rate).abs() < 1e-10);
+        assert!((loaded.indel_probability - model.indel_probability).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_convert_score_additional() {
+        let model = SequencingErrorModel::default().unwrap();
+        // Q40 → 10^(-40/10) = 0.0001
+        assert!((model.convert_score(40).unwrap() - 0.0001).abs() < 1e-12);
+        // Q10 → 10^(-10/10) = 0.1
+        assert!((model.convert_score(10).unwrap() - 0.1).abs() < 1e-10);
+    }
 }

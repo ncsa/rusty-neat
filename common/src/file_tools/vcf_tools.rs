@@ -2,15 +2,33 @@
 extern crate log;
 
 use std::collections::HashMap;
-use std::io;
+use std::io::{self, BufReader, Lines, Read};
+use std::num::ParseIntError;
 use std::path::PathBuf;
 use std::io::Write;
 use flate2::write::GzEncoder;
 use flate2::Compression;
+use thiserror::Error;
+use log::*;
 
-use crate::file_tools::file_io::create_output_file;
-use crate::structs::nucleotides::sequence_array_to_string;
+use crate::file_tools::file_io::{create_output_file, read_gzip_lines, read_lines};
+use crate::structs::nucleotides::{sequence_array_to_string};
 use crate::structs::mutated_map::MutatedMap;
+use crate::structs::variants::{Variant, VariantError};
+
+#[derive(Debug, Error)]
+pub enum VcfToolsError {
+    #[error("Error reading the vcf file. Check file format: {0}")]
+    MalformedVcf(String),
+    #[error("IO error from the bed reader: {0}")]
+    IoError(#[from] io::Error),
+    #[error("Error parsing ints from the bed file: {0}")]
+    ParserError(#[from] ParseIntError),
+    #[error("File has an unknown or missing file extension: {0}")]
+    FileExtensionUnknown(String),
+    #[error("Error creating a variant from file: {0}")]
+    VariantError(#[from] VariantError)
+}
 
 pub fn write_vcf(
     mutated_maps: &HashMap<String, Vec<MutatedMap>>,
@@ -87,8 +105,112 @@ pub fn write_vcf(
     Ok(())
 }
 
+pub fn read_vcf(vcf_file: PathBuf) -> Result<HashMap<String, Vec<Variant>>, VcfToolsError> {
+    let ext = vcf_file.extension();
+    match ext {
+        Some(ext) => {
+            if ext == "gz" {
+                return process_gzip_vcf(&vcf_file)
+            } else {
+                return process_vcf(&vcf_file)
+            }
+        },
+        None => panic!("file extonsion unknown! {:?}", vcf_file),
+    }
+}
+
+fn process_gzip_vcf(filename: &PathBuf) -> Result<HashMap<String, Vec<Variant>>, VcfToolsError> {
+    let reader = read_gzip_lines(filename)?;
+    read_open_vcf(reader)
+}
+
+fn process_vcf(filename: &PathBuf) -> Result<HashMap<String, Vec<Variant>>, VcfToolsError> {
+    let reader = read_lines(filename)?;
+    read_open_vcf(reader)
+}
+
+fn read_open_vcf<P: Read> (reader: Lines<BufReader<P>>) -> Result<HashMap<String, Vec<Variant>>, VcfToolsError> {
+    let mut file_records: HashMap<String, Vec<Variant>> = HashMap::new();
+    for result in reader {
+        match result {
+            Ok(line) => {
+                if line.starts_with("#") {
+                    continue
+                } else {
+                    let split_line: Vec<&str> = line.split("\t").collect();
+                    let chrom = split_line[0];
+                    let pos = split_line[1].parse();
+                    let location: usize = {
+                        match pos {
+                            Ok(num) => num,
+                            Err(error) => return Err(VcfToolsError::ParserError(error))
+                        }
+                    };
+                    let id = split_line[2];
+                    let vcf_reference = split_line[3];
+                    let vcf_alternate = split_line[4];
+                    // QUAL may be "." in real-world VCFs
+                    let quality_score: usize = split_line[5].parse().unwrap_or(0);
+                    let filter = split_line[6];
+                    let info_field = split_line[7];
+                    let mut format: Vec<String> = Vec::new();
+                    let mut sample: Vec<String> = Vec::new();
+                    if split_line.len() > 8 {
+                        let fmt = split_line[8];
+                        let smp = split_line[9];
+                        // "." means no FORMAT/SAMPLE data — GT will be absent and cause an error below
+                        if fmt != "." && smp != "." {
+                            let format_split: Vec<&str> = fmt.split(":").collect();
+                            let sample_split: Vec<&str> = smp.split(":").collect();
+                            let format_len = format_split.len();
+                            if sample_split.len() != format_len {
+                                return Err(
+                                    VcfToolsError::MalformedVcf(
+                                        "FORMAT list and sample list different lengths, invalid VCF".to_string()
+                                    )
+                                )
+                            }
+                            for i in 0..format_len {
+                                format.push(format_split[i].to_string());
+                                sample.push(sample_split[i].to_string());
+                            }
+                        }
+                    }
+                    if split_line.len() > 10 {
+                        warn!("Currently rneat can only read one sample per record")
+                    }
+                    let variant = Variant::from_file(
+                        location,
+                        id,
+                        filter,
+                        info_field,
+                        vcf_reference,
+                        vcf_alternate,
+                        quality_score,
+                        format,
+                        sample,
+                    )?;
+                    // Standard hashmap safety check
+                    if !file_records.contains_key(chrom) {
+                        file_records.insert(chrom.to_string(), Vec::new());
+                    }
+                    file_records
+                        .get_mut(chrom)
+                        .unwrap()
+                        .push(variant);
+                }
+            },
+            Err(error) => {
+                return Err(VcfToolsError::IoError(error))
+            },
+        }
+    }
+    Ok(file_records)
+}
+
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
     use super::*;
     use crate::structs::{nucleotides::Nucleotide, variants::{Variant, VariantType}};
 
@@ -204,5 +326,33 @@ mod tests {
             lines.iter().any(|l| l.starts_with("chr2\t11\t")),
             "missing chr2 variant; got: {:?}", lines
         );
+    }
+
+    #[test]
+    fn test_read_vcf_qual_dot() {
+        let vcf_content = "\
+##fileformat=VCFv4.1\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n\
+chr1\t100\t.\tA\tT\t.\tPASS\t.\tGT\t0/1\n";
+        let mut tmp = tempfile::Builder::new().suffix(".vcf").tempfile().unwrap();
+        write!(tmp, "{}", vcf_content).unwrap();
+        let result = read_vcf(tmp.path().to_path_buf());
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        let records = result.unwrap();
+        let variants = records.get("chr1").expect("chr1 not found");
+        assert_eq!(variants.len(), 1);
+        assert_eq!(variants[0].quality_score, Some(0));
+    }
+
+    #[test]
+    fn test_read_vcf_missing_gt_hard_errors() {
+        let vcf_content = "\
+##fileformat=VCFv4.1\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n\
+chr1\t100\t.\tA\tT\t60\tPASS\t.\tDP:GQ\t30:99\n";
+        let mut tmp = tempfile::Builder::new().suffix(".vcf").tempfile().unwrap();
+        write!(tmp, "{}", vcf_content).unwrap();
+        let result = read_vcf(tmp.path().to_path_buf());
+        assert!(result.is_err(), "Expected Err for missing GT, got Ok");
     }
 }

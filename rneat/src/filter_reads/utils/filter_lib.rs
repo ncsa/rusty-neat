@@ -7,7 +7,7 @@ use flate2::write::GzEncoder;
 use flate2::Compression;
 use common::structs::bed_record::BedRecord;
 use flate2::read::GzDecoder;
-use crate::filter_reads::FilterReadsError;
+use crate::filter_reads::errors::FilterReadsError;
 use thiserror::Error;
 
 use common::file_tools::file_io::{read_gzip_lines, read_lines, create_output_file};

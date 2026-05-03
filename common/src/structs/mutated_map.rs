@@ -4,14 +4,15 @@
 //! This allows us to choose when we write the fastq, whether to use
 //! the ref or alt version.
 use crate::structs::{
-    fasta_map::{FastaMapError, decode_block_filename}, 
-    nucleotides::Nucleotide, 
-    variants::{Genotypes, Variant, VariantError},
+    fasta_map::{FastaMapError, decode_block_filename},
+    nucleotides::Nucleotide,
+    variants::{Genotype, Variant, VariantError},
 };
 use std::collections::HashMap;
 use simple_rng::NeatRng;
 use thiserror::Error;
 use std::path::PathBuf;
+use log::debug;
 
 #[derive(Debug, Error)]
 pub enum MutatedMapError {
@@ -42,11 +43,16 @@ impl MutatedMap {
     ) -> Result<Self, MutatedMapError> {
         // Reconstruct the range from the filename
         let block_interval = decode_block_filename(&sequence_block)?;
-        // Build the variant_map
+        // Build the variant_map; skip duplicate positions with a warning so the caller
+        // knows their requested mutation count may be slightly under-represented.
         let mut variant_map: HashMap<usize, Variant> = HashMap::new();
         let mut flagged_positions: Vec<usize> = Vec::new();
         for variant in variant_vec {
             let location = variant.get_loc()?;
+            if variant_map.contains_key(&location) {
+                debug!("Two mutations sampled at position {}; keeping first, discarding second", location);
+                continue;
+            }
             variant_map.insert(location, variant);
             flagged_positions.push(location);
         }
@@ -80,8 +86,8 @@ impl MutatedMap {
         // the calling function has already checked thath position is within variant_map, or else
         // this will throw an index out of range error.
         match self.variant_map[&position].genotype {
-            Genotypes::Homozygous => return Ok(self.variant_map[&position].alternate.clone()),
-            Genotypes::Heterozygous => {
+            Genotype::Homozygous => return Ok(self.variant_map[&position].alternate.clone()),
+            Genotype::Heterozygous => {
                 // 50/50 chance we mutate
                 if rng.gen_bool(0.5).unwrap() {
                     return Ok(self.variant_map[&position].reference.clone())

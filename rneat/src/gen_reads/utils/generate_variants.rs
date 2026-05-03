@@ -54,6 +54,7 @@ pub fn generate_variants(
     Ok(Some(block_variants))
 }
 
+
 #[cfg(test)]
 mod tests {
     use super::*;

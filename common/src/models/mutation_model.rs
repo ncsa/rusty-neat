@@ -1,24 +1,43 @@
 //! The mutation model
-use std;
+use std::{self, collections::HashMap};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use flate2::read::GzDecoder;
 use thiserror::Error;
 use simple_rng::{NeatRng, NeatRngError};
 use log::error;
 
-use crate::structs::{
-    distributions::{DiscreteDistribution, DistributionErrors}, nucleotides::{allowed_vec, Nucleotide}, transition_matrix::{TransitionMatrix, TransitionMatrixError}, variants::{Variant, VariantError, VariantType}
-};
+use crate::{models::snp_trinuc_model::TrinucFrame, structs::{
+    distributions::{
+        DiscreteDistribution, 
+        DistributionErrors
+    }, 
+    nucleotides::{
+        allowed_vec, 
+        Nucleotide
+    }, 
+    transition_matrix::{
+        TransitionMatrix, 
+        TransitionMatrixError
+    }, 
+    variants::{
+        Variant, 
+        VariantError, 
+        VariantType
+    }
+}};
 use crate::models::{
     indel_model::{IndelModel, IndelModelError},
-    quality_scores::{QualityModelError, QualityScoreModel},
-    sequencing_error_model::{SeqModelError, SequencingErrorModel},
+    quality_scores::{QualityModelError},
+    sequencing_error_model::{SeqModelError},
     snp_trinuc_model::{SnpTrinucModel, SnpTrinucError},
     lib::{model_reader, model_writer},
 };
 
 #[derive(Error, Debug)]
 pub enum MutationModelError {
+    #[error("Error in inputs to MutationModel")]
+    InputError,
     #[error("Mutation model returned RNG error: {0}")]
     RngError(#[from] NeatRngError),
     #[error("Error retrieving reference sequence block")]
@@ -42,10 +61,20 @@ pub enum MutationModelError {
     #[error("Mutation model returned an error with a distribution model: {0}")]
     DistributionError(#[from] DistributionErrors),
     #[error("Mutation model return and error: {0}")]
-    ModelInitiationError(&'static str),
+    ModelInitiationError(String),
+    #[error("Error reading Mutation Model from file {0}")]
+    SerdeError(#[from] serde_json::Error),
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+fn allowed_variant_types() -> Vec<VariantType> { 
+    vec![
+        VariantType::SNP,
+        VariantType::Insertion,
+        VariantType::Deletion,
+    ]
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MutationModel {
     // This is the model for mutations, the same construct used by the python version, basically.
     // The idea is to store all the data we need to create mutations in one construct.
@@ -63,52 +92,105 @@ pub struct MutationModel {
     //    1. SNP
     //    2. Insertion
     //    3. Deletion
-    pub variant_dist: DiscreteDistribution,
+    pub variant_dist: DiscreteDistribution<VariantType>,
     // These hold all the statistical model data we need to apply the mutations with this model
     statistical_models: StatisticalModels,
     // Store a reference to the NeatRng for this run
 }
 
+static DATA_FILE: &'static [u8] = include_bytes!("model_data/default_mutation_model.json.gz");
+
 impl MutationModel {
-    pub fn default() -> Result<Self, MutationModelError> {
-        // Creating the default model based on the default for the original NEAT.
-        let statistical_models = StatisticalModels::default()?;
-        // Based on NA12878 data
-        let mutation_rate = 0.0010987132390211135;
-        // This was hard-coded in
-        let homozygous_frequency = 0.01;
-        // from NA12878 data
-        let insertion_given_indel_rate = statistical_models.indel_model.insertion_probability;
-        // from NA12878 data
-        let snp_rate = 0.886404192662459;
-        // Originally this was expressed as indel_fraction 0.05, So snp probs is 0.95
-        // insertion frequency (relative to their being an indel variant) was 0.6.
-        // This gives us, e.g.,
-        //                 probability of insertion of 0.6 * 0.05 = 0.03 * 100 = 3
-        //                 probability of deletion of  0.4 * 0.05 = 0.02 * 100 = 2
-        //                 probability of SNP of       0.95              * 100 = 95
-        let ins_rate = (1.0 - snp_rate) * (insertion_given_indel_rate);
-        let del_rate = (1.0 - snp_rate) * (1.0 - insertion_given_indel_rate);
-        assert!((snp_rate + ins_rate + del_rate - 1.0).abs() < 1e-10);
-        let variant_weights = [
-            snp_rate, // snp
-            ins_rate, // insertion
-            del_rate, //deletion
+    pub fn from_raw_data(
+        average_mutation_rate: f64,
+        homozygous_frequency: f64,
+        variant_probs: Vec<f64>,
+        snp_transition_frequency: HashMap<(Nucleotide, Nucleotide), f64>,
+        trinuc_frequency: HashMap<TrinucFrame, f64>,
+        trinuc_transition_frequency: HashMap<(TrinucFrame, TrinucFrame), f64>,
+        ins_lengths: Vec<usize>,
+        ins_weights: Vec<f64>,
+        del_lengths: Vec<usize>,
+        del_weights: Vec<f64>,
+    ) -> Result<Self, MutationModelError> {
+        // Inputs:
+        // average_mutation_rate: Average rate by total reference (or bed track) length
+        //    of a base mutating
+        // homozygous_frequency: Average rate that, if a mutation occurs, it is homozygous
+        // variant_probs: Relative probabilities of each type of allowed variant (SNP, INS, DEL)
+        // snp_transition_frequency: Probability that one base mutates to another, 
+        //    independent of context
+        // trinuc_frequency: The relative frequency of each trinucleotide in the dataset
+        //    mutating to anything else (to help detect if some trinucs are more volatile 
+        //    than others)
+        // trinuc_transition_frequency: The probability of trinuc A mutating into trinuc B,
+        //    as seen in data. Some may not have been observed and will be assigned a very
+        //    low probability.
+        //
+        // custom tranisition matrix for snps
+        let mut temp_trans_matrix: [[f64; 4]; 4] = [
+            [0.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 0.0],
         ];
-
-        // We'll use the inex to find the variant
-        let variant_index = vec![0, 1, 2];
-        let variant_dist = DiscreteDistribution::new(
-            &Vec::from(variant_weights),
-            &variant_index,
+        for (key, value) in snp_transition_frequency {
+            temp_trans_matrix[key.0 as usize][key.1 as usize] = value;
+        }
+        let transition_matrix = TransitionMatrix::from(
+            temp_trans_matrix[Nucleotide::A as usize],
+            temp_trans_matrix[Nucleotide::C as usize],
+            temp_trans_matrix[Nucleotide::G as usize],
+            temp_trans_matrix[Nucleotide::T as usize],
         )?;
-
+        // build transition matrices from data for snps and trinucs
+        let snp_trinuc_model = SnpTrinucModel::from_raw_data(
+            trinuc_frequency,
+            trinuc_transition_frequency,
+        )?;
+        // Probability, given that it is an indel, that it is an insertion.
+        // Fall back to the default indel model when no indel data was observed.
+        let indel_denom = variant_probs[1] + variant_probs[2];
+        let indel_model = if indel_denom == 0.0 || ins_lengths.is_empty() || del_lengths.is_empty() {
+            IndelModel::default()?
+        } else {
+            let insertion_probability = variant_probs[1] / indel_denom;
+            IndelModel::from_raw_data(
+                insertion_probability,
+                ins_lengths,
+                ins_weights,
+                del_lengths,
+                del_weights,
+            )?
+        };
+        let statistical_models = StatisticalModels {
+            transition_matrix,
+            indel_model,
+            snp_trinuc_model,
+        };
+        // SNP, Insertion, Deletion, respectively.
+        if variant_probs.len() != 3 {
+            error!("Input to mutation model from raw incorrect. Variant probs should have a length of 3: SNP, INS, DEL");
+            return Err(MutationModelError::InputError)
+        }
+        let variant_distribution = DiscreteDistribution::new(
+            &variant_probs,
+            &(allowed_variant_types()),
+        )?;
         Ok(MutationModel {
-            mutation_rate,
+            mutation_rate: average_mutation_rate,
+            variant_dist: variant_distribution,
             homozygous_frequency,
-            variant_dist,
             statistical_models,
         })
+    }
+
+    pub fn default() -> Result<Self, MutationModelError> {
+        // Creating the default model based on the default for the original NEAT.
+        let reader = GzDecoder::new(DATA_FILE);
+        let data: MutationModel = serde_json::from_reader(reader)
+            .map_err(MutationModelError::SerdeError)?;
+        Ok(data)
     }
 
     pub fn from_file(filename: &PathBuf) -> Result<Self, MutationModelError> {
@@ -170,10 +252,16 @@ impl MutationModel {
                         check_base(reference_sequence[variant_location]),
                         check_base(reference_sequence[variant_location+1]),
                     ];
-                    let alternate_base = self.statistical_models.snp_model
+                    let alternate_base = self.statistical_models.snp_trinuc_model
                         .generate_snp(rng.random()?, &trinuc_reference)?;
 
-                    alternate = vec![alternate_base];
+                    // Degenerate model context (sparse data, all-zero row): fall back to
+                    // a uniform random pick rather than producing a same-base "mutation".
+                    if alternate_base == ref_base {
+                        alternate = pick_random_snp(ref_base, rng)?;
+                    } else {
+                        alternate = vec![alternate_base];
+                    }
                 }
             },
             VariantType::Insertion => {
@@ -200,6 +288,9 @@ impl MutationModel {
                         .to_vec();
                 }
             },
+            _ => {
+                panic!("Unsupported option for generating mutation")
+            }
         };
         
         if reference.is_empty() || alternate.is_empty() || reference == alternate {
@@ -216,36 +307,14 @@ impl MutationModel {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct StatisticalModels {
     // This struct links the Mutation model to the other statistical models for modeling different
     // variant types. If new variant types are added, then we will need to expand this struct to
     // include them.
     transition_matrix: TransitionMatrix,
-    quality_score_model: QualityScoreModel,
-    sequencing_error_model: SequencingErrorModel,
     indel_model: IndelModel,
-    snp_model: SnpTrinucModel,
-}
-
-impl StatisticalModels {
-    pub fn default() -> Result<Self, MutationModelError> {
-        // use the default transition matrix, snp model and indel model
-        let transition_matrix = TransitionMatrix::default()?;
-        let snp_model = SnpTrinucModel::default_minimal()?;
-        let indel_model = IndelModel::default()?;
-        // todo update this line:
-        let quality_score_model = QualityScoreModel::default()?;
-        let sequencing_error_model = SequencingErrorModel::default()?;
-
-        Ok(StatisticalModels {
-            transition_matrix,
-            quality_score_model,
-            snp_model,
-            indel_model,
-            sequencing_error_model,
-        })
-    }
+    snp_trinuc_model: SnpTrinucModel,
 }
 
 fn pick_random_snp(ref_base: Nucleotide, rng: &mut NeatRng)-> Result<Vec<Nucleotide>, MutationModelError> {
@@ -256,7 +325,7 @@ fn pick_random_snp(ref_base: Nucleotide, rng: &mut NeatRng)-> Result<Vec<Nucleot
     // Pick one of the remaining
     let alt = rng.choose(&allowed)?;
     // sanity check
-    assert!(alt != ref_base);
+    assert_ne!(alt, ref_base);
     Ok(vec![alt])
 }
 
@@ -274,6 +343,7 @@ fn check_base(nuc: Nucleotide) -> Nucleotide {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::snp_trinuc_model::TrinucFrame;
     use crate::structs::nucleotides::Nucleotide::{A, C, G, T};
 
     #[test]
@@ -347,5 +417,32 @@ mod tests {
         let v1 = model.generate_mutation(&seq, 5, 2, &mut rng1).unwrap();
         let v2 = model.generate_mutation(&seq, 5, 2, &mut rng2).unwrap();
         assert_eq!(v1, v2);
+    }
+
+    #[test]
+    fn test_from_raw_data_no_indels() {
+        // Exercises the indel_denom == 0 || empty vecs fallback to IndelModel::default()
+        let snp_trans: HashMap<(Nucleotide, Nucleotide), f64> = HashMap::from([
+            ((Nucleotide::A, Nucleotide::C), 0.25),
+            ((Nucleotide::A, Nucleotide::G), 0.5),
+            ((Nucleotide::A, Nucleotide::T), 0.25),
+        ]);
+        let trinuc_freq: HashMap<TrinucFrame, f64> = HashMap::new();
+        let trinuc_trans: HashMap<(TrinucFrame, TrinucFrame), f64> = HashMap::new();
+        let result = MutationModel::from_raw_data(
+            0.001,
+            0.5,
+            vec![1.0, 0.0, 0.0], // SNP only, no indels
+            snp_trans,
+            trinuc_freq,
+            trinuc_trans,
+            vec![], // no insertion data
+            vec![],
+            vec![], // no deletion data
+            vec![],
+        );
+        assert!(result.is_ok(), "Expected Ok with no indels, got {:?}", result);
+        let model = result.unwrap();
+        assert_eq!(model.mutation_rate, 0.001);
     }
 }

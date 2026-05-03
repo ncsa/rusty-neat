@@ -20,10 +20,10 @@ fn check_data() {
     ]).unwrap();
     let fasta_map = read_fasta(
         &test_fasta,
-        NucleotideSelector::new(),
+        Some(&NucleotideSelector::new()),
         350,
         &temp_dir,
-        &mut rng,
+        Some(&mut rng),
     ).unwrap();
 
     assert_eq!(fasta_map.contigs.len(), contig_count);

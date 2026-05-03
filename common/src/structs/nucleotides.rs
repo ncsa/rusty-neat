@@ -27,15 +27,15 @@ pub fn allowed_usize() -> Vec<usize> {
 
 pub struct NucleotideSelector {
     // Struct for selecting a random nucleotide
-    distribution: DiscreteDistribution,
+    distribution: DiscreteDistribution<Nucleotide>,
 }
 
 impl NucleotideSelector {
     pub fn new() -> Self {
-        let allowed_idx: Vec<usize> = allowed_usize();
+        let allowed_nucs: Vec<Nucleotide> = allowed_vec();
         let weights: Vec<f64> = vec![0.25, 0.25, 0.25, 0.25];
         NucleotideSelector {
-            distribution: DiscreteDistribution::new(&weights, &allowed_idx).expect(
+            distribution: DiscreteDistribution::new(&weights, &allowed_nucs).expect(
                 "Error creating distribution",
             )
         }

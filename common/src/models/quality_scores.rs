@@ -37,37 +37,13 @@ pub const QUALITY_OFFSET: usize = 33;
 #[derive(Debug, Error)]
 pub enum QualityModelError {
     #[error("Quality model initiation returned a distribution error: {0}")]
-    DistributionError(DistributionErrors),
+    DistributionError(#[from] DistributionErrors),
     #[error("Quality score creation reported an RNG Error: {0}")]
-    RngError(NeatRngError),
+    RngError(#[from] NeatRngError),
     #[error("Quality model return an IO error: {0}")]
-    IoError(io::Error),
+    IoError(#[from] io::Error),
     #[error("Serde error building default model: {0}")]
-    SerdeError(serde_json::Error),
-}
-
-impl From<serde_json::Error> for QualityModelError {
-    fn from(error: serde_json::Error) -> Self {
-        QualityModelError::SerdeError(error)
-    }
-}
-
-impl From<DistributionErrors> for QualityModelError {
-    fn from(error: DistributionErrors) -> Self {
-        QualityModelError::DistributionError(error)
-    }
-}
-
-impl From<NeatRngError> for QualityModelError {
-    fn from(error: NeatRngError) -> Self {
-        QualityModelError::RngError(error)
-    }
-}
-
-impl From<std::io::Error> for QualityModelError {
-    fn from(error: std::io::Error) -> Self {
-        QualityModelError::IoError(error)
-    }
+    SerdeError(#[from] serde_json::Error),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -82,14 +58,14 @@ pub struct QualityScoreModel {
     // on a per-run basis in a deterministic way (doubling positional weight arrays)
     pub assumed_read_length: usize,
     // Weights for the first position in the read length.
-    pub seed_dist: DiscreteDistribution,
+    pub seed_dist: DiscreteDistribution<usize>,
     // A matrix for each subsequent position along the read length after the first. Each row is a
     // discrete distribution, keyed the previous score. For example, for possible scores 0-41,
     // inclusive, there would be 42 vectors (one for each possible previous score), each giving the
     // distribution for the current position (one weight for each of 42 scores). This is based on
     // the original design in NEAT. Previous attempts to simplify this have not been able to
     // successfully reproduce quality scores.
-    pub distros_from_one: Vec<Vec<DiscreteDistribution>>,
+    pub distros_from_one: Vec<Vec<DiscreteDistribution<usize>>>,
 }
 
 impl Display for QualityScoreModel {

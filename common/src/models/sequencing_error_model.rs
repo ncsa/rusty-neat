@@ -3,9 +3,9 @@ use std::{io, path::PathBuf};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use crate::{
-    models::lib::{model_reader, model_writer}, 
+    models::{lib::{model_reader, model_writer}, quality_scores::{QualityModelError, QualityScoreModel}}, 
     structs::{distributions::{DiscreteDistribution, DistributionErrors}, 
-    nucleotides::{Nucleotide, ALLOWED_USIZE}, 
+    nucleotides::{Nucleotide, ALLOWED_NUCS}, 
     transition_matrix::{TransitionMatrix, TransitionMatrixError}}
 };
 use simple_rng::{NeatRng, NeatRngError};
@@ -24,6 +24,8 @@ pub enum SeqModelError{
     MissingRngError,
     #[error("Sequencing Error model return an IO error: {0}")]
     IoError(#[from] io::Error),
+    #[error("Error initializing Quality Score model: {0}")]
+    QualModelError(#[from] QualityModelError)
 }
 
 #[derive(Debug)]
@@ -38,11 +40,12 @@ pub struct SequencingErrorModel {
     // Neat only dealt with 2 types of sequencing errors: snps and small indels.
     // We will retain that idea and assume it is accurate.
     error_rate: f64,
-    del_length_distribution: DiscreteDistribution,
-    ins_length_distribution: DiscreteDistribution,
+    del_length_distribution: DiscreteDistribution<usize>,
+    ins_length_distribution: DiscreteDistribution<usize>,
     indel_probability: f64,
-    insertion_bias: DiscreteDistribution,
+    insertion_bias: DiscreteDistribution<Nucleotide>,
     transition_distros: TransitionMatrix,
+    quality_score_model: QualityScoreModel,
 }
 
 impl SequencingErrorModel {
@@ -51,10 +54,10 @@ impl SequencingErrorModel {
         // Note that this was originally in a file, and we could have done it the way we did
         // the other defaults, but it was so small, I just included it in full here.
         let default_transition_distros = TransitionMatrix::from(
-            vec![0.0, 0.4918, 0.3377, 0.1705],
-            vec![0.5238, 0.0, 0.2661, 0.2101],
-            vec![0.3754, 0.2355, 0.0, 0.389],
-            vec![0.2505, 0.2552, 0.4942, 0.0],
+            [0.0, 0.4918, 0.3377, 0.1705],
+            [0.5238, 0.0, 0.2661, 0.2101],
+            [0.3754, 0.2355, 0.0, 0.389],
+            [0.2505, 0.2552, 0.4942, 0.0],
         )?;
         let default_error_rate = 0.006638164688495656;
         let default_lengths = vec![1, 2];
@@ -67,8 +70,9 @@ impl SequencingErrorModel {
         // default is no bias
         let default_insertion_bias = DiscreteDistribution::new(
             &vec![1.0, 1.0, 1.0, 1.0],
-            &Vec::from(ALLOWED_USIZE.clone()),
+            &ALLOWED_NUCS.to_vec(),
         )?;
+        let quality_score_model = QualityScoreModel::default()?;
 
         Ok(SequencingErrorModel {
             error_rate: default_error_rate,
@@ -77,6 +81,7 @@ impl SequencingErrorModel {
             indel_probability: default_indel_probability,
             insertion_bias: default_insertion_bias,
             transition_distros: default_transition_distros,
+            quality_score_model,
         })
     }
 
@@ -139,6 +144,14 @@ impl SequencingErrorModel {
             let length = self.del_length_distribution.sample(rng.random()?)?;
             Ok(SequencingErrorType::DeletionError(length))
         }
+    }
+
+    pub fn generate_quality_scores(
+        &self, 
+        read_length: usize, 
+        rng: &mut NeatRng
+    ) -> Result<Vec<usize>, SeqModelError> {
+        self.quality_score_model.generate_quality_scores(read_length, rng)
     }
 }
 
@@ -206,14 +219,15 @@ mod tests {
             indel_probability: 1.0,
             insertion_bias: DiscreteDistribution::new(
                 &vec![1.0, 1.0, 1.0, 1.0],
-                &Vec::from(ALLOWED_USIZE.clone()),
+                &Vec::from(ALLOWED_NUCS),
             ).unwrap(),
             transition_distros: TransitionMatrix::from(
-                vec![0.0, 0.5, 0.25, 0.25],
-                vec![0.5, 0.0, 0.25, 0.25],
-                vec![0.25, 0.25, 0.0, 0.5],
-                vec![0.25, 0.25, 0.5, 0.0],
+                [0.0, 0.5, 0.25, 0.25],
+                [0.5, 0.0, 0.25, 0.25],
+                [0.25, 0.25, 0.0, 0.5],
+                [0.25, 0.25, 0.5, 0.0],
             ).unwrap(),
+            quality_score_model: QualityScoreModel::default().unwrap(),
         };
         let mut rng = make_rng();
         let mut saw_insertion = false;

@@ -14,12 +14,11 @@ use thiserror::Error;
 
 use crate::structs::mutated_map::{MutatedMap, MutatedMapError};
 use crate::structs::fasta_map::{FastaMapError, SequenceBlock};
-use crate::models::quality_scores::{QualityScoreModel};
 use crate::structs::nucleotides::Nucleotide;
 use crate::file_tools::file_io::{append_to_file, read_gzip_lines};
 use crate::models::sequencing_error_model::{SeqModelError, SequencingErrorModel, SequencingErrorType};
 use crate::structs::nucleotides::Nucleotide::N;
-use crate::structs::variants::{Genotypes, Variant};
+use crate::structs::variants::{Genotype, Variant};
 
 #[derive(Error, Debug)]
 pub enum FastqToolsError {
@@ -78,7 +77,6 @@ pub fn write_block_fastq<T: Write, W: Write> (
     buffer2: &mut GzEncoder<W>,
     read_length: usize,
     read_name_prefix: &str,
-    quality_score_model: &QualityScoreModel,
     sequencing_error_model: &SequencingErrorModel,
     rng: &mut NeatRng,
 ) -> Result<(), FastqToolsError> {
@@ -125,7 +123,7 @@ pub fn write_block_fastq<T: Write, W: Write> (
             
         }
 
-        let quality_scores_1 = quality_score_model.generate_quality_scores(read_length, rng)?;
+        let quality_scores_1 = sequencing_error_model.generate_quality_scores(read_length, rng)?;
         let result = apply_variants_and_write_sequence(
             &fragment,
             &reads1_flagged,
@@ -158,7 +156,7 @@ pub fn write_block_fastq<T: Write, W: Write> (
 
         if paired_ended {
             // open second buffer
-            let quality_scores_2 = quality_score_model.generate_quality_scores(read_length, rng)?;
+            let quality_scores_2 = sequencing_error_model.generate_quality_scores(read_length, rng)?;
             let result = apply_variants_and_write_sequence(
                 &(reverse_complement(fragment)),
                 &reads2_flagged,
@@ -298,7 +296,7 @@ fn apply_variants_and_write_sequence<T: Write> (
             // Potentially contains a mutation, so we will write that, if applicable
             let variant = variant_map[&fragment_position];
             // alwas apply homozygous mutations, but only half the time for heterozygous
-            if (variant.genotype == Genotypes::Homozygous) || (rng.random()? < 0.5) {
+            if (variant.genotype == Genotype::Homozygous) || (rng.random()? < 0.5) {
                 base_to_write = {
                     match read_strand {
                         Strand::Forward => variant.alternate.clone(),

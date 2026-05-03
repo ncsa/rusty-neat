@@ -265,7 +265,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
                     writer1, Compression::default()
                 );
                 let read_name_prefix = format!(
-                    "neat_generated_{}",
+                    "RNEAT_generated_{}",
                     current_block.contig,
                 );
                 if config.paired_ended {
@@ -352,14 +352,12 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
                             create_output_file(filename2, config.overwrite_output)?;
                             for (_contig, temp_fastqs) in all_fastq_files {
                                 combine_temp_fastqs(
-                                    temp_fastqs.0, 
-                                    &filename1, 
-                                    false
-                                )?;
-                                combine_temp_fastqs(
+                                    temp_fastqs.0,
                                     temp_fastqs.1,
-                                    &filename2,
-                                    false,
+                                    filename1,
+                                    Some(filename2),
+                                    true,
+                                    rng,
                                 )?;
                                 bar.inc(1);
                             }
@@ -372,9 +370,12 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
                 } else {
                     for (_contig, temp_fastqs) in all_fastq_files {
                         combine_temp_fastqs(
-                            temp_fastqs.0, 
-                            &filename1, 
-                            false
+                            temp_fastqs.0,
+                            vec![],
+                            filename1,
+                            None,
+                            true,
+                            rng,
                         )?;
                         bar.inc(1);
                     }

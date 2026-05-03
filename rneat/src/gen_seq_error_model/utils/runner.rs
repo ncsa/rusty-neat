@@ -1,4 +1,5 @@
 use log::info;
+#[cfg(test)]
 use std::path::PathBuf;
 use common::{
     file_tools::file_io::{read_gzip_lines, read_lines},

@@ -90,6 +90,37 @@ impl SequencingErrorModel {
         Ok(data)
     }
 
+    pub fn from_raw_data(
+        error_rate: f64,
+        quality_score_model: QualityScoreModel,
+    ) -> Result<Self, SeqModelError> {
+        let default_transition_distros = TransitionMatrix::from(
+            [0.0, 0.4918, 0.3377, 0.1705],
+            [0.5238, 0.0, 0.2661, 0.2101],
+            [0.3754, 0.2355, 0.0, 0.389],
+            [0.2505, 0.2552, 0.4942, 0.0],
+        )?;
+        let default_lengths = vec![1, 2];
+        let default_ins_distr = DiscreteDistribution::new(&vec![0.999, 0.001], &default_lengths)?;
+        let default_del_distr = default_ins_distr.clone();
+        Ok(SequencingErrorModel {
+            error_rate,
+            del_length_distribution: default_del_distr,
+            ins_length_distribution: default_ins_distr,
+            indel_probability: 0.4,
+            insertion_bias: DiscreteDistribution::new(
+                &vec![1.0, 1.0, 1.0, 1.0],
+                &ALLOWED_NUCS.to_vec(),
+            )?,
+            transition_distros: default_transition_distros,
+            quality_score_model,
+        })
+    }
+
+    pub fn error_rate(&self) -> f64 {
+        self.error_rate
+    }
+
     pub fn write_model(&self, filename: &PathBuf) -> Result<(), SeqModelError> {
         model_writer(self, filename)?;
         Ok(())
@@ -269,5 +300,35 @@ mod tests {
         assert!((model.convert_score(40).unwrap() - 0.0001).abs() < 1e-12);
         // Q10 → 10^(-10/10) = 0.1
         assert!((model.convert_score(10).unwrap() - 0.1).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_from_raw_data_stores_error_rate_and_defaults() {
+        use crate::models::quality_scores::QualityScoreModel;
+        let quality_score_model = QualityScoreModel::default().unwrap();
+        let error_rate = 0.00312;
+        let model = SequencingErrorModel::from_raw_data(error_rate, quality_score_model).unwrap();
+        assert!((model.error_rate() - error_rate).abs() < 1e-15);
+        // indel_probability default from NEAT2 should be preserved
+        assert!((model.indel_probability - 0.4).abs() < 1e-15);
+        // Model must be usable
+        let mut rng = NeatRng::new_from_seed(&vec!["r".to_string()]).unwrap();
+        let scores = model.generate_quality_scores(100, &mut rng).unwrap();
+        assert_eq!(scores.len(), 100);
+    }
+
+    #[test]
+    fn test_from_raw_data_round_trips_file() {
+        use crate::models::quality_scores::QualityScoreModel;
+        use tempfile::tempdir;
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("from_raw.json.gz");
+        let model = SequencingErrorModel::from_raw_data(
+            0.00555,
+            QualityScoreModel::default().unwrap(),
+        ).unwrap();
+        model.write_model(&path).unwrap();
+        let loaded = SequencingErrorModel::from_file(&path).unwrap();
+        assert!((loaded.error_rate() - 0.00555).abs() < 1e-10);
     }
 }

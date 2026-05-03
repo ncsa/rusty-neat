@@ -16,6 +16,7 @@ use crate::structs::mutated_map::{MutatedMap, MutatedMapError};
 use crate::structs::fasta_map::{FastaMapError, SequenceBlock};
 use crate::structs::nucleotides::Nucleotide;
 use crate::file_tools::file_io::{append_to_file, read_gzip_lines};
+use crate::models::quality_scores::QualityScoreModel;
 use crate::models::sequencing_error_model::{SeqModelError, SequencingErrorModel, SequencingErrorType};
 use crate::structs::nucleotides::Nucleotide::N;
 use crate::structs::variants::{Genotype, Variant};

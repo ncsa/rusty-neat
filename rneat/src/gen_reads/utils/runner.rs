@@ -24,8 +24,9 @@ use crate::{
             file_io::{append_to_file, VectorBuffer}, 
             vcf_tools::write_vcf
         }, models::{
-            fragment_length::FragmentLengthModel, 
-            mutation_model::MutationModel, 
+            fragment_length::FragmentLengthModel,
+            mutation_model::MutationModel,
+            quality_scores::QualityScoreModel,
             sequencing_error_model::SequencingErrorModel
         }, structs::{
             fasta_map::SequenceBlock, 
@@ -99,6 +100,15 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
             None => {
                 SequencingErrorModel::default()?
             }
+        }
+    };
+
+    // Load Quality Score Model
+    info!("Generate quality score model");
+    let quality_score_model: QualityScoreModel = {
+        match &config.quality_score_model {
+            Some(filename) => QualityScoreModel::from_file(filename)?,
+            None => QualityScoreModel::default()?,
         }
     };
 
@@ -283,6 +293,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
                         &mut buffer2,
                         config.read_len,
                         &read_name_prefix,
+                        &quality_score_model,
                         &seq_error_model,
                         rng,
                     )?;
@@ -306,6 +317,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
                         &mut buffer2,
                         config.read_len,
                         &read_name_prefix,
+                        &quality_score_model,
                         &seq_error_model,
                         rng,
                     )?;

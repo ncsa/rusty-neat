@@ -255,7 +255,13 @@ impl MutationModel {
                     let alternate_base = self.statistical_models.snp_trinuc_model
                         .generate_snp(rng.random()?, &trinuc_reference)?;
 
-                    alternate = vec![alternate_base];
+                    // Degenerate model context (sparse data, all-zero row): fall back to
+                    // a uniform random pick rather than producing a same-base "mutation".
+                    if alternate_base == ref_base {
+                        alternate = pick_random_snp(ref_base, rng)?;
+                    } else {
+                        alternate = vec![alternate_base];
+                    }
                 }
             },
             VariantType::Insertion => {

@@ -148,16 +148,21 @@ impl MutationModel {
             trinuc_frequency,
             trinuc_transition_frequency,
         )?;
-        // Should be easier than the snp models 
-        // Probability, given that it is an indel, that it is an insertion
-        let insertion_probability = variant_probs[1] / (variant_probs[1] + variant_probs[2]);
-        let indel_model = IndelModel::from_raw_data(
-            insertion_probability,
-            ins_lengths,
-            ins_weights,
-            del_lengths,
-            del_weights,
-        )?;
+        // Probability, given that it is an indel, that it is an insertion.
+        // Fall back to the default indel model when no indel data was observed.
+        let indel_denom = variant_probs[1] + variant_probs[2];
+        let indel_model = if indel_denom == 0.0 || ins_lengths.is_empty() || del_lengths.is_empty() {
+            IndelModel::default()?
+        } else {
+            let insertion_probability = variant_probs[1] / indel_denom;
+            IndelModel::from_raw_data(
+                insertion_probability,
+                ins_lengths,
+                ins_weights,
+                del_lengths,
+                del_weights,
+            )?
+        };
         let statistical_models = StatisticalModels {
             transition_matrix,
             indel_model,

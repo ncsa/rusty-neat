@@ -57,7 +57,13 @@ pub fn runner(
             // I think the coordinates are forward on all regions
             total_reflen += region.end - region.start;
         }
-        let matching_variants = &filtered_mutations[&contig.name];
+        let matching_variants = match filtered_mutations.get(&contig.name) {
+            Some(v) => v,
+            None => {
+                debug!("No variants found for {}", contig.name);
+                continue
+            }
+        };
         if matching_variants.is_empty() {
             debug!("No variants found for {}", contig.name);
             continue
@@ -66,12 +72,22 @@ pub fn runner(
             match variant.variant_type {
                 VariantType::SNP => {
                     snp_count += 1;
-                    // Retrieve the trinucleotide sequence from the sequence block
-                    // If this is slow we may need to load the entire block and comb it.
-                    let trinuc_to_analyze = contig.get_block_subseq(variant.location-1, variant.location+2)?;
-                    // I'm curious to see what happens if the above is 4 bases long.
-                    // does impl From implement some error check under the hood?
-                    let ref_array: [&Nucleotide; 3] = trinuc_to_analyze.iter().collect_array().unwrap(); 
+                    // VCF POS is 1-based; skip variants too close to contig edges
+                    if variant.location < 2 {
+                        debug!("Skipping edge variant at position {}", variant.location);
+                        continue;
+                    }
+                    // Trinucleotide centered on the variant: [pos-1, pos, pos+1] (0-based)
+                    // => get_block_subseq(pos-2, pos+1) with 1-based VCF pos
+                    let trinuc_result = contig.get_block_subseq(variant.location-2, variant.location+1);
+                    let trinuc_to_analyze = match trinuc_result {
+                        Ok(t) => t,
+                        Err(_) => {
+                            debug!("Skipping edge variant at position {} (out of contig bounds)", variant.location);
+                            continue;
+                        }
+                    };
+                    let ref_array: [&Nucleotide; 3] = trinuc_to_analyze.iter().collect_array().unwrap();
                     let ref_frame = TrinucFrame::from(ref_array);
                     let alt_array = [ref_array[0], &variant.alternate[0], ref_array[2]];
                     let alt_frame = TrinucFrame::from(alt_array);
@@ -276,7 +292,7 @@ fn count_trinculeotides(
                     // iterate over the regions, grab trinucleotides, profit
                     // The first trincu is one base in. The last is one base from the end
                     for i in (region.start+1)..(region.end-1) {
-                        let trinuc = contig_block.get_block_subseq(i-1, i+1)?;
+                        let trinuc = contig_block.get_block_subseq(i-1, i+2)?;
                         let frame = TrinucFrame::from((trinuc[0], trinuc[1], trinuc[2]));
                         *trinuc_count.entry(frame.to_owned()).or_default() += 1;
                     }
@@ -295,7 +311,7 @@ fn count_trinculeotides(
                 // iterate over the regions, grab trinucleotides, profit
                 // The first trincu is one base in. The last is one base from the end
                 for i in (region.start+1)..(region.end-1) {
-                    let trinuc = contig_block.get_block_subseq(i-1, i+1)?;
+                    let trinuc = contig_block.get_block_subseq(i-1, i+2)?;
                     let frame = TrinucFrame::from((trinuc[0], trinuc[1], trinuc[2]));
                     *trinuc_count.entry(frame.to_owned()).or_default() += 1;
                 }

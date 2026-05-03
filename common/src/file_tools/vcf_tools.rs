@@ -149,44 +149,34 @@ fn read_open_vcf<P: Read> (reader: Lines<BufReader<P>>) -> Result<HashMap<String
                     let id = split_line[2];
                     let vcf_reference = split_line[3];
                     let vcf_alternate = split_line[4];
-                    let qual = split_line[5].parse();
-                    let quality_score: usize = {
-                        match qual {
-                            Ok(num) => num,
-                            Err(error) => return Err(VcfToolsError::ParserError(error))
-                        }
-                    };
+                    // QUAL may be "." in real-world VCFs
+                    let quality_score: usize = split_line[5].parse().unwrap_or(0);
                     let filter = split_line[6];
                     let info_field = split_line[7];
                     let mut format: Vec<String> = Vec::new();
                     let mut sample: Vec<String> = Vec::new();
-                    if split_line.len() > 7 {
-                        if split_line.len() < 9 {
-                            return Err(
-                                VcfToolsError::MalformedVcf(
-                                "FORMAT field present with no Sample field, invalid VCF".to_string()
+                    if split_line.len() > 8 {
+                        let fmt = split_line[8];
+                        let smp = split_line[9];
+                        // "." means no FORMAT/SAMPLE data — GT will be absent and cause an error below
+                        if fmt != "." && smp != "." {
+                            let format_split: Vec<&str> = fmt.split(":").collect();
+                            let sample_split: Vec<&str> = smp.split(":").collect();
+                            let format_len = format_split.len();
+                            if sample_split.len() != format_len {
+                                return Err(
+                                    VcfToolsError::MalformedVcf(
+                                        "FORMAT list and sample list different lengths, invalid VCF".to_string()
+                                    )
                                 )
-                            )
-                        }
-                        // This is a FORMAT field, if it exists
-                        let format_split: Vec<&str> = split_line[8].split(":").collect();
-                        let sample_split: Vec<&str> = split_line[9].split(":").collect();
-                        let format_len = format_split.len();
-                        if sample_split.len() != format_len {
-                            return Err(
-                                VcfToolsError::MalformedVcf(
-                                    "FORMAT list and sample list different lengths, invalid VCF".to_string()
-                                )
-                            )
-                        }
-                        for i in 0..format_len {
-                            // Look for GT
-
-                            format.push(format_split[i].to_string());
-                            sample.push(sample_split[i].to_string());
+                            }
+                            for i in 0..format_len {
+                                format.push(format_split[i].to_string());
+                                sample.push(sample_split[i].to_string());
+                            }
                         }
                     }
-                    if split_line.len() > 9 {
+                    if split_line.len() > 10 {
                         warn!("Currently rneat can only read one sample per record")
                     }
                     let variant = Variant::from_file(

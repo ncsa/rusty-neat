@@ -60,34 +60,26 @@ impl RunConfiguration {
         if !vcf_file.is_file() {
             panic!("Invalid bed file {:?}", vcf_file)
         }
-        let bed_file = PathBuf::from(scrape_config["bed_file"].as_str().unwrap());
-        if !bed_file.is_file() {
-            panic!("Invalid bed file {:?}", bed_file)
-        }
-        let overwrite_choice = scrape_config["overwrite_output"].as_bool().unwrap();
-        let overwrite_output = {
-            match overwrite_choice {
-                value => {
-                    if value == true {
-                        true
-                    } else {
-                        false
-                    }
-                }
+        let bed_file_raw = scrape_config["bed_file"].as_str().unwrap_or(".");
+        let bed_table = if bed_file_raw == "." {
+            HashMap::new()
+        } else {
+            let bed_file = PathBuf::from(bed_file_raw);
+            if !bed_file.is_file() {
+                panic!("Invalid bed file {:?}", bed_file)
             }
+            read_bed(&bed_file).expect("Error reading bed file!")
         };
+        let overwrite_output = scrape_config["overwrite_output"].as_bool().unwrap_or(false);
         let output_file = PathBuf::from(scrape_config["output_file"].as_str().unwrap());
         if !overwrite_output {
             if output_file.is_file() {
                 panic!("Attempting to overwrite an existing file {:?}", output_file)
             }
         }
-        // Generate the configuration from inputs
-        let bed_table = read_bed(&bed_file)
-            .expect("Error reading bed file!");
         let mutations = read_vcf(vcf_file)?;
-        
-        Ok(RunConfiguration { 
+
+        Ok(RunConfiguration {
             reference,
             mutations,
             bed_table,

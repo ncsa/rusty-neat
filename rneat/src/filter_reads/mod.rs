@@ -2,7 +2,7 @@ pub mod errors;
 pub mod utils;
 use std::path::PathBuf;
 use log::*;
-use common::{file_tools::bed_reader::{self, BedReaderError}};
+use common::{file_tools::bed_reader::{self}};
 use utils::filter_lib::{filter_fastq, filter_vcf};
 
 use crate::filter_reads::{

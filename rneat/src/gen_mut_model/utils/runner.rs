@@ -320,3 +320,33 @@ fn count_trinculeotides(
     }
     Ok((trinuc_count, bed_track_len))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use common::{
+        file_tools::{fasta_reader::read_fasta, vcf_tools::read_vcf},
+        models::mutation_model::MutationModel,
+    };
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_runner_with_snps() {
+        // Exercises the full runner pipeline with SNP-only input, which also
+        // exercises the IndelModel::default() fallback path in MutationModel::from_raw_data.
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let reference = PathBuf::from(format!("{}/test_data/references/H1N1.fa", manifest_dir));
+        let vcf_path = PathBuf::from(format!("{}/test_data/vcfs/small_snps.vcf", manifest_dir));
+        let temp = tempdir().unwrap();
+        let fasta_map = read_fasta(&reference, None, 0, &temp, None).unwrap();
+        let mutations = read_vcf(vcf_path).unwrap();
+        let out_dir = tempdir().unwrap();
+        let output_file = out_dir.path().join("test_model.json.gz");
+        runner(fasta_map, mutations, HashMap::new(), &output_file).unwrap();
+        assert!(output_file.exists());
+        let model = MutationModel::from_file(&output_file).unwrap();
+        assert!(model.mutation_rate > 0.0, "mutation_rate should be positive");
+        // 1 of 3 SNPs has GT=1/1 (homozygous), so homozygous_frequency should be > 0
+        assert!(model.homozygous_frequency > 0.0, "homozygous_frequency should be positive");
+    }
+}

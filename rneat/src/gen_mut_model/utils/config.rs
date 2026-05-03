@@ -119,11 +119,24 @@ pub fn create_map_item(
 
 #[cfg(test)]
 mod tests {
-    // use super::*;
+    use super::*;
+    use std::io::Write;
 
     #[test]
     fn test_run_configuration() {
-        // TODO create test
-        assert!(true)
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let reference = format!("{}/test_data/references/H1N1.fa", manifest_dir);
+        let vcf_file = format!("{}/test_data/vcfs/small_snps.vcf", manifest_dir);
+        let output_file = format!("{}/test_data/test_run_config_output.json.gz", manifest_dir);
+        let yaml = format!(
+            "reference: {}\nvcf_file: {}\noutput_file: {}\nbed_file: .\noverwrite_output: true\n",
+            reference, vcf_file, output_file
+        );
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        write!(tmp, "{}", yaml).unwrap();
+        let config = RunConfiguration::from(&tmp.path().to_path_buf()).unwrap();
+        let h1n1_variants = config.mutations.get("H1N1_HA").expect("H1N1_HA not found");
+        assert_eq!(h1n1_variants.len(), 3);
+        assert!(config.bed_table.is_empty());
     }
 }

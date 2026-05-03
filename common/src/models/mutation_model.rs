@@ -338,6 +338,7 @@ fn check_base(nuc: Nucleotide) -> Nucleotide {
 mod tests {
     use super::*;
     use std::fs;
+    use crate::models::snp_trinuc_model::TrinucFrame;
 
     #[test]
     fn test_model_read_write() {
@@ -347,5 +348,32 @@ mod tests {
         let result = model.write_to_file(&output_file);
         assert_eq!(result.unwrap(), ());
         fs::remove_file(output_file).unwrap();
+    }
+
+    #[test]
+    fn test_from_raw_data_no_indels() {
+        // Exercises the indel_denom == 0 || empty vecs fallback to IndelModel::default()
+        let snp_trans: HashMap<(Nucleotide, Nucleotide), f64> = HashMap::from([
+            ((Nucleotide::A, Nucleotide::C), 0.25),
+            ((Nucleotide::A, Nucleotide::G), 0.5),
+            ((Nucleotide::A, Nucleotide::T), 0.25),
+        ]);
+        let trinuc_freq: HashMap<TrinucFrame, f64> = HashMap::new();
+        let trinuc_trans: HashMap<(TrinucFrame, TrinucFrame), f64> = HashMap::new();
+        let result = MutationModel::from_raw_data(
+            0.001,
+            0.5,
+            vec![1.0, 0.0, 0.0], // SNP only, no indels
+            snp_trans,
+            trinuc_freq,
+            trinuc_trans,
+            vec![], // no insertion data
+            vec![],
+            vec![], // no deletion data
+            vec![],
+        );
+        assert!(result.is_ok(), "Expected Ok with no indels, got {:?}", result);
+        let model = result.unwrap();
+        assert_eq!(model.mutation_rate, 0.001);
     }
 }

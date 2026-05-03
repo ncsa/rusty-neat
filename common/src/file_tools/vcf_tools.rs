@@ -121,12 +121,12 @@ pub fn read_vcf(vcf_file: PathBuf) -> Result<HashMap<String, Vec<Variant>>, VcfT
 
 fn process_gzip_vcf(filename: &PathBuf) -> Result<HashMap<String, Vec<Variant>>, VcfToolsError> {
     let reader = read_gzip_lines(filename)?;
-    return Ok(read_open_vcf(reader).expect("Problem processing lines of gzipped bed file"))
+    read_open_vcf(reader)
 }
 
 fn process_vcf(filename: &PathBuf) -> Result<HashMap<String, Vec<Variant>>, VcfToolsError> {
     let reader = read_lines(filename)?;
-    return Ok(read_open_vcf(reader).expect("Error processing bed file"))
+    read_open_vcf(reader)
 }
 
 fn read_open_vcf<P: Read> (reader: Lines<BufReader<P>>) -> Result<HashMap<String, Vec<Variant>>, VcfToolsError> {
@@ -211,6 +211,7 @@ fn read_open_vcf<P: Read> (reader: Lines<BufReader<P>>) -> Result<HashMap<String
 #[cfg(test)]
 mod tests {
     use std::path::Path;
+    use std::io::Write;
 
     use super::*;
     use crate::structs::{nucleotides::Nucleotide, variants::{Variant, VariantType}};
@@ -254,5 +255,33 @@ mod tests {
         result.unwrap();
         assert!(Path::new("good_test.vcf").exists());
         fs::remove_file("good_test.vcf").unwrap();
+    }
+
+    #[test]
+    fn test_read_vcf_qual_dot() {
+        let vcf_content = "\
+##fileformat=VCFv4.1\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n\
+chr1\t100\t.\tA\tT\t.\tPASS\t.\tGT\t0/1\n";
+        let mut tmp = tempfile::Builder::new().suffix(".vcf").tempfile().unwrap();
+        write!(tmp, "{}", vcf_content).unwrap();
+        let result = read_vcf(tmp.path().to_path_buf());
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        let records = result.unwrap();
+        let variants = records.get("chr1").expect("chr1 not found");
+        assert_eq!(variants.len(), 1);
+        assert_eq!(variants[0].quality_score, Some(0));
+    }
+
+    #[test]
+    fn test_read_vcf_missing_gt_hard_errors() {
+        let vcf_content = "\
+##fileformat=VCFv4.1\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n\
+chr1\t100\t.\tA\tT\t60\tPASS\t.\tDP:GQ\t30:99\n";
+        let mut tmp = tempfile::Builder::new().suffix(".vcf").tempfile().unwrap();
+        write!(tmp, "{}", vcf_content).unwrap();
+        let result = read_vcf(tmp.path().to_path_buf());
+        assert!(result.is_err(), "Expected Err for missing GT, got Ok");
     }
 }

@@ -301,4 +301,34 @@ mod tests {
         // Q10 → 10^(-10/10) = 0.1
         assert!((model.convert_score(10).unwrap() - 0.1).abs() < 1e-10);
     }
+
+    #[test]
+    fn test_from_raw_data_stores_error_rate_and_defaults() {
+        use crate::models::quality_scores::QualityScoreModel;
+        let quality_score_model = QualityScoreModel::default().unwrap();
+        let error_rate = 0.00312;
+        let model = SequencingErrorModel::from_raw_data(error_rate, quality_score_model).unwrap();
+        assert!((model.error_rate() - error_rate).abs() < 1e-15);
+        // indel_probability default from NEAT2 should be preserved
+        assert!((model.indel_probability - 0.4).abs() < 1e-15);
+        // Model must be usable
+        let mut rng = NeatRng::new_from_seed(&vec!["r".to_string()]).unwrap();
+        let scores = model.generate_quality_scores(100, &mut rng).unwrap();
+        assert_eq!(scores.len(), 100);
+    }
+
+    #[test]
+    fn test_from_raw_data_round_trips_file() {
+        use crate::models::quality_scores::QualityScoreModel;
+        use tempfile::tempdir;
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("from_raw.json.gz");
+        let model = SequencingErrorModel::from_raw_data(
+            0.00555,
+            QualityScoreModel::default().unwrap(),
+        ).unwrap();
+        model.write_model(&path).unwrap();
+        let loaded = SequencingErrorModel::from_file(&path).unwrap();
+        assert!((loaded.error_rate() - 0.00555).abs() < 1e-10);
+    }
 }

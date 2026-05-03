@@ -249,11 +249,19 @@ impl QualityScoreModel {
         let seed_dist = DiscreteDistribution::new(&seed_weights, &quality_score_options)?;
         let n_scores = quality_score_options.len();
         let score_indices: Vec<usize> = (0..n_scores).collect();
+        let uniform = vec![1.0f64; n_scores];
         let mut distros_from_one: Vec<Vec<DiscreteDistribution<usize>>> = Vec::new();
         for pos_weights in &trans_weights {
             let mut row: Vec<DiscreteDistribution<usize>> = Vec::new();
             for prev_weights in pos_weights {
-                row.push(DiscreteDistribution::new(prev_weights, &score_indices)?);
+                // A prev_score that never appeared as a transition source has all-zero weights.
+                // Fall back to uniform so sample() doesn't always return the lowest score.
+                let weights = if prev_weights.iter().all(|&w| w == 0.0) {
+                    &uniform
+                } else {
+                    prev_weights
+                };
+                row.push(DiscreteDistribution::new(weights, &score_indices)?);
             }
             distros_from_one.push(row);
         }
@@ -371,5 +379,84 @@ mod tests {
             .iter()
             .map(|x| assert!(model.quality_score_options.contains(x)))
             .collect()
+    }
+
+    #[test]
+    fn test_from_counts_basic() {
+        // 2 scores (Q30, Q40), read_length 3 → 2 transition positions
+        let options = vec![30usize, 40usize];
+        let seed_weights = vec![3.0, 1.0]; // 75% Q30 seed, 25% Q40 seed
+        let trans_weights = vec![
+            // position 0→1
+            vec![vec![3.0, 1.0], vec![0.0, 2.0]],
+            // position 1→2
+            vec![vec![1.0, 1.0], vec![1.0, 0.0]],
+        ];
+        let model = QualityScoreModel::from_counts(
+            options.clone(), 3, seed_weights, trans_weights,
+        ).unwrap();
+        assert_eq!(model.quality_score_options, options);
+        assert_eq!(model.assumed_read_length, 3);
+        assert_eq!(model.distros_from_one.len(), 2);
+        assert_eq!(model.distros_from_one[0].len(), 2);
+        // seed samples actual quality scores
+        let mut rng = NeatRng::new_from_seed(&vec!["seed".to_string()]).unwrap();
+        let s = model.seed_dist.sample(rng.random().unwrap()).unwrap();
+        assert!(options.contains(&s));
+        // generate_quality_scores must produce the right length
+        let scores = model.generate_quality_scores(3, &mut rng).unwrap();
+        assert_eq!(scores.len(), 3);
+        for &sc in &scores {
+            assert!(options.contains(&sc), "unexpected score {sc}");
+        }
+    }
+
+    #[test]
+    fn test_from_counts_zero_transition_row_uses_uniform_fallback() {
+        // Q40 appears in seed but never as a prev_score in any transition.
+        // Without the fix its row would be degenerate (always returns index 0 = Q30).
+        // With the fix its row is uniform: CDF should be [0.5, 1.0].
+        let options = vec![30usize, 40usize];
+        let seed_weights = vec![1.0, 1.0];
+        let trans_weights = vec![
+            // position 0→1: prev=Q30 has real data; prev=Q40 row is all zeros
+            vec![vec![2.0, 1.0], vec![0.0, 0.0]],
+        ];
+        let model = QualityScoreModel::from_counts(
+            options.clone(), 2, seed_weights, trans_weights,
+        ).unwrap();
+        // distros_from_one[pos=0][prev_idx=1] is the formerly-zero row for Q40
+        let zero_row = &model.distros_from_one[0][1];
+        let cdf = zero_row.weights().unwrap();
+        assert_eq!(cdf.len(), 2);
+        // Uniform over 2 values → CDF = [0.5, 1.0]
+        assert!(
+            (cdf[0] - 0.5).abs() < 1e-10,
+            "expected uniform CDF [0.5, 1.0], got {cdf:?}"
+        );
+        assert!((cdf[1] - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_from_counts_generates_only_observed_scores() {
+        // All scores produced by generate_quality_scores must be in quality_score_options.
+        let options = vec![20usize, 30usize, 40usize];
+        let n = options.len();
+        let seed_weights = vec![1.0; n];
+        let uniform_row = vec![1.0; n];
+        let trans_weights = vec![
+            vec![uniform_row.clone(), uniform_row.clone(), uniform_row.clone()],
+            vec![uniform_row.clone(), uniform_row.clone(), uniform_row.clone()],
+        ];
+        let model = QualityScoreModel::from_counts(
+            options.clone(), 3, seed_weights, trans_weights,
+        ).unwrap();
+        let mut rng = NeatRng::new_from_seed(&vec!["t".to_string()]).unwrap();
+        for _ in 0..50 {
+            let scores = model.generate_quality_scores(3, &mut rng).unwrap();
+            for &s in &scores {
+                assert!(options.contains(&s), "score {s} not in options");
+            }
+        }
     }
 }

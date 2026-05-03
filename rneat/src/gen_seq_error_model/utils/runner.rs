@@ -211,6 +211,105 @@ mod tests {
     }
 
     #[test]
+    fn test_runner_error_rate_accuracy() {
+        // All bases at Q30: '?' = ASCII 63, score = 63 - 33 = 30
+        // Expected error_rate = 10^(-30/10) = 0.001 exactly
+        let temp = tempfile::tempdir().unwrap();
+        let fastq_path = temp.path().join("q30.fastq");
+        let seq = "A".repeat(40);
+        let qual = "?".repeat(40);
+        let content: String = (0..20)
+            .map(|i| format!("@r{i}\n{seq}\n+\n{qual}\n"))
+            .collect();
+        std::fs::write(&fastq_path, content).unwrap();
+        let output_path = temp.path().join("model.json.gz");
+        let config = make_config(fastq_path, output_path.clone());
+        runner(&config).unwrap();
+        let model = SequencingErrorModel::from_file(&output_path).unwrap();
+        let expected = 10f64.powf(-30.0 / 10.0);
+        assert!(
+            (model.error_rate() - expected).abs() < 1e-10,
+            "expected error_rate {expected:.6}, got {:.6}",
+            model.error_rate()
+        );
+    }
+
+    #[test]
+    fn test_runner_error_rate_survives_serialization() {
+        // Verify error_rate is preserved exactly after write + reload.
+        let temp = tempfile::tempdir().unwrap();
+        let fastq_path = temp.path().join("q20.fastq");
+        // Q20: 'A' + 20 = chr(53) = '5', score = 53 - 33 = 20
+        let qual = "5".repeat(30);
+        let seq = "C".repeat(30);
+        let content: String = (0..10)
+            .map(|i| format!("@r{i}\n{seq}\n+\n{qual}\n"))
+            .collect();
+        std::fs::write(&fastq_path, content).unwrap();
+        let output_path = temp.path().join("model.json.gz");
+        runner(&make_config(fastq_path, output_path.clone())).unwrap();
+        let model = SequencingErrorModel::from_file(&output_path).unwrap();
+        let expected = 10f64.powf(-20.0 / 10.0); // 0.01
+        assert!(
+            (model.error_rate() - expected).abs() < 1e-10,
+            "expected {expected:.6}, got {:.6}",
+            model.error_rate()
+        );
+    }
+
+    #[test]
+    fn test_runner_zero_transition_row_handled() {
+        // Q41 ('J' = ASCII 74, score 41) only appears at position 2 of each read.
+        // It never acts as a prev_score, so its transition rows would be all-zero
+        // without the uniform fallback fix. Model must build and generate scores cleanly.
+        let temp = tempfile::tempdir().unwrap();
+        let fastq_path = temp.path().join("sparse.fastq");
+        // Scores per read: [30, 28, 41] → chars [?, =, J]
+        let content: String = (0..20)
+            .map(|i| format!("@r{i}\nAAA\n+\n?=J\n"))
+            .collect();
+        std::fs::write(&fastq_path, content).unwrap();
+        let output_path = temp.path().join("model.json.gz");
+        runner(&make_config(fastq_path, output_path.clone())).unwrap();
+        let model = SequencingErrorModel::from_file(&output_path).unwrap();
+        let mut rng = simple_rng::NeatRng::new_from_seed(&vec!["s".to_string()]).unwrap();
+        // 100 samples; without the fix all would be ≤ 28 (lowest score); with fix Q41 can appear
+        let scores: Vec<usize> = (0..100)
+            .map(|_| model.generate_quality_scores(3, &mut rng).unwrap()[2])
+            .collect();
+        // At least some last-position scores should be Q41 (uniform fallback is working)
+        assert!(
+            scores.iter().any(|&s| s == 41),
+            "expected Q41 to appear in last-position scores with uniform fallback; got {scores:?}"
+        );
+    }
+
+    #[test]
+    fn test_runner_qual_offset() {
+        // Phred+64 encoding: 'a' = ASCII 97, score = 97 - 64 = 33
+        // Expected error_rate = 10^(-33/10) ≈ 5.012e-4
+        let temp = tempfile::tempdir().unwrap();
+        let fastq_path = temp.path().join("phred64.fastq");
+        let qual = "a".repeat(20);
+        let seq = "G".repeat(20);
+        let content: String = (0..15)
+            .map(|i| format!("@r{i}\n{seq}\n+\n{qual}\n"))
+            .collect();
+        std::fs::write(&fastq_path, content).unwrap();
+        let output_path = temp.path().join("model.json.gz");
+        let mut config = make_config(fastq_path, output_path.clone());
+        config.qual_offset = 64;
+        runner(&config).unwrap();
+        let model = SequencingErrorModel::from_file(&output_path).unwrap();
+        let expected = 10f64.powf(-33.0 / 10.0);
+        assert!(
+            (model.error_rate() - expected).abs() < 1e-10,
+            "expected {expected:.6e}, got {:.6e}",
+            model.error_rate()
+        );
+    }
+
+    #[test]
     fn test_runner_gzip_h1n1_r1() {
         let manifest_dir = env!("CARGO_MANIFEST_DIR");
         let fastq_path = PathBuf::from(format!("{}/test_data/H1N1_read1.fq.gz", manifest_dir));

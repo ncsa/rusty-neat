@@ -77,6 +77,7 @@ pub fn write_block_fastq<T: Write, W: Write> (
     buffer2: &mut GzEncoder<W>,
     read_length: usize,
     read_name_prefix: &str,
+    quality_score_model: &QualityScoreModel,
     sequencing_error_model: &SequencingErrorModel,
     rng: &mut NeatRng,
 ) -> Result<(), FastqToolsError> {
@@ -123,7 +124,8 @@ pub fn write_block_fastq<T: Write, W: Write> (
             
         }
 
-        let quality_scores_1 = sequencing_error_model.generate_quality_scores(read_length, rng)?;
+        let ref_start = sequence_block.ref_start;
+        let quality_scores_1 = quality_score_model.generate_quality_scores(read_length, rng)?;
         let result = apply_variants_and_write_sequence(
             &fragment,
             &reads1_flagged,
@@ -131,8 +133,8 @@ pub fn write_block_fastq<T: Write, W: Write> (
             read_length,
             &read_name_prefix,
             counter,
-            start,
-            end,
+            start + ref_start,
+            end + ref_start,
             Strand::Forward,
             buffer1,
             quality_scores_1,
@@ -164,8 +166,8 @@ pub fn write_block_fastq<T: Write, W: Write> (
                 read_length,
                 &read_name_prefix,
                 counter,
-                start,
-                end,
+                start + ref_start,
+                end + ref_start,
                 Strand::Reverse,
                 buffer2,
                 quality_scores_2,
@@ -504,6 +506,77 @@ mod tests {
         let read: Vec<Nucleotide> = vec![A, A, A, A, C, C, C, C, C];
         let revcomp: Vec<Nucleotide> = vec![G, G, G, G, G, T, T, T, T];
         assert_eq!(reverse_complement(read), revcomp);
+    }
+
+    #[test]
+    fn test_write_block_fastq_ref_start_in_read_name() {
+        // Verifies that when a SequenceBlock has ref_start > 0, the read names in the
+        // output FASTQ use reference-relative positions, not block-local positions.
+        use crate::structs::{
+            fasta_map::{RegionType, SequenceBlock, SequenceMap},
+            mutated_map::MutatedMap,
+        };
+        use crate::models::quality_scores::QualityScoreModel;
+        let temp_dir = tempfile::tempdir().unwrap();
+        let ref_start: usize = 1000;
+        let seq_len: usize = 50;
+        let sequence: Vec<Nucleotide> = (0..seq_len)
+            .map(|i| match i % 4 { 0 => A, 1 => C, 2 => G, _ => T })
+            .collect();
+        let block = SequenceBlock {
+            contig: "chr1".to_string(),
+            ref_start,
+            ref_end: ref_start + seq_len,
+            sequence: sequence.clone(),
+            sequence_map: vec![SequenceMap::from(RegionType::NonNRegion, 0, seq_len)],
+        };
+        let block_path = temp_dir.path().join(
+            format!("chr1_{:010}_{:010}.json", ref_start, ref_start + seq_len)
+        );
+        std::fs::write(&block_path, serde_json::to_string(&block).unwrap()).unwrap();
+        let mutated_map = MutatedMap::new(block_path, vec![]).unwrap();
+        let frag_start: usize = 5;
+        let frag_end: usize = 25;
+        let fragments = vec![(frag_start, frag_end)];
+        let out_path = temp_dir.path().join("out.fastq.gz");
+        let outfile = create_output_file(&out_path, true).unwrap();
+        use crate::file_tools::file_io::VectorBuffer;
+        let dummy_data: VectorBuffer = VectorBuffer::new();
+        let mut buf1 = GzEncoder::new(outfile, Compression::default());
+        let mut buf2 = GzEncoder::new(dummy_data, Compression::default());
+        let quality_model = QualityScoreModel::default().unwrap();
+        let seq_err_model = SequencingErrorModel::default().unwrap();
+        let mut rng = NeatRng::new_from_seed(&vec!["test".to_string()]).unwrap();
+        write_block_fastq(
+            fragments, &mutated_map, false,
+            &mut buf1, &mut buf2,
+            10, "chr1",
+            &quality_model, &seq_err_model, &mut rng,
+        ).unwrap();
+        buf1.finish().unwrap();
+        let lines: Vec<String> = read_gzip_lines(&out_path)
+            .unwrap()
+            .map(|l| l.unwrap())
+            .collect();
+        let header = &lines[0];
+        assert!(header.starts_with('@'), "Expected FASTQ header, got: {}", header);
+        // Read name must contain ref-relative positions, not block-local ones
+        let expected_start = format!("{:010}", frag_start + ref_start); // 0000001005
+        let expected_end   = format!("{:010}", frag_end   + ref_start); // 0000001025
+        assert!(
+            header.contains(&expected_start),
+            "Read name should contain ref-relative start {}; got: {}", expected_start, header
+        );
+        assert!(
+            header.contains(&expected_end),
+            "Read name should contain ref-relative end {}; got: {}", expected_end, header
+        );
+        // Also verify block-local positions are NOT what was written
+        let local_start = format!("{:010}", frag_start); // 0000000005
+        assert!(
+            !header.contains(&local_start),
+            "Read name should NOT contain block-local start {}; got: {}", local_start, header
+        );
     }
 
     #[test]

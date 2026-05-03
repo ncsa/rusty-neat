@@ -209,4 +209,66 @@ mod tests {
         let result = runner(&config);
         assert!(result.is_err());
     }
+
+    #[test]
+    fn test_runner_gzip_h1n1_r1() {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let fastq_path = PathBuf::from(format!("{}/test_data/H1N1_read1.fq.gz", manifest_dir));
+        let temp = tempfile::tempdir().unwrap();
+        let output_path = temp.path().join("h1n1_r1_model.json.gz");
+        let config = make_config(fastq_path, output_path.clone());
+        runner(&config).unwrap();
+        assert!(output_path.exists());
+
+        let model = SequencingErrorModel::from_file(&output_path).unwrap();
+        // H1N1 FASTQ is real Illumina data: error rate should be in [0.0001, 0.05]
+        let error_rate = model.error_rate();
+        assert!(
+            error_rate > 0.0001 && error_rate < 0.05,
+            "error_rate {error_rate} outside expected Illumina range [0.0001, 0.05]"
+        );
+        // Quality scores must be generable at the FASTQ read length (151)
+        let mut rng = simple_rng::NeatRng::new_from_seed(&vec!["h1n1".to_string()]).unwrap();
+        let scores = model.generate_quality_scores(151, &mut rng).unwrap();
+        assert_eq!(scores.len(), 151);
+        assert!(scores.iter().all(|&s| s <= 94), "all scores should be ≤ MAX_SCORE");
+    }
+
+    #[test]
+    fn test_runner_gzip_h1n1_r2() {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let fastq_path = PathBuf::from(format!("{}/test_data/H1N1_read2.fq.gz", manifest_dir));
+        let temp = tempfile::tempdir().unwrap();
+        let output_path = temp.path().join("h1n1_r2_model.json.gz");
+        let config = make_config(fastq_path, output_path.clone());
+        runner(&config).unwrap();
+        assert!(output_path.exists());
+
+        let model = SequencingErrorModel::from_file(&output_path).unwrap();
+        let error_rate = model.error_rate();
+        assert!(
+            error_rate > 0.0001 && error_rate < 0.05,
+            "error_rate {error_rate} outside expected Illumina range [0.0001, 0.05]"
+        );
+    }
+
+    #[test]
+    fn test_runner_max_reads_reduces_processed_count() {
+        // With max_reads=50, the model should still write successfully and produce
+        // a valid model from a subset of the H1N1 reads (653 total).
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let fastq_path = PathBuf::from(format!("{}/test_data/H1N1_read1.fq.gz", manifest_dir));
+        let temp = tempfile::tempdir().unwrap();
+        let output_path = temp.path().join("h1n1_maxreads_model.json.gz");
+        let mut config = make_config(fastq_path, output_path.clone());
+        config.max_reads = 50;
+        runner(&config).unwrap();
+        assert!(output_path.exists());
+
+        // Model should still be valid and usable
+        let model = SequencingErrorModel::from_file(&output_path).unwrap();
+        let mut rng = simple_rng::NeatRng::new_from_seed(&vec!["seed".to_string()]).unwrap();
+        let scores = model.generate_quality_scores(151, &mut rng).unwrap();
+        assert_eq!(scores.len(), 151);
+    }
 }

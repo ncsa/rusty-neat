@@ -117,6 +117,10 @@ impl SequencingErrorModel {
         })
     }
 
+    pub fn error_rate(&self) -> f64 {
+        self.error_rate
+    }
+
     pub fn write_model(&self, filename: &PathBuf) -> Result<(), SeqModelError> {
         model_writer(self, filename)?;
         Ok(())

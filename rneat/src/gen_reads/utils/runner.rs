@@ -375,8 +375,6 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
         } 
     }
 
-    bar.finish_and_clear();
-
     let mut files_written = Vec::new();
     if config.paired_ended {
         if let Some(filename1) = &config.output_fastq_1 {

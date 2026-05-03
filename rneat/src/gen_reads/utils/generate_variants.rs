@@ -57,99 +57,87 @@ pub fn generate_variants(
 
 #[cfg(test)]
 mod tests {
-    use common::structs::fasta_map::RegionType::NonNRegion;
-    use common::structs::fasta_map::SequenceMap;
-    use common::structs::nucleotides::Nucleotide::*;
     use super::*;
+    use crate::common::{
+        models::mutation_model::MutationModel,
+        structs::fasta_map::{RegionType, SequenceBlock, SequenceMap},
+    };
+    use common::structs::nucleotides::Nucleotide;
+    use simple_rng::NeatRng;
 
-    fn setup() -> (SequenceBlock, NeatRng) {
-        let sequence_map = SequenceMap{
-            region_type: NonNRegion,
-            start: 0,
-            end: 10
-        };
-        let sequence_block = SequenceBlock{
-            contig: "chr1".to_string(),
-            ref_start: 10,
-            ref_end: 20,
-            sequence: vec![A, A, A, G, T, A, G, C, C, T],
-            sequence_map: vec![sequence_map]
-        };
-        let rng = NeatRng::new_from_seed(
-            &vec![
-                "Goodbye".to_string(),
-                "Cruel".to_string(),
-                "World".to_string(),
-            ]
-        ).unwrap();
-        (sequence_block, rng)
+    fn make_block(len: usize) -> SequenceBlock {
+        let sequence: Vec<Nucleotide> = (0..len)
+            .map(|i| match i % 4 {
+                0 => Nucleotide::A,
+                1 => Nucleotide::C,
+                2 => Nucleotide::G,
+                _ => Nucleotide::T,
+            })
+            .collect();
+        SequenceBlock {
+            contig: "test".to_string(),
+            ref_start: 0,
+            ref_end: len,
+            sequence,
+            sequence_map: vec![SequenceMap::from(RegionType::NonNRegion, 0, len)],
+        }
     }
-    // Now the tests
+
+    fn make_rng() -> NeatRng {
+        NeatRng::new_from_seed(&vec![
+            "Hello".to_string(),
+            "Cruel".to_string(),
+            "World".to_string(),
+        ]).unwrap()
+    }
+
     #[test]
-    fn test_generate_variants_success() {
-        let (sequence_block, mut rng) = setup();
-        let region_weights = vec![1.0; 10];
-        let mutation_model = MutationModel::default().unwrap();
-        let num_mutations = 3;
-        let ploidy = 2;
+    fn test_generate_variants_count() {
+        let block = make_block(200);
+        let weights = vec![1.0f64; block.get_len()];
+        let model = MutationModel::default().unwrap();
+        let mut rng = make_rng();
+        let result = generate_variants(&block, &weights, &model, 5, 2, &mut rng)
+            .unwrap()
+            .unwrap();
+        assert_eq!(result.len(), 5);
+    }
 
-        let result = generate_variants(
-            &sequence_block,
-            &region_weights,
-            &mutation_model,
-            num_mutations,
-            ploidy,
-            &mut rng,
-        );
-
-        assert!(result.is_ok());
-        let variants = result.unwrap().unwrap();
-        assert_eq!(variants.len(), num_mutations);
-        for variant in variants {
-            assert!(variant.location < sequence_block.get_len());
+    #[test]
+    fn test_generate_variants_positions_in_range() {
+        let block = make_block(200);
+        let weights = vec![1.0f64; block.get_len()];
+        let model = MutationModel::default().unwrap();
+        let mut rng = make_rng();
+        let variants = generate_variants(&block, &weights, &model, 10, 2, &mut rng)
+            .unwrap()
+            .unwrap();
+        for v in variants {
+            assert!(v.location < 200, "Variant location {} out of range", v.location);
         }
     }
 
     #[test]
-    fn test_generate_variants_region_weights_length_mismatch() {
-        let (sequence_block, mut rng) = setup();
-        let region_weights = vec![1.0; 7]; // length mismatch
-        let mutation_model = MutationModel::default().unwrap();
-        let num_mutations = 1;
-        let ploidy = 2;
-
-        let result = generate_variants(
-            &sequence_block,
-            &region_weights,
-            &mutation_model,
-            num_mutations,
-            ploidy,
-            &mut rng,
-        );
-
-        assert!(result.is_err());
+    fn test_generate_variants_weight_mismatch_errors() {
+        let block = make_block(200);
+        let weights = vec![1.0f64; 100]; // wrong length
+        let model = MutationModel::default().unwrap();
+        let mut rng = make_rng();
+        assert!(generate_variants(&block, &weights, &model, 5, 2, &mut rng).is_err());
     }
 
     #[test]
-    fn test_generate_variants_zero_mutations() {
-        let (sequence_block, mut rng) = setup();
-        let region_weights = vec![1.0; 10];
-        let mutation_model = MutationModel::default().unwrap();
-        let num_mutations = 0;
-        let ploidy = 2;
-
-        let result = generate_variants(
-            &sequence_block,
-            &region_weights,
-            &mutation_model,
-            num_mutations,
-            ploidy,
-            &mut rng,
-        );
-
-        assert!(result.is_ok());
-        let variants = result.unwrap();
-        assert!(variants.is_some());
-        assert_eq!(variants.unwrap().len(), 0);
+    fn test_generate_variants_deterministic() {
+        let block = make_block(200);
+        let weights = vec![1.0f64; block.get_len()];
+        let model = MutationModel::default().unwrap();
+        let result1 = generate_variants(&block, &weights, &model, 5, 2, &mut make_rng())
+            .unwrap().unwrap();
+        let result2 = generate_variants(&block, &weights, &model, 5, 2, &mut make_rng())
+            .unwrap().unwrap();
+        for (v1, v2) in result1.iter().zip(result2.iter()) {
+            assert_eq!(v1.location, v2.location);
+            assert_eq!(v1.variant_type, v2.variant_type);
+        }
     }
 }

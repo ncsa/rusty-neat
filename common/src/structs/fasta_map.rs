@@ -397,7 +397,6 @@ impl FastaMap {
 
 #[cfg(test)]
 mod tests {
-    use std::fs::remove_file;
     use crate::structs::fasta_map::RegionType::NonNRegion;
     use crate::structs::nucleotides::Nucleotide::*;
     
@@ -405,6 +404,7 @@ mod tests {
 
     #[test]
     fn test_sequence_block() {
+        let temp_dir = tempfile::tempdir().unwrap();
         let mut seq_block = SequenceBlock {
             contig: "chrom1".to_string(),
             ref_start: 0,
@@ -412,17 +412,14 @@ mod tests {
             sequence: vec![A,A,A,A,A,A,A,A,A,A,A,A,T,T,T,A,A,A,T,A],
             sequence_map: vec![SequenceMap::from(NonNRegion, 0, 20)]
         };
-        let filename = PathBuf::from("chrom1_000_020.json");
-        // Test write works
+        let filename = temp_dir.path().join("chrom1_000_020.json");
         let file = File::create(&filename).unwrap();
         seq_block.write_block(file).unwrap();
-        // let's read the file we just made and check the contents
         let seq_block_read = SequenceBlock::from(&filename).unwrap();
         assert_eq!(seq_block.contig, seq_block_read.contig);
         assert_eq!(seq_block.ref_start, seq_block_read.ref_start);
         assert_eq!(seq_block.ref_end, seq_block_read.ref_end);
         assert_eq!(seq_block.sequence, seq_block_read.sequence);
-        remove_file(filename).unwrap();
     }
 
     #[test]
@@ -474,5 +471,89 @@ mod tests {
         let test_out = format!("{:?}", fasta_map);
 
         assert_eq!(test_out, expected_output)
+    }
+
+    fn make_block() -> SequenceBlock {
+        SequenceBlock {
+            contig: "chr1".to_string(),
+            ref_start: 0,
+            ref_end: 20,
+            sequence: vec![A, A, A, A, A, C, C, C, C, C, G, G, G, G, G, T, T, T, T, T],
+            sequence_map: vec![],
+        }
+    }
+
+    #[test]
+    fn test_get_subseq_valid() {
+        let block = make_block();
+        let sub = block.get_subseq(5, 10).unwrap();
+        assert_eq!(sub, vec![C, C, C, C, C]);
+    }
+
+    #[test]
+    fn test_get_subseq_full() {
+        let block = make_block();
+        let sub = block.get_subseq(0, 20).unwrap();
+        assert_eq!(sub, block.sequence);
+    }
+
+    #[test]
+    fn test_get_subseq_bad_coords() {
+        let block = make_block();
+        let result = block.get_subseq(10, 5);
+        assert!(matches!(result, Err(FastaMapError::BadCoordinatesError)));
+    }
+
+    #[test]
+    fn test_get_subseq_out_of_bounds() {
+        let block = make_block();
+        // request_end exceeds ref_end
+        let result = block.get_subseq(15, 25);
+        assert!(matches!(result, Err(FastaMapError::OutOfBoundsError)));
+    }
+
+    #[test]
+    fn test_get_non_n_regions_mixed() {
+        let block = SequenceBlock {
+            contig: "chr1".to_string(),
+            ref_start: 0,
+            ref_end: 20,
+            sequence: vec![N; 20],
+            sequence_map: vec![
+                SequenceMap::from(RegionType::NRegion, 0, 5),
+                SequenceMap::from(NonNRegion, 5, 15),
+                SequenceMap::from(RegionType::NRegion, 15, 20),
+            ],
+        };
+        let regions = block.get_non_n_regions().unwrap();
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0].start, 5);
+        assert_eq!(regions[0].end, 15);
+    }
+
+    #[test]
+    fn test_get_non_n_regions_all_n() {
+        let block = SequenceBlock {
+            contig: "chr1".to_string(),
+            ref_start: 0,
+            ref_end: 20,
+            sequence: vec![N; 20],
+            sequence_map: vec![SequenceMap::from(RegionType::NRegion, 0, 20)],
+        };
+        let regions = block.get_non_n_regions().unwrap();
+        assert!(regions.is_empty());
+    }
+
+    #[test]
+    fn test_get_non_n_regions_all_non_n() {
+        let block = SequenceBlock {
+            contig: "chr1".to_string(),
+            ref_start: 0,
+            ref_end: 20,
+            sequence: vec![A; 20],
+            sequence_map: vec![SequenceMap::from(NonNRegion, 0, 20)],
+        };
+        let regions = block.get_non_n_regions().unwrap();
+        assert_eq!(regions.len(), 1);
     }
 }

@@ -6,6 +6,10 @@ description.workspace = true
 repository.workspace = true
 edition.workspace = true
 
+[[test]]
+name = "integration_tests"
+path = "common_tests/integration_tests.rs"
+
 [dependencies]
 simple_rng = { path = "../simple_rng" }
 serde = { version = "1.0.197", features = ["derive"] }

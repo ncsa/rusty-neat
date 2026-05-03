@@ -119,7 +119,6 @@ fn main() -> Result<(), NeatErrors> {
     let mut level_filter = "trace".to_string();
     let mut log_dest = env::current_dir().unwrap();
     log_dest.push(".neat.log");
-    println!("log dest = {:?}", log_dest.display());
     if let Some(("rneat", cmd)) = subcommand {
         if cmd.contains_id("log_level") {
             level_filter = cmd
@@ -255,7 +254,6 @@ fn main() -> Result<(), NeatErrors> {
     }
 
     let elapsed_time = time::Instant::now() - start;
-    info!("Processing finished in {} milliseconds", elapsed_time.as_millis());
     if elapsed_time.as_millis() < 1000 {
         info!("Processing finished in {} milliseconds", elapsed_time.as_millis());
     } else if elapsed_time.as_secs() > 300 {

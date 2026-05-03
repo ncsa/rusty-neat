@@ -498,8 +498,9 @@ mod tests {
 
     #[test]
     fn test_count_fasta() {
-        // TODO add test
-        assert!(true)
+        let test_fasta = PathBuf::from("test_data/H1N1.fa");
+        let count = count_fasta(&test_fasta).unwrap();
+        assert_eq!(count, 8, "H1N1.fa should contain exactly 8 contigs");
     }
 
     #[test]

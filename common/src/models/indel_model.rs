@@ -117,6 +117,15 @@ impl IndelModel {
 mod tests {
     use super::*;
     use crate::structs::nucleotides::Nucleotide::*;
+    use tempfile::tempdir;
+
+    fn make_model() -> IndelModel {
+        IndelModel {
+            insertion_probability: 0.75,
+            ins_dist: DiscreteDistribution::new(&vec![100.0, 1.0], &vec![1, 2]).unwrap(),
+            del_dist: DiscreteDistribution::new(&vec![1.0, 1000.0], &vec![3, 4]).unwrap(),
+        }
+    }
 
     #[test]
     fn test_indel_model() {
@@ -159,5 +168,48 @@ mod tests {
         let insertion2 = indel_model.generate_random_insertion(12, &mut rng).unwrap();
         assert_eq!(insertion2.len(), 12);
         assert_eq!(insertion2, Vec::from([G, T, T, G, G, G, T, C, T, C, T, T]));
+    }
+
+    #[test]
+    fn test_is_insertion_below_threshold() {
+        let model = make_model();
+        assert_eq!(model.is_insertion(0.3).unwrap(), true);
+    }
+
+    #[test]
+    fn test_is_insertion_above_threshold() {
+        let model = make_model();
+        assert_eq!(model.is_insertion(0.8).unwrap(), false);
+    }
+
+    #[test]
+    fn test_is_insertion_at_boundary() {
+        // uses strict <, so rand == insertion_probability → false
+        let model = IndelModel {
+            insertion_probability: 0.5,
+            ins_dist: DiscreteDistribution::new(&vec![1.0], &vec![1]).unwrap(),
+            del_dist: DiscreteDistribution::new(&vec![1.0], &vec![1]).unwrap(),
+        };
+        assert_eq!(model.is_insertion(0.5).unwrap(), false);
+    }
+
+    #[test]
+    fn test_new_delete_length() {
+        let model = make_model();
+        // del_dist heavily weights length 4 (1000:1)
+        let length = model.new_delete_length(0.5).unwrap();
+        assert!(length == 3 || length == 4);
+        let length_high = model.new_delete_length(0.999).unwrap();
+        assert_eq!(length_high, 4);
+    }
+
+    #[test]
+    fn test_indel_model_file_round_trip() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("indel_model.json.gz");
+        let model = IndelModel::default().unwrap();
+        model.write_to_file(&path).unwrap();
+        let loaded = IndelModel::from(&path).unwrap();
+        assert!((loaded.insertion_probability - model.insertion_probability).abs() < 1e-10);
     }
 }

@@ -196,17 +196,23 @@ impl Variant {
         alternate: &Vec<Nucleotide>,
         genotype: &mut Vec<usize>,
     ) -> Result<Self, VariantError> {
-        // This will generate a variant, storing the reference, alternate, start point relative to the contig, and a genotype
-        // but first a quick sanity check
+        // Check for empty vecs before any index access
+        if reference.is_empty() {
+            return Err(VariantError::MalformedRef)
+        }
+        if alternate.is_empty() {
+            return Err(VariantError::MalformedAlt)
+        }
+
         match variant_type {
-            VariantType::Insertion | 
+            VariantType::Insertion |
             VariantType::Deletion => {
                 if (reference.len() == alternate.len()) ||
                     reference[0] != alternate[0] {
                     return Err(VariantError::MalformedIndel)
                 }
             },
-            VariantType::SNP => { 
+            VariantType::SNP => {
                 if reference.len() != alternate.len() {
                     return Err(VariantError::MalformedSnp)
                 }
@@ -214,14 +220,6 @@ impl Variant {
             _ => {
                 panic!("Complex variants not yet supported.")
             }
-        }
-
-        // Enforcing a policy that we assume elsewhere in the code
-        if reference.len() < 1 {
-            return Err(VariantError::MalformedRef)
-        }
-        if reference.len() < 1 {
-            return Err(VariantError::MalformedAlt)
         }
 
         let mut genotype_label = Genotype::Homozygous;
@@ -319,10 +317,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "MalformedSnp")]
     fn test_bad_variant_creation() {
         Variant::new(
-            // with new it should catch this error
             SNP,
             22,
             &vec![Nucleotide::A, Nucleotide::C, Nucleotide::T, Nucleotide::G],
@@ -335,5 +332,29 @@ mod tests {
     fn test_genotype_to_string() {
         let mut genotype = vec![0, 1, 0];
         assert_eq!(String::from("0/1/0"), genotype_to_string(&mut genotype).unwrap());
+    }
+
+    #[test]
+    fn test_empty_reference_returns_malformed_ref() {
+        let result = Variant::new(
+            SNP,
+            0,
+            &vec![],
+            &vec![Nucleotide::G],
+            &mut vec![1, 1],
+        );
+        assert!(matches!(result, Err(VariantError::MalformedRef)));
+    }
+
+    #[test]
+    fn test_empty_alternate_returns_malformed_alt() {
+        let result = Variant::new(
+            SNP,
+            0,
+            &vec![Nucleotide::A],
+            &vec![],
+            &mut vec![1, 1],
+        );
+        assert!(matches!(result, Err(VariantError::MalformedAlt)));
     }
 }

@@ -2,9 +2,7 @@ pub mod errors;
 pub mod utils;
 use std::path::PathBuf;
 use log::*;
-use std::{thread, time};
-
-use common::file_tools::bed_reader;
+use common::{file_tools::bed_reader::{self, BedReaderError}};
 use utils::filter_lib::{filter_fastq, filter_vcf};
 
 use crate::filter_reads::{
@@ -15,7 +13,7 @@ use crate::filter_reads::{
 
 
 pub fn main(config: &PathBuf) -> Result<(), FilterReadsError> {
-    info!("////////////// Welcome to rusty-neat read generator! \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\");
+    info!("////////////// Welcome to rusty-neat filter reads! \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\");
     info!("Using Configuration file input: {:?}", &config);
     let run_config = RunConfiguration::from(config);
     // bed_file: path to bed file to use for filtering

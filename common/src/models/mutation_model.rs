@@ -337,17 +337,80 @@ fn check_base(nuc: Nucleotide) -> Nucleotide {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
     use crate::models::snp_trinuc_model::TrinucFrame;
+    use crate::structs::nucleotides::Nucleotide::{A, C, G, T};
 
     #[test]
     fn test_model_read_write() {
-        let output_file: PathBuf = PathBuf::from("test.json.gz");
+        let temp_dir = tempfile::tempdir().unwrap();
+        let output_file = temp_dir.path().join("test.json.gz");
         let model: MutationModel = MutationModel::default().unwrap();
         assert_eq!(model.mutation_rate, 0.0010987132390211135);
-        let result = model.write_to_file(&output_file);
-        assert_eq!(result.unwrap(), ());
-        fs::remove_file(output_file).unwrap();
+        model.write_to_file(&output_file).unwrap();
+        let loaded = MutationModel::from_file(&output_file).unwrap();
+        assert_eq!(loaded.mutation_rate, model.mutation_rate);
+    }
+
+    #[test]
+    fn test_generate_genotype_homozygous() {
+        let model = MutationModel::default().unwrap();
+        let geno = model.generate_genotype(4, true).unwrap();
+        assert_eq!(geno, vec![1, 1, 1, 1]);
+    }
+
+    #[test]
+    fn test_generate_genotype_heterozygous() {
+        let model = MutationModel::default().unwrap();
+        let geno = model.generate_genotype(4, false).unwrap();
+        // half 1s, half 0s — order may vary but count must hold
+        assert_eq!(geno.iter().filter(|&&x| x == 1).count(), 2);
+        assert_eq!(geno.iter().filter(|&&x| x == 0).count(), 2);
+    }
+
+    #[test]
+    fn test_check_base_passes_through_acgt() {
+        assert_eq!(check_base(A), A);
+        assert_eq!(check_base(C), C);
+        assert_eq!(check_base(G), G);
+        assert_eq!(check_base(T), T);
+    }
+
+    #[test]
+    fn test_check_base_replaces_n() {
+        assert_eq!(check_base(Nucleotide::N), Nucleotide::A);
+    }
+
+    #[test]
+    fn test_check_base_unmasks_masked() {
+        // Masked bases should be replaced with their unmasked equivalent
+        assert_eq!(check_base(Nucleotide::Maskeda), Nucleotide::A);
+        assert_eq!(check_base(Nucleotide::Maskedc), Nucleotide::C);
+    }
+
+    #[test]
+    fn test_generate_mutation_produces_variant() {
+        let model = MutationModel::default().unwrap();
+        let mut rng = simple_rng::NeatRng::new_from_seed(&vec![
+            "test".to_string(), "seed".to_string(),
+        ]).unwrap();
+        // 20-base sequence with room on both sides of position 5
+        let seq = vec![A, C, G, T, A, C, G, T, A, C, G, T, A, C, G, T, A, C, G, T];
+        let variant = model.generate_mutation(&seq, 5, 2, &mut rng).unwrap();
+        // alternate must differ from reference
+        assert_ne!(variant.reference, variant.alternate);
+        assert!(variant.location == 5);
+    }
+
+    #[test]
+    fn test_generate_mutation_deterministic() {
+        let model = MutationModel::default().unwrap();
+        let seq = vec![A, C, G, T, A, C, G, T, A, C, G, T, A, C, G, T, A, C, G, T];
+        let seed = vec!["det".to_string(), "seed".to_string()];
+        let mut rng1 = simple_rng::NeatRng::new_from_seed(&seed).unwrap();
+        let mut rng2 = simple_rng::NeatRng::new_from_seed(&seed).unwrap();
+        let v1 = model.generate_mutation(&seq, 5, 2, &mut rng1).unwrap();
+        let v2 = model.generate_mutation(&seq, 5, 2, &mut rng2).unwrap();
+        assert_eq!(v1, v2);
     }
 
     #[test]

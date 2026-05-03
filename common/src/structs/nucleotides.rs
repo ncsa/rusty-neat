@@ -254,6 +254,48 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_get_unmasked_base() {
+        assert_eq!(Nucleotide::Maskeda.get_unmasked_base(), Nucleotide::A);
+        assert_eq!(Nucleotide::Maskedc.get_unmasked_base(), Nucleotide::C);
+        assert_eq!(Nucleotide::Maskedg.get_unmasked_base(), Nucleotide::G);
+        assert_eq!(Nucleotide::Maskedt.get_unmasked_base(), Nucleotide::T);
+        assert_eq!(Nucleotide::X.get_unmasked_base(), Nucleotide::N);
+        assert_eq!(Nucleotide::A.get_unmasked_base(), Nucleotide::A);
+    }
+
+    #[test]
+    fn test_is_masked() {
+        assert!(Nucleotide::Maskeda.is_masked());
+        assert!(Nucleotide::Maskedc.is_masked());
+        assert!(Nucleotide::Maskedg.is_masked());
+        assert!(Nucleotide::Maskedt.is_masked());
+        assert!(Nucleotide::X.is_masked());
+        assert!(!Nucleotide::A.is_masked());
+        assert!(!Nucleotide::C.is_masked());
+        assert!(!Nucleotide::G.is_masked());
+        assert!(!Nucleotide::T.is_masked());
+        assert!(!Nucleotide::N.is_masked());
+    }
+
+    #[test]
+    fn test_get_masked() {
+        assert_eq!(Nucleotide::A.get_masked(), Nucleotide::Maskeda);
+        assert_eq!(Nucleotide::C.get_masked(), Nucleotide::Maskedc);
+        assert_eq!(Nucleotide::G.get_masked(), Nucleotide::Maskedg);
+        assert_eq!(Nucleotide::T.get_masked(), Nucleotide::Maskedt);
+        assert_eq!(Nucleotide::N.get_masked(), Nucleotide::X);
+    }
+
+    #[test]
+    fn test_sequence_array_to_string() {
+        let seq = vec![Nucleotide::A, Nucleotide::C, Nucleotide::G, Nucleotide::T];
+        assert_eq!(sequence_array_to_string(&seq), "ACGT");
+        let masked = vec![Nucleotide::Maskeda, Nucleotide::Maskedc];
+        assert_eq!(sequence_array_to_string(&masked), "ac");
+        assert_eq!(sequence_array_to_string(&vec![]), "");
+    }
+
+    #[test]
     fn test_base_to_nuc() {
         let test_nuc: char = 'A';
         let nuc: Nucleotide = Nucleotide::from(test_nuc);

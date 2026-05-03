@@ -2,7 +2,7 @@
 //! probability from one base to another. The trinucleotide SNP model requires 4 layers of these transition
 //! matrices. Indexing is now implemented for the Tranisition matrix, which should make the code more straightforward.
 use crate::structs::{
-    distributions::{DiscreteDistribution, DistributionErrors}, 
+    distributions::{DiscreteDistribution, DistributionErrors},
     nucleotides::{Nucleotide, ALLOWED_NUCS}
 };
 use thiserror::Error;
@@ -125,23 +125,32 @@ impl TransitionMatrix where {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use simple_rng::NeatRng;
 
     #[test]
     fn test_transition_matrix_build() {
-        // todo fix test
         let a_weights = [0.0, 20.0, 1.0, 20.0];
         let c_weights = [20.0, 0.0, 1.0, 1.0];
         let g_weights = [1.0, 1.0, 0.0, 20.0];
         let t_weights = [20.0, 1.0, 20.0, 0.0];
-
         let model = TransitionMatrix::from(
-            a_weights,
-            c_weights,
-            g_weights,
-            t_weights,
-        );
+            a_weights, c_weights, g_weights, t_weights,
+        ).unwrap();
+        // Index by usize and Nucleotide must reference the same distribution
+        assert_eq!(model[0].values().unwrap(), model[&Nucleotide::A].values().unwrap());
+        assert_eq!(model[1].values().unwrap(), model[&Nucleotide::C].values().unwrap());
+        assert_eq!(model[2].values().unwrap(), model[&Nucleotide::G].values().unwrap());
+        assert_eq!(model[3].values().unwrap(), model[&Nucleotide::T].values().unwrap());
+        // Each row's values should be the four ACGT nucleotides
+        assert_eq!(model[&Nucleotide::A].values().unwrap(), Vec::from(ALLOWED_NUCS));
+    }
 
-        println!("{:?}", model);
-        // assert_eq!(model.a_dist, a_weights);
+    #[test]
+    fn test_transition_matrix_default() {
+        let model = TransitionMatrix::default().unwrap();
+        // Spot-check: sampling from A row should return one of [A, C, G, T]
+        let mut rng = NeatRng::new_from_seed(&vec!["seed".to_string()]).unwrap();
+        let sample = model[&Nucleotide::A].sample(rng.random().unwrap()).unwrap();
+        assert!(ALLOWED_NUCS.contains(&sample));
     }
 }

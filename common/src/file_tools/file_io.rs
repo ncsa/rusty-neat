@@ -77,3 +77,108 @@ impl Read for VectorBuffer {
         Ok(val as usize)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flate2::Compression;
+    use flate2::write::GzEncoder;
+
+    #[test]
+    fn test_read_lines() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("test.txt");
+        std::fs::write(&path, "line1\nline2\nline3\n").unwrap();
+        let lines: Vec<String> = read_lines(&path)
+            .unwrap()
+            .map(|l| l.unwrap())
+            .collect();
+        assert_eq!(lines, vec!["line1", "line2", "line3"]);
+    }
+
+    #[test]
+    fn test_read_gzip_lines() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("test.txt.gz");
+        let file = File::create(&path).unwrap();
+        let mut enc = GzEncoder::new(file, Compression::default());
+        enc.write_all(b"alpha\nbeta\n").unwrap();
+        enc.finish().unwrap();
+        let lines: Vec<String> = read_gzip_lines(&path)
+            .unwrap()
+            .map(|l| l.unwrap())
+            .collect();
+        assert_eq!(lines, vec!["alpha", "beta"]);
+    }
+
+    #[test]
+    fn test_open_safe() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("test.txt");
+        std::fs::write(&path, "hello").unwrap();
+        let mut reader = open_safe(&path).unwrap();
+        let mut contents = String::new();
+        reader.read_to_string(&mut contents).unwrap();
+        assert_eq!(contents, "hello");
+    }
+
+    #[test]
+    fn test_create_output_file_new() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("out.txt");
+        assert!(!path.exists());
+        let mut f = create_output_file(&path, false).unwrap();
+        f.write_all(b"data").unwrap();
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn test_create_output_file_overwrite() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("out.txt");
+        std::fs::write(&path, "original").unwrap();
+        let mut f = create_output_file(&path, true).unwrap();
+        f.write_all(b"new").unwrap();
+        drop(f);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
+    }
+
+    #[test]
+    #[should_panic(expected = "Attempting to overwrite an existing file")]
+    fn test_create_output_file_no_overwrite_panics() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("out.txt");
+        std::fs::write(&path, "original").unwrap();
+        create_output_file(&path, false).unwrap();
+    }
+
+    #[test]
+    fn test_append_to_file_creates_new() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("new.txt");
+        assert!(!path.exists());
+        let mut f = append_to_file(&path).unwrap();
+        f.write_all(b"first").unwrap();
+        drop(f);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "first");
+    }
+
+    #[test]
+    fn test_append_to_file_appends() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("existing.txt");
+        std::fs::write(&path, "line1\n").unwrap();
+        let mut f = append_to_file(&path).unwrap();
+        f.write_all(b"line2\n").unwrap();
+        drop(f);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "line1\nline2\n");
+    }
+
+    #[test]
+    fn test_vector_buffer_accumulates_writes() {
+        let mut buf = VectorBuffer::new();
+        buf.write_all(b"hello").unwrap();
+        buf.write_all(b" world").unwrap();
+        assert_eq!(buf.buffer, b"hello world");
+    }
+}

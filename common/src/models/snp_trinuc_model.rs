@@ -6,7 +6,7 @@
 //! deletions, since they are treated similarly by variant calling software.
 use flate2::read::GzDecoder;
 use itertools::Itertools;
-use log::{error, debug};
+use log::debug;
 use vectorize;
 use serde;
 use std::hash::Hash;
@@ -375,6 +375,7 @@ impl SnpTrinucModel {
 mod tests {
     use std::fs;
     use super::*;
+    use tempfile::tempdir;
 
     #[test]
     fn test_model_write_read() {
@@ -385,5 +386,59 @@ mod tests {
         let result = model.write_out(&output_file);
         assert_eq!(result.unwrap(), ());
         fs::remove_file(output_file).unwrap();
+    }
+
+    #[test]
+    fn test_generate_snp_changes_base() {
+        let model = SnpTrinucModel::default().unwrap();
+        let cases = [
+            ([A, A, G], A),
+            ([G, C, T], C),
+            ([C, G, A], G),
+            ([T, T, C], T),
+        ];
+        for (trinuc, middle) in &cases {
+            let result = model.generate_snp(0.5, trinuc).unwrap();
+            assert_ne!(result, *middle, "SNP must change the middle base");
+            assert!(matches!(result, A | C | G | T), "result must be a standard base");
+        }
+    }
+
+    #[test]
+    fn test_generate_snp_deterministic() {
+        let model = SnpTrinucModel::default().unwrap();
+        let trinuc = [G, A, T];
+        let r1 = model.generate_snp(0.3, &trinuc).unwrap();
+        let r2 = model.generate_snp(0.3, &trinuc).unwrap();
+        assert_eq!(r1, r2);
+    }
+
+    #[test]
+    fn test_default_minimal_has_16_contexts() {
+        let model = SnpTrinucModel::default_minimal().unwrap();
+        // 4 flanking bases × 4 flanking bases = 16 ANA-style contexts
+        assert_eq!(model.trinuc_distros.len(), 16);
+    }
+
+    #[test]
+    fn test_default_minimal_generate_snp() {
+        let model = SnpTrinucModel::default_minimal().unwrap();
+        let trinuc = [A, C, G];
+        let result = model.generate_snp(0.5, &trinuc).unwrap();
+        assert_ne!(result, C, "minimal model SNP must still change the base");
+        assert!(matches!(result, A | C | G | T));
+    }
+
+    #[test]
+    fn test_model_write_read_round_trip() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("trinuc.json.gz");
+        let model = SnpTrinucModel::default().unwrap();
+        model.write_out(&path).unwrap();
+        let loaded: SnpTrinucModel = model_reader(&path).unwrap();
+        // Both models should have the same 16 ANG-style context keys
+        assert_eq!(loaded.trinuc_distros.len(), model.trinuc_distros.len());
+        let frame = TrinucFrame::from((A, N, G));
+        assert!(loaded.trinuc_distros.contains_key(&frame));
     }
 }

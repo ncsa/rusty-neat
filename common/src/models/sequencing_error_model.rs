@@ -90,6 +90,33 @@ impl SequencingErrorModel {
         Ok(data)
     }
 
+    pub fn from_raw_data(
+        error_rate: f64,
+        quality_score_model: QualityScoreModel,
+    ) -> Result<Self, SeqModelError> {
+        let default_transition_distros = TransitionMatrix::from(
+            [0.0, 0.4918, 0.3377, 0.1705],
+            [0.5238, 0.0, 0.2661, 0.2101],
+            [0.3754, 0.2355, 0.0, 0.389],
+            [0.2505, 0.2552, 0.4942, 0.0],
+        )?;
+        let default_lengths = vec![1, 2];
+        let default_ins_distr = DiscreteDistribution::new(&vec![0.999, 0.001], &default_lengths)?;
+        let default_del_distr = default_ins_distr.clone();
+        Ok(SequencingErrorModel {
+            error_rate,
+            del_length_distribution: default_del_distr,
+            ins_length_distribution: default_ins_distr,
+            indel_probability: 0.4,
+            insertion_bias: DiscreteDistribution::new(
+                &vec![1.0, 1.0, 1.0, 1.0],
+                &ALLOWED_NUCS.to_vec(),
+            )?,
+            transition_distros: default_transition_distros,
+            quality_score_model,
+        })
+    }
+
     pub fn write_model(&self, filename: &PathBuf) -> Result<(), SeqModelError> {
         model_writer(self, filename)?;
         Ok(())

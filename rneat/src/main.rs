@@ -9,6 +9,7 @@ extern crate simple_rng;
 pub mod filter_reads;
 pub mod gen_reads;
 pub mod gen_mut_model;
+pub mod gen_seq_error_model;
 
 use std::env;
 use std::time;
@@ -29,8 +30,9 @@ use clap::{value_parser, Arg, ArgAction, Command};
 use std::path::PathBuf;
 
 use crate::gen_mut_model::errors::GenMutationModelError;
+use crate::gen_seq_error_model::errors::GenSeqErrorModelError;
 use crate::{
-    filter_reads::errors::FilterReadsError, 
+    filter_reads::errors::FilterReadsError,
     gen_reads::errors::GenerateReadsErrors,
 };
 /// This script parses arguments and checks them before submitting to the submodules, which currently 
@@ -45,9 +47,11 @@ pub enum NeatErrors {
     FilterReadsError(#[from] FilterReadsError),
     #[error("Error while generating mutation model {0}")]
     GenMutModelError(#[from] GenMutationModelError),
+    #[error("Error while generating sequencing error model {0}")]
+    GenSeqErrorModel(#[from] GenSeqErrorModelError),
 }
 
-fn neat_commands() -> [Command; 3] {
+fn neat_commands() -> [Command; 4] {
 	// These are the submodule commands. Any new commands added should go here.
     let configuration_arg = Arg::new("configuration_yaml")
         .long("configuration-yaml")
@@ -73,6 +77,12 @@ fn neat_commands() -> [Command; 3] {
             ),
         Command::new("gen-mut-model")
             .about("Generate a mutation model based on an input mutations file")
+            .arg_required_else_help(true)
+            .arg(
+                &configuration_arg
+            ),
+        Command::new("gen-seq-error-model")
+            .about("Generate a sequencing error model from a FASTQ file")
             .arg_required_else_help(true)
             .arg(
                 &configuration_arg
@@ -246,6 +256,32 @@ fn main() -> Result<(), NeatErrors> {
                     match result {
                         Err(error) => return Err(NeatErrors::GenMutModelError(error)),
                         Ok(()) => info!("rneat gen-mut-model completed succesfully"),
+                    }
+                }
+            }
+        },
+        Some(("gen-seq-error-model", _)) => {
+            if let Some(("gen-seq-error-model", cmd)) = subcommand {
+                info!("Running rneat gen-seq-error-model");
+                if cmd.contains_id("configuration_yaml") {
+                    let file = cmd.get_one::<PathBuf>("configuration_yaml")
+                            .expect("Must provide a path with configuration-yaml")
+                            .to_path_buf();
+
+                    if !file.is_file() {
+                        return Err(
+                            NeatErrors::FilterReadsError(
+                                FilterReadsError::CliError(
+                                    "Must supply a configuration file to run gen-seq-error-model!".to_string()
+                                )
+                            )
+                        )
+                    }
+                    info!("Running gen-seq-error-model to generate a sequencing error model.");
+                    let result = gen_seq_error_model::main(&file);
+                    match result {
+                        Err(error) => return Err(NeatErrors::GenSeqErrorModel(error)),
+                        Ok(()) => info!("rneat gen-seq-error-model completed successfully"),
                     }
                 }
             }

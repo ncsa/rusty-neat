@@ -77,7 +77,6 @@ pub fn write_block_fastq<T: Write, W: Write> (
     buffer2: &mut GzEncoder<W>,
     read_length: usize,
     read_name_prefix: &str,
-    quality_score_model: &QualityScoreModel,
     sequencing_error_model: &SequencingErrorModel,
     rng: &mut NeatRng,
 ) -> Result<(), FastqToolsError> {
@@ -125,7 +124,7 @@ pub fn write_block_fastq<T: Write, W: Write> (
         }
 
         let ref_start = sequence_block.ref_start;
-        let quality_scores_1 = quality_score_model.generate_quality_scores(read_length, rng)?;
+        let quality_scores_1 = sequencing_error_model.generate_quality_scores(read_length, rng)?;
         let result = apply_variants_and_write_sequence(
             &fragment,
             &reads1_flagged,
@@ -516,7 +515,6 @@ mod tests {
             fasta_map::{RegionType, SequenceBlock, SequenceMap},
             mutated_map::MutatedMap,
         };
-        use crate::models::quality_scores::QualityScoreModel;
         let temp_dir = tempfile::tempdir().unwrap();
         let ref_start: usize = 1000;
         let seq_len: usize = 50;
@@ -544,14 +542,13 @@ mod tests {
         let dummy_data: VectorBuffer = VectorBuffer::new();
         let mut buf1 = GzEncoder::new(outfile, Compression::default());
         let mut buf2 = GzEncoder::new(dummy_data, Compression::default());
-        let quality_model = QualityScoreModel::default().unwrap();
         let seq_err_model = SequencingErrorModel::default().unwrap();
         let mut rng = NeatRng::new_from_seed(&vec!["test".to_string()]).unwrap();
         write_block_fastq(
             fragments, &mutated_map, false,
             &mut buf1, &mut buf2,
             10, "chr1",
-            &quality_model, &seq_err_model, &mut rng,
+            &seq_err_model, &mut rng,
         ).unwrap();
         buf1.finish().unwrap();
         let lines: Vec<String> = read_gzip_lines(&out_path)

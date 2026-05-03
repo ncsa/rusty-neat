@@ -237,6 +237,35 @@ impl QualityScoreModel {
         }
     }
 
+    pub fn from_counts(
+        quality_score_options: Vec<usize>,
+        read_length: usize,
+        seed_weights: Vec<f64>,
+        trans_weights: Vec<Vec<Vec<f64>>>,
+    ) -> Result<Self, QualityModelError> {
+        // seed_dist values are actual quality scores (generate_quality_scores pushes the sampled
+        // value directly); distros_from_one values are indices into quality_score_options
+        // (generate_quality_scores indexes quality_score_options[sampled_index]).
+        let seed_dist = DiscreteDistribution::new(&seed_weights, &quality_score_options)?;
+        let n_scores = quality_score_options.len();
+        let score_indices: Vec<usize> = (0..n_scores).collect();
+        let mut distros_from_one: Vec<Vec<DiscreteDistribution<usize>>> = Vec::new();
+        for pos_weights in &trans_weights {
+            let mut row: Vec<DiscreteDistribution<usize>> = Vec::new();
+            for prev_weights in pos_weights {
+                row.push(DiscreteDistribution::new(prev_weights, &score_indices)?);
+            }
+            distros_from_one.push(row);
+        }
+        Ok(QualityScoreModel {
+            quality_score_options,
+            binned_scores: false,
+            assumed_read_length: read_length,
+            seed_dist,
+            distros_from_one,
+        })
+    }
+
     #[allow(unused)]
     /// we will write subutilities that use these features, eventually
     fn write_to_file(&self, filename: &PathBuf) -> std::io::Result<()> {

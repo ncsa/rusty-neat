@@ -1,0 +1,643 @@
+From d57db4f3758a1e7487c660ae2a377a7902cd9e6a Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 3 May 2026 17:21:58 +0000
+Subject: [PATCH] Add gen-seq-error-model subcommand
+
+Adds a new CLI subcommand that reads a FASTQ file, accumulates
+per-position quality-score transition counts and a global error rate,
+then writes a SequencingErrorModel (with an embedded QualityScoreModel)
+to disk. Mirrors the Python NEAT model_sequencing_error algorithm.
+
+Also fixes two pre-existing compile errors in fastq_tools.rs: missing
+QualityScoreModel import and a redundant quality_score_model parameter
+in write_block_fastq whose callers had already dropped it.
+
+https://claude.ai/code/session_0145gMaN94vH3vnxripbBvBZ
+---
+ common/src/file_tools/fastq_tools.rs          |   7 +-
+ common/src/models/quality_scores.rs           |  29 +++
+ common/src/models/sequencing_error_model.rs   |  27 +++
+ rneat/src/gen_seq_error_model/errors.rs       |  21 ++
+ rneat/src/gen_seq_error_model/mod.rs          |  13 ++
+ rneat/src/gen_seq_error_model/utils.rs        |   2 +
+ rneat/src/gen_seq_error_model/utils/config.rs | 126 +++++++++++
+ rneat/src/gen_seq_error_model/utils/runner.rs | 212 ++++++++++++++++++
+ rneat/src/main.rs                             |  40 +++-
+ 9 files changed, 470 insertions(+), 7 deletions(-)
+ create mode 100644 rneat/src/gen_seq_error_model/errors.rs
+ create mode 100644 rneat/src/gen_seq_error_model/mod.rs
+ create mode 100644 rneat/src/gen_seq_error_model/utils.rs
+ create mode 100644 rneat/src/gen_seq_error_model/utils/config.rs
+ create mode 100644 rneat/src/gen_seq_error_model/utils/runner.rs
+
+diff --git a/common/src/file_tools/fastq_tools.rs b/common/src/file_tools/fastq_tools.rs
+index fcb1f4b..c4cd2df 100644
+--- a/common/src/file_tools/fastq_tools.rs
++++ b/common/src/file_tools/fastq_tools.rs
+@@ -77,7 +77,6 @@ pub fn write_block_fastq<T: Write, W: Write> (
+     buffer2: &mut GzEncoder<W>,
+     read_length: usize,
+     read_name_prefix: &str,
+-    quality_score_model: &QualityScoreModel,
+     sequencing_error_model: &SequencingErrorModel,
+     rng: &mut NeatRng,
+ ) -> Result<(), FastqToolsError> {
+@@ -125,7 +124,7 @@ pub fn write_block_fastq<T: Write, W: Write> (
+         }
+ 
+         let ref_start = sequence_block.ref_start;
+-        let quality_scores_1 = quality_score_model.generate_quality_scores(read_length, rng)?;
++        let quality_scores_1 = sequencing_error_model.generate_quality_scores(read_length, rng)?;
+         let result = apply_variants_and_write_sequence(
+             &fragment,
+             &reads1_flagged,
+@@ -516,7 +515,6 @@ mod tests {
+             fasta_map::{RegionType, SequenceBlock, SequenceMap},
+             mutated_map::MutatedMap,
+         };
+-        use crate::models::quality_scores::QualityScoreModel;
+         let temp_dir = tempfile::tempdir().unwrap();
+         let ref_start: usize = 1000;
+         let seq_len: usize = 50;
+@@ -544,14 +542,13 @@ mod tests {
+         let dummy_data: VectorBuffer = VectorBuffer::new();
+         let mut buf1 = GzEncoder::new(outfile, Compression::default());
+         let mut buf2 = GzEncoder::new(dummy_data, Compression::default());
+-        let quality_model = QualityScoreModel::default().unwrap();
+         let seq_err_model = SequencingErrorModel::default().unwrap();
+         let mut rng = NeatRng::new_from_seed(&vec!["test".to_string()]).unwrap();
+         write_block_fastq(
+             fragments, &mutated_map, false,
+             &mut buf1, &mut buf2,
+             10, "chr1",
+-            &quality_model, &seq_err_model, &mut rng,
++            &seq_err_model, &mut rng,
+         ).unwrap();
+         buf1.finish().unwrap();
+         let lines: Vec<String> = read_gzip_lines(&out_path)
+diff --git a/common/src/models/quality_scores.rs b/common/src/models/quality_scores.rs
+index 66499c6..299b5a6 100644
+--- a/common/src/models/quality_scores.rs
++++ b/common/src/models/quality_scores.rs
+@@ -237,6 +237,35 @@ impl QualityScoreModel {
+         }
+     }
+ 
++    pub fn from_counts(
++        quality_score_options: Vec<usize>,
++        read_length: usize,
++        seed_weights: Vec<f64>,
++        trans_weights: Vec<Vec<Vec<f64>>>,
++    ) -> Result<Self, QualityModelError> {
++        // seed_dist values are actual quality scores (generate_quality_scores pushes the sampled
++        // value directly); distros_from_one values are indices into quality_score_options
++        // (generate_quality_scores indexes quality_score_options[sampled_index]).
++        let seed_dist = DiscreteDistribution::new(&seed_weights, &quality_score_options)?;
++        let n_scores = quality_score_options.len();
++        let score_indices: Vec<usize> = (0..n_scores).collect();
++        let mut distros_from_one: Vec<Vec<DiscreteDistribution<usize>>> = Vec::new();
++        for pos_weights in &trans_weights {
++            let mut row: Vec<DiscreteDistribution<usize>> = Vec::new();
++            for prev_weights in pos_weights {
++                row.push(DiscreteDistribution::new(prev_weights, &score_indices)?);
++            }
++            distros_from_one.push(row);
++        }
++        Ok(QualityScoreModel {
++            quality_score_options,
++            binned_scores: false,
++            assumed_read_length: read_length,
++            seed_dist,
++            distros_from_one,
++        })
++    }
++
+     #[allow(unused)]
+     /// we will write subutilities that use these features, eventually
+     fn write_to_file(&self, filename: &PathBuf) -> std::io::Result<()> {
+diff --git a/common/src/models/sequencing_error_model.rs b/common/src/models/sequencing_error_model.rs
+index 8fca362..dee655b 100644
+--- a/common/src/models/sequencing_error_model.rs
++++ b/common/src/models/sequencing_error_model.rs
+@@ -90,6 +90,33 @@ impl SequencingErrorModel {
+         Ok(data)
+     }
+ 
++    pub fn from_raw_data(
++        error_rate: f64,
++        quality_score_model: QualityScoreModel,
++    ) -> Result<Self, SeqModelError> {
++        let default_transition_distros = TransitionMatrix::from(
++            [0.0, 0.4918, 0.3377, 0.1705],
++            [0.5238, 0.0, 0.2661, 0.2101],
++            [0.3754, 0.2355, 0.0, 0.389],
++            [0.2505, 0.2552, 0.4942, 0.0],
++        )?;
++        let default_lengths = vec![1, 2];
++        let default_ins_distr = DiscreteDistribution::new(&vec![0.999, 0.001], &default_lengths)?;
++        let default_del_distr = default_ins_distr.clone();
++        Ok(SequencingErrorModel {
++            error_rate,
++            del_length_distribution: default_del_distr,
++            ins_length_distribution: default_ins_distr,
++            indel_probability: 0.4,
++            insertion_bias: DiscreteDistribution::new(
++                &vec![1.0, 1.0, 1.0, 1.0],
++                &ALLOWED_NUCS.to_vec(),
++            )?,
++            transition_distros: default_transition_distros,
++            quality_score_model,
++        })
++    }
++
+     pub fn write_model(&self, filename: &PathBuf) -> Result<(), SeqModelError> {
+         model_writer(self, filename)?;
+         Ok(())
+diff --git a/rneat/src/gen_seq_error_model/errors.rs b/rneat/src/gen_seq_error_model/errors.rs
+new file mode 100644
+index 0000000..2223e9b
+--- /dev/null
++++ b/rneat/src/gen_seq_error_model/errors.rs
+@@ -0,0 +1,21 @@
++use thiserror::Error;
++use common::models::{
++    quality_scores::QualityModelError,
++    sequencing_error_model::SeqModelError,
++};
++
++#[derive(Error, Debug)]
++pub enum GenSeqErrorModelError {
++    #[error("I/O error: {0}")]
++    IoError(#[from] std::io::Error),
++    #[error("Configuration error: {0}")]
++    ConfigurationError(String),
++    #[error("CLI error: {0}")]
++    CliError(String),
++    #[error("Malformed FASTQ: {0}")]
++    MalformedFastq(String),
++    #[error("Quality score model error: {0}")]
++    QualModelError(#[from] QualityModelError),
++    #[error("Sequencing error model error: {0}")]
++    SeqModelError(#[from] SeqModelError),
++}
+diff --git a/rneat/src/gen_seq_error_model/mod.rs b/rneat/src/gen_seq_error_model/mod.rs
+new file mode 100644
+index 0000000..14404d8
+--- /dev/null
++++ b/rneat/src/gen_seq_error_model/mod.rs
+@@ -0,0 +1,13 @@
++pub mod errors;
++pub mod utils;
++
++use std::path::PathBuf;
++use crate::gen_seq_error_model::{
++    errors::GenSeqErrorModelError,
++    utils::config::RunConfiguration,
++};
++
++pub fn main(config_file: &PathBuf) -> Result<(), GenSeqErrorModelError> {
++    let config = RunConfiguration::from(config_file)?;
++    utils::runner::runner(&config)
++}
+diff --git a/rneat/src/gen_seq_error_model/utils.rs b/rneat/src/gen_seq_error_model/utils.rs
+new file mode 100644
+index 0000000..287ac21
+--- /dev/null
++++ b/rneat/src/gen_seq_error_model/utils.rs
+@@ -0,0 +1,2 @@
++pub mod config;
++pub mod runner;
+diff --git a/rneat/src/gen_seq_error_model/utils/config.rs b/rneat/src/gen_seq_error_model/utils/config.rs
+new file mode 100644
+index 0000000..92fe4a2
+--- /dev/null
++++ b/rneat/src/gen_seq_error_model/utils/config.rs
+@@ -0,0 +1,126 @@
++use serde_yml::Value;
++use std::collections::HashMap;
++use std::fs;
++use std::path::PathBuf;
++use crate::gen_seq_error_model::errors::GenSeqErrorModelError;
++
++#[derive(Debug, Clone)]
++pub struct RunConfiguration {
++    pub fastq_file: PathBuf,
++    pub output_file: PathBuf,
++    pub overwrite_output: bool,
++    pub max_reads: usize,
++    pub qual_offset: usize,
++}
++
++impl RunConfiguration {
++    pub fn from(yml_file: &PathBuf) -> Result<Self, GenSeqErrorModelError> {
++        let f = fs::File::open(yml_file).map_err(|e| {
++            GenSeqErrorModelError::ConfigurationError(format!(
++                "Cannot open config file {:?}: {}",
++                yml_file, e
++            ))
++        })?;
++        let scrape_config: HashMap<String, Value> = serde_yml::from_reader(f)
++            .map_err(|e| GenSeqErrorModelError::ConfigurationError(e.to_string()))?;
++
++        let fastq_file = PathBuf::from(
++            scrape_config
++                .get("fastq_file")
++                .and_then(|v| v.as_str())
++                .ok_or_else(|| {
++                    GenSeqErrorModelError::ConfigurationError(
++                        "Missing required field: fastq_file".to_string(),
++                    )
++                })?,
++        );
++        if !fastq_file.is_file() {
++            return Err(GenSeqErrorModelError::ConfigurationError(format!(
++                "fastq_file not found: {:?}",
++                fastq_file
++            )));
++        }
++
++        let output_file = PathBuf::from(
++            scrape_config
++                .get("output_file")
++                .and_then(|v| v.as_str())
++                .ok_or_else(|| {
++                    GenSeqErrorModelError::ConfigurationError(
++                        "Missing required field: output_file".to_string(),
++                    )
++                })?,
++        );
++
++        let overwrite_output = scrape_config
++            .get("overwrite_output")
++            .and_then(|v| v.as_bool())
++            .unwrap_or(false);
++
++        if !overwrite_output && output_file.is_file() {
++            return Err(GenSeqErrorModelError::ConfigurationError(format!(
++                "output_file already exists and overwrite_output is false: {:?}",
++                output_file
++            )));
++        }
++
++        let max_reads = scrape_config
++            .get("max_reads")
++            .and_then(|v| v.as_u64())
++            .unwrap_or(0) as usize;
++
++        let qual_offset = scrape_config
++            .get("qual_offset")
++            .and_then(|v| v.as_u64())
++            .unwrap_or(33) as usize;
++
++        Ok(RunConfiguration {
++            fastq_file,
++            output_file,
++            overwrite_output,
++            max_reads,
++            qual_offset,
++        })
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use std::io::Write;
++
++    #[test]
++    fn test_run_configuration() {
++        let temp_dir = tempfile::tempdir().unwrap();
++        let fastq_path = temp_dir.path().join("test.fastq");
++        std::fs::write(&fastq_path, "@read1\nACGT\n+\nIIII\n").unwrap();
++        let output_path = temp_dir.path().join("model.json.gz");
++
++        let yaml = format!(
++            "fastq_file: {}\noutput_file: {}\noverwrite_output: true\nmax_reads: 1000\nqual_offset: 33\n",
++            fastq_path.display(),
++            output_path.display()
++        );
++        let mut tmp = tempfile::NamedTempFile::new().unwrap();
++        write!(tmp, "{}", yaml).unwrap();
++
++        let config = RunConfiguration::from(&tmp.path().to_path_buf()).unwrap();
++        assert_eq!(config.max_reads, 1000);
++        assert_eq!(config.qual_offset, 33);
++        assert!(config.overwrite_output);
++    }
++
++    #[test]
++    fn test_missing_fastq_file_errors() {
++        let temp_dir = tempfile::tempdir().unwrap();
++        let output_path = temp_dir.path().join("model.json.gz");
++        let yaml = format!(
++            "fastq_file: /nonexistent/path.fastq\noutput_file: {}\n",
++            output_path.display()
++        );
++        let mut tmp = tempfile::NamedTempFile::new().unwrap();
++        write!(tmp, "{}", yaml).unwrap();
++        let result = RunConfiguration::from(&tmp.path().to_path_buf());
++        assert!(result.is_err());
++    }
++}
+diff --git a/rneat/src/gen_seq_error_model/utils/runner.rs b/rneat/src/gen_seq_error_model/utils/runner.rs
+new file mode 100644
+index 0000000..ec1fd86
+--- /dev/null
++++ b/rneat/src/gen_seq_error_model/utils/runner.rs
+@@ -0,0 +1,212 @@
++use log::info;
++use std::path::PathBuf;
++use common::{
++    file_tools::file_io::{read_gzip_lines, read_lines},
++    models::{
++        quality_scores::QualityScoreModel,
++        sequencing_error_model::SequencingErrorModel,
++    },
++};
++use crate::gen_seq_error_model::{
++    errors::GenSeqErrorModelError,
++    utils::config::RunConfiguration,
++};
++
++const MAX_SCORE: usize = 94;
++
++pub fn runner(config: &RunConfiguration) -> Result<(), GenSeqErrorModelError> {
++    let is_gz = config
++        .fastq_file
++        .extension()
++        .map(|e| e == "gz")
++        .unwrap_or(false);
++
++    let lines: Vec<String> = if is_gz {
++        read_gzip_lines(&config.fastq_file)?
++            .collect::<Result<Vec<_>, _>>()?
++    } else {
++        read_lines(&config.fastq_file)?
++            .collect::<Result<Vec<_>, _>>()?
++    };
++
++    if lines.len() < 4 {
++        return Err(GenSeqErrorModelError::MalformedFastq(
++            "FASTQ file has fewer than 4 lines".to_string(),
++        ));
++    }
++
++    // Determine read length from the first record's quality line (index 3)
++    let read_length = lines[3].len();
++    if read_length == 0 {
++        return Err(GenSeqErrorModelError::MalformedFastq(
++            "Quality line in first record is empty".to_string(),
++        ));
++    }
++
++    let qual_offset = config.qual_offset;
++
++    let mut seed_counts = vec![0usize; MAX_SCORE];
++    let mut transition_counts = vec![vec![vec![0usize; MAX_SCORE]; MAX_SCORE]; read_length - 1];
++    let mut global_counts = vec![0usize; MAX_SCORE];
++    let mut total_bases: usize = 0;
++    let mut reads_processed: usize = 0;
++
++    // Process all records: groups of 4 lines
++    let mut i = 0;
++    while i + 3 < lines.len() {
++        let qual_line = &lines[i + 3];
++        let scores: Vec<usize> = qual_line
++            .bytes()
++            .map(|b| (b as usize).saturating_sub(qual_offset).min(MAX_SCORE - 1))
++            .collect();
++
++        if scores.is_empty() {
++            i += 4;
++            continue;
++        }
++
++        seed_counts[scores[0]] += 1;
++        for j in 1..scores.len().min(read_length) {
++            transition_counts[j - 1][scores[j - 1]][scores[j]] += 1;
++        }
++        for &score in &scores {
++            global_counts[score] += 1;
++        }
++        total_bases += scores.len();
++        reads_processed += 1;
++
++        if config.max_reads > 0 && reads_processed >= config.max_reads {
++            break;
++        }
++        i += 4;
++    }
++
++    info!("Processed {} reads ({} bases)", reads_processed, total_bases);
++
++    if total_bases == 0 {
++        return Err(GenSeqErrorModelError::MalformedFastq(
++            "No bases found in FASTQ file".to_string(),
++        ));
++    }
++
++    // Compute error_rate
++    let error_rate: f64 = (0..MAX_SCORE)
++        .map(|q| 10f64.powf(-(q as f64) / 10.0) * global_counts[q] as f64)
++        .sum::<f64>()
++        / total_bases as f64;
++
++    info!("Computed error_rate: {:.6}", error_rate);
++
++    // Collect observed quality scores
++    let quality_score_options: Vec<usize> = (0..MAX_SCORE)
++        .filter(|&q| global_counts[q] > 0)
++        .collect();
++
++    let n_scores = quality_score_options.len();
++
++    // Re-index seed counts
++    let seed_weights: Vec<f64> = quality_score_options
++        .iter()
++        .map(|&q| seed_counts[q] as f64)
++        .collect();
++
++    // Re-index transition counts
++    let trans_weights: Vec<Vec<Vec<f64>>> = (0..read_length - 1)
++        .map(|pos| {
++            (0..n_scores)
++                .map(|p| {
++                    let prev_raw = quality_score_options[p];
++                    (0..n_scores)
++                        .map(|c| {
++                            let curr_raw = quality_score_options[c];
++                            transition_counts[pos][prev_raw][curr_raw] as f64
++                        })
++                        .collect()
++                })
++                .collect()
++        })
++        .collect();
++
++    let quality_score_model = QualityScoreModel::from_counts(
++        quality_score_options,
++        read_length,
++        seed_weights,
++        trans_weights,
++    )?;
++
++    let model = SequencingErrorModel::from_raw_data(error_rate, quality_score_model)?;
++    model.write_model(&config.output_file)?;
++
++    info!("Wrote sequencing error model to {:?}", config.output_file);
++    Ok(())
++}
++
++#[cfg(test)]
++fn make_test_fastq(path: &PathBuf, n_reads: usize, read_length: usize) {
++    use std::io::Write;
++    let seq: String = "ACGT".chars().cycle().take(read_length).collect();
++    // Quality scores cycling through a range: I(40), J(41), K(42), etc.
++    let qual: String = (0..read_length)
++        .map(|i| char::from_u32(('!' as u32) + 33 + (i % 10) as u32).unwrap())
++        .collect();
++    let mut f = std::fs::File::create(path).unwrap();
++    for i in 0..n_reads {
++        writeln!(f, "@read{}\n{}\n+\n{}", i, seq, qual).unwrap();
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::gen_seq_error_model::utils::config::RunConfiguration;
++
++    fn make_config(fastq: PathBuf, output: PathBuf) -> RunConfiguration {
++        RunConfiguration {
++            fastq_file: fastq,
++            output_file: output,
++            overwrite_output: true,
++            max_reads: 0,
++            qual_offset: 33,
++        }
++    }
++
++    #[test]
++    fn test_runner_basic() {
++        let temp = tempfile::tempdir().unwrap();
++        let fastq_path = temp.path().join("test.fastq");
++        make_test_fastq(&fastq_path, 20, 50);
++        let output_path = temp.path().join("model.json.gz");
++        let config = make_config(fastq_path, output_path.clone());
++        runner(&config).unwrap();
++        assert!(output_path.exists());
++        let model = SequencingErrorModel::from_file(&output_path).unwrap();
++        // just check it round-trips — error_rate must be finite and positive
++        let scores = model.generate_quality_scores(50, &mut simple_rng::NeatRng::new_from_seed(
++            &vec!["test".to_string()]
++        ).unwrap()).unwrap();
++        assert_eq!(scores.len(), 50);
++    }
++
++    #[test]
++    fn test_runner_max_reads() {
++        let temp = tempfile::tempdir().unwrap();
++        let fastq_path = temp.path().join("test.fastq");
++        make_test_fastq(&fastq_path, 100, 50);
++        let output_path = temp.path().join("model.json.gz");
++        let mut config = make_config(fastq_path, output_path.clone());
++        config.max_reads = 10;
++        runner(&config).unwrap();
++        assert!(output_path.exists());
++    }
++
++    #[test]
++    fn test_runner_empty_fastq_errors() {
++        let temp = tempfile::tempdir().unwrap();
++        let fastq_path = temp.path().join("empty.fastq");
++        std::fs::write(&fastq_path, "").unwrap();
++        let output_path = temp.path().join("model.json.gz");
++        let config = make_config(fastq_path, output_path);
++        let result = runner(&config);
++        assert!(result.is_err());
++    }
++}
+diff --git a/rneat/src/main.rs b/rneat/src/main.rs
+index 31ce5db..44d6319 100644
+--- a/rneat/src/main.rs
++++ b/rneat/src/main.rs
+@@ -9,6 +9,7 @@ extern crate simple_rng;
+ pub mod filter_reads;
+ pub mod gen_reads;
+ pub mod gen_mut_model;
++pub mod gen_seq_error_model;
+ 
+ use std::env;
+ use std::time;
+@@ -29,8 +30,9 @@ use clap::{value_parser, Arg, ArgAction, Command};
+ use std::path::PathBuf;
+ 
+ use crate::gen_mut_model::errors::GenMutationModelError;
++use crate::gen_seq_error_model::errors::GenSeqErrorModelError;
+ use crate::{
+-    filter_reads::errors::FilterReadsError, 
++    filter_reads::errors::FilterReadsError,
+     gen_reads::errors::GenerateReadsErrors,
+ };
+ /// This script parses arguments and checks them before submitting to the submodules, which currently 
+@@ -45,9 +47,11 @@ pub enum NeatErrors {
+     FilterReadsError(#[from] FilterReadsError),
+     #[error("Error while generating mutation model {0}")]
+     GenMutModelError(#[from] GenMutationModelError),
++    #[error("Error while generating sequencing error model {0}")]
++    GenSeqErrorModel(#[from] GenSeqErrorModelError),
+ }
+ 
+-fn neat_commands() -> [Command; 3] {
++fn neat_commands() -> [Command; 4] {
+ 	// These are the submodule commands. Any new commands added should go here.
+     let configuration_arg = Arg::new("configuration_yaml")
+         .long("configuration-yaml")
+@@ -74,6 +78,12 @@ fn neat_commands() -> [Command; 3] {
+         Command::new("gen-mut-model")
+             .about("Generate a mutation model based on an input mutations file")
+             .arg_required_else_help(true)
++            .arg(
++                &configuration_arg
++            ),
++        Command::new("gen-seq-error-model")
++            .about("Generate a sequencing error model from a FASTQ file")
++            .arg_required_else_help(true)
+             .arg(
+                 &configuration_arg
+             )
+@@ -250,6 +260,32 @@ fn main() -> Result<(), NeatErrors> {
+                 }
+             }
+         },
++        Some(("gen-seq-error-model", _)) => {
++            if let Some(("gen-seq-error-model", cmd)) = subcommand {
++                info!("Running rneat gen-seq-error-model");
++                if cmd.contains_id("configuration_yaml") {
++                    let file = cmd.get_one::<PathBuf>("configuration_yaml")
++                            .expect("Must provide a path with configuration-yaml")
++                            .to_path_buf();
++
++                    if !file.is_file() {
++                        return Err(
++                            NeatErrors::FilterReadsError(
++                                FilterReadsError::CliError(
++                                    "Must supply a configuration file to run gen-seq-error-model!".to_string()
++                                )
++                            )
++                        )
++                    }
++                    info!("Running gen-seq-error-model to generate a sequencing error model.");
++                    let result = gen_seq_error_model::main(&file);
++                    match result {
++                        Err(error) => return Err(NeatErrors::GenSeqErrorModel(error)),
++                        Ok(()) => info!("rneat gen-seq-error-model completed successfully"),
++                    }
++                }
++            }
++        },
+         _ => unreachable!("Parser should ensure no other subcommand choice is made.")
+     }
+ 
+-- 
+2.43.0

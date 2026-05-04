@@ -10,6 +10,7 @@ pub mod filter_reads;
 pub mod gen_reads;
 pub mod gen_mut_model;
 pub mod gen_seq_error_model;
+pub mod gen_frag_length_model;
 
 use std::env;
 use std::time;
@@ -31,6 +32,7 @@ use std::path::PathBuf;
 
 use crate::gen_mut_model::errors::GenMutationModelError;
 use crate::gen_seq_error_model::errors::GenSeqErrorModelError;
+use crate::gen_frag_length_model::errors::GenFragLengthModelError;
 use crate::{
     filter_reads::errors::FilterReadsError,
     gen_reads::errors::GenerateReadsErrors,
@@ -49,9 +51,11 @@ pub enum NeatErrors {
     GenMutModelError(#[from] GenMutationModelError),
     #[error("Error while generating sequencing error model {0}")]
     GenSeqErrorModel(#[from] GenSeqErrorModelError),
+    #[error("Error while generating fragment length model {0}")]
+    GenFragLengthModel(#[from] GenFragLengthModelError),
 }
 
-fn neat_commands() -> [Command; 4] {
+fn neat_commands() -> [Command; 5] {
 	// These are the submodule commands. Any new commands added should go here.
     let configuration_arg = Arg::new("configuration_yaml")
         .long("configuration-yaml")
@@ -83,6 +87,12 @@ fn neat_commands() -> [Command; 4] {
             ),
         Command::new("gen-seq-error-model")
             .about("Generate a sequencing error model from a FASTQ file")
+            .arg_required_else_help(true)
+            .arg(
+                &configuration_arg
+            ),
+        Command::new("gen-frag-length-model")
+            .about("Generate a fragment length model from a BAM or SAM file")
             .arg_required_else_help(true)
             .arg(
                 &configuration_arg
@@ -282,6 +292,32 @@ fn main() -> Result<(), NeatErrors> {
                     match result {
                         Err(error) => return Err(NeatErrors::GenSeqErrorModel(error)),
                         Ok(()) => info!("rneat gen-seq-error-model completed successfully"),
+                    }
+                }
+            }
+        },
+        Some(("gen-frag-length-model", _)) => {
+            if let Some(("gen-frag-length-model", cmd)) = subcommand {
+                info!("Running rneat gen-frag-length-model");
+                if cmd.contains_id("configuration_yaml") {
+                    let file = cmd.get_one::<PathBuf>("configuration_yaml")
+                            .expect("Must provide a path with configuration-yaml")
+                            .to_path_buf();
+
+                    if !file.is_file() {
+                        return Err(
+                            NeatErrors::FilterReadsError(
+                                FilterReadsError::CliError(
+                                    "Must supply a configuration file to run gen-frag-length-model!".to_string()
+                                )
+                            )
+                        )
+                    }
+                    info!("Running gen-frag-length-model to generate a fragment length model.");
+                    let result = gen_frag_length_model::main(&file);
+                    match result {
+                        Err(error) => return Err(NeatErrors::GenFragLengthModel(error)),
+                        Ok(()) => info!("rneat gen-frag-length-model completed successfully"),
                     }
                 }
             }

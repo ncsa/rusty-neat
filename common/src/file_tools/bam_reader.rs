@@ -124,6 +124,101 @@ impl MdWalker {
     }
 }
 
+/// Minimum mapping quality for a read to contribute to the fragment length model.
+const FRAG_FILTER_MAPQUAL: u8 = 10;
+
+/// Reads a BAM or SAM file and returns the absolute template lengths (TLEN) for
+/// paired, first-in-pair reads that are confidently mapped to the same reference
+/// as their mate and have mapping quality > FRAG_FILTER_MAPQUAL.
+///
+/// Files with a `.sam` extension are read as plain-text SAM; all others are
+/// treated as BGZF-compressed BAM.
+pub fn read_fragment_lengths(path: &PathBuf) -> Result<Vec<usize>, BamReaderError> {
+    let is_sam = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.eq_ignore_ascii_case("sam"))
+        .unwrap_or(false);
+
+    if is_sam {
+        read_fragment_lengths_sam(path)
+    } else {
+        read_fragment_lengths_bam(path)
+    }
+}
+
+fn read_fragment_lengths_bam(path: &PathBuf) -> Result<Vec<usize>, BamReaderError> {
+    let mut tlens = Vec::new();
+    let mut reader = std::fs::File::open(path).map(bam::io::Reader::new)?;
+    reader.read_header()?;
+    for result in reader.records() {
+        let record = result?;
+        let flags = record.flags();
+        // Must be paired and first in pair
+        if !flags.is_segmented() || !flags.is_first_segment() {
+            continue;
+        }
+        // Skip unmapped, secondary, supplementary, or mate-unmapped reads
+        if flags.intersects(SKIP_FLAGS) || flags.is_mate_unmapped() {
+            continue;
+        }
+        let mq: u8 = match record.mapping_quality() {
+            Some(mq) => u8::from(mq),
+            None => continue,
+        };
+        if mq <= FRAG_FILTER_MAPQUAL {
+            continue;
+        }
+        let ref_id = record.reference_sequence_id().transpose()?;
+        let mate_ref_id = record.mate_reference_sequence_id().transpose()?;
+        if ref_id != mate_ref_id {
+            continue;
+        }
+        let tlen = record.template_length().unsigned_abs() as usize;
+        if tlen > 0 {
+            tlens.push(tlen);
+        }
+    }
+    Ok(tlens)
+}
+
+fn read_fragment_lengths_sam(path: &PathBuf) -> Result<Vec<usize>, BamReaderError> {
+    use noodles::sam;
+    use std::io::BufReader;
+
+    let file = std::fs::File::open(path)?;
+    let mut reader = sam::io::Reader::new(BufReader::new(file));
+    let header = reader.read_header()?;
+    let mut tlens = Vec::new();
+    for result in reader.records() {
+        let record = result?;
+        let flags = record.flags()?;
+        if !flags.is_segmented() || !flags.is_first_segment() {
+            continue;
+        }
+        if flags.intersects(SKIP_FLAGS) || flags.is_mate_unmapped() {
+            continue;
+        }
+        let mq: u8 = match record.mapping_quality() {
+            Some(Ok(mq)) => u8::from(mq),
+            _ => continue,
+        };
+        if mq <= FRAG_FILTER_MAPQUAL {
+            continue;
+        }
+        let ref_id = record.reference_sequence_id(&header).transpose()?;
+        let mate_ref_id = record.mate_reference_sequence_id(&header).transpose()?;
+        if ref_id != mate_ref_id {
+            continue;
+        }
+        let tlen = record.template_length()?.unsigned_abs() as usize;
+        if tlen > 0 {
+            tlens.push(tlen);
+        }
+    }
+    Ok(tlens)
+}
+
 /// Reads a BAM file and accumulates a raw 4×4 SNP mismatch count matrix.
 ///
 /// `counts[ref_base][read_base]` is incremented for each position where a read

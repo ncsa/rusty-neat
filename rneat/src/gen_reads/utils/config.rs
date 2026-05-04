@@ -278,7 +278,6 @@ impl RunConfiguration {
                         match pb_option {
                             Some(pb_opt) => {
                                 configuration.produce_bam = pb_opt;
-                                warn!("Produce BAM is currently not functional, but will be implemented soon!")
                             },
                             None => {
                                 return Err(GenerateReadsErrors::ConfigReadError("produce_bam".to_string(), "boolean".to_string()))

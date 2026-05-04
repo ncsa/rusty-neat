@@ -16,12 +16,13 @@ use flate2::{
 use crate::{
     common::{
         file_tools::{
-            fasta_reader::read_fasta, 
+            bam_writer::BamWriter,
+            fasta_reader::read_fasta,
             fastq_tools::{
-                combine_temp_fastqs, 
+                combine_temp_fastqs,
                 write_block_fastq
-            }, 
-            file_io::{append_to_file, VectorBuffer}, 
+            },
+            file_io::{append_to_file, VectorBuffer},
             vcf_tools::write_vcf
         }, models::{
             fragment_length::FragmentLengthModel,
@@ -132,6 +133,18 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
 
     // Mutating the reference and recording the variant locations.
     info!("Generating simulated dataset");
+
+    // Open BAM writer if requested, using contig names+lengths from the fasta header.
+    let mut bam_writer: Option<BamWriter> = if config.produce_bam {
+        let contigs: Vec<(String, usize)> = fasta_map.contigs
+            .iter()
+            .map(|c| (c.name.clone(), c.contig_len))
+            .collect();
+        let bam_path = config.output_bam.as_ref().expect("output_bam must be set when produce_bam is true");
+        Some(BamWriter::new(bam_path, &contigs)?)
+    } else {
+        None
+    };
 
     // all variants will be a hashmap of the contig name indexing a variants.
     let mut mutated_maps: HashMap<String, Vec<MutatedMap>> = HashMap::new();
@@ -296,6 +309,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
                         &quality_score_model,
                         &seq_error_model,
                         rng,
+                        bam_writer.as_mut(),
                     )?;
                     contig_files_r1
                         .push(file_to_write_1);
@@ -320,6 +334,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
                         &quality_score_model,
                         &seq_error_model,
                         rng,
+                        bam_writer.as_mut(),
                     )?;
                     contig_files_r1
                         .push(file_to_write_1)
@@ -402,6 +417,13 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
         if let Some(filename1) = &config.output_fastq_1 {
             info!("Successfully wrote fastq file: {:?}", &filename1);
             files_written.push(filename1.clone());
+        }
+    }
+
+    if let Some(bam_path) = &config.output_bam {
+        if config.produce_bam {
+            info!("Successfully wrote BAM file: {:?}", bam_path);
+            files_written.push(bam_path.clone());
         }
     }
 

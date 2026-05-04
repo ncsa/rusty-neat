@@ -1,7 +1,12 @@
 use std::{num::{ParseFloatError, ParseIntError}, str::ParseBoolError};
 
 use common::{
-    file_tools::{bed_reader::BedReaderError, fasta_reader::FastaReaderError, fastq_tools::FastqToolsError}, 
+    file_tools::{
+        bam_writer::BamWriterError,
+        bed_reader::BedReaderError,
+        fasta_reader::FastaReaderError,
+        fastq_tools::FastqToolsError,
+    },
     
     models::{
         fragment_length::FragmentModelError, 
@@ -78,6 +83,8 @@ pub enum GenerateReadsErrors {
     FqToolsError(#[from] FastqToolsError),
     #[error("Bed reader error: {0}")]
     BedError(#[from] BedReaderError),
+    #[error("BAM writer error: {0}")]
+    BamWriterError(#[from] BamWriterError),
     #[error("Sequence too short to process")]
     ShortSequence,
 }

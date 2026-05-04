@@ -236,6 +236,68 @@ pub fn runner(config: &RunConfiguration) -> Result<(), GenSeqErrorModelError> {
     Ok(())
 }
 
+/// Write a minimal BAM file with `n_records` mapped records.
+/// Each record uses `ref_bases` for the MD mismatch source and `read_bases` for the SEQ field.
+/// Slices must be the same length. Pass `with_md = false` to omit the MD tag entirely.
+#[cfg(test)]
+fn write_test_bam(path: &PathBuf, n_records: usize, ref_bases: &[u8], read_bases: &[u8], with_md: bool) {
+    use noodles::bam;
+    use noodles::sam::{
+        self as sam,
+        alignment::{
+            RecordBuf,
+            io::Write as _,
+            record::{
+                cigar::{op::Kind, Op},
+                data::field::Tag,
+                Flags,
+            },
+            record_buf::{Cigar, Sequence, data::field::Value as BufValue},
+        },
+    };
+
+    let n = read_bases.len();
+    let header = sam::Header::default();
+
+    // Build MD string: match counts interspersed with ref bases at mismatches
+    let md_str: Option<String> = if with_md {
+        let mut md = String::new();
+        let mut match_count = 0usize;
+        for (&r, &q) in ref_bases.iter().zip(read_bases.iter()) {
+            if r.to_ascii_uppercase() == q.to_ascii_uppercase() {
+                match_count += 1;
+            } else {
+                md.push_str(&match_count.to_string());
+                md.push(r as char);
+                match_count = 0;
+            }
+        }
+        md.push_str(&match_count.to_string());
+        Some(md)
+    } else {
+        None
+    };
+
+    let file = std::fs::File::create(path).unwrap();
+    let mut writer = bam::io::Writer::new(file);
+    writer.write_header(&header).unwrap();
+
+    for _ in 0..n_records {
+        let cigar: Cigar = [Op::new(Kind::Match, n)].into_iter().collect();
+        let mut record = RecordBuf::default();
+        *record.flags_mut() = Flags::empty();
+        *record.cigar_mut() = cigar;
+        *record.sequence_mut() = Sequence::from(read_bases);
+
+        if let Some(ref md) = md_str {
+            record
+                .data_mut()
+                .insert(Tag::MISMATCHED_POSITIONS, BufValue::from(md.as_str()));
+        }
+        writer.write_alignment_record(&header, &record).unwrap();
+    }
+}
+
 #[cfg(test)]
 fn make_test_fastq(path: &PathBuf, n_reads: usize, read_length: usize) {
     use std::io::Write;
@@ -481,6 +543,91 @@ mod tests {
         };
         runner(&config).unwrap();
         assert!(output_path.exists());
+    }
+
+    #[test]
+    fn test_runner_with_bam_md_tags() {
+        // ref=AAAA, read=CCCC → every base is an A→C mismatch.
+        // Verifies that runner accepts a bam_file and completes successfully.
+        let temp = tempfile::tempdir().unwrap();
+        let fastq_path = temp.path().join("test.fastq");
+        make_test_fastq(&fastq_path, 20, 4);
+        let bam_path = temp.path().join("test.bam");
+        write_test_bam(&bam_path, 10, b"AAAA", b"CCCC", true);
+        let output_path = temp.path().join("model.json.gz");
+
+        let config = RunConfiguration {
+            fastq_file: fastq_path,
+            output_file: output_path.clone(),
+            overwrite_output: true,
+            max_reads: 0,
+            qual_offset: 33,
+            bam_file: Some(bam_path),
+            transition_matrix_file: None,
+        };
+        runner(&config).unwrap();
+        assert!(output_path.exists());
+        SequencingErrorModel::from_file(&output_path).unwrap();
+    }
+
+    #[test]
+    fn test_runner_bam_no_md_tags_falls_back() {
+        // BAM records without MD tags → runner succeeds and uses the default matrix.
+        let temp = tempfile::tempdir().unwrap();
+        let fastq_path = temp.path().join("test.fastq");
+        make_test_fastq(&fastq_path, 20, 4);
+        let bam_path = temp.path().join("nomd.bam");
+        write_test_bam(&bam_path, 5, b"ACGT", b"TGCA", false);
+        let output_path = temp.path().join("model.json.gz");
+
+        let config = RunConfiguration {
+            fastq_file: fastq_path,
+            output_file: output_path.clone(),
+            overwrite_output: true,
+            max_reads: 0,
+            qual_offset: 33,
+            bam_file: Some(bam_path),
+            transition_matrix_file: None,
+        };
+        runner(&config).unwrap();
+        assert!(output_path.exists());
+    }
+
+    #[test]
+    fn test_tsv_takes_precedence_over_bam() {
+        // When both transition_matrix_file and bam_file are set, the TSV wins.
+        // The BAM has A→C biased mismatches; the TSV has a uniform matrix.
+        // We can't easily inspect the matrix after serialization, so just verify
+        // that the runner completes and writes a valid model.
+        let temp = tempfile::tempdir().unwrap();
+        let fastq_path = temp.path().join("test.fastq");
+        make_test_fastq(&fastq_path, 20, 4);
+        let bam_path = temp.path().join("test.bam");
+        write_test_bam(&bam_path, 10, b"AAAA", b"CCCC", true);
+        let tsv_path = temp.path().join("matrix.tsv");
+        std::fs::write(
+            &tsv_path,
+            "A\tC\tG\tT\n\
+             0.0\t0.5\t0.3\t0.2\n\
+             0.5\t0.0\t0.3\t0.2\n\
+             0.4\t0.3\t0.0\t0.3\n\
+             0.3\t0.3\t0.4\t0.0\n",
+        )
+        .unwrap();
+        let output_path = temp.path().join("model.json.gz");
+
+        let config = RunConfiguration {
+            fastq_file: fastq_path,
+            output_file: output_path.clone(),
+            overwrite_output: true,
+            max_reads: 0,
+            qual_offset: 33,
+            bam_file: Some(bam_path),
+            transition_matrix_file: Some(tsv_path),
+        };
+        runner(&config).unwrap();
+        assert!(output_path.exists());
+        SequencingErrorModel::from_file(&output_path).unwrap();
     }
 
     #[test]

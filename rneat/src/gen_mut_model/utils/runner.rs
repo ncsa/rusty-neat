@@ -339,6 +339,7 @@ mod tests {
     use common::{
         file_tools::{fasta_reader::read_fasta, vcf_tools::read_vcf},
         models::mutation_model::MutationModel,
+        structs::bed_record::BedRecord,
     };
     use tempfile::tempdir;
 
@@ -418,7 +419,7 @@ mod tests {
         let bed_record = BedRecord::new("H1N1_HA".to_string(), 1, 100, vec![]).unwrap();
         let bed_table = HashMap::from([("H1N1_HA".to_string(), vec![bed_record])]);
 
-        runner(fasta_map, mutations, bed_table, &output_file).unwrap();
+        runner(fasta_map, mutations, bed_table, &output_file, None).unwrap();
 
         assert!(output_file.exists());
         let model = MutationModel::from_file(&output_file).unwrap();

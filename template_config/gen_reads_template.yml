@@ -105,3 +105,17 @@ fragment_model: .
 # Coordinates must use the same contig names as the reference FASTA.
 # Omit (or set to .) to generate reads over the full reference. (default: none)
 target_bed: .
+
+# --------------- forced variants ---------------
+
+# Optional VCF file (.vcf or .vcf.gz) of variants to force into the simulation.
+# The VCF must be single-sample and every record must have a GT field in FORMAT.
+# Accepted variant types: SNPs and indels (insertion / deletion).
+# Complex variants (multi-base REF and multi-base ALT that are not a simple indel)
+# are skipped with a warning — they are not yet supported.
+# Contig names must match the short names in the reference FASTA.
+#
+# Positions not covered by the input VCF still receive randomly generated variants
+# at mutation_rate. Set mutation_rate: 0 to disable random variants entirely.
+# Omit (or set to .) to generate variants purely at random. (default: none)
+input_vcf: .

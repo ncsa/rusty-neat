@@ -398,4 +398,36 @@ mod tests {
         let model = MutationModel::from_file(&output_file).unwrap();
         assert!(model.mutation_rate > 0.0);
     }
+
+    #[test]
+    fn test_runner_with_bed_table() {
+        // When a BED table is provided, trinucleotide counts are restricted to BED
+        // regions and mutation_rate is computed against bed_track_len, not total_reflen.
+        // With 3 SNPs over a 99-bp window the per-bp rate should exceed that of the
+        // whole-reference run (which divides by the full H1N1 multi-segment reference).
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let reference = PathBuf::from(format!("{}/test_data/references/H1N1.fa", manifest_dir));
+        let vcf_path = PathBuf::from(format!("{}/test_data/vcfs/small_snps.vcf", manifest_dir));
+        let temp_fa = tempdir().unwrap();
+        let temp_out = tempdir().unwrap();
+        let fasta_map = read_fasta(&reference, None, 0, &temp_fa, None).unwrap();
+        let mutations = read_vcf(vcf_path).unwrap();
+        let output_file = temp_out.path().join("bed_model.json.gz");
+
+        // BED region covering SNP positions 22, 25, 28 on H1N1_HA (1-based VCF coords)
+        let bed_record = BedRecord::new("H1N1_HA".to_string(), 1, 100, vec![]).unwrap();
+        let bed_table = HashMap::from([("H1N1_HA".to_string(), vec![bed_record])]);
+
+        runner(fasta_map, mutations, bed_table, &output_file).unwrap();
+
+        assert!(output_file.exists());
+        let model = MutationModel::from_file(&output_file).unwrap();
+        assert!(model.mutation_rate > 0.0, "mutation_rate should be positive");
+        // 3 variants / 99 bp ≈ 0.030; whole-reference denominator is ~14 000 bp total
+        assert!(
+            model.mutation_rate > 0.01,
+            "BED-constrained rate should exceed 0.01, got {}",
+            model.mutation_rate
+        );
+    }
 }

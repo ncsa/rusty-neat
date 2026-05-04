@@ -15,37 +15,6 @@ use common::{
 
 use crate::gen_mut_model::errors::GenMutationModelError;
 
-fn load_transition_matrix_tsv(path: &PathBuf) -> Result<TransitionMatrix, GenMutationModelError> {
-    let content = std::fs::read_to_string(path)?;
-    let mut rows: Vec<[f64; 4]> = Vec::new();
-
-    for line in content.lines() {
-        let tokens: Vec<&str> = line.split_whitespace().collect();
-        if tokens.is_empty() {
-            continue;
-        }
-        if rows.is_empty() && tokens[0].parse::<f64>().is_err() {
-            continue; // skip header
-        }
-        let vals: Vec<f64> = tokens.iter().filter_map(|s| s.parse().ok()).collect();
-        if vals.len() >= 4 {
-            rows.push([vals[0], vals[1], vals[2], vals[3]]);
-        }
-    }
-
-    if rows.len() < 4 {
-        return Err(GenMutationModelError::ConfigurationError(format!(
-            "transition_matrix_file {:?} has only {} data rows (expected 4)",
-            path, rows.len()
-        )));
-    }
-
-    for (i, row) in rows.iter_mut().enumerate() {
-        row[i] = 0.0; // zero diagonal so self-transitions are impossible
-    }
-
-    Ok(TransitionMatrix::from(rows[0], rows[1], rows[2], rows[3])?)
-}
 
 pub fn runner(
     fasta_map: Box<FastaMap>,
@@ -278,7 +247,7 @@ pub fn runner(
     let transition_matrix_override = match transition_matrix_file {
         Some(ref path) => {
             info!("Loading custom SNP transition matrix from TSV: {:?}", path);
-            Some(load_transition_matrix_tsv(path)?)
+            Some(TransitionMatrix::from_tsv(path)?)
         }
         None => None,
     };

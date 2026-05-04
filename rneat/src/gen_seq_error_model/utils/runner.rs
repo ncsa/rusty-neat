@@ -18,46 +18,6 @@ use crate::gen_seq_error_model::{
 
 const MAX_SCORE: usize = 94;
 
-/// Loads a 4×4 SNP transition matrix from a whitespace-delimited TSV file.
-///
-/// The file should have 4 data rows (A/C/G/T from-base) and 4 columns (A/C/G/T to-base).
-/// An optional single header row is skipped if the first token is non-numeric.
-/// The diagonal is zeroed before building the distribution so self-transitions
-/// are impossible.
-fn load_transition_matrix_tsv(path: &PathBuf) -> Result<TransitionMatrix, GenSeqErrorModelError> {
-    let content = std::fs::read_to_string(path)?;
-    let mut rows: Vec<[f64; 4]> = Vec::new();
-
-    for line in content.lines() {
-        let tokens: Vec<&str> = line.split_whitespace().collect();
-        if tokens.is_empty() {
-            continue;
-        }
-        // Skip a header row whose first token is not a number
-        if rows.is_empty() && tokens[0].parse::<f64>().is_err() {
-            continue;
-        }
-        let vals: Vec<f64> = tokens.iter().filter_map(|s| s.parse().ok()).collect();
-        if vals.len() >= 4 {
-            rows.push([vals[0], vals[1], vals[2], vals[3]]);
-        }
-    }
-
-    if rows.len() < 4 {
-        return Err(GenSeqErrorModelError::ConfigurationError(format!(
-            "transition_matrix_file {:?} has only {} data rows (expected 4)",
-            path,
-            rows.len()
-        )));
-    }
-
-    // Zero the diagonal so self-transitions are impossible
-    for (i, row) in rows.iter_mut().enumerate() {
-        row[i] = 0.0;
-    }
-
-    Ok(TransitionMatrix::from(rows[0], rows[1], rows[2], rows[3])?)
-}
 
 /// Normalizes a raw 4×4 mismatch count matrix into a `TransitionMatrix`.
 ///
@@ -210,7 +170,7 @@ pub fn runner(config: &RunConfiguration) -> Result<(), GenSeqErrorModelError> {
     let snp_transition_matrix: Option<TransitionMatrix> =
         if let Some(path) = &config.transition_matrix_file {
             info!("Loading SNP transition matrix from TSV: {:?}", path);
-            Some(load_transition_matrix_tsv(path)?)
+            Some(TransitionMatrix::from_tsv(path)?)
         } else if let Some(path) = &config.bam_file {
             info!("Inferring SNP transition matrix from BAM: {:?}", path);
             let counts = read_bam_transitions(path)?;

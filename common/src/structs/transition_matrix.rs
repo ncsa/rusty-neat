@@ -8,6 +8,7 @@ use crate::structs::{
 use thiserror::Error;
 use std::ops::Index;
 use std::fmt::Debug;
+use std::path::PathBuf;
 use serde::{Serialize, Deserialize};
 
 #[derive(Debug, Error)]
@@ -16,6 +17,10 @@ pub enum TransitionMatrixError {
     DistributionError(DistributionErrors),
     #[error("Input weights and lengths were of unequal length")]
     UnequalWeightsError,
+    #[error("I/O error reading transition matrix file: {0}")]
+    IoError(#[from] std::io::Error),
+    #[error("Transition matrix file has {0} data rows (expected 4)")]
+    InvalidRowCount(usize),
 }
 
 impl From<DistributionErrors> for TransitionMatrixError {
@@ -86,6 +91,40 @@ impl TransitionMatrix where {
         })
     }
 
+    /// Load a 4×4 SNP transition matrix from a whitespace-delimited TSV file.
+    ///
+    /// Rows and columns correspond to A/C/G/T (from-base and to-base).
+    /// An optional header row is skipped if its first token is non-numeric.
+    /// Diagonal values are zeroed so self-transitions are impossible.
+    pub fn from_tsv(path: &PathBuf) -> Result<Self, TransitionMatrixError> {
+        let content = std::fs::read_to_string(path)?;
+        let mut rows: Vec<[f64; 4]> = Vec::new();
+
+        for line in content.lines() {
+            let tokens: Vec<&str> = line.split_whitespace().collect();
+            if tokens.is_empty() {
+                continue;
+            }
+            if rows.is_empty() && tokens[0].parse::<f64>().is_err() {
+                continue; // skip header
+            }
+            let vals: Vec<f64> = tokens.iter().filter_map(|s| s.parse().ok()).collect();
+            if vals.len() >= 4 {
+                rows.push([vals[0], vals[1], vals[2], vals[3]]);
+            }
+        }
+
+        if rows.len() < 4 {
+            return Err(TransitionMatrixError::InvalidRowCount(rows.len()));
+        }
+
+        for (i, row) in rows.iter_mut().enumerate() {
+            row[i] = 0.0; // zero diagonal so self-transitions are impossible
+        }
+
+        Self::from(rows[0], rows[1], rows[2], rows[3])
+    }
+
     pub fn from(
         a_weights: [f64; 4],
         c_weights: [f64; 4],
@@ -143,6 +182,41 @@ mod tests {
         assert_eq!(model[3].values().unwrap(), model[&Nucleotide::T].values().unwrap());
         // Each row's values should be the four ACGT nucleotides
         assert_eq!(model[&Nucleotide::A].values().unwrap(), Vec::from(ALLOWED_NUCS));
+    }
+
+    #[test]
+    fn test_from_tsv_valid() {
+        let dir = tempfile::tempdir().unwrap();
+        let tsv = dir.path().join("matrix.tsv");
+        std::fs::write(
+            &tsv,
+            "A\tC\tG\tT\n\
+             0.0\t0.5\t0.3\t0.2\n\
+             0.5\t0.0\t0.3\t0.2\n\
+             0.4\t0.3\t0.0\t0.3\n\
+             0.3\t0.3\t0.4\t0.0\n",
+        )
+        .unwrap();
+        let tm = TransitionMatrix::from_tsv(&tsv).unwrap();
+        // Check each row can sample one of the four ACGT nucleotides
+        let mut rng = NeatRng::new_from_seed(&vec!["t".to_string()]).unwrap();
+        for nuc in ALLOWED_NUCS {
+            let sample = tm[&nuc].sample(rng.random().unwrap()).unwrap();
+            assert!(ALLOWED_NUCS.contains(&sample));
+            // Self-transition must be impossible: diagonal was zeroed
+            assert_ne!(sample, nuc);
+        }
+    }
+
+    #[test]
+    fn test_from_tsv_too_few_rows_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let tsv = dir.path().join("short.tsv");
+        std::fs::write(&tsv, "0.0\t0.5\t0.3\t0.2\n0.5\t0.0\t0.3\t0.2\n").unwrap();
+        assert!(matches!(
+            TransitionMatrix::from_tsv(&tsv),
+            Err(TransitionMatrixError::InvalidRowCount(2))
+        ));
     }
 
     #[test]

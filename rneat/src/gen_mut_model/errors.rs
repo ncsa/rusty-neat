@@ -1,6 +1,10 @@
 use thiserror::Error;
 use std::num::ParseIntError;
-use common::{file_tools::{bed_reader::BedReaderError, fasta_reader::FastaReaderError, vcf_tools::VcfToolsError}, models::mutation_model::MutationModelError, structs::fasta_map::FastaMapError};
+use common::{
+    file_tools::{bed_reader::BedReaderError, fasta_reader::FastaReaderError, vcf_tools::VcfToolsError},
+    models::mutation_model::MutationModelError,
+    structs::{fasta_map::FastaMapError, transition_matrix::TransitionMatrixError},
+};
 
 #[derive(Error, Debug)]
 pub enum GenMutationModelError {
@@ -38,4 +42,6 @@ pub enum GenMutationModelError {
     BaseMismatch(String),
     #[error("Error building mutation model: {0}")]
     MutModelError(#[from] MutationModelError),
+    #[error("Transition matrix error: {0}")]
+    TransitionMatrixError(#[from] TransitionMatrixError),
 }

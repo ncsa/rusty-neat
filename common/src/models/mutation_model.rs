@@ -112,37 +112,22 @@ impl MutationModel {
         ins_weights: Vec<f64>,
         del_lengths: Vec<usize>,
         del_weights: Vec<f64>,
+        transition_matrix_override: Option<TransitionMatrix>,
     ) -> Result<Self, MutationModelError> {
-        // Inputs:
-        // average_mutation_rate: Average rate by total reference (or bed track) length
-        //    of a base mutating
-        // homozygous_frequency: Average rate that, if a mutation occurs, it is homozygous
-        // variant_probs: Relative probabilities of each type of allowed variant (SNP, INS, DEL)
-        // snp_transition_frequency: Probability that one base mutates to another, 
-        //    independent of context
-        // trinuc_frequency: The relative frequency of each trinucleotide in the dataset
-        //    mutating to anything else (to help detect if some trinucs are more volatile 
-        //    than others)
-        // trinuc_transition_frequency: The probability of trinuc A mutating into trinuc B,
-        //    as seen in data. Some may not have been observed and will be assigned a very
-        //    low probability.
-        //
-        // custom tranisition matrix for snps
-        let mut temp_trans_matrix: [[f64; 4]; 4] = [
-            [0.0, 0.0, 0.0, 0.0],
-            [0.0, 0.0, 0.0, 0.0],
-            [0.0, 0.0, 0.0, 0.0],
-            [0.0, 0.0, 0.0, 0.0],
-        ];
-        for (key, value) in snp_transition_frequency {
-            temp_trans_matrix[key.0 as usize][key.1 as usize] = value;
-        }
-        let transition_matrix = TransitionMatrix::from(
-            temp_trans_matrix[Nucleotide::A as usize],
-            temp_trans_matrix[Nucleotide::C as usize],
-            temp_trans_matrix[Nucleotide::G as usize],
-            temp_trans_matrix[Nucleotide::T as usize],
-        )?;
+        let transition_matrix = if let Some(tm) = transition_matrix_override {
+            tm
+        } else {
+            let mut temp_trans_matrix: [[f64; 4]; 4] = [[0.0; 4]; 4];
+            for (key, value) in snp_transition_frequency {
+                temp_trans_matrix[key.0 as usize][key.1 as usize] = value;
+            }
+            TransitionMatrix::from(
+                temp_trans_matrix[Nucleotide::A as usize],
+                temp_trans_matrix[Nucleotide::C as usize],
+                temp_trans_matrix[Nucleotide::G as usize],
+                temp_trans_matrix[Nucleotide::T as usize],
+            )?
+        };
         // build transition matrices from data for snps and trinucs
         let snp_trinuc_model = SnpTrinucModel::from_raw_data(
             trinuc_frequency,
@@ -440,6 +425,7 @@ mod tests {
             vec![],
             vec![], // no deletion data
             vec![],
+            None,
         );
         assert!(result.is_ok(), "Expected Ok with no indels, got {:?}", result);
         let model = result.unwrap();

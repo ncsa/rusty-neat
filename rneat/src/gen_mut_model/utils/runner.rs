@@ -3,22 +3,56 @@ use itertools::Itertools;
 use log::*;
 
 use common::{
-    models::{mutation_model::MutationModel, snp_trinuc_model::{TrinucFrame}}, 
+    models::{mutation_model::MutationModel, snp_trinuc_model::{TrinucFrame}},
     structs::{
-        bed_record::BedRecord, 
-        fasta_map::{FastaMap}, 
-        nucleotides::{Nucleotide, ALLOWED_NUCS}, 
+        bed_record::BedRecord,
+        fasta_map::{FastaMap},
+        nucleotides::{Nucleotide, ALLOWED_NUCS},
+        transition_matrix::TransitionMatrix,
         variants::{Genotype, Variant, VariantType}
     }
 };
 
 use crate::gen_mut_model::errors::GenMutationModelError;
 
+fn load_transition_matrix_tsv(path: &PathBuf) -> Result<TransitionMatrix, GenMutationModelError> {
+    let content = std::fs::read_to_string(path)?;
+    let mut rows: Vec<[f64; 4]> = Vec::new();
+
+    for line in content.lines() {
+        let tokens: Vec<&str> = line.split_whitespace().collect();
+        if tokens.is_empty() {
+            continue;
+        }
+        if rows.is_empty() && tokens[0].parse::<f64>().is_err() {
+            continue; // skip header
+        }
+        let vals: Vec<f64> = tokens.iter().filter_map(|s| s.parse().ok()).collect();
+        if vals.len() >= 4 {
+            rows.push([vals[0], vals[1], vals[2], vals[3]]);
+        }
+    }
+
+    if rows.len() < 4 {
+        return Err(GenMutationModelError::ConfigurationError(format!(
+            "transition_matrix_file {:?} has only {} data rows (expected 4)",
+            path, rows.len()
+        )));
+    }
+
+    for (i, row) in rows.iter_mut().enumerate() {
+        row[i] = 0.0; // zero diagonal so self-transitions are impossible
+    }
+
+    Ok(TransitionMatrix::from(rows[0], rows[1], rows[2], rows[3])?)
+}
+
 pub fn runner(
     fasta_map: Box<FastaMap>,
     filtered_mutations: HashMap<String, Vec<Variant>>,
     bed_table: HashMap<String, Vec<BedRecord>>,
     output_file: &PathBuf,
+    transition_matrix_file: Option<PathBuf>,
 ) -> Result<(), GenMutationModelError> {
     // This will generate a MutationModel and write it to the output file 
     // provided.
@@ -241,6 +275,14 @@ pub fn runner(
         .map(|x| x as f64)
         .collect();
 
+    let transition_matrix_override = match transition_matrix_file {
+        Some(ref path) => {
+            info!("Loading custom SNP transition matrix from TSV: {:?}", path);
+            Some(load_transition_matrix_tsv(path)?)
+        }
+        None => None,
+    };
+
     let result = MutationModel::from_raw_data(
         average_mutation_rate,
         homozygous_frequency,
@@ -252,6 +294,7 @@ pub fn runner(
         ins_weights,
         del_lengths,
         del_weights,
+        transition_matrix_override,
     );
 
     match result {
@@ -342,11 +385,48 @@ mod tests {
         let mutations = read_vcf(vcf_path).unwrap();
         let out_dir = tempdir().unwrap();
         let output_file = out_dir.path().join("test_model.json.gz");
-        runner(fasta_map, mutations, HashMap::new(), &output_file).unwrap();
+        runner(fasta_map, mutations, HashMap::new(), &output_file, None).unwrap();
         assert!(output_file.exists());
         let model = MutationModel::from_file(&output_file).unwrap();
         assert!(model.mutation_rate > 0.0, "mutation_rate should be positive");
         // 1 of 3 SNPs has GT=1/1 (homozygous), so homozygous_frequency should be > 0
         assert!(model.homozygous_frequency > 0.0, "homozygous_frequency should be positive");
+    }
+
+    #[test]
+    fn test_runner_with_tsv_transition_matrix() {
+        // Verify that supplying a transition_matrix_file overrides the VCF-inferred matrix
+        // and still produces a valid, writable model.
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let reference = PathBuf::from(format!("{}/test_data/references/H1N1.fa", manifest_dir));
+        let vcf_path = PathBuf::from(format!("{}/test_data/vcfs/small_snps.vcf", manifest_dir));
+        let temp = tempdir().unwrap();
+        let fasta_map = read_fasta(&reference, None, 0, &temp, None).unwrap();
+        let mutations = read_vcf(vcf_path).unwrap();
+
+        let tsv_path = temp.path().join("matrix.tsv");
+        std::fs::write(
+            &tsv_path,
+            "A\tC\tG\tT\n\
+             0.0\t0.5\t0.3\t0.2\n\
+             0.5\t0.0\t0.3\t0.2\n\
+             0.4\t0.3\t0.0\t0.3\n\
+             0.3\t0.3\t0.4\t0.0\n",
+        )
+        .unwrap();
+
+        let out_dir = tempdir().unwrap();
+        let output_file = out_dir.path().join("test_model_tsv.json.gz");
+        runner(
+            fasta_map,
+            mutations,
+            HashMap::new(),
+            &output_file,
+            Some(tsv_path),
+        )
+        .unwrap();
+        assert!(output_file.exists());
+        let model = MutationModel::from_file(&output_file).unwrap();
+        assert!(model.mutation_rate > 0.0);
     }
 }

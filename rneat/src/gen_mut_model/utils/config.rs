@@ -31,6 +31,10 @@ pub struct RunConfiguration {
     pub bed_table: HashMap<String, Vec<BedRecord>>,
     pub output_file: PathBuf,
     pub overwrite_output: bool,
+    /// Optional path to a 4×4 TSV specifying a custom SNP transition matrix.
+    /// Rows/columns are A/C/G/T. A single header line is ignored.
+    /// Overrides the transition matrix inferred from VCF data.
+    pub transition_matrix_file: Option<PathBuf>,
 }
 
 impl RunConfiguration {
@@ -79,12 +83,24 @@ impl RunConfiguration {
         }
         let mutations = read_vcf(vcf_file)?;
 
+        let transition_matrix_file = scrape_config
+            .get("transition_matrix_file")
+            .and_then(|v| v.as_str())
+            .map(|s| {
+                let p = PathBuf::from(s);
+                if !p.is_file() {
+                    panic!("transition_matrix_file not found: {:?}", p)
+                }
+                p
+            });
+
         Ok(RunConfiguration {
             reference,
             mutations,
             bed_table,
             output_file,
             overwrite_output,
+            transition_matrix_file,
         })
     }
 }

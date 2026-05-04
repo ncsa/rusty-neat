@@ -219,6 +219,11 @@ bed_file: .
 
 # optional: set to true to overwrite an existing output file (default: false)
 overwrite_output: false
+
+# optional: custom 4x4 SNP transition matrix TSV (rows/columns: A C G T).
+# A single header line is allowed. Diagonal values are zeroed automatically.
+# Overrides the transition matrix inferred from VCF SNP data.
+transition_matrix_file: /path/to/matrix.tsv
 ```
 
 **VCF requirements:**

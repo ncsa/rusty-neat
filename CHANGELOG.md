@@ -71,3 +71,4 @@ Moved the code from a brach under NEAT (https://github.com/ncsa/neat) to its own
 - Added `template_config/gen_seq_error_model_template.yml` documenting all config fields with inline comments.
 - Updated README with a full "Generating a Sequencing Error Model" section covering config schema, BAM MD-tag requirement, TSV format, and priority order.
 - Bug fixes: degenerate zero-row handling in transition matrix normalization; edge-position SNP handling in MD-tag walker.
+- Added `gen-frag-length-model` subcommand. Reads a paired-end BAM or SAM file and outputs a `FragmentLengthModel::Normal` (gzipped JSON) fitted to the observed template lengths. Filters using a median + 10×MAD outlier ceiling and a configurable per-length `min_reads` count floor (default 2; set 0 to disable). Added `template_config/gen_frag_length_model_template.yml` and README section.

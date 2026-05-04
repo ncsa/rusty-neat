@@ -8,18 +8,19 @@ As of now, `rneat` is still under development. We are working toward the goal of
 ## Prerequisites
 One of the packages requires cmake to use. For Debian/Ubuntu this should be a simple `sudo apt install cmake` and for RHEL/Rocky type distros this should be `sudo dnf install cmake`
 
-Download the executable in the release (current version 1.2.1).
+Download the executable in the release (current version 1.3.0).
 
 ```bash
 $ rneat --help
 Usage: rneat [OPTIONS] [SUB-COMMAND]
 
 SUB-COMMANDS:
-  gen-reads            Generates reads for an input dataset
-  filter-reads         Filters the output of gen-reads
-  gen-mut-model        Generates a mutation model from real VCF data
-  gen-seq-error-model  Generates a sequencing error model from real FASTQ data
-  help                 Print this message or the help of the given subcommand(s)
+  gen-reads              Generates reads for an input dataset
+  filter-reads           Filters the output of gen-reads
+  gen-mut-model          Generates a mutation model from real VCF data
+  gen-seq-error-model    Generates a sequencing error model from real FASTQ data
+  gen-frag-length-model  Generates a fragment length model from a BAM or SAM file
+  help                   Print this message or the help of the given subcommand(s)
 
 Options:
       --log-level [<log_level>]  Sets the log level for the display log. [default: trace] [possible values: trace, debug, info, warn, error, off]
@@ -301,3 +302,42 @@ A    C    G    T
 ```
 
 That's it so far! Test out the features and let us know what you think!
+
+Generating a Fragment Length Model
+====================
+`rneat` can learn a fragment length model from real paired-end alignment data using the `rneat gen-frag-length-model` subcommand. It reads a BAM or SAM file, collects the template lengths (TLEN) of confidently-mapped concordant read pairs, filters out rare and extreme-outlier lengths, then fits a normal distribution to the result and writes a `FragmentLengthModel` that `gen-reads` can use.
+
+```bash
+$ rneat gen-frag-length-model -c gen_frag_length_model_config.yml
+```
+
+The output is a gzipped JSON model file that can be passed directly to `gen-reads` via its `fragment_model` config key.
+
+Copy `template_config/gen_frag_length_model_template.yml` to a directory of your choosing and fill in the fields:
+
+```yaml
+# required: path to input BAM or SAM file
+# The file must contain paired-end aligned reads. BAM is strongly recommended.
+input_file: /path/to/aligned.bam
+
+# required: output path for the generated model; should end in .json.gz
+output_file: /path/to/fragment_length_model.json.gz
+
+# optional: minimum number of reads for a fragment length to be included in the model
+# Default is 2 to handle smaller datasets. Set to 0 to disable filtering entirely.
+# For larger datasets (e.g. whole-genome), try 100 and adjust from there.
+min_reads: 2
+
+# optional: set to true to overwrite an existing output file (default: false)
+overwrite_output: false
+```
+
+**Read filtering rules:**  
+Only reads that satisfy all of the following are used:
+- Paired-end and first in pair
+- Mapped (not unmapped, secondary, or supplementary)
+- Mate mapped to the same reference sequence
+- Mapping quality > 10
+
+**Outlier filtering:**  
+Fragment lengths that exceed `median + 10 × MAD` (median absolute deviation) are removed before fitting. This mirrors the filtering in Python NEAT's fragment length modeler. If no lengths survive the filter, lower `min_reads` or set it to `0`.

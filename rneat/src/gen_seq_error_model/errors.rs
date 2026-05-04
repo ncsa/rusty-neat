@@ -1,7 +1,11 @@
 use thiserror::Error;
-use common::models::{
-    quality_scores::QualityModelError,
-    sequencing_error_model::SeqModelError,
+use common::{
+    file_tools::bam_reader::BamReaderError,
+    models::{
+        quality_scores::QualityModelError,
+        sequencing_error_model::SeqModelError,
+    },
+    structs::transition_matrix::TransitionMatrixError,
 };
 
 #[derive(Error, Debug)]
@@ -18,4 +22,8 @@ pub enum GenSeqErrorModelError {
     QualModelError(#[from] QualityModelError),
     #[error("Sequencing error model error: {0}")]
     SeqModelError(#[from] SeqModelError),
+    #[error("BAM reader error: {0}")]
+    BamError(#[from] BamReaderError),
+    #[error("Transition matrix error: {0}")]
+    TransitionMatrixError(#[from] TransitionMatrixError),
 }

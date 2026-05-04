@@ -93,13 +93,17 @@ impl SequencingErrorModel {
     pub fn from_raw_data(
         error_rate: f64,
         quality_score_model: QualityScoreModel,
+        transition_matrix: Option<TransitionMatrix>,
     ) -> Result<Self, SeqModelError> {
-        let default_transition_distros = TransitionMatrix::from(
-            [0.0, 0.4918, 0.3377, 0.1705],
-            [0.5238, 0.0, 0.2661, 0.2101],
-            [0.3754, 0.2355, 0.0, 0.389],
-            [0.2505, 0.2552, 0.4942, 0.0],
-        )?;
+        let transition_distros = match transition_matrix {
+            Some(tm) => tm,
+            None => TransitionMatrix::from(
+                [0.0, 0.4918, 0.3377, 0.1705],
+                [0.5238, 0.0, 0.2661, 0.2101],
+                [0.3754, 0.2355, 0.0, 0.389],
+                [0.2505, 0.2552, 0.4942, 0.0],
+            )?,
+        };
         let default_lengths = vec![1, 2];
         let default_ins_distr = DiscreteDistribution::new(&vec![0.999, 0.001], &default_lengths)?;
         let default_del_distr = default_ins_distr.clone();
@@ -112,7 +116,7 @@ impl SequencingErrorModel {
                 &vec![1.0, 1.0, 1.0, 1.0],
                 &ALLOWED_NUCS.to_vec(),
             )?,
-            transition_distros: default_transition_distros,
+            transition_distros,
             quality_score_model,
         })
     }
@@ -307,7 +311,7 @@ mod tests {
         use crate::models::quality_scores::QualityScoreModel;
         let quality_score_model = QualityScoreModel::default().unwrap();
         let error_rate = 0.00312;
-        let model = SequencingErrorModel::from_raw_data(error_rate, quality_score_model).unwrap();
+        let model = SequencingErrorModel::from_raw_data(error_rate, quality_score_model, None).unwrap();
         assert!((model.error_rate() - error_rate).abs() < 1e-15);
         // indel_probability default from NEAT2 should be preserved
         assert!((model.indel_probability - 0.4).abs() < 1e-15);
@@ -326,6 +330,7 @@ mod tests {
         let model = SequencingErrorModel::from_raw_data(
             0.00555,
             QualityScoreModel::default().unwrap(),
+            None,
         ).unwrap();
         model.write_model(&path).unwrap();
         let loaded = SequencingErrorModel::from_file(&path).unwrap();

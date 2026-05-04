@@ -11,12 +11,10 @@ use crate::{
     }
 };
 use simple_rng::NeatRng;
-use std::{thread, time};
 
 /// gen-reads is the primary read generation function of rneat. It reads a fasta file and generates a set of fastqs and/or a set of variants. It can now also filter reads by bed file.
 pub fn main(config: &PathBuf) -> Result<(), GenerateReadsErrors> {   
     info!("////////////// Welcome to rusty-neat read generator! \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\");
-    thread::sleep(time::Duration::from_millis(1000));
     // set up the config struct based on whether there was an input config. Input config
     // overrides any other inputs.
     let config = if &config.display().to_string() != "" {
@@ -47,7 +45,6 @@ pub fn main(config: &PathBuf) -> Result<(), GenerateReadsErrors> {
     }
     
     info!("////////////// Configuration successuful! Ready to run! \\\\\\\\\\\\\\\\\\\\\\\\\\");
-    thread::sleep(time::Duration::from_millis(100));
     // Generate the RNG used for this run. If one was given in the config file, use that, or else
     // use thread_rng to generate a random seed, then seed using a SeedableRng based on StdRng
     let mut rng: NeatRng = NeatRng::new_from_seed(&config.seed_vec)
@@ -55,14 +52,13 @@ pub fn main(config: &PathBuf) -> Result<(), GenerateReadsErrors> {
     // run the generate reads main script
     let result = run_neat(&Box::new(config.clone()), &mut rng);
     match result {
-        Ok(files_created) => {
+        Ok(_) => {
             // Continue on for bed filtering
-            info!("Successfully produced unfiltered output file: {:?}", &files_created);
             Ok(())
         },
         Err(error) => {
             error!("runner returned an error {:?}", error);
-            return Err(GenerateReadsErrors::RunnerError)
+            Err(GenerateReadsErrors::RunnerError)
         },
     }
 }

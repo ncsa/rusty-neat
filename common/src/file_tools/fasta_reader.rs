@@ -5,10 +5,7 @@
 //! 
 //! The fasta file contains the sequences that will be broken up into smaller pieces
 //! read_fasta writes out json files to this temp dir to act as a database to facilitate 
-//! the simulation
-//! 
-//! Eventually, we will add a write fasta function to write out output fasta files, but there's 
-//! some simulation details to work out and it is low-priority.
+//! the simulationuse std::collections::HashMap;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io;
@@ -56,10 +53,10 @@ pub enum FastaReaderError {
 
 pub fn read_fasta(
     fasta_path: &PathBuf,
-    nucleotide_selector: NucleotideSelector,
+    nucleotide_selector: Option<&NucleotideSelector>,
     overlap_len: usize,
     temp_dir: &TempDir,
-    rng: &mut NeatRng,
+    mut rng: Option<&mut NeatRng>,
 ) -> Result<Box<FastaMap>, FastaReaderError> {
     // Here's the basic idea:
     //     1. Read in 128kb worth of sequence (or the entire sequence)
@@ -88,6 +85,9 @@ pub fn read_fasta(
     let mut contigs: Vec<Contig> = Vec::new();
     // This is a vector of filenames from which we can reconstruct the sequence_block.
     let mut block_filenames: Vec<PathBuf> = Vec::new();
+    // This will keep our sequence maps stored at a higher level, so that we don't have to
+    // read the entire sequence from file just to know where the N-regions are
+    let mut block_sequence_maps: HashMap<PathBuf, Vec<SequenceMap>> = HashMap::new();
     // This hashmap maps the short name to a long name.
     let mut name_map: HashMap<String, String> = HashMap::new();
     // This will give us the write order for the bam and vcf
@@ -107,14 +107,14 @@ pub fn read_fasta(
     // Process the file
     for line in lines {
         match line {
-            Ok(l) => {
+            Ok(line_str) => {
                 // In FASTA format, header lines start with ">" and then contain alphanumeric strings
                 // with data about the machine that produced them, a way to sort them relative to other 
                 // reads, and if this is not the first loop, then this indicates
                 // the end of the previous contig. We check that condition with "new_data" and if
                 // there is, we dump the data to file. These types of things always have a first loop/
                 // last loop problem. Happy to take suggestions on how to make this less clunky.
-                if l.starts_with(">") {
+                if line_str.starts_with(">") {
                     // Checking if this is either the first loop or an empty read.
                     // After the first loop, then we need to log the previous contig
                     if contig_length == 0 && current_key.is_empty() {
@@ -142,58 +142,68 @@ pub fn read_fasta(
                         // variant generation more complicated.
                         let buffer_to_write = buffer[..buffer_len].to_vec(); // may need to add 1
 
-                        let block_file = process_buffer_into_sequenceblock(
+                        let (block_file, sequence_maps) = process_buffer_into_sequenceblock(
                             &buffer_to_write, 
                             &current_key, 
                             block_start, 
                             &temp_dir,
-                            &nucleotide_selector,
-                            rng,
+                            nucleotide_selector,
+                            &mut rng,
                         )?;
 
                         // Store the filename
-                        block_filenames.push(block_file);
+                        block_filenames.push(block_file.clone());
+
+                        // Store the sequence_maps
+                        block_sequence_maps.insert(block_file, sequence_maps);
 
                         // Add the contig to the list
-                        contigs.push(Contig::new(
-                            current_key.clone(),
-                            contig_length,
-                            block_filenames,
-                        )?);
+                        contigs.push(
+                            Contig::new(
+                                current_key.clone(),
+                                contig_length,
+                                block_filenames,
+                                block_sequence_maps,
+                            )?
+                        );
 
                         // Reset buffers, no need to save since we're starting a new contig
                         buffer = [X; BUFSIZE];
                         buffer_index = 0;
                         // reset variables to start building the next contig and sequence block
                         block_filenames = Vec::new();
+                        block_sequence_maps = HashMap::new();
                         contig_length = 0;
                         block_start = 0;
                     }
                     // grab the name from the string, omitting the initial '>' character
-                    let long_name = l[1..].to_string();
+                    let long_name = line_str[1..].to_string();
                     let short_name = extract_key_name(&long_name);
                     current_key = short_name;
                     name_map.entry(current_key.clone()).or_insert(long_name);
                     contig_order.push(current_key.clone());
 
                 } else {
-                    for char in l.chars() {
+                    for char in line_str.chars() {
                         // If we have filled the buffer, time to write the file and clear the buffer
                         if buffer_index == BUFSIZE {
                             // grab the end of the buffer to create an overlap with the next section
                             let overlap_buffer: Vec<Nucleotide> = buffer[buffer_index-overlap_len..].to_vec();
                             // Encode the data and write to temporary file
-                            let sequence_block_filename = process_buffer_into_sequenceblock(
+                            let (sequence_block_filename, sequence_maps) = process_buffer_into_sequenceblock(
                                 &buffer,
                                 &current_key,
                                 block_start,
                                 temp_dir,
-                                &nucleotide_selector,
-                                rng,
+                                nucleotide_selector,
+                                &mut rng,
                             )?;
 
                             // record sequence block filename for later retrieval
-                            block_filenames.push(sequence_block_filename);
+                            block_filenames.push(sequence_block_filename.clone());
+
+                            // Store the sequence_maps
+                            block_sequence_maps.insert(sequence_block_filename, sequence_maps);
 
                             // Set start point for recording next block, offset to account for the overlap
                             block_start += BUFSIZE-overlap_len;
@@ -235,25 +245,29 @@ pub fn read_fasta(
         let buffer_len = contig_length - block_start;
         let buffer_to_write = buffer[..buffer_len].to_vec();
 
-        let block_file = process_buffer_into_sequenceblock(
+        let (block_file, sequence_maps) = process_buffer_into_sequenceblock(
             &buffer_to_write, 
             &current_key, 
             block_start, 
             temp_dir,
-            &nucleotide_selector,
-            rng,
+            nucleotide_selector,
+            &mut rng,
         )?;
 
         // Store the filename
-        block_filenames.push(block_file);
+        block_filenames.push(block_file.clone());
+
+        // Store the sequence_maps
+        block_sequence_maps.insert(block_file, sequence_maps);    
     }
 
     // any new data was written, now we add the final block to the contig
     // Add the contig to the list
     contigs.push(Contig::new(
-        current_key.clone(),
-        contig_length.clone(),
-        block_filenames.clone(),
+        current_key,
+        contig_length,
+        block_filenames,
+        block_sequence_maps,
     )?);
 
     // Return box object with final FastaMap object, which will be used for processing
@@ -283,7 +297,7 @@ fn extract_key_name(full_name: &str) -> String {
     full_name[..delim_index].to_string()
 }
 
-fn map_sequence(sequence: &[Nucleotide]) -> Result<Vec<SequenceMap>, FastaReaderError> {
+fn map_buffer(sequence: &[Nucleotide]) -> Result<Vec<SequenceMap>, FastaReaderError> {
     // This is a 2D vector map representing the regions of the string of DNA.
     // example: If a DNA strand looks like this:
     //     NNNNNNNNAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAANNNNN
@@ -377,38 +391,67 @@ fn map_sequence(sequence: &[Nucleotide]) -> Result<Vec<SequenceMap>, FastaReader
 }
 
 fn process_buffer_into_sequenceblock(
-    buffer: &[Nucleotide], // The sequence in u8 format
-    current_key: &str, // The contig short name
-    block_start: usize, // Where, relative to the reference, this block starts
-    temp_dir: &TempDir, // where to write files
-    nucleotide_selector: &NucleotideSelector, // Used to find a valid nucleotide
-    rng: &mut NeatRng,
-) -> Result<PathBuf, FastaReaderError> {
+    buffer: &[Nucleotide],
+    current_key: &str,
+    block_start: usize,
+    temp_dir: &TempDir,
+    nucleotide_selector: Option<&NucleotideSelector>,
+    rng: &mut Option<&mut NeatRng>,
+) -> Result<(PathBuf, Vec<SequenceMap>), FastaReaderError> {
     // This function creates a temporary sequence block to store data then serializes it into
     // json format and writes that to file. Later, SequenceBlock can reconstruct this struct instance
     // based on the json file. This way we can parallelize the simulation.
+    // params:
+    //   buffer: The sequence to write in u8 format
+    //   current_key: The contig short name
+    //   block_start: Where, relative to the reference, this block starts
+    //   temp_dir: where to write temp files
+    //   nucleotide_selector: Optional for producing random bases
+    //   rng: Optional for producing random bases
     let block_end = block_start+buffer.len();
-    let sequence_map = map_sequence(buffer)?;
+    let sequence_map = map_buffer(buffer)?;
     let mut buffer_to_write: Vec<Nucleotide> = Vec::with_capacity(buffer.len());
-    for item in buffer {
-        match item {
-            N => {
-                buffer_to_write.push(nucleotide_selector.sample_bases(rng.random()?).get_masked());
-            },
-            X => {
-                //skip
+    match nucleotide_selector {
+        Some(model) => {
+            match rng {
+                Some(random_num) => {
+                    for item in buffer {
+                        match item {
+                            N => {
+                                buffer_to_write.push(model.sample_bases(random_num.random()?).get_masked());
+                            },
+                            X => {
+                                //skip
+                            }
+                            _ => {
+                                buffer_to_write.push(item.clone());
+                            },
+                        }
+                    }
+                },
+                None => return Err(FastaReaderError::ReadFastaError),
             }
-            _ => {
-                buffer_to_write.push(item.clone());
-            },
+        },
+        None => {
+            for item in buffer {
+                match item {
+                    X => {
+                        //skip
+                    }
+                    _ => {
+                        buffer_to_write.push(item.clone());
+                    },
+                }
+            }
         }
     }
+
     let mut sequence_block = SequenceBlock {
         contig: current_key.to_string(),
         ref_start: block_start,
         ref_end: block_end,
         sequence: buffer_to_write,
-        sequence_map,
+        sequence_map: sequence_map.clone(),
     };
 
     let sequence_file_path = temp_dir
@@ -423,7 +466,7 @@ fn process_buffer_into_sequenceblock(
     let tmp_file = File::create(&sequence_file_path)?;
     sequence_block.write_block(tmp_file)?;
     
-    Ok(sequence_file_path)
+    Ok((sequence_file_path, sequence_map))
 }
 
 pub fn count_fasta(filename: &PathBuf) -> Result<usize, FastaReaderError> {
@@ -449,12 +492,15 @@ pub fn count_fasta(filename: &PathBuf) -> Result<usize, FastaReaderError> {
 #[cfg(test)]
 mod tests {
     use walkdir::WalkDir;
+    use crate::structs::fasta_map::RegionType;
+
     use super::*;
 
     #[test]
     fn test_count_fasta() {
-        // TODO add test
-        assert!(true)
+        let test_fasta = PathBuf::from("test_data/H1N1.fa");
+        let count = count_fasta(&test_fasta).unwrap();
+        assert_eq!(count, 8, "H1N1.fa should contain exactly 8 contigs");
     }
 
     #[test]
@@ -467,18 +513,19 @@ mod tests {
             "Cruel".to_string(),
             "World".to_string(),
         ]).unwrap();
-        let segment_file = process_buffer_into_sequenceblock(
+        let (segment_file, sequence_maps) = process_buffer_into_sequenceblock(
             &test, 
             "chr1", 
             25, 
             &temp_dir,
-            &nucleotide_selector,
-            &mut rng,
+            Some(&nucleotide_selector),
+            &mut Some(&mut rng),
         ).unwrap();
 
         // below is the decode code from fasta_map
         let sequence_block = SequenceBlock::from(&segment_file).unwrap();
-        assert_eq!(Vec::from(test), sequence_block.sequence);
+        assert_eq!(sequence_block.sequence, Vec::from(test));
+        assert_eq!(sequence_maps[0], SequenceMap::from(RegionType::NonNRegion, 0, BUFSIZE))
     }
 
     #[test]
@@ -493,10 +540,10 @@ mod tests {
         ]).unwrap();
         let test_map = read_fasta(
             &test_fasta,
-            nucleotide_selector,
+            Some(&nucleotide_selector),
             350,
             &temp_dir,
-            &mut rng,
+            Some(&mut rng),
         ).unwrap();
         assert_eq!(test_map.contig_order[0], "H1N1_HA".to_string());
         let dir_list: Vec<String> = WalkDir::new(&temp_dir)
@@ -533,7 +580,7 @@ mod tests {
         for char in sequence.chars() {
             buffer.push(Nucleotide::from(char))
         }
-        let map: Vec<SequenceMap> = map_sequence(buffer.as_slice()).unwrap();
+        let map: Vec<SequenceMap> = map_buffer(buffer.as_slice()).unwrap();
         assert_eq!(map.len(), 3);
         assert_eq!(map[0], SequenceMap::from(NRegion, 0, 3));
         assert_eq!(map[1], SequenceMap::from(NonNRegion, 3, 7));
@@ -547,7 +594,7 @@ mod tests {
         for char in sequence.chars() {
             buffer.push(Nucleotide::from(char))
         }
-        let map: Vec<SequenceMap> = map_sequence(buffer.as_slice()).unwrap();
+        let map: Vec<SequenceMap> = map_buffer(buffer.as_slice()).unwrap();
         assert_eq!(map.len(), 1);
         assert_eq!(map[0], SequenceMap::from(NRegion, 0, 8));
     }
@@ -559,7 +606,7 @@ mod tests {
         for char in sequence.chars() {
             buffer.push(Nucleotide::from(char))
         }
-        let map: Vec<SequenceMap> = map_sequence(buffer.as_slice()).unwrap();
+        let map: Vec<SequenceMap> = map_buffer(buffer.as_slice()).unwrap();
         assert_eq!(map.len(), 3);
         assert_eq!(map[0], SequenceMap::from(NonNRegion, 0, 4));
         assert_eq!(map[1], SequenceMap::from(NRegion, 4, 7));

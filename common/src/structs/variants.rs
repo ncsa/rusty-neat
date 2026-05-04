@@ -1,7 +1,9 @@
 //! These enums and structs help us keep track of variants added to the reference
 //! It stores all the necessary data to write a variant out.
 use thiserror::Error;
+use serde::{Deserialize, Serialize};
 use crate::structs::nucleotides::Nucleotide;
+use log::*;
 
 #[derive(Error, Debug)]
 pub enum VariantError {
@@ -15,19 +17,42 @@ pub enum VariantError {
     MalformedAlt,
     #[error("Error Generating the genotype string!")]
     GenoStringError,
+    #[error("Invalid Vcf Input: {0}")]
+    InvalidVcf(String),
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Genotypes {
+pub enum Genotype {
     Heterozygous,
     Homozygous,
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+fn gt_from_str(input: &str) -> Genotype {
+    let mut result: Vec<&str> = input.split("/").collect();
+    if result.len() == 1 {
+        // Split may have failed, trying a different delimiter
+        result = input.split("|").collect();
+    }
+    let mut found_zero = false;
+    for item in result {
+        if item.parse::<u64>().unwrap() == 0 {
+            found_zero = true;
+            break
+        }
+    }
+    if found_zero {
+        Genotype::Heterozygous
+    } else {
+        Genotype::Homozygous
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
 pub enum VariantType {
     SNP,
     Insertion,
     Deletion,
+    Complex,
 }
 
 impl From<usize> for VariantType {
@@ -36,6 +61,7 @@ impl From<usize> for VariantType {
             0 => Self::SNP,
             1 => Self::Insertion,
             2 => Self::Deletion,
+            3 => Self::Complex,
             _ => panic!("Index out of range!")
         }
     }
@@ -57,13 +83,111 @@ pub struct Variant {
     pub reference: Vec<Nucleotide>,
     // The alternate allele of interest. This is either one base or several bases for an insertion.
     pub alternate: Vec<Nucleotide>,
-    // the genotype string is for writing in the vcf. 
+    // the genotype string is feor writing in the vcf. 
     pub genotype_str: String,
     // The genotype is either heterozygous (not on all alleles) or homozygous (on all alleles)
-    pub genotype: Genotypes,
+    pub genotype: Genotype,
+
+    // VCF files specific. These are variables specific to VCF files read as input,
+    // either for variant inputs or for generating models.
+
+    // Included id, if present
+    pub id: Option<String>,
+    // Included quality score
+    pub quality_score: Option<usize>,
+    // Included filter, if present
+    pub filter: Option<String>,
+    // Included Info, if present
+    pub info: Option<String>,
+    // Other included information, if present
+    pub format: Vec<String>,
+    // Sample, if present, must be same length as format
+    pub sample: Vec<String>
 }
 
 impl Variant {
+
+    pub fn from_file(
+        location: usize,
+        id: &str,
+        filter: &str,
+        info_field: &str,
+        vcf_reference: &str,
+        vcf_alternate: &str,
+        quality_score: usize,
+        format: Vec<String>,
+        sample: Vec<String>,
+    ) -> Result<Self, VariantError> {
+
+        let genotype_str = {
+            if format.contains(&String::from("GT")) {
+                info!("Found genotype in vcf file");
+                let gt_pos = format
+                    .clone()
+                    .into_iter()
+                    .position(|x| x == String::from("GT"))
+                    .unwrap();
+                sample[gt_pos].to_string()
+            } else {
+                return Err(
+                    VariantError::InvalidVcf(
+                        "Missing GT field. Cannot process input VCF without GT in FORMAT field".to_string()
+                    )
+                )
+            }
+        };
+    
+        let mut variant_type = VariantType::SNP;
+        if vcf_reference.len() > 1 {
+            if vcf_alternate.len() > 1 {
+                variant_type = VariantType::Complex;
+            } else if vcf_alternate.len() == 1 {
+                variant_type = VariantType::Deletion
+            } else {
+                return Err(
+                    VariantError::InvalidVcf(
+                        "ALT field in vcf with empty alt. Invalid VCF.".to_string()
+                    )
+                )
+            }
+        } else if vcf_reference.len() == 1 {
+            if vcf_alternate.len() > 1 {
+                variant_type = VariantType::Insertion;
+            } else {
+                // snp
+            }
+        } else {
+            return Err(
+                VariantError::InvalidVcf(
+                    "REF field in vcf with empty ref. Invalid VCF.".to_string()
+                )
+            )
+        }
+        let mut reference = Vec::new();
+        for char in vcf_reference.chars() {
+            reference.push(Nucleotide::from(char))
+        }
+        let mut alternate = Vec::new();
+        for char in vcf_alternate.chars() {
+            alternate.push(Nucleotide::from(char))
+        }
+        let genotype = gt_from_str(&genotype_str);
+        Ok(Variant{
+            variant_type,
+            location,
+            reference,
+            alternate,
+            genotype_str,
+            genotype,
+            id: Some(id.to_string()),
+            quality_score: Some(quality_score),
+            filter: Some(filter.to_string()),
+            info: Some(info_field.to_string()),
+            format,
+            sample
+        })
+
+    }
 
     pub fn new(
         variant_type: VariantType,
@@ -72,37 +196,38 @@ impl Variant {
         alternate: &Vec<Nucleotide>,
         genotype: &mut Vec<usize>,
     ) -> Result<Self, VariantError> {
-        // This will generate a variant, storing the reference, alternate, start point relative to the contig, and a genotype
-        // but first a quick sanity check
+        // Check for empty vecs before any index access
+        if reference.is_empty() {
+            return Err(VariantError::MalformedRef)
+        }
+        if alternate.is_empty() {
+            return Err(VariantError::MalformedAlt)
+        }
+
         match variant_type {
-            VariantType::Insertion | 
+            VariantType::Insertion |
             VariantType::Deletion => {
                 if (reference.len() == alternate.len()) ||
                     reference[0] != alternate[0] {
                     return Err(VariantError::MalformedIndel)
                 }
             },
-            VariantType::SNP => { 
+            VariantType::SNP => {
                 if reference.len() != alternate.len() {
                     return Err(VariantError::MalformedSnp)
                 }
             },
+            _ => {
+                panic!("Complex variants not yet supported.")
+            }
         }
 
-        // Enforcing a policy that we assume elsewhere in the code
-        if reference.len() < 1 {
-            return Err(VariantError::MalformedRef)
-        }
-        if reference.len() < 1 {
-            return Err(VariantError::MalformedAlt)
-        }
-
-        let mut genotype_label = Genotypes::Homozygous;
+        let mut genotype_label = Genotype::Homozygous;
         // Homozygous would mean all alleles have the variant, so all are 1's
         // the presence of a single 0 indicates heterozygous.
         // This is a little shakey biologically, but we're going with this.
         if genotype.contains(&0) {
-            genotype_label = Genotypes::Heterozygous;
+            genotype_label = Genotype::Heterozygous;
         }
         
         Ok(Variant {
@@ -112,11 +237,17 @@ impl Variant {
             alternate: alternate.clone(),
             genotype_str: genotype_to_string(genotype)?,
             genotype: genotype_label,
+            id: None,
+            quality_score: None,
+            filter: None,
+            info: None,
+            format: Vec::new(),
+            sample: Vec::new()
         })
     }
 
     pub fn get_loc(&self) -> Result<usize, VariantError> {
-        Ok(self.location.clone())
+        Ok(self.location)
     }
 }
 
@@ -148,11 +279,17 @@ mod tests {
             reference: vec![Nucleotide::A, Nucleotide::C, Nucleotide::T, Nucleotide::G],
             alternate: vec![Nucleotide::A],
             genotype_str: "1/1/1".to_string(),
-            genotype: Genotypes::Homozygous,
+            genotype: Genotype::Homozygous,
+            id: None,
+            quality_score: None,
+            filter: None,
+            info: None,
+            format: Vec::new(),
+            sample: Vec::new(),
         };
         assert_eq!(variant.variant_type, SNP);
         assert_eq!(variant.reference, vec![Nucleotide::A, Nucleotide::C, Nucleotide::T, Nucleotide::G]);
-        assert_eq!(variant.genotype, Genotypes::Homozygous);
+        assert_eq!(variant.genotype, Genotype::Homozygous);
     }
 
     #[test]
@@ -164,7 +301,7 @@ mod tests {
             &vec![Nucleotide::A, Nucleotide::C, Nucleotide::T, Nucleotide::G],
             &mut vec![0, 1],
         ).unwrap();
-        assert_eq!(variant.genotype, Genotypes::Heterozygous)
+        assert_eq!(variant.genotype, Genotype::Heterozygous)
     }
 
     #[test]
@@ -176,14 +313,13 @@ mod tests {
             &vec![Nucleotide::A],
             &mut vec![1, 1],
         ).unwrap();
-        assert_eq!(variant.genotype, Genotypes::Homozygous)
+        assert_eq!(variant.genotype, Genotype::Homozygous)
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "MalformedSnp")]
     fn test_bad_variant_creation() {
         Variant::new(
-            // with new it should catch this error
             SNP,
             22,
             &vec![Nucleotide::A, Nucleotide::C, Nucleotide::T, Nucleotide::G],
@@ -196,5 +332,29 @@ mod tests {
     fn test_genotype_to_string() {
         let mut genotype = vec![0, 1, 0];
         assert_eq!(String::from("0/1/0"), genotype_to_string(&mut genotype).unwrap());
+    }
+
+    #[test]
+    fn test_empty_reference_returns_malformed_ref() {
+        let result = Variant::new(
+            SNP,
+            0,
+            &vec![],
+            &vec![Nucleotide::G],
+            &mut vec![1, 1],
+        );
+        assert!(matches!(result, Err(VariantError::MalformedRef)));
+    }
+
+    #[test]
+    fn test_empty_alternate_returns_malformed_alt() {
+        let result = Variant::new(
+            SNP,
+            0,
+            &vec![Nucleotide::A],
+            &vec![],
+            &mut vec![1, 1],
+        );
+        assert!(matches!(result, Err(VariantError::MalformedAlt)));
     }
 }

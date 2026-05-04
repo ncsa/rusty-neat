@@ -24,9 +24,9 @@ use crate::{
             file_io::{append_to_file, VectorBuffer}, 
             vcf_tools::write_vcf
         }, models::{
-            fragment_length::FragmentLengthModel, 
-            mutation_model::MutationModel, 
-            quality_scores::QualityScoreModel, 
+            fragment_length::FragmentLengthModel,
+            mutation_model::MutationModel,
+            quality_scores::QualityScoreModel,
             sequencing_error_model::SequencingErrorModel
         }, structs::{
             fasta_map::SequenceBlock, 
@@ -50,21 +50,8 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
     // We'll need a temp dir to store file fragments
     let working_dir = tempfile::tempdir().unwrap();
     info!("Created temp dir at {:?}", working_dir);
-    // Load models that will be used for the runs.
+    // Load models that will be used for the runs
     //
-    // Quality score model
-    info!("Generate quality score model");
-    let quality_score_model = {
-        match &config.quality_score_model {
-            Some(filename) => {
-                 QualityScoreModel::from_file(&filename)?
-            },
-            None => {
-                QualityScoreModel::default()?
-            }
-        }
-    };
-
     // load mutation model
     info!("Generate mutation model");
     let mutation_model = {
@@ -116,8 +103,17 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
         }
     };
 
-    // This model provides an alternate base for N based on a simple equal weight distribution.
+    // Load Quality Score Model
     info!("Generate quality score model");
+    let quality_score_model: QualityScoreModel = {
+        match &config.quality_score_model {
+            Some(filename) => QualityScoreModel::from_file(filename)?,
+            None => QualityScoreModel::default()?,
+        }
+    };
+
+    // This model provides an alternate base for N based on a simple equal weight distribution.
+    info!("Initialize Nucleotide selector");
     let nuc_sub_model: NucleotideSelector = {
         NucleotideSelector::new()
     };
@@ -128,10 +124,10 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
     info!("Reading fasta file: {}", &config.reference.display());    
     let fasta_map = read_fasta(
         &config.reference,
-        nuc_sub_model,
+        Some(&nuc_sub_model),
         config.read_len,
         &working_dir,
-        rng,
+        Some(rng),
     )?;
 
     // Mutating the reference and recording the variant locations.
@@ -269,7 +265,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
                     writer1, Compression::default()
                 );
                 let read_name_prefix = format!(
-                    "neat_generated_{}",
+                    "RNEAT_generated_{}",
                     current_block.contig,
                 );
                 if config.paired_ended {
@@ -356,14 +352,12 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
                             create_output_file(filename2, config.overwrite_output)?;
                             for (_contig, temp_fastqs) in all_fastq_files {
                                 combine_temp_fastqs(
-                                    temp_fastqs.0, 
-                                    &filename1, 
-                                    false
-                                )?;
-                                combine_temp_fastqs(
+                                    temp_fastqs.0,
                                     temp_fastqs.1,
-                                    &filename2,
-                                    false,
+                                    filename1,
+                                    Some(filename2),
+                                    true,
+                                    rng,
                                 )?;
                                 bar.inc(1);
                             }
@@ -376,9 +370,12 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
                 } else {
                     for (_contig, temp_fastqs) in all_fastq_files {
                         combine_temp_fastqs(
-                            temp_fastqs.0, 
-                            &filename1, 
-                            false
+                            temp_fastqs.0,
+                            vec![],
+                            filename1,
+                            None,
+                            true,
+                            rng,
                         )?;
                         bar.inc(1);
                     }
@@ -390,8 +387,6 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
             },
         } 
     }
-
-    bar.finish_and_clear();
 
     let mut files_written = Vec::new();
     if config.paired_ended {

@@ -7,3 +7,4 @@ pub mod fastq_tools;
 pub mod fasta_reader;
 pub mod vcf_tools;
 pub mod bed_reader;
+pub mod bam_reader;

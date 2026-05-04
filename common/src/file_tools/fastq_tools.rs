@@ -4,7 +4,7 @@
 //! This one needs a major overhaul, it is autogenerating quality scores etc. 
 //! Will wait to get other things set up first
 use std::io::{BufWriter, Write};
-use log::{debug, error, warn};
+use log::debug;
 use std::path::PathBuf;
 use std::collections::HashMap;
 use simple_rng::{NeatRng, NeatRngError};
@@ -14,12 +14,12 @@ use thiserror::Error;
 
 use crate::structs::mutated_map::{MutatedMap, MutatedMapError};
 use crate::structs::fasta_map::{FastaMapError, SequenceBlock};
-use crate::models::quality_scores::{QualityScoreModel};
 use crate::structs::nucleotides::Nucleotide;
 use crate::file_tools::file_io::{append_to_file, read_gzip_lines};
+use crate::models::quality_scores::QualityScoreModel;
 use crate::models::sequencing_error_model::{SeqModelError, SequencingErrorModel, SequencingErrorType};
 use crate::structs::nucleotides::Nucleotide::N;
-use crate::structs::variants::{Genotypes, Variant};
+use crate::structs::variants::{Genotype, Variant};
 
 #[derive(Error, Debug)]
 pub enum FastqToolsError {
@@ -94,10 +94,7 @@ pub fn write_block_fastq<T: Write, W: Write> (
     // sequencing_error_model: Model to generate sequencing errors for a read.
     // rng: The NeatRng random number generator for the this run.
     debug!("writing reads for {:?}", block_map.sequence_block);
-    let mut counter: usize = 1;
     let sequence_block: SequenceBlock = SequenceBlock::from(&block_map.sequence_block)?;
-    // These reads should be in order of sequence block, but if we find one out of order, we can tuck it
-    // in the back and maybe it matches later. If not it'll just get skipped.
     for (start, end) in block_fragments {
         let fragment = sequence_block.get_subseq(start, end)?;
         let mut read1_variants: HashMap<usize, &Variant> = HashMap::new();
@@ -125,16 +122,15 @@ pub fn write_block_fastq<T: Write, W: Write> (
             
         }
 
+        let ref_start = sequence_block.ref_start;
+        let read_name = format!("{}_{:010}_{:010}", read_name_prefix, start + ref_start, end + ref_start);
         let quality_scores_1 = quality_score_model.generate_quality_scores(read_length, rng)?;
         let result = apply_variants_and_write_sequence(
             &fragment,
             &reads1_flagged,
             &read1_variants,
             read_length,
-            &read_name_prefix,
-            counter,
-            start,
-            end,
+            &read_name,
             Strand::Forward,
             buffer1,
             quality_scores_1,
@@ -164,10 +160,7 @@ pub fn write_block_fastq<T: Write, W: Write> (
                 &reads2_flagged,
                 &read2_variants,
                 read_length,
-                &read_name_prefix,
-                counter,
-                start,
-                end,
+                &read_name,
                 Strand::Reverse,
                 buffer2,
                 quality_scores_2,
@@ -189,37 +182,93 @@ pub fn write_block_fastq<T: Write, W: Write> (
                 }
             }
         }
-        counter += 1;
     }
     Ok(())
 }
 
 pub fn combine_temp_fastqs(
-    files: Vec<PathBuf>, 
-    final_filename: &PathBuf, 
-    shuffle: bool, 
+    files_r1: Vec<PathBuf>,
+    files_r2: Vec<PathBuf>,
+    final_filename_r1: &PathBuf,
+    final_filename_r2: Option<&PathBuf>,
+    shuffle: bool,
+    rng: &mut NeatRng,
 ) -> Result<(), FastqToolsError> {
-    // This will take all the temporary fastqs we wrote out on a per-block level and 
-    // combine them into one fastq. An improvement here might be to randomize the order:
-    // We could do this with a hashmap from the original name to a number in a shuffled vector
-    // of indexes. We'll make that optional.
-    if shuffle {
-        warn!("Fastq shuffle implementation not yet ready, proceeding with ordered fastq")
-    }
-    let final_file = append_to_file(final_filename)?;
-    let buffer = GzEncoder::new(final_file, Compression::default());
-    let mut writer = BufWriter::new(buffer);
-    for file in files {
-        let reader = read_gzip_lines(&file)?;
+    let mut r1_lines: Vec<String> = Vec::new();
+    for file in &files_r1 {
+        let reader = read_gzip_lines(file)?;
         for line_result in reader {
-            match line_result { 
-                Ok(l) => {
-                    writer.write_fmt(format_args!("{}\n", l))?;
-                },
-                Err(error) => return Err(FastqToolsError::FastqReadError(error.to_string()))
+            match line_result {
+                Ok(l) => r1_lines.push(l),
+                Err(e) => return Err(FastqToolsError::FastqReadError(e.to_string())),
             }
         }
     }
+    let mut records_r1: Vec<Vec<String>> = r1_lines
+        .chunks(4)
+        .filter(|c| c.len() == 4)
+        .map(|c| c.to_vec())
+        .collect();
+
+    let paired = !files_r2.is_empty();
+    let mut records_r2: Vec<Vec<String>> = if paired {
+        let mut r2_lines: Vec<String> = Vec::new();
+        for file in &files_r2 {
+            let reader = read_gzip_lines(file)?;
+            for line_result in reader {
+                match line_result {
+                    Ok(l) => r2_lines.push(l),
+                    Err(e) => return Err(FastqToolsError::FastqReadError(e.to_string())),
+                }
+            }
+        }
+        r2_lines
+            .chunks(4)
+            .filter(|c| c.len() == 4)
+            .map(|c| c.to_vec())
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    if shuffle {
+        if paired && !records_r2.is_empty() {
+            let mut pairs: Vec<(Vec<String>, Vec<String>)> = records_r1
+                .into_iter()
+                .zip(records_r2.into_iter())
+                .collect();
+            rng.shuffle_in_place(&mut pairs)?;
+            let (new_r1, new_r2): (Vec<Vec<String>>, Vec<Vec<String>>) =
+                pairs.into_iter().unzip();
+            records_r1 = new_r1;
+            records_r2 = new_r2;
+        } else {
+            rng.shuffle_in_place(&mut records_r1)?;
+        }
+    }
+
+    {
+        let final_file = append_to_file(final_filename_r1)?;
+        let enc = GzEncoder::new(final_file, Compression::default());
+        let mut writer = BufWriter::new(enc);
+        for record in &records_r1 {
+            for line in record {
+                writer.write_fmt(format_args!("{}\n", line))?;
+            }
+        }
+    }
+
+    if let Some(filename_r2) = final_filename_r2 {
+        let final_file = append_to_file(filename_r2)?;
+        let enc = GzEncoder::new(final_file, Compression::default());
+        let mut writer = BufWriter::new(enc);
+        for record in &records_r2 {
+            for line in record {
+                writer.write_fmt(format_args!("{}\n", line))?;
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -228,49 +277,22 @@ fn apply_variants_and_write_sequence<T: Write> (
     flagged_positions: &Vec<usize>,
     variant_map: &HashMap<usize, &Variant>,
     read_length: usize,
-    read_name_prefix: &str,
-    read_num: usize,
-    fragment_start: usize,
-    fragment_end: usize,
+    read_name: &str,
     read_strand: Strand,
     buffer: &mut GzEncoder<T>,
     quality_scores: Vec<usize>,
     sequencing_error_model: &SequencingErrorModel,
     rng: &mut NeatRng,
 ) -> Result<(), FastqToolsError> {
-    // This process will apply variants and sequencing errors to a fragment, then write the reads,
-    // as applicable.
-    // we start by writing the read name:
-    // Write read name
     if sequence.len() <= read_length {
-        // truncated read
         return Err(FastqToolsError::TruncatedRead(format!("{:?}", sequence)))
     }
 
-    let (name_start, name_end) = {
-        match read_strand {
-            Strand::Forward => {
-                (fragment_start, fragment_end)
-            },
-            Strand::Reverse => {
-                (fragment_end, fragment_start)
-            }
-        }
+    let strand_num = match read_strand {
+        Strand::Forward => 1,
+        Strand::Reverse => 2,
     };
-    let name_strand = {
-        match read_strand {
-            Strand::Forward => 1,
-            Strand::Reverse => 2,
-        }
-    };
-    buffer.write(
-        format!("@{}_{:010}_{:010}_{}:{}\n", 
-        &read_name_prefix,
-        name_start,
-        name_end,
-        &read_num, 
-        name_strand,
-    ).as_bytes())?;
+    buffer.write(format!("@{}/{}\n", read_name, strand_num).as_bytes())?;
     
     let mut bases_written = 0;
     let mut out_seq = String::new();
@@ -298,7 +320,7 @@ fn apply_variants_and_write_sequence<T: Write> (
             // Potentially contains a mutation, so we will write that, if applicable
             let variant = variant_map[&fragment_position];
             // alwas apply homozygous mutations, but only half the time for heterozygous
-            if (variant.genotype == Genotypes::Homozygous) || (rng.random()? < 0.5) {
+            if (variant.genotype == Genotype::Homozygous) || (rng.random()? < 0.5) {
                 base_to_write = {
                     match read_strand {
                         Strand::Forward => variant.alternate.clone(),
@@ -334,7 +356,7 @@ fn apply_variants_and_write_sequence<T: Write> (
                         debug!("Deletion error");
                         // skip `length` bases, leave quality scores untouched (because it's close enough)
                         // First we check to make sure we haven't deleted too many bases this read
-                        if seq_index + length >= fragment_end {
+                        if seq_index + length >= sequence.len() {
                             // In this case, we would be deleting too many bases, so we'll skip
                         } else {
                             // for a deletion, we still write the reference base, then we skip the next 
@@ -400,10 +422,39 @@ pub fn quality_scores_to_char_vec(array: Vec<usize>) -> Result<Vec<u8>, FastqToo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::file_tools::file_io::create_output_file;
+    use crate::file_tools::file_io::{create_output_file, read_gzip_lines};
     use crate::structs::variants::{Variant, VariantType};
     use crate::structs::nucleotides::Nucleotide::*;
-    use std::fs;
+    use std::io::Write;
+
+    #[test]
+    fn test_combine_temp_fastqs() {
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        let write_fastq_gz = |name: &str, content: &[u8]| -> PathBuf {
+            let path = temp_dir.path().join(name);
+            let f = std::fs::File::create(&path).unwrap();
+            let mut enc = GzEncoder::new(f, Compression::default());
+            enc.write_all(content).unwrap();
+            enc.finish().unwrap();
+            path
+        };
+
+        let file1 = write_fastq_gz("r1.fastq.gz", b"@read1\nACGT\n+\nIIII\n");
+        let file2 = write_fastq_gz("r2.fastq.gz", b"@read2\nTTTT\n+\nIIII\n");
+        let output = temp_dir.path().join("combined.fastq.gz");
+
+        let mut rng = NeatRng::new_from_seed(&vec!["test".to_string()]).unwrap();
+        combine_temp_fastqs(vec![file1, file2], vec![], &output, None, false, &mut rng).unwrap();
+
+        let lines: Vec<String> = read_gzip_lines(&output)
+            .unwrap()
+            .map(|l| l.unwrap())
+            .collect();
+        assert_eq!(lines.len(), 8, "Combined file should have 8 lines (2 records × 4 lines)");
+        assert_eq!(lines[0], "@read1");
+        assert_eq!(lines[4], "@read2");
+    }
   
     #[test]
     fn test_write_reverse() {
@@ -419,10 +470,7 @@ mod tests {
         let flagged_positions: Vec<usize> = Vec::new();
         let variant_map: HashMap<usize, &Variant> = HashMap::new();
         let read_len = 4;
-        let read_name_prefix = "neat_gen_";
-        let read_num = 1;
-        let fragment_start = 0;
-        let fragment_end = 9;
+        let read_name = "neat_gen__0000000000_0000000009";
         let mut buffer = GzEncoder::new(&mut temp_writer, Compression::default());
         let quality_scores = vec![32, 32, 32, 32];
         let sequencing_error_model = SequencingErrorModel::default().unwrap();
@@ -436,10 +484,7 @@ mod tests {
             &flagged_positions,
             &variant_map,
             read_len,
-            read_name_prefix,
-            read_num,
-            fragment_start,
-            fragment_end,
+            read_name,
             Strand::Reverse,
             &mut buffer,
             quality_scores,
@@ -481,6 +526,76 @@ mod tests {
     }
 
     #[test]
+    fn test_write_block_fastq_ref_start_in_read_name() {
+        // Verifies that when a SequenceBlock has ref_start > 0, the read names in the
+        // output FASTQ use reference-relative positions, not block-local positions.
+        use crate::structs::{
+            fasta_map::{RegionType, SequenceBlock, SequenceMap},
+            mutated_map::MutatedMap,
+        };
+        let temp_dir = tempfile::tempdir().unwrap();
+        let ref_start: usize = 1000;
+        let seq_len: usize = 50;
+        let sequence: Vec<Nucleotide> = (0..seq_len)
+            .map(|i| match i % 4 { 0 => A, 1 => C, 2 => G, _ => T })
+            .collect();
+        let block = SequenceBlock {
+            contig: "chr1".to_string(),
+            ref_start,
+            ref_end: ref_start + seq_len,
+            sequence: sequence.clone(),
+            sequence_map: vec![SequenceMap::from(RegionType::NonNRegion, 0, seq_len)],
+        };
+        let block_path = temp_dir.path().join(
+            format!("chr1_{:010}_{:010}.json", ref_start, ref_start + seq_len)
+        );
+        std::fs::write(&block_path, serde_json::to_string(&block).unwrap()).unwrap();
+        let mutated_map = MutatedMap::new(block_path, vec![]).unwrap();
+        let frag_start: usize = 5;
+        let frag_end: usize = 25;
+        let fragments = vec![(frag_start, frag_end)];
+        let out_path = temp_dir.path().join("out.fastq.gz");
+        let outfile = create_output_file(&out_path, true).unwrap();
+        use crate::file_tools::file_io::VectorBuffer;
+        let dummy_data: VectorBuffer = VectorBuffer::new();
+        let mut buf1 = GzEncoder::new(outfile, Compression::default());
+        let mut buf2 = GzEncoder::new(dummy_data, Compression::default());
+        let seq_err_model = SequencingErrorModel::default().unwrap();
+        let quality_model = QualityScoreModel::default().unwrap();
+        let mut rng = NeatRng::new_from_seed(&vec!["test".to_string()]).unwrap();
+        write_block_fastq(
+            fragments, &mutated_map, false,
+            &mut buf1, &mut buf2,
+            10, "chr1",
+            &quality_model, &seq_err_model, &mut rng,
+        ).unwrap();
+        buf1.finish().unwrap();
+        let lines: Vec<String> = read_gzip_lines(&out_path)
+            .unwrap()
+            .map(|l| l.unwrap())
+            .collect();
+        let header = &lines[0];
+        assert!(header.starts_with('@'), "Expected FASTQ header, got: {}", header);
+        // Read name must contain ref-relative positions, not block-local ones
+        let expected_start = format!("{:010}", frag_start + ref_start); // 0000001005
+        let expected_end   = format!("{:010}", frag_end   + ref_start); // 0000001025
+        assert!(
+            header.contains(&expected_start),
+            "Read name should contain ref-relative start {}; got: {}", expected_start, header
+        );
+        assert!(
+            header.contains(&expected_end),
+            "Read name should contain ref-relative end {}; got: {}", expected_end, header
+        );
+        // Also verify block-local positions are NOT what was written
+        let local_start = format!("{:010}", frag_start); // 0000000005
+        assert!(
+            !header.contains(&local_start),
+            "Read name should NOT contain block-local start {}; got: {}", local_start, header
+        );
+    }
+
+    #[test]
     fn test_apply_variants() {
         let sequence = vec![A, C, G, T, T, A, T, G, A, C, G, T, T, A, T, G];
         let variant1 = Variant::new(
@@ -502,8 +617,9 @@ mod tests {
             (3, &variant2),
         ]);
         let flagged_positions = vec![1,3];
-        let read_name_prefix = "neat_generated_";
-        let file = PathBuf::from("fake.fq");
+        let read_name = "neat_generated__0000000000_0000000008";
+        let temp_dir = tempfile::tempdir().unwrap();
+        let file = temp_dir.path().join("test.fq");
         let outfile = create_output_file(&file, true).unwrap();
         let mut buffer = GzEncoder::new(outfile, Compression::default());
         let qual_scores = vec![33, 25, 37, 28, 15, 33, 33, 37];
@@ -514,26 +630,19 @@ mod tests {
             "World".to_string(),
         ]).unwrap();
         let result = apply_variants_and_write_sequence(
-            &sequence, 
-            &flagged_positions, 
-            &variant_map, 
-            8, 
-            read_name_prefix, 
-            1, 
-            0,
+            &sequence,
+            &flagged_positions,
+            &variant_map,
             8,
+            read_name,
             Strand::Forward,
-            &mut buffer, 
-            qual_scores, 
-            &sequencing_error_model, 
+            &mut buffer,
+            qual_scores,
+            &sequencing_error_model,
             &mut rng
         );
 
-        match result {
-            Ok(()) => assert!(true),
-            Err(_) => assert!(false),
-        }
-        fs::remove_file(file).unwrap();
+        assert!(result.is_ok());
     }
 
 }

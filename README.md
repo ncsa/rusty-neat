@@ -96,7 +96,7 @@ Rust will download any required packages. Compiling Rust code is the slowest par
 ~/rusty-neat/$ ./target/release/rneat -h
 ```
 
-`rneat` uses a configuration file to read values it needs for the run. Most of these features should be active, but there is currently no way to generate your own data, so stick with default models for now. Also, there is not yet a way to create bams. A command line execution might look like this:
+`rneat` uses a configuration file to read values it needs for the run. Most of these features should be active, but there is currently no way to generate your own data, so stick with default models for now. A command line execution might look like this:
 
 ```bash
 ~/rusty-neat/$ ./target/release/rneat -C /path/to/filled/in/config.yml
@@ -115,6 +115,27 @@ CTTTTCATTCTGACTGCAACGGGCAATATGTCTCTGTGTGGATTAAAAAAAGAGTGTCTGATAGCAGCTTCTTAACTGGT
 ```
 For example, comes from the chromosome in the reference (which was simply named "Chromosome") between 0 and 353, which is the size 
 of a fragment in the simulated DNA. If there is a pair with this read, it will have the same coordinates, though it started at index 352 instead.
+
+BAM Output
+==========
+`rneat` can write a golden BAM file alongside the FASTQ output. The BAM contains the same reads as the FASTQ — same sequences, same quality scores, same variants and sequencing errors applied — with alignment information included. To enable it, set `produce_bam: true` in your `gen-reads` config. The output path is derived automatically from `output_filename` (e.g. `output_filename: my_run` → `my_run.bam`).
+
+```yaml
+produce_bam: true
+```
+
+The CIGAR strings in the BAM reflect the full ground-truth alignment:
+- Genomic variants (SNPs, insertions, deletions) are encoded as `M`, `I`, and `D` ops.
+- Sequencing error indels are also encoded: deletion errors add `D` ops for skipped reference bases; insertion errors add `I` ops for inserted bases.
+
+The BAM is written in block-generation order. Before using it with most downstream tools, run:
+
+```bash
+samtools sort my_run.bam -o my_run.sorted.bam
+samtools index my_run.sorted.bam
+```
+
+Note: heterozygous variants are applied probabilistically, identical to the FASTQ. A read drawn to the reference allele will not show the variant in either the FASTQ or the BAM.
 
 Reading Bed Data
 ================

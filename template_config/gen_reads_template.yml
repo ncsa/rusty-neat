@@ -1,34 +1,94 @@
-# Full path to reference in fasta format
-reference: .
-# Whole number length of reads
-read_len: .
-# Whole number target coverage value 
-coverage: .
-# float giving the average mutation rate
-mutation_rate: .
+# ============================================================
+# gen-reads configuration template
+# Usage: rneat gen-reads -c /path/to/this/config.yml
+#
+# Set any field to . (a single dot) to use its default value.
+# ============================================================
 
-# integer value for ploidy
-ploidy: .
-# boolean
-paired_ended: .
-# floats that give the mean and standard deviation of the fragments desired
+# --------------- required ---------------
+
+# Full path to the reference genome in FASTA format (.fa or .fa.gz).
+reference: /path/to/reference.fa
+
+# --------------- read parameters ---------------
+
+# Length of each simulated read in bases. (default: 151)
+read_len: 151
+
+# Target mean read depth across the reference. (default: 10)
+coverage: 10
+
+# --------------- mutation parameters ---------------
+
+# Average per-base mutation rate applied when generating variants. (default: 0.001)
+mutation_rate: 0.001
+
+# Number of chromosome copies in the simulated organism.
+# Heterozygous variants are distributed across the copies. (default: 2)
+ploidy: 2
+
+# Minimum number of mutations to guarantee per contig, regardless of mutation_rate.
+# Useful for short contigs where random sampling may produce zero variants. (default: 0)
+minimum_mutations: 0
+
+# --------------- paired-end parameters ---------------
+
+# Set to true to produce paired-end reads. (default: false)
+# fragment_mean and fragment_st_dev are required when paired_ended is true.
+paired_ended: false
+
+# Mean fragment length for paired-end mode (float). Required when paired_ended: true.
 fragment_mean: .
+
+# Standard deviation of the fragment length distribution (float). Required when paired_ended: true.
 fragment_st_dev: .
-rng_seed: .
-# Boolean values
-produce_vcf: .
-produce_fastq: .
 
-# true or false (default false, to avoid destroying data)
-overwrite_output: .
+# --------------- output format ---------------
 
-# the directory where you want to write files
+# Produce a FASTQ file (or pair of files for paired-end). (default: true)
+# At least one of produce_fastq, produce_vcf, or produce_bam must be true.
+produce_fastq: true
+
+# Produce a gzipped VCF file recording all inserted variants. (default: false)
+produce_vcf: false
+
+# Produce a BAM file whose reads match the FASTQ exactly (same sequence, quality scores,
+# variants, and sequencing errors applied). CIGAR strings reflect both genomic variants
+# and sequencing error indels. Run `samtools sort` + `samtools index` before use with
+# most downstream tools. (default: false)
+produce_bam: false
+
+# --------------- output location ---------------
+
+# Directory to write output files. Created if it does not exist. (default: current directory)
 output_dir: .
-# the common name given to all output files (e.g., "TEST" => TEST_r1.fastq, TEST.vcf, TEST.bam)
-output_filename: .
 
-# input files (full paths to files)
-# Note that these are not yet active
-# mutation_model: .
-# fragment_model: .
-# sequence_error_model: .
+# Stem name applied to all output files.
+# e.g., "my_run" produces my_run_r1.fastq.gz, my_run.vcf.gz, my_run.bam (default: "neat_out")
+output_filename: neat_out
+
+# Set to true to overwrite existing output files. false will error on collision. (default: false)
+overwrite_output: false
+
+# --------------- reproducibility ---------------
+
+# Seed string for the random number generator. Any whitespace-separated series of words.
+# The seed used for a run is printed to the log; copy it here to reproduce that run exactly.
+# Omit (or set to .) to use a timestamp-based seed. (default: auto timestamp)
+rng_seed: .
+
+# --------------- optional model files ---------------
+# Each field accepts a path to a gzipped JSON model file produced by the corresponding
+# rneat sub-command. Omit (or set to .) to use the built-in NEAT2 default model.
+
+# Custom quality score / sequencing error model (.json.gz).
+# Generate with: rneat gen-seq-error-model -c gen_seq_error_model_config.yml
+sequence_error_model: .
+
+# Custom SNP/indel mutation model (.json.gz).
+# Generate with: rneat gen-mut-model -c gen_mut_model_config.yml
+mutation_model: .
+
+# Custom fragment length model (.json.gz). Only used when paired_ended: true.
+# Generate with: rneat gen-frag-length-model -c gen_frag_length_model_config.yml
+fragment_model: .

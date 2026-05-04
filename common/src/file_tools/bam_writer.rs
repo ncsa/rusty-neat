@@ -1,0 +1,239 @@
+use std::collections::HashMap;
+use std::num::NonZero;
+use std::path::PathBuf;
+
+use noodles::bam;
+use noodles::bgzf;
+use noodles::core::Position;
+use noodles::sam::{
+    self as sam,
+    alignment::{
+        io::Write as AlignmentWrite,
+        record::{
+            cigar::op::{Kind as CigarKind, Op},
+Flags,
+            MappingQuality,
+        },
+        record_buf::{Cigar, QualityScores, RecordBuf, Sequence},
+    },
+    header::record::value::{map::ReferenceSequence, Map},
+};
+use thiserror::Error;
+
+use crate::structs::read_record::ReadRecord;
+
+#[derive(Debug, Error)]
+pub enum BamWriterError {
+    #[error(transparent)]
+    IoError(#[from] std::io::Error),
+    #[error("Unknown contig: {0}")]
+    UnknownContig(String),
+}
+
+pub struct BamWriter {
+    writer: bam::io::Writer<bgzf::io::Writer<std::fs::File>>,
+    header: sam::Header,
+    pub contig_index: HashMap<String, usize>,
+}
+
+impl BamWriter {
+    /// Creates a new BAM file with a header derived from `contigs` (ordered name + length pairs).
+    pub fn new(path: &PathBuf, contigs: &[(String, usize)]) -> Result<Self, BamWriterError> {
+        let mut builder = sam::Header::builder();
+        let mut contig_index = HashMap::new();
+        for (i, (name, length)) in contigs.iter().enumerate() {
+            let len = NonZero::<usize>::new(*length)
+                .unwrap_or_else(|| NonZero::<usize>::new(1).unwrap());
+            builder = builder.add_reference_sequence(
+                name.as_bytes().to_vec(),
+                Map::<ReferenceSequence>::new(len),
+            );
+            contig_index.insert(name.clone(), i);
+        }
+        let header = builder.build();
+        let file = std::fs::File::create(path)?;
+        let mut writer = bam::io::Writer::new(file);
+        writer.write_header(&header)?;
+        Ok(Self {
+            writer,
+            header,
+            contig_index,
+        })
+    }
+
+    pub fn write_record(&mut self, record: &RecordBuf) -> Result<(), BamWriterError> {
+        self.writer.write_alignment_record(&self.header, record)?;
+        Ok(())
+    }
+
+    /// Returns the 0-based index of `name` in the BAM header @SQ table.
+    pub fn contig_id(&self, name: &str) -> Result<usize, BamWriterError> {
+        self.contig_index
+            .get(name)
+            .copied()
+            .ok_or_else(|| BamWriterError::UnknownContig(name.to_string()))
+    }
+
+    pub fn write_read_record(&mut self, record: &ReadRecord) -> Result<(), BamWriterError> {
+        let ref_id = self.contig_id(&record.contig)?;
+        let mate_ref_id = self.contig_id(&record.mate_contig)?;
+        let cigar = rle_to_cigar(&record.cigar_ops);
+        let flags = read_flags(record.is_paired, record.is_reverse);
+        let bam_record = build_bam_record(
+            &record.name,
+            ref_id,
+            record.position,
+            flags,
+            60,
+            cigar,
+            mate_ref_id,
+            record.mate_position,
+            record.template_length,
+            &record.sequence,
+            &record.quality_scores,
+        );
+        self.write_record(&bam_record)
+    }
+}
+
+fn rle_to_cigar(char_ops: &[char]) -> Cigar {
+    if char_ops.is_empty() {
+        return [Op::new(CigarKind::Match, 1)].into_iter().collect();
+    }
+    let mut ops: Vec<Op> = Vec::new();
+    let mut current = char_ops[0];
+    let mut count = 1usize;
+    for &ch in &char_ops[1..] {
+        if ch == current {
+            count += 1;
+        } else {
+            ops.push(Op::new(char_to_cigar_kind(current), count));
+            current = ch;
+            count = 1;
+        }
+    }
+    ops.push(Op::new(char_to_cigar_kind(current), count));
+    ops.into_iter().collect()
+}
+
+fn char_to_cigar_kind(c: char) -> CigarKind {
+    match c {
+        'I' => CigarKind::Insertion,
+        'D' => CigarKind::Deletion,
+        _ => CigarKind::Match,
+    }
+}
+
+/// Builds SAM flags for a simulated read.
+///
+/// For single-ended runs, returns `Flags::empty()`. For paired-end:
+/// - R1 (forward): SEGMENTED | PROPERLY_SEGMENTED | MATE_REVERSE_COMPLEMENTED | FIRST_SEGMENT
+/// - R2 (reverse): SEGMENTED | PROPERLY_SEGMENTED | REVERSE_COMPLEMENTED | LAST_SEGMENT
+pub fn read_flags(is_paired_run: bool, is_reverse: bool) -> Flags {
+    if !is_paired_run {
+        return Flags::empty();
+    }
+    if is_reverse {
+        Flags::SEGMENTED
+            | Flags::PROPERLY_SEGMENTED
+            | Flags::REVERSE_COMPLEMENTED
+            | Flags::LAST_SEGMENT
+    } else {
+        Flags::SEGMENTED
+            | Flags::PROPERLY_SEGMENTED
+            | Flags::MATE_REVERSE_COMPLEMENTED
+            | Flags::FIRST_SEGMENT
+    }
+}
+
+/// Assembles a `RecordBuf` from alignment parameters.
+///
+/// `pos` and `mate_pos` are 0-based reference coordinates.
+/// `qual_scores` are raw Phred values (not ASCII-offset).
+pub fn build_bam_record(
+    name: &str,
+    ref_id: usize,
+    pos: usize,
+    flags: Flags,
+    mapq: u8,
+    cigar: Cigar,
+    mate_ref_id: usize,
+    mate_pos: usize,
+    template_length: i32,
+    sequence: &str,
+    qual_scores: &[usize],
+) -> RecordBuf {
+    let mut record = RecordBuf::default();
+
+    *record.name_mut() = Some(name.as_bytes().to_vec().into());
+    *record.flags_mut() = flags;
+    *record.reference_sequence_id_mut() = Some(ref_id);
+    *record.alignment_start_mut() = Position::new(pos + 1);
+    *record.mapping_quality_mut() = MappingQuality::try_from(mapq).ok();
+    *record.cigar_mut() = cigar;
+    *record.mate_reference_sequence_id_mut() = Some(mate_ref_id);
+    *record.mate_alignment_start_mut() = Position::new(mate_pos + 1);
+    *record.template_length_mut() = template_length;
+    *record.sequence_mut() = Sequence::from(sequence.as_bytes());
+
+    let qual_u8: Vec<u8> = qual_scores.iter().map(|&q| q as u8).collect();
+    *record.quality_scores_mut() = QualityScores::from(qual_u8);
+
+    record
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use crate::structs::read_record::ReadRecord;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_read_flags_single_ended() {
+        assert_eq!(read_flags(false, false), Flags::empty());
+        assert_eq!(read_flags(false, true), Flags::empty());
+    }
+
+    #[test]
+    fn test_read_flags_paired_r1() {
+        let flags = read_flags(true, false);
+        assert!(flags.is_segmented());
+        assert!(flags.contains(Flags::FIRST_SEGMENT));
+        assert!(!flags.contains(Flags::REVERSE_COMPLEMENTED));
+    }
+
+    #[test]
+    fn test_read_flags_paired_r2() {
+        let flags = read_flags(true, true);
+        assert!(flags.is_segmented());
+        assert!(flags.contains(Flags::LAST_SEGMENT));
+        assert!(flags.contains(Flags::REVERSE_COMPLEMENTED));
+    }
+
+    #[test]
+    fn test_bam_writer_creates_file() {
+        let temp = tempdir().unwrap();
+        let bam_path: PathBuf = temp.path().join("test.bam");
+        let contigs = vec![("chr1".to_string(), 100_000usize)];
+        let mut writer = BamWriter::new(&bam_path, &contigs).unwrap();
+        assert_eq!(writer.contig_id("chr1").unwrap(), 0);
+        assert!(writer.contig_id("chrX").is_err());
+
+        let record = ReadRecord {
+            name: "read1/1".to_string(),
+            sequence: "ACGT".to_string(),
+            quality_scores: vec![30, 30, 30, 30],
+            cigar_ops: vec!['M', 'M', 'M', 'M'],
+            is_paired: false,
+            is_reverse: false,
+            contig: "chr1".to_string(),
+            position: 100,
+            mate_contig: "chr1".to_string(),
+            mate_position: 0,
+            template_length: 0,
+        };
+        writer.write_read_record(&record).unwrap();
+        assert!(bam_path.exists());
+    }
+}

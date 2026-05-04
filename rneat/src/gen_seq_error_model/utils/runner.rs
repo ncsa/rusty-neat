@@ -1,4 +1,5 @@
 use log::{info, warn};
+#[cfg(test)]
 use std::path::PathBuf;
 use common::{
     file_tools::{

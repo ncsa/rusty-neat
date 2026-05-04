@@ -1,6 +1,6 @@
 //! In DNA sequencing, a fragment is a bit of DNA, roughly uniform in length that is sequenced
 //! by the machine. Sometimes these fragments have special molecules attached to the end for ID
-//! purposes. How this is done is a process called Chemistry Magic. For our purposes, we exect
+//! purposes. How this is done is a process called Chemistry Magic. For our purposes, we expect
 //! the data to be uniform enough that a mean and standard deviation will describe the set.
 
 use flate2::read::GzDecoder;

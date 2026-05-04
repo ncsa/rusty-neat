@@ -15,10 +15,11 @@ $ rneat --help
 Usage: rneat [OPTIONS] [SUB-COMMAND]
 
 SUB-COMMANDS:
-  gen-reads     Generates reads for an input dataset
-  filter-reads  Filters the output of gen-reads
-  gen-mut-model Generates a mutation model from real VCF data
-  help          Print this message or the help of the given subcommand(s)
+  gen-reads            Generates reads for an input dataset
+  filter-reads         Filters the output of gen-reads
+  gen-mut-model        Generates a mutation model from real VCF data
+  gen-seq-error-model  Generates a sequencing error model from real FASTQ data
+  help                 Print this message or the help of the given subcommand(s)
 
 Options:
       --log-level [<log_level>]  Sets the log level for the display log. [default: trace] [possible values: trace, debug, info, warn, error, off]
@@ -230,5 +231,68 @@ Caveats: Only one sample can be read at this point. Currently, high-mutation reg
 Try it out and let us know if you run into any issues!
 
 We will continue to improve this process in the future. If you have suggestions for parsing names to facilitate this, let us know in the Issues section!
+
+Generating a Sequencing Error Model
+====================
+`rneat` can also learn a sequencing error model from real FASTQ data using the `rneat gen-seq-error-model` subcommand. This reads per-base quality scores from the FASTQ to build a Markov quality score model and computes an average base error rate. Optionally, you can supply a BAM file or a custom TSV to set the SNP transition matrix (which base errors are most likely to become which other bases).
+
+```bash
+$ rneat gen-seq-error-model -c gen_seq_error_model_config.yml
+```
+
+The output is a gzipped JSON model file that can be passed directly to `gen-reads` via its `seq_error_model` config key.
+
+Copy `template_config/gen_seq_error_model_template.yml` to a directory of your choosing and fill in the fields:
+
+```yaml
+# required: path to input FASTQ file (.fastq or .fastq.gz)
+fastq_file: /path/to/reads.fastq.gz
+
+# required: output path for the generated model; should end in .json.gz
+output_file: /path/to/seq_error_model.json.gz
+
+# optional: set to true to overwrite an existing output file (default: false)
+overwrite_output: false
+
+# optional: maximum number of reads to use for model learning; 0 = unlimited (default: 0)
+max_reads: 0
+
+# optional: quality score ASCII offset; 33 for Illumina 1.8+/Sanger, 64 for older Illumina (default: 33)
+qual_offset: 33
+
+# optional: aligned BAM file to infer the SNP transition matrix from read-vs-reference mismatches.
+# The BAM must have MD tags. If your aligner did not add them, run:
+#   samtools calmd -b aligned.bam reference.fa > aligned_with_md.bam
+# Ignored if transition_matrix_file is also set.
+bam_file: /path/to/aligned.bam
+
+# optional: custom 4x4 SNP transition matrix TSV (rows/columns: A C G T).
+# A single header line is allowed. Diagonal values are ignored.
+# Takes precedence over bam_file.
+transition_matrix_file: /path/to/matrix.tsv
+```
+
+**SNP transition matrix priority:**
+1. `transition_matrix_file` (explicit TSV) — highest priority
+2. `bam_file` (inferred from MD-tagged BAM mismatches)
+3. Default matrix from Python NEAT — used when neither is provided
+
+**BAM MD tag requirement:**
+The BAM path requires MD tags to identify reference bases at mismatch positions. Most aligners (BWA-MEM, STAR with `--outSAMattributes MD`) add them automatically. If yours does not, generate them with:
+```bash
+samtools calmd -b aligned.bam reference.fa > aligned_with_md.bam
+samtools index aligned_with_md.bam
+```
+
+**TSV format:**
+The transition matrix TSV has 4 data rows (one per reference base: A, C, G, T) and 4 whitespace-separated columns (one per read base: A, C, G, T). An optional header row (non-numeric first token) is skipped. Diagonal values are zeroed automatically. Rows are re-normalized to sum to 1.
+
+```
+A    C    G    T
+0.0  0.5  0.3  0.2
+0.5  0.0  0.3  0.2
+0.4  0.3  0.0  0.3
+0.3  0.3  0.4  0.0
+```
 
 That's it so far! Test out the features and let us know what you think!

@@ -1,12 +1,15 @@
-use log::info;
-#[cfg(test)]
+use log::{info, warn};
 use std::path::PathBuf;
 use common::{
-    file_tools::file_io::{read_gzip_lines, read_lines},
+    file_tools::{
+        bam_reader::read_bam_transitions,
+        file_io::{read_gzip_lines, read_lines},
+    },
     models::{
         quality_scores::QualityScoreModel,
         sequencing_error_model::SequencingErrorModel,
     },
+    structs::transition_matrix::TransitionMatrix,
 };
 use crate::gen_seq_error_model::{
     errors::GenSeqErrorModelError,
@@ -14,6 +17,73 @@ use crate::gen_seq_error_model::{
 };
 
 const MAX_SCORE: usize = 94;
+
+/// Loads a 4×4 SNP transition matrix from a whitespace-delimited TSV file.
+///
+/// The file should have 4 data rows (A/C/G/T from-base) and 4 columns (A/C/G/T to-base).
+/// An optional single header row is skipped if the first token is non-numeric.
+/// The diagonal is zeroed before building the distribution so self-transitions
+/// are impossible.
+fn load_transition_matrix_tsv(path: &PathBuf) -> Result<TransitionMatrix, GenSeqErrorModelError> {
+    let content = std::fs::read_to_string(path)?;
+    let mut rows: Vec<[f64; 4]> = Vec::new();
+
+    for line in content.lines() {
+        let tokens: Vec<&str> = line.split_whitespace().collect();
+        if tokens.is_empty() {
+            continue;
+        }
+        // Skip a header row whose first token is not a number
+        if rows.is_empty() && tokens[0].parse::<f64>().is_err() {
+            continue;
+        }
+        let vals: Vec<f64> = tokens.iter().filter_map(|s| s.parse().ok()).collect();
+        if vals.len() >= 4 {
+            rows.push([vals[0], vals[1], vals[2], vals[3]]);
+        }
+    }
+
+    if rows.len() < 4 {
+        return Err(GenSeqErrorModelError::ConfigurationError(format!(
+            "transition_matrix_file {:?} has only {} data rows (expected 4)",
+            path,
+            rows.len()
+        )));
+    }
+
+    // Zero the diagonal so self-transitions are impossible
+    for (i, row) in rows.iter_mut().enumerate() {
+        row[i] = 0.0;
+    }
+
+    Ok(TransitionMatrix::from(rows[0], rows[1], rows[2], rows[3])?)
+}
+
+/// Normalizes a raw 4×4 mismatch count matrix into a `TransitionMatrix`.
+///
+/// Each row is normalized independently. Rows with no observed mismatches get
+/// equal probability distributed across the three off-diagonal positions.
+fn build_transition_matrix_from_counts(
+    counts: [[usize; 4]; 4],
+) -> Result<TransitionMatrix, GenSeqErrorModelError> {
+    let mut weights = [[0.0f64; 4]; 4];
+    for i in 0..4 {
+        let total: f64 = counts[i].iter().sum::<usize>() as f64;
+        if total == 0.0 {
+            for j in 0..4 {
+                if i != j {
+                    weights[i][j] = 1.0 / 3.0;
+                }
+            }
+        } else {
+            for j in 0..4 {
+                weights[i][j] = counts[i][j] as f64 / total;
+            }
+            weights[i][i] = 0.0;
+        }
+    }
+    Ok(TransitionMatrix::from(weights[0], weights[1], weights[2], weights[3])?)
+}
 
 pub fn runner(config: &RunConfiguration) -> Result<(), GenSeqErrorModelError> {
     let is_gz = config
@@ -135,11 +205,97 @@ pub fn runner(config: &RunConfiguration) -> Result<(), GenSeqErrorModelError> {
         trans_weights,
     )?;
 
-    let model = SequencingErrorModel::from_raw_data(error_rate, quality_score_model)?;
+    // Determine transition matrix: TSV > BAM inference > defaults from original Python NEAT
+    // (see https://github.com/ncsa/NEAT/blob/main/neat/model_sequencing_error/runner.py)
+    let snp_transition_matrix: Option<TransitionMatrix> =
+        if let Some(path) = &config.transition_matrix_file {
+            info!("Loading SNP transition matrix from TSV: {:?}", path);
+            Some(load_transition_matrix_tsv(path)?)
+        } else if let Some(path) = &config.bam_file {
+            info!("Inferring SNP transition matrix from BAM: {:?}", path);
+            let counts = read_bam_transitions(path)?;
+            let total_mismatches: usize = counts.iter().flatten().sum();
+            if total_mismatches == 0 {
+                warn!(
+                    "BAM file {:?} had no MD-tagged records; using default transition matrix",
+                    path
+                );
+                None
+            } else {
+                info!("Observed {} SNP mismatches across all records", total_mismatches);
+                Some(build_transition_matrix_from_counts(counts)?)
+            }
+        } else {
+            None
+        };
+
+    let model = SequencingErrorModel::from_raw_data(error_rate, quality_score_model, snp_transition_matrix)?;
     model.write_model(&config.output_file)?;
 
     info!("Wrote sequencing error model to {:?}", config.output_file);
     Ok(())
+}
+
+/// Write a minimal BAM file with `n_records` mapped records.
+/// Each record uses `ref_bases` for the MD mismatch source and `read_bases` for the SEQ field.
+/// Slices must be the same length. Pass `with_md = false` to omit the MD tag entirely.
+#[cfg(test)]
+fn write_test_bam(path: &PathBuf, n_records: usize, ref_bases: &[u8], read_bases: &[u8], with_md: bool) {
+    use noodles::bam;
+    use noodles::sam::{
+        self as sam,
+        alignment::{
+            RecordBuf,
+            io::Write as _,
+            record::{
+                cigar::{op::Kind, Op},
+                data::field::Tag,
+                Flags,
+            },
+            record_buf::{Cigar, Sequence, data::field::Value as BufValue},
+        },
+    };
+
+    let n = read_bases.len();
+    let header = sam::Header::default();
+
+    // Build MD string: match counts interspersed with ref bases at mismatches
+    let md_str: Option<String> = if with_md {
+        let mut md = String::new();
+        let mut match_count = 0usize;
+        for (&r, &q) in ref_bases.iter().zip(read_bases.iter()) {
+            if r.to_ascii_uppercase() == q.to_ascii_uppercase() {
+                match_count += 1;
+            } else {
+                md.push_str(&match_count.to_string());
+                md.push(r as char);
+                match_count = 0;
+            }
+        }
+        md.push_str(&match_count.to_string());
+        Some(md)
+    } else {
+        None
+    };
+
+    let file = std::fs::File::create(path).unwrap();
+    let mut writer = bam::io::Writer::new(file);
+    writer.write_header(&header).unwrap();
+
+    for _ in 0..n_records {
+        let cigar: Cigar = [Op::new(Kind::Match, n)].into_iter().collect();
+        let mut record = RecordBuf::default();
+        *record.flags_mut() = Flags::empty();
+        *record.cigar_mut() = cigar;
+        *record.sequence_mut() = Sequence::from(read_bases);
+
+        if let Some(ref md) = md_str {
+            record
+                .data_mut()
+                .insert(Tag::MISMATCHED_POSITIONS, BufValue::from(md.as_str()));
+        }
+        writer.write_alignment_record(&header, &record).unwrap();
+    }
 }
 
 #[cfg(test)]
@@ -168,6 +324,8 @@ mod tests {
             overwrite_output: true,
             max_reads: 0,
             qual_offset: 33,
+            bam_file: None,
+            transition_matrix_file: None,
         }
     }
 
@@ -181,7 +339,6 @@ mod tests {
         runner(&config).unwrap();
         assert!(output_path.exists());
         let model = SequencingErrorModel::from_file(&output_path).unwrap();
-        // just check it round-trips — error_rate must be finite and positive
         let scores = model.generate_quality_scores(50, &mut simple_rng::NeatRng::new_from_seed(
             &vec!["test".to_string()]
         ).unwrap()).unwrap();
@@ -237,10 +394,8 @@ mod tests {
 
     #[test]
     fn test_runner_error_rate_survives_serialization() {
-        // Verify error_rate is preserved exactly after write + reload.
         let temp = tempfile::tempdir().unwrap();
         let fastq_path = temp.path().join("q20.fastq");
-        // Q20: 'A' + 20 = chr(53) = '5', score = 53 - 33 = 20
         let qual = "5".repeat(30);
         let seq = "C".repeat(30);
         let content: String = (0..10)
@@ -250,7 +405,7 @@ mod tests {
         let output_path = temp.path().join("model.json.gz");
         runner(&make_config(fastq_path, output_path.clone())).unwrap();
         let model = SequencingErrorModel::from_file(&output_path).unwrap();
-        let expected = 10f64.powf(-20.0 / 10.0); // 0.01
+        let expected = 10f64.powf(-20.0 / 10.0);
         assert!(
             (model.error_rate() - expected).abs() < 1e-10,
             "expected {expected:.6}, got {:.6}",
@@ -260,12 +415,8 @@ mod tests {
 
     #[test]
     fn test_runner_zero_transition_row_handled() {
-        // Q41 ('J' = ASCII 74, score 41) only appears at position 2 of each read.
-        // It never acts as a prev_score, so its transition rows would be all-zero
-        // without the uniform fallback fix. Model must build and generate scores cleanly.
         let temp = tempfile::tempdir().unwrap();
         let fastq_path = temp.path().join("sparse.fastq");
-        // Scores per read: [30, 28, 41] → chars [?, =, J]
         let content: String = (0..20)
             .map(|i| format!("@r{i}\nAAA\n+\n?=J\n"))
             .collect();
@@ -274,11 +425,9 @@ mod tests {
         runner(&make_config(fastq_path, output_path.clone())).unwrap();
         let model = SequencingErrorModel::from_file(&output_path).unwrap();
         let mut rng = simple_rng::NeatRng::new_from_seed(&vec!["s".to_string()]).unwrap();
-        // 100 samples; without the fix all would be ≤ 28 (lowest score); with fix Q41 can appear
         let scores: Vec<usize> = (0..100)
             .map(|_| model.generate_quality_scores(3, &mut rng).unwrap()[2])
             .collect();
-        // At least some last-position scores should be Q41 (uniform fallback is working)
         assert!(
             scores.iter().any(|&s| s == 41),
             "expected Q41 to appear in last-position scores with uniform fallback; got {scores:?}"
@@ -287,8 +436,6 @@ mod tests {
 
     #[test]
     fn test_runner_qual_offset() {
-        // Phred+64 encoding: 'a' = ASCII 97, score = 97 - 64 = 33
-        // Expected error_rate = 10^(-33/10) ≈ 5.012e-4
         let temp = tempfile::tempdir().unwrap();
         let fastq_path = temp.path().join("phred64.fastq");
         let qual = "a".repeat(20);
@@ -321,13 +468,11 @@ mod tests {
         assert!(output_path.exists());
 
         let model = SequencingErrorModel::from_file(&output_path).unwrap();
-        // H1N1 FASTQ is real Illumina data: error rate should be in [0.0001, 0.05]
         let error_rate = model.error_rate();
         assert!(
             error_rate > 0.0001 && error_rate < 0.05,
             "error_rate {error_rate} outside expected Illumina range [0.0001, 0.05]"
         );
-        // Quality scores must be generable at the FASTQ read length (151)
         let mut rng = simple_rng::NeatRng::new_from_seed(&vec!["h1n1".to_string()]).unwrap();
         let scores = model.generate_quality_scores(151, &mut rng).unwrap();
         assert_eq!(scores.len(), 151);
@@ -354,8 +499,6 @@ mod tests {
 
     #[test]
     fn test_runner_max_reads_reduces_processed_count() {
-        // With max_reads=50, the model should still write successfully and produce
-        // a valid model from a subset of the H1N1 reads (653 total).
         let manifest_dir = env!("CARGO_MANIFEST_DIR");
         let fastq_path = PathBuf::from(format!("{}/test_data/H1N1_read1.fq.gz", manifest_dir));
         let temp = tempfile::tempdir().unwrap();
@@ -365,10 +508,149 @@ mod tests {
         runner(&config).unwrap();
         assert!(output_path.exists());
 
-        // Model should still be valid and usable
         let model = SequencingErrorModel::from_file(&output_path).unwrap();
         let mut rng = simple_rng::NeatRng::new_from_seed(&vec!["seed".to_string()]).unwrap();
         let scores = model.generate_quality_scores(151, &mut rng).unwrap();
         assert_eq!(scores.len(), 151);
+    }
+
+    #[test]
+    fn test_transition_matrix_from_tsv() {
+        let temp = tempfile::tempdir().unwrap();
+        let fastq_path = temp.path().join("test.fastq");
+        make_test_fastq(&fastq_path, 20, 50);
+        let output_path = temp.path().join("model.json.gz");
+
+        // Write a valid 4×4 TSV with a header line
+        let tsv_path = temp.path().join("matrix.tsv");
+        std::fs::write(
+            &tsv_path,
+            "from\\to\tA\tC\tG\tT\n\
+             0.0\t0.5\t0.3\t0.2\n\
+             0.5\t0.0\t0.3\t0.2\n\
+             0.4\t0.3\t0.0\t0.3\n\
+             0.3\t0.3\t0.4\t0.0\n",
+        ).unwrap();
+
+        let config = RunConfiguration {
+            fastq_file: fastq_path,
+            output_file: output_path.clone(),
+            overwrite_output: true,
+            max_reads: 0,
+            qual_offset: 33,
+            bam_file: None,
+            transition_matrix_file: Some(tsv_path),
+        };
+        runner(&config).unwrap();
+        assert!(output_path.exists());
+    }
+
+    #[test]
+    fn test_runner_with_bam_md_tags() {
+        // ref=AAAA, read=CCCC → every base is an A→C mismatch.
+        // Verifies that runner accepts a bam_file and completes successfully.
+        let temp = tempfile::tempdir().unwrap();
+        let fastq_path = temp.path().join("test.fastq");
+        make_test_fastq(&fastq_path, 20, 4);
+        let bam_path = temp.path().join("test.bam");
+        write_test_bam(&bam_path, 10, b"AAAA", b"CCCC", true);
+        let output_path = temp.path().join("model.json.gz");
+
+        let config = RunConfiguration {
+            fastq_file: fastq_path,
+            output_file: output_path.clone(),
+            overwrite_output: true,
+            max_reads: 0,
+            qual_offset: 33,
+            bam_file: Some(bam_path),
+            transition_matrix_file: None,
+        };
+        runner(&config).unwrap();
+        assert!(output_path.exists());
+        SequencingErrorModel::from_file(&output_path).unwrap();
+    }
+
+    #[test]
+    fn test_runner_bam_no_md_tags_falls_back() {
+        // BAM records without MD tags → runner succeeds and uses the default matrix.
+        let temp = tempfile::tempdir().unwrap();
+        let fastq_path = temp.path().join("test.fastq");
+        make_test_fastq(&fastq_path, 20, 4);
+        let bam_path = temp.path().join("nomd.bam");
+        write_test_bam(&bam_path, 5, b"ACGT", b"TGCA", false);
+        let output_path = temp.path().join("model.json.gz");
+
+        let config = RunConfiguration {
+            fastq_file: fastq_path,
+            output_file: output_path.clone(),
+            overwrite_output: true,
+            max_reads: 0,
+            qual_offset: 33,
+            bam_file: Some(bam_path),
+            transition_matrix_file: None,
+        };
+        runner(&config).unwrap();
+        assert!(output_path.exists());
+    }
+
+    #[test]
+    fn test_tsv_takes_precedence_over_bam() {
+        // When both transition_matrix_file and bam_file are set, the TSV wins.
+        // The BAM has A→C biased mismatches; the TSV has a uniform matrix.
+        // We can't easily inspect the matrix after serialization, so just verify
+        // that the runner completes and writes a valid model.
+        let temp = tempfile::tempdir().unwrap();
+        let fastq_path = temp.path().join("test.fastq");
+        make_test_fastq(&fastq_path, 20, 4);
+        let bam_path = temp.path().join("test.bam");
+        write_test_bam(&bam_path, 10, b"AAAA", b"CCCC", true);
+        let tsv_path = temp.path().join("matrix.tsv");
+        std::fs::write(
+            &tsv_path,
+            "A\tC\tG\tT\n\
+             0.0\t0.5\t0.3\t0.2\n\
+             0.5\t0.0\t0.3\t0.2\n\
+             0.4\t0.3\t0.0\t0.3\n\
+             0.3\t0.3\t0.4\t0.0\n",
+        )
+        .unwrap();
+        let output_path = temp.path().join("model.json.gz");
+
+        let config = RunConfiguration {
+            fastq_file: fastq_path,
+            output_file: output_path.clone(),
+            overwrite_output: true,
+            max_reads: 0,
+            qual_offset: 33,
+            bam_file: Some(bam_path),
+            transition_matrix_file: Some(tsv_path),
+        };
+        runner(&config).unwrap();
+        assert!(output_path.exists());
+        SequencingErrorModel::from_file(&output_path).unwrap();
+    }
+
+    #[test]
+    fn test_build_transition_matrix_from_counts_uniform_fallback() {
+        use common::structs::nucleotides::Nucleotide;
+        // A row with all zeros should produce uniform off-diagonal distribution —
+        // verify by sampling and checking that A is never the result and all three
+        // other bases are reachable.
+        let mut counts = [[0usize; 4]; 4];
+        counts[1][0] = 10; // C→A
+        counts[1][2] = 5;  // C→G
+        counts[1][3] = 5;  // C→T
+        let tm = build_transition_matrix_from_counts(counts).unwrap();
+
+        // Sample the A row at several evenly-spaced random values
+        let a_dist = &tm[&Nucleotide::A];
+        let mut seen = std::collections::HashSet::new();
+        for k in 1..=99 {
+            let r = k as f64 / 100.0;
+            let result = a_dist.sample(r).unwrap();
+            assert_ne!(result, Nucleotide::A, "A→A self-transition should be impossible");
+            seen.insert(result as usize);
+        }
+        assert_eq!(seen.len(), 3, "all three off-diagonal bases should be reachable");
     }
 }

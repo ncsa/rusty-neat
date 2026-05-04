@@ -60,6 +60,19 @@ Moved the code from a brach under NEAT (https://github.com/ncsa/neat) to its own
 - Added bed filtering functions. Now if you supply a "filter_output" bed file to your gen-reads run, it will produce the original files plus a filtered version showing only reads and variants that overlap with the regions in the bed.
 - It's also possible to run this utility separately with `rneat filter-reads`
 
-# TODO DATE
+5/3/2026
+=========
+
 ## rneat v1.2.1
 - Added gen_mut_model mimicking the functionality in python Neat. The purpose is to allow users to create custom models based on real data.
+
+5/3/2026
+=========
+
+## rneat v1.3.0
+- Added `gen-seq-error-model` subcommand. Reads FASTQ (.fastq or .fastq.gz) input and outputs a serialized `SequencingErrorModel` + `QualityScoreModel` (JSON, gzip-compressed). Supports optional BAM file input to infer a SNP transition matrix from real aligned reads using MD tags, and an optional TSV file to supply a fully custom transition matrix. Priority order: TSV override > BAM inference > default matrix.
+- BAM-based transition matrix inference reads MD tags from aligned reads (via noodles), walking CIGAR + MD tokens to identify reference/alt base pairs at each SNP position and accumulating per-context counts into the 4×4 substitution matrix.
+- Added FASTQ read shuffle in gen-reads: output reads are now randomly shuffled so alignment-tool ordering assumptions are not baked in. Simplified read naming to reduce verbosity.
+- Added `template_config/gen_seq_error_model_template.yml` documenting all config fields with inline comments.
+- Updated README with a full "Generating a Sequencing Error Model" section covering config schema, BAM MD-tag requirement, TSV format, and priority order.
+- Bug fixes: degenerate zero-row handling in transition matrix normalization; edge-position SNP handling in MD-tag walker.

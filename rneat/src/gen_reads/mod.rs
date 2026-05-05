@@ -3,6 +3,129 @@ pub mod utils;
 use log::*;
 use errors::GenerateReadsErrors;
 
+#[cfg(test)]
+mod tests {
+    use std::io::{BufRead, BufReader, Write};
+    use std::path::{Path, PathBuf};
+    use flate2::read::MultiGzDecoder;
+    use noodles::bam;
+    use tempfile::{tempdir, NamedTempFile};
+    use common::rng::NeatRng;
+    use crate::gen_reads::utils::{config::RunConfiguration, runner::run_neat};
+
+    // ── helpers ──────────────────────────────────────────────────────────────
+
+    fn make_config(reference: &Path, output_dir: &Path, paired_ended: bool) -> RunConfiguration {
+        let mut yaml = NamedTempFile::new().unwrap();
+        let pair_section = if paired_ended {
+            "paired_ended: true\nfragment_mean: 200.0\nfragment_st_dev: 30.0\n"
+        } else {
+            "paired_ended: false\n"
+        };
+        write!(yaml,
+            "reference: {ref}\nread_len: 50\ncoverage: 2\n\
+             produce_fastq: true\nproduce_bam: true\nproduce_vcf: false\n\
+             output_dir: {out}\noutput_filename: bam_int_test\noverwrite_output: true\n\
+             rng_seed: integration bam test\n{pair}",
+            ref = reference.display(),
+            out = output_dir.display(),
+            pair = pair_section,
+        ).unwrap();
+        RunConfiguration::from_yaml_file(&yaml.path().to_path_buf()).unwrap()
+    }
+
+    fn run(config: RunConfiguration) {
+        let mut rng = NeatRng::new_from_seed(&config.seed_vec).unwrap();
+        run_neat(&Box::new(config), &mut rng).unwrap();
+    }
+
+    /// Returns (ref_id, 0-based alignment start) for every record in the BAM.
+    fn bam_positions(path: &Path) -> Vec<(usize, usize)> {
+        let mut reader = bam::io::Reader::new(std::fs::File::open(path).unwrap());
+        reader.read_header().unwrap();
+        reader.records()
+            .map(|r| {
+                let rec = r.unwrap();
+                let ref_id = rec.reference_sequence_id()
+                    .unwrap()  // Option → Some(Result<usize>)
+                    .unwrap(); // Result  → usize
+                let pos = rec.alignment_start()
+                    .unwrap()  // Option → Some(Result<Position>)
+                    .unwrap()  // Result → Position
+                    .get() - 1;
+                (ref_id, pos)
+            })
+            .collect()
+    }
+
+    fn fastq_record_count(path: &Path) -> usize {
+        // The output FASTQ is multiple concatenated gzip streams (one per contig);
+        // MultiGzDecoder reads all streams in sequence.
+        let reader = BufReader::new(MultiGzDecoder::new(std::fs::File::open(path).unwrap()));
+        reader.lines().count() / 4
+    }
+
+    fn h1n1_reference() -> PathBuf {
+        PathBuf::from(format!("{}/test_data/references/H1N1.fa", env!("CARGO_MANIFEST_DIR")))
+    }
+
+    // ── tests ─────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_bam_single_ended_produced_and_sorted() {
+        let out = tempdir().unwrap();
+        let config = make_config(&h1n1_reference(), out.path(), false);
+        let bam_path = config.output_bam.clone().unwrap();
+        run(config);
+
+        let positions = bam_positions(&bam_path);
+        assert!(!positions.is_empty(), "BAM should contain records");
+
+        for window in positions.windows(2) {
+            assert!(
+                window[0] <= window[1],
+                "BAM not coordinate-sorted: {:?} followed by {:?}",
+                window[0], window[1]
+            );
+        }
+    }
+
+    #[test]
+    fn test_bam_paired_ended_produced_and_sorted() {
+        let out = tempdir().unwrap();
+        let config = make_config(&h1n1_reference(), out.path(), true);
+        let bam_path = config.output_bam.clone().unwrap();
+        run(config);
+
+        let positions = bam_positions(&bam_path);
+        assert!(!positions.is_empty(), "BAM should contain records");
+
+        for window in positions.windows(2) {
+            assert!(
+                window[0] <= window[1],
+                "BAM not coordinate-sorted: {:?} followed by {:?}",
+                window[0], window[1]
+            );
+        }
+    }
+
+    #[test]
+    fn test_bam_record_count_matches_fastq_single_ended() {
+        let out = tempdir().unwrap();
+        let config = make_config(&h1n1_reference(), out.path(), false);
+        let bam_path = config.output_bam.clone().unwrap();
+        let fastq_path = config.output_fastq_1.clone().unwrap();
+        run(config);
+
+        let bam_count = bam_positions(&bam_path).len();
+        let fastq_count = fastq_record_count(&fastq_path);
+        assert_eq!(
+            bam_count, fastq_count,
+            "BAM record count ({bam_count}) must equal FASTQ record count ({fastq_count})"
+        );
+    }
+}
+
 use std::path::PathBuf;
 use crate::{
     gen_reads::utils::{

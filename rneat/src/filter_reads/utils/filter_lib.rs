@@ -55,7 +55,7 @@ impl Iterator for ReaderType {
 }
 
 fn prep_files_for_filtering(file_in: &PathBuf, is_gzip: bool, file_out: &PathBuf) -> Result<(ReaderType, GzEncoder<File>), FilterReadsError> {
-    // Open file file for reading.
+    // Open file for reading.
     let lines: ReaderType = {
         if is_gzip {
             open_gzipped(&file_in)

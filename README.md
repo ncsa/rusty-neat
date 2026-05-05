@@ -128,14 +128,30 @@ The CIGAR strings in the BAM reflect the full ground-truth alignment:
 - Genomic variants (SNPs, insertions, deletions) are encoded as `M`, `I`, and `D` ops.
 - Sequencing error indels are also encoded: deletion errors add `D` ops for skipped reference bases; insertion errors add `I` ops for inserted bases.
 
-The BAM is written in block-generation order. Before using it with most downstream tools, run:
+The BAM is written in coordinate-sorted order. No post-processing sort is required before indexing:
 
 ```bash
-samtools sort my_run.bam -o my_run.sorted.bam
-samtools index my_run.sorted.bam
+samtools index my_run.bam
 ```
 
 Note: heterozygous variants are applied probabilistically, identical to the FASTQ. A read drawn to the reference allele will not show the variant in either the FASTQ or the BAM.
+
+FASTQ Shuffling
+===============
+`rneat` globally shuffles all generated reads before writing the final FASTQ, so no chromosome ordering is visible in the output — matching real sequencer output. All reads from all contigs are collected into memory together and shuffled in a single pass before being written.
+
+**Large genome note:** The global shuffle loads every read record into RAM at once. This is fine for small to moderate genomes (viral, bacterial, small eukaryotes), but becomes impractical for mammalian-scale genomes at typical coverage depths (e.g. human 30× ≈ 900 M reads ≈ hundreds of GB). For those cases, run the post-processing shuffle instead:
+
+```bash
+# single-ended
+seqkit shuffle sample.fastq.gz -o sample_shuffled.fastq.gz
+
+# paired-ended (keeps mates in sync)
+seqkit shuffle -2 sample_R1.fastq.gz sample_R2.fastq.gz \
+    -o sample_R1_shuffled.fastq.gz -o sample_R2_shuffled.fastq.gz
+```
+
+`seqkit` uses reservoir sampling and streams from disk, so its memory use is bounded regardless of file size. `rneat` will emit a warning at runtime when the reference genome exceeds 500 Mbp as a reminder that post-processing may be preferable.
 
 Reading Bed Data
 ================

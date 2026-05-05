@@ -147,7 +147,7 @@ pub fn write_block_fastq<T: Write, W: Write> (
 
         write_read_to_fastq(&r1_record, buffer1)?;
         if let Some(ref mut bam) = bam_writer {
-            bam.write_read_record(&r1_record)
+            bam.stage_read_record(&r1_record)
                 .map_err(|e| FastqToolsError::BamError(e.to_string()))?;
         }
 
@@ -180,7 +180,7 @@ pub fn write_block_fastq<T: Write, W: Write> (
 
             write_read_to_fastq(&r2_record, buffer2)?;
             if let Some(ref mut bam) = bam_writer {
-                bam.write_read_record(&r2_record)
+                bam.stage_read_record(&r2_record)
                     .map_err(|e| FastqToolsError::BamError(e.to_string()))?;
             }
         }

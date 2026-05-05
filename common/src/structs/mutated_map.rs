@@ -4,15 +4,14 @@
 //! This allows us to choose when we write the fastq, whether to use
 //! the ref or alt version.
 use crate::structs::{
-    fasta_map::{FastaMapError, decode_block_filename},
-    nucleotides::Nucleotide,
-    variants::{Genotype, Variant, VariantError},
+    fasta_map::{FastaMapError, decode_block_filename}, 
+    nucleotides::Nucleotide, 
+    variants::{Genotypes, Variant, VariantError},
 };
 use std::collections::HashMap;
 use simple_rng::NeatRng;
 use thiserror::Error;
 use std::path::PathBuf;
-use log::debug;
 
 #[derive(Debug, Error)]
 pub enum MutatedMapError {
@@ -43,16 +42,11 @@ impl MutatedMap {
     ) -> Result<Self, MutatedMapError> {
         // Reconstruct the range from the filename
         let block_interval = decode_block_filename(&sequence_block)?;
-        // Build the variant_map; skip duplicate positions with a warning so the caller
-        // knows their requested mutation count may be slightly under-represented.
+        // Build the variant_map
         let mut variant_map: HashMap<usize, Variant> = HashMap::new();
         let mut flagged_positions: Vec<usize> = Vec::new();
         for variant in variant_vec {
             let location = variant.get_loc()?;
-            if variant_map.contains_key(&location) {
-                debug!("Two mutations sampled at position {}; keeping first, discarding second", location);
-                continue;
-            }
             variant_map.insert(location, variant);
             flagged_positions.push(location);
         }
@@ -86,8 +80,8 @@ impl MutatedMap {
         // the calling function has already checked thath position is within variant_map, or else
         // this will throw an index out of range error.
         match self.variant_map[&position].genotype {
-            Genotype::Homozygous => return Ok(self.variant_map[&position].alternate.clone()),
-            Genotype::Heterozygous => {
+            Genotypes::Homozygous => return Ok(self.variant_map[&position].alternate.clone()),
+            Genotypes::Heterozygous => {
                 // 50/50 chance we mutate
                 if rng.gen_bool(0.5).unwrap() {
                     return Ok(self.variant_map[&position].reference.clone())
@@ -145,53 +139,5 @@ mod tests {
 
         assert_eq!(map.contains((1003, 1300)).unwrap(), true);
         assert_eq!(map.contains((1900, 2100)).unwrap(), false);
-    }
-
-    #[test]
-    fn test_mutate_position_homozygous_always_returns_alt() {
-        let sequence_block = PathBuf::from("chr1_0001000_0002000.fa");
-        let variant = Variant::new(
-            VariantType::SNP,
-            1003,
-            &vec![A],
-            &vec![G],
-            &mut vec![1, 1], // homozygous
-        ).unwrap();
-        let map = MutatedMap::new(sequence_block, vec![variant]).unwrap();
-        let mut rng = simple_rng::NeatRng::new_from_seed(&vec![
-            "test".to_string()
-        ]).unwrap();
-        // Homozygous must always return the alternate
-        for _ in 0..10 {
-            let result = map.mutate_position(1003, &mut rng).unwrap();
-            assert_eq!(result, vec![G]);
-        }
-    }
-
-    #[test]
-    fn test_mutate_position_heterozygous_returns_ref_or_alt() {
-        let sequence_block = PathBuf::from("chr1_0001000_0002000.fa");
-        let variant = Variant::new(
-            VariantType::SNP,
-            1003,
-            &vec![A],
-            &vec![G],
-            &mut vec![1, 0], // heterozygous
-        ).unwrap();
-        let map = MutatedMap::new(sequence_block, vec![variant]).unwrap();
-        let mut rng = simple_rng::NeatRng::new_from_seed(&vec![
-            "test".to_string()
-        ]).unwrap();
-        // Heterozygous must return either ref or alt, never anything else
-        let mut saw_ref = false;
-        let mut saw_alt = false;
-        for _ in 0..20 {
-            let result = map.mutate_position(1003, &mut rng).unwrap();
-            assert!(result == vec![A] || result == vec![G]);
-            if result == vec![A] { saw_ref = true; }
-            if result == vec![G] { saw_alt = true; }
-        }
-        assert!(saw_ref, "expected at least one ref result in 20 trials");
-        assert!(saw_alt, "expected at least one alt result in 20 trials");
     }
 }

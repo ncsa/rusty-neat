@@ -11,9 +11,8 @@ pub fn model_writer<T: Serialize>(model: T, filename: &PathBuf) -> std::io::Resu
 {
     // This will take any serializable model and write it to file.
     let data = serde_json::to_vec(&model).unwrap();
-    // Overwrite check is the caller's responsibility (e.g., config builder)
-    let fileout = create_output_file(&filename, true)
-        .expect(&format!("Error creating output {:?}", &filename));
+    let fileout = create_output_file(&filename, false)
+        .expect(&format!("Error creating output {:?}. If file alread exists, remove.", &filename));
     let writer = BufWriter::new(fileout);
     let mut encoder = GzEncoder::new(writer, Compression::default());
     encoder.write_all(&data)?;

@@ -7,7 +7,7 @@ use flate2::write::GzEncoder;
 use flate2::Compression;
 use common::structs::bed_record::BedRecord;
 use flate2::read::GzDecoder;
-use crate::filter_reads::FilterReadsError;
+use crate::filter_reads::errors::FilterReadsError;
 use thiserror::Error;
 
 use common::file_tools::file_io::{read_gzip_lines, read_lines, create_output_file};
@@ -272,5 +272,70 @@ mod tests {
             parse_fastq_record_name(&record_name).unwrap(),
             ("chrom_1".to_string(), 1000, 2000),
         );
+    }
+
+    #[test]
+    fn test_filter_fastq() {
+        let temp_dir: TempDir = tempfile::tempdir().unwrap();
+
+        // Two reads: first inside BED chr1:0-2000, second outside
+        let fastq_content = concat!(
+            "@neat_generated_chr1_0000001000_0000002000_1:1\n",
+            "ACGTACGT\n",
+            "+\n",
+            "IIIIIIII\n",
+            "@neat_generated_chr1_0000005000_0000006000_2:1\n",
+            "TTTTTTTT\n",
+            "+\n",
+            "IIIIIIII\n",
+        );
+        let input = temp_dir.path().join("input.fastq");
+        std::fs::write(&input, fastq_content).unwrap();
+
+        let bed_table = HashMap::from([(
+            "chr1".to_string(),
+            vec![BedRecord::new("chr1".to_string(), 0, 2000, vec![]).unwrap()],
+        )]);
+
+        let output = temp_dir.path().join("output.fastq.gz");
+        filter_fastq(&bed_table, &input, false, &output).unwrap();
+
+        let lines: Vec<String> = read_gzip_lines(&output)
+            .unwrap()
+            .map(|l| l.unwrap())
+            .collect();
+        assert_eq!(lines.len(), 4, "Only the in-range read (4 lines) should be in output");
+        assert!(lines[0].contains("0000001000"));
+    }
+
+    #[test]
+    fn test_filter_vcf() {
+        let temp_dir: TempDir = tempfile::tempdir().unwrap();
+
+        // Two variants: pos 1500 inside BED chr1:0-2000, pos 5000 outside
+        let vcf_content = concat!(
+            "##fileformat=VCFv4.1\n",
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n",
+            "chr1\t1500\t.\tA\tG\t37\tPASS\t.\tGT\t0/1\n",
+            "chr1\t5000\t.\tT\tC\t37\tPASS\t.\tGT\t0/1\n",
+        );
+        let input = temp_dir.path().join("input.vcf");
+        std::fs::write(&input, vcf_content).unwrap();
+
+        let bed_table = HashMap::from([(
+            "chr1".to_string(),
+            vec![BedRecord::new("chr1".to_string(), 0, 2000, vec![]).unwrap()],
+        )]);
+
+        let output = temp_dir.path().join("output.vcf.gz");
+        filter_vcf(&bed_table, &input, false, &output).unwrap();
+
+        let lines: Vec<String> = read_gzip_lines(&output)
+            .unwrap()
+            .map(|l| l.unwrap())
+            .collect();
+        let variant_lines: Vec<&String> = lines.iter().filter(|l| !l.starts_with('#')).collect();
+        assert_eq!(variant_lines.len(), 1, "Only the in-range variant should appear");
+        assert!(variant_lines[0].contains("1500"));
     }
 }

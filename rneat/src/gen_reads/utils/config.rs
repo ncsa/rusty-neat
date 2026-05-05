@@ -468,7 +468,7 @@ impl RunConfiguration {
         // No point in running if we aren't producing files
         if !(self.produce_fastq | self.produce_vcf | self.produce_bam) {
             error!("All file types set to false, no files would be produced.");
-            return Err(GenerateReadsErrors::MissingReferenceError)
+            return Err(GenerateReadsErrors::ConfigError)
         }
 
         if self.paired_ended {
@@ -477,7 +477,7 @@ impl RunConfiguration {
                     "Paired ended is set to true, but fragment mean \
                     and standard deviation were not set."
                 );
-                return Err(GenerateReadsErrors::MissingReferenceError)
+                return Err(GenerateReadsErrors::ConfigError)
             }
             if self.produce_fastq {
                 info!("\t> fragment mean: {}", self.fragment_mean.unwrap());
@@ -634,10 +634,25 @@ mod tests {
 
     #[test]
     fn test_creates_out_dir() {
-        let yaml = PathBuf::from("test_data/configs/neat_test_bad.yml");
-        RunConfiguration::from_yaml_file(&yaml).unwrap();
-        assert!(PathBuf::from("fake").is_dir());
-        fs::remove_dir("fake").unwrap()
+        let temp_dir = tempfile::tempdir().unwrap();
+        let output_dir = temp_dir.path().join("output");
+        // Write a minimal valid yaml that points output_dir at a path that doesn't exist yet
+        let yaml_content = format!(
+            "reference: test_data/references/H1N1.fa\n\
+             paired_ended: true\n\
+             fragment_mean: 10.0\n\
+             fragment_st_dev: 11.0\n\
+             produce_vcf: true\n\
+             overwrite_output: true\n\
+             output_dir: {}\n",
+            output_dir.display()
+        );
+        let yaml_file = temp_dir.path().join("test.yml");
+        fs::write(&yaml_file, &yaml_content).unwrap();
+
+        assert!(!output_dir.is_dir(), "output dir should not exist before the call");
+        RunConfiguration::from_yaml_file(&yaml_file).unwrap();
+        assert!(output_dir.is_dir(), "from_yaml_file should have created the output dir");
     }
 
     #[test]
@@ -656,62 +671,54 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
-    fn test_produce_fastq_messages() {
+    fn test_paired_ended_fastq_paths() {
+        // Verifies that update_and_log sets both fastq output paths when paired_ended=true
         let mut config_builder = ConfigBuilder::new();
         config_builder.reference = Some("test_data/references/H1N1.fa".to_string());
         let mut config = config_builder.build();
         config.paired_ended = true;
         config.fragment_mean = Some(100.0);
         config.fragment_st_dev = Some(10.0);
-        // tests first branch of if statement for paired_ended & produce_fastq = true
         config.update_and_log().unwrap();
-        // Checks the alternative pe = true, produce_fastq = false
-        config.produce_fastq = false;
-        // need to produce at least one file or check will panic
-        config.update_and_log().unwrap();
+        assert!(config.output_fastq_1.is_some());
+        assert!(config.output_fastq_2.is_some());
     }
 
     #[test]
-    #[should_panic]
     fn test_no_files() {
         let mut config_builder = ConfigBuilder::new();
         config_builder.reference = Some("test_data/references/H1N1.fa".to_string());
         let mut config = config_builder.build();
         config.produce_fastq = false;
-        config.update_and_log().unwrap();
+        assert!(matches!(config.update_and_log(), Err(GenerateReadsErrors::ConfigError)));
     }
 
     #[test]
-    #[should_panic]
     fn test_no_frag_mean_or_stdev() {
         let mut config_builder = ConfigBuilder::new();
         config_builder.reference = Some("test_data/references/H1N1.fa".to_string());
         let mut config = config_builder.build();
-        // paired end set to true, by default, fragment mean and st dev are None
         config.paired_ended = true;
-        config.update_and_log().unwrap();
+        assert!(matches!(config.update_and_log(), Err(GenerateReadsErrors::ConfigError)));
     }
 
     #[test]
-    #[should_panic]
     fn test_no_frag_mean() {
         let mut config_builder = ConfigBuilder::new();
         config_builder.reference = Some("test_data/references/H1N1.fa".to_string());
         let mut config = config_builder.build();
         config.paired_ended = true;
         config.fragment_st_dev = Some(10.0);
-        config.update_and_log().unwrap();
+        assert!(matches!(config.update_and_log(), Err(GenerateReadsErrors::ConfigError)));
     }
 
     #[test]
-    #[should_panic]
     fn test_no_stdev() {
         let mut config_builder = ConfigBuilder::new();
         config_builder.reference = Some("test_data/references/H1N1.fa".to_string());
         let mut config = config_builder.build();
         config.paired_ended = true;
         config.fragment_mean = Some(100.0);
-        config.update_and_log().unwrap();
+        assert!(matches!(config.update_and_log(), Err(GenerateReadsErrors::ConfigError)));
     }
 }

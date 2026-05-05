@@ -191,6 +191,49 @@ mod tests {
         let count = fastq_record_count(&fastq_path);
         assert_eq!(count, 0, "Expected no reads when BED references only unknown contigs, got {count}");
     }
+
+    /// Supply a VCF with a single known SNP on H1N1_HA and verify it appears in the
+    /// output VCF. The SNP is at 1-based position 100 (A→T); H1N1_HA position 99
+    /// (0-based) is confirmed non-N so the variant will be applied.
+    #[test]
+    fn test_input_vcf_snp_appears_in_output() {
+        let out = tempdir().unwrap();
+
+        // Minimal single-sample VCF: position 100 (1-based), A→T, homozygous
+        let vcf_path = out.path().join("input.vcf");
+        std::fs::write(&vcf_path,
+            "##fileformat=VCFv4.2\n\
+             #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n\
+             H1N1_HA\t100\t.\tA\tT\t.\tPASS\t.\tGT\t1/1\n"
+        ).unwrap();
+
+        let mut yaml = NamedTempFile::new().unwrap();
+        write!(yaml,
+            "reference: {ref}\nread_len: 50\ncoverage: 2\n\
+             produce_fastq: true\nproduce_bam: false\nproduce_vcf: true\n\
+             output_dir: {out}\noutput_filename: vcf_input_test\noverwrite_output: true\n\
+             rng_seed: vcf input test\ninput_vcf: {vcf}\n",
+            ref = h1n1_reference().display(),
+            out = out.path().display(),
+            vcf = vcf_path.display(),
+        ).unwrap();
+        let config = RunConfiguration::from_yaml_file(&yaml.path().to_path_buf()).unwrap();
+        let output_vcf = config.output_vcf.clone().unwrap();
+        run(config);
+
+        // Read the output VCF and look for a record at position 100 on H1N1_HA
+        use std::io::{BufRead, BufReader};
+        use flate2::read::GzDecoder;
+        let reader = BufReader::new(GzDecoder::new(std::fs::File::open(&output_vcf).unwrap()));
+        let found = reader.lines()
+            .filter_map(|l| l.ok())
+            .filter(|l| !l.starts_with('#'))
+            .any(|l| {
+                let cols: Vec<&str> = l.split('\t').collect();
+                cols.len() >= 5 && cols[0] == "H1N1_HA" && cols[1] == "100"
+            });
+        assert!(found, "Expected SNP at H1N1_HA:100 in output VCF but did not find it");
+    }
 }
 
 use std::path::PathBuf;

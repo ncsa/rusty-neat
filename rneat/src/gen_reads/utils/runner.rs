@@ -24,7 +24,7 @@ use crate::{
                 write_block_fastq
             },
             file_io::{append_to_file, VectorBuffer},
-            vcf_tools::write_vcf
+            vcf_tools::{read_vcf, write_vcf}
         }, models::{
             fragment_length::FragmentLengthModel,
             mutation_model::MutationModel,
@@ -146,6 +146,17 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
         None => None,
     };
 
+    // Load input VCF variants if provided. Complex variants (multi-base ref AND alt that are
+    // not a simple indel) are skipped with a warning — they have no application code yet.
+    let input_variants: Option<HashMap<String, Vec<Variant>>> = match &config.input_vcf {
+        Some(path) => {
+            info!("Loading input VCF: {}", path.display());
+            let raw = read_vcf(path.to_path_buf())?;
+            Some(filter_input_vcf(raw))
+        },
+        None => None,
+    };
+
     // Open BAM writer if requested, using contig names+lengths from the fasta header.
     let mut bam_writer: Option<BamWriter> = if config.produce_bam {
         let contigs: Vec<(String, usize)> = fasta_map.contigs
@@ -187,7 +198,6 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
         }
 
         for block_filename in contig_blocks {
-            let mut block_variants: Vec<Variant> = Vec::new();
             debug!("Processing block {:?}", block_filename);
             // Set up current block
             let current_block = SequenceBlock::from(&block_filename)?;
@@ -220,13 +230,57 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
                     num_mutable_area += 1.0;
                 }
             }
-            // determine the number of mutations for this segment
+
+            // Extract any user-supplied variants that fall in this block.
+            // VCF POS is 1-based contig-global; convert to 0-based block-local.
+            // Zero out those positions in bias_map so random generation doesn't
+            // double-mutate them, and reduce the random mutation budget accordingly.
+            let block_start = current_block.get_start()?;
+            let block_end   = current_block.get_end()?;
+            let mut block_variants: Vec<Variant> = if let Some(iv) = &input_variants {
+                iv.get(contig_name)
+                    .map(|vs| {
+                        vs.iter()
+                            .filter(|v| {
+                                // VCF POS is 1-based; 0-based global = location - 1
+                                let pos0 = v.location.saturating_sub(1);
+                                pos0 >= block_start && pos0 < block_end
+                            })
+                            .filter_map(|v| {
+                                let local_pos = (v.location - 1) - block_start;
+                                if local_pos >= bias_map.len() {
+                                    return None;
+                                }
+                                // Only zero out if the position was mutable
+                                if bias_map[local_pos] > 0.0 {
+                                    bias_map[local_pos] = 0.0;
+                                    num_mutable_area -= 1.0;
+                                }
+                                let mut v2 = v.clone();
+                                v2.location = local_pos;
+                                Some(v2)
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            debug!("Seeded {} user variant(s) into block {:?}", block_variants.len(), block_filename);
+
+            // determine the number of additional random mutations for this segment
             let num_mutations = (num_mutable_area * config.mutation_rate)
                 .trunc()
                 as usize;
             debug!("Adding {} mutations to block {:?}", num_mutations, block_filename);
             let mut max_del_len = 0;
-            // Generate any relevant mutations
+            // Update max_del_len from user variants already in the block
+            for v in &block_variants {
+                if v.variant_type == VariantType::Deletion && v.reference.len() > 1 {
+                    max_del_len = max_del_len.max(v.reference.len() - 1);
+                }
+            }
+            // Generate random mutations for unmutated positions
             if num_mutations > 0 {
                 // first we generate variants for the block
                 let result: Option<Vec<Variant>> = generate_variants(
@@ -503,6 +557,32 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
         }
     }
     Ok(files_written.clone())
+}
+
+/// Removes Complex variants from the input map, emitting a warning for each one.
+/// SNPs, insertions, and deletions are kept as-is.
+fn filter_input_vcf(
+    raw: HashMap<String, Vec<Variant>>,
+) -> HashMap<String, Vec<Variant>> {
+    let mut out: HashMap<String, Vec<Variant>> = HashMap::new();
+    for (contig, variants) in raw {
+        let mut kept = Vec::new();
+        for v in variants {
+            if v.variant_type == VariantType::Complex {
+                log::warn!(
+                    "Skipping complex variant at {}:{} (multi-base REF and ALT that is not \
+                     a simple indel) — not yet supported",
+                    contig, v.location
+                );
+            } else {
+                kept.push(v);
+            }
+        }
+        if !kept.is_empty() {
+            out.insert(contig, kept);
+        }
+    }
+    out
 }
 
 /// Intersects a set of non-N regions (block-local coordinates) with BED records

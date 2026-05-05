@@ -148,6 +148,38 @@ When `target_bed` is set, `gen-reads` skips contigs absent from the BED entirely
 
 The BED contig names must match the short names derived from the reference FASTA (the text after `>` up to the first space or `|`). Both `.bed` and `.bed.gz` inputs are accepted.
 
+Input Variants VCF
+==================
+You can supply a VCF of variants to force into the simulation:
+
+```yaml
+input_vcf: /path/to/variants.vcf.gz
+```
+
+`rneat` will place every variant from the VCF into the corresponding position in the simulated reads and the output VCF. Random variants are still generated at `mutation_rate` for all positions not covered by the input VCF; set `mutation_rate: 0` to disable random variants entirely and simulate only the provided set.
+
+**Requirements**
+
+- The VCF must be single-sample (one sample column).
+- Every record must include `GT` in the FORMAT field. `rneat` uses the genotype to determine whether to apply the variant to all reads covering the position (homozygous, e.g. `1/1`) or only a probabilistic subset (heterozygous, e.g. `0/1`). Records without `GT` are rejected.
+- Contig names must match the short names derived from the reference FASTA (text after `>` up to the first space or `|`). Variants on unrecognised contigs are skipped with a warning.
+- Both `.vcf` and `.vcf.gz` files are accepted.
+
+**Supported variant types**
+
+| Type | Condition | Handled |
+|------|-----------|---------|
+| SNP | REF and ALT both single base | Yes |
+| Insertion | single-base REF, multi-base ALT | Yes |
+| Deletion | multi-base REF, single-base ALT | Yes |
+| Complex | multi-base REF **and** multi-base ALT | **No** — skipped with warning |
+
+**Current caveats**
+
+- *Multi-allelic records*: only the first ALT allele is used; additional alleles are silently ignored. Split multi-allelic records with `bcftools norm -m -` before passing to `rneat`.
+- *REF allele verification*: `rneat` does not check that the REF field matches the reference sequence at that position. Mismatches will produce biologically incorrect output without any warning.
+- *Structural variants / breakends*: records whose REF and ALT are both multi-base strings (complex variants) are skipped with a logged warning and do not appear in the output.
+
 FASTQ Shuffling
 ===============
 `rneat` globally shuffles all generated reads before writing the final FASTQ, so no chromosome ordering is visible in the output — matching real sequencer output. All reads from all contigs are collected into memory together and shuffled in a single pass before being written.

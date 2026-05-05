@@ -136,6 +136,18 @@ samtools index my_run.bam
 
 Note: heterozygous variants are applied probabilistically, identical to the FASTQ. A read drawn to the reference allele will not show the variant in either the FASTQ or the BAM.
 
+Targeted Generation with a BED File
+=====================================
+For exome, targeted-panel, or any run where you only want reads over specific regions, you can supply a BED file at generation time:
+
+```yaml
+target_bed: /path/to/targets.bed
+```
+
+When `target_bed` is set, `gen-reads` skips contigs absent from the BED entirely — no blocks are read, no variants are placed, and no temp files are written for those contigs. Within covered contigs, reads and variants are generated only over the intersecting non-N regions. This is the recommended approach for targeted runs on large genomes; it is far more efficient than generating genome-wide reads and post-filtering with `filter-reads`.
+
+The BED contig names must match the short names derived from the reference FASTA (the text after `>` up to the first space or `|`). Both `.bed` and `.bed.gz` inputs are accepted.
+
 FASTQ Shuffling
 ===============
 `rneat` globally shuffles all generated reads before writing the final FASTQ, so no chromosome ordering is visible in the output — matching real sequencer output. All reads from all contigs are collected into memory together and shuffled in a single pass before being written.

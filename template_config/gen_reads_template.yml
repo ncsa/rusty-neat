@@ -92,3 +92,16 @@ mutation_model: .
 # Custom fragment length model (.json.gz). Only used when paired_ended: true.
 # Generate with: rneat gen-frag-length-model -c gen_frag_length_model_config.yml
 fragment_model: .
+
+# --------------- targeted region filter ---------------
+
+# Optional BED file (.bed or .bed.gz) of target regions.
+# When provided, reads and variants are generated ONLY over regions in this file.
+# Contigs absent from the BED are skipped entirely — no blocks are read, no temp
+# files are written — making this the recommended approach for targeted-panel or
+# exome runs on large genomes, where post-hoc filtering with `filter-reads` would
+# otherwise process the entire genome first.
+#
+# Coordinates must use the same contig names as the reference FASTA.
+# Omit (or set to .) to generate reads over the full reference. (default: none)
+target_bed: .

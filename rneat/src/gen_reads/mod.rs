@@ -124,6 +124,73 @@ mod tests {
             "BAM record count ({bam_count}) must equal FASTQ record count ({fastq_count})"
         );
     }
+
+    /// Writes a BED covering only H1N1_HA (the full segment) and verifies that:
+    /// 1. Reads are generated (the covered contig produces output).
+    /// 2. Fewer reads are produced than the no-BED run (7 of 8 segments are excluded).
+    #[test]
+    fn test_target_bed_limits_reads() {
+        let out = tempdir().unwrap();
+
+        // BED covering only H1N1_HA; the other 7 segments are absent → skipped entirely.
+        let bed_path = out.path().join("targets.bed");
+        std::fs::write(&bed_path, "H1N1_HA\t0\t1726\n").unwrap();
+
+        let mut yaml = NamedTempFile::new().unwrap();
+        write!(yaml,
+            "reference: {ref}\nread_len: 50\ncoverage: 2\n\
+             produce_fastq: true\nproduce_bam: false\nproduce_vcf: false\n\
+             output_dir: {out}\noutput_filename: bed_test\noverwrite_output: true\n\
+             rng_seed: bed test\ntarget_bed: {bed}\n",
+            ref = h1n1_reference().display(),
+            out = out.path().display(),
+            bed = bed_path.display(),
+        ).unwrap();
+        let config = RunConfiguration::from_yaml_file(&yaml.path().to_path_buf()).unwrap();
+        let fastq_path = config.output_fastq_1.clone().unwrap();
+        run(config);
+
+        let bed_count = fastq_record_count(&fastq_path);
+
+        // Without a BED, all 8 segments produce reads.
+        let out_full = tempdir().unwrap();
+        let config_full = make_config(&h1n1_reference(), out_full.path(), false);
+        let fastq_full = config_full.output_fastq_1.clone().unwrap();
+        run(config_full);
+        let full_count = fastq_record_count(&fastq_full);
+
+        assert!(bed_count > 0, "BED-filtered run produced no reads");
+        assert!(
+            bed_count < full_count,
+            "BED-filtered run ({bed_count} reads) should be less than full run ({full_count} reads)"
+        );
+    }
+
+    /// A BED that names a contig not in the reference should produce an empty FASTQ.
+    #[test]
+    fn test_target_bed_unknown_contig_produces_no_reads() {
+        let out = tempdir().unwrap();
+
+        let bed_path = out.path().join("empty_targets.bed");
+        std::fs::write(&bed_path, "nonexistent_contig\t0\t1000\n").unwrap();
+
+        let mut yaml = NamedTempFile::new().unwrap();
+        write!(yaml,
+            "reference: {ref}\nread_len: 50\ncoverage: 2\n\
+             produce_fastq: true\nproduce_bam: false\nproduce_vcf: false\n\
+             output_dir: {out}\noutput_filename: empty_bed_test\noverwrite_output: true\n\
+             rng_seed: empty bed test\ntarget_bed: {bed}\n",
+            ref = h1n1_reference().display(),
+            out = out.path().display(),
+            bed = bed_path.display(),
+        ).unwrap();
+        let config = RunConfiguration::from_yaml_file(&yaml.path().to_path_buf()).unwrap();
+        let fastq_path = config.output_fastq_1.clone().unwrap();
+        run(config);
+
+        let count = fastq_record_count(&fastq_path);
+        assert_eq!(count, 0, "Expected no reads when BED references only unknown contigs, got {count}");
+    }
 }
 
 use std::path::PathBuf;

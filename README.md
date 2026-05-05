@@ -182,7 +182,7 @@ input_vcf: /path/to/variants.vcf.gz
 
 FASTQ Shuffling
 ===============
-`rneat` globally shuffles all generated reads before writing the final FASTQ, so no chromosome ordering is visible in the output — matching real sequencer output. All reads from all contigs are collected into memory together and shuffled in a single pass before being written.
+`rneat` globally shuffles all generated reads before writing the final FASTQ by default, so no chromosome ordering is visible in the output — matching real sequencer output. Set `shuffle_fastq: false` in `gen-reads` config to preserve the generated ordering and avoid the in-memory global shuffle.
 
 **Large genome note:** The global shuffle loads every read record into RAM at once. This is fine for small to moderate genomes (viral, bacterial, small eukaryotes), but becomes impractical for mammalian-scale genomes at typical coverage depths (e.g. human 30× ≈ 900 M reads ≈ hundreds of GB). For those cases, run the post-processing shuffle instead:
 

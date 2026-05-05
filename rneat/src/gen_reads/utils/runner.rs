@@ -478,7 +478,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
                                 all_r2,
                                 filename1,
                                 Some(filename2),
-                                true,
+                                config.shuffle_fastq,
                                 rng,
                             )?;
                         },
@@ -493,7 +493,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
                         vec![],
                         filename1,
                         None,
-                        true,
+                        config.shuffle_fastq,
                         rng,
                     )?;
                 }

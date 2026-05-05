@@ -24,6 +24,5 @@ assert_fs = "1.1.1"
 indicatif = { version = "0.18.0", features = ["rayon"] }
 same-file = "1.0.6"
 rust_search = "2.1.0"
-noodles = { version = "0.109.0", features = ["bam", "sam", "bgzf", "core"] }
 
 [dev-dependencies]

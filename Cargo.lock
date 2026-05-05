@@ -262,7 +262,7 @@ checksum = "b05b61dc5112cbb17e4b6cd61790d9845d13888356391624cbe7e41efeac1e75"
 
 [[package]]
 name = "common"
-version = "1.3.0"
+version = "1.2.0"
 dependencies = [
  "bincode",
  "bstr",
@@ -1114,7 +1114,7 @@ checksum = "caf4aa5b0f434c91fe5c7f1ecb6a5ece2130b02ad2a590589dda5146df959001"
 
 [[package]]
 name = "rneat"
-version = "1.3.0"
+version = "1.2.0"
 dependencies = [
  "assert_fs",
  "chrono",
@@ -1124,6 +1124,7 @@ dependencies = [
  "indicatif",
  "itertools",
  "log",
+ "noodles",
  "rust_search",
  "same-file",
  "serde",

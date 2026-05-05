@@ -96,11 +96,34 @@ fn read_open_bed<P: Read> (reader: Lines<BufReader<P>>) -> Result<HashMap<String
 
 #[cfg(test)]
 mod tests {
-    // use super::*;
+    use super::*;
+    use std::io::Write;
 
     #[test]
     fn test_process_bed() {
-        // TODO add some tests
-        assert!(true)
+        let temp_dir = tempfile::tempdir().unwrap();
+        let bed_path = temp_dir.path().join("test.bed");
+        let mut f = std::fs::File::create(&bed_path).unwrap();
+        writeln!(f, "chr1\t100\t200\textra_field").unwrap();
+        writeln!(f, "chr1\t500\t600").unwrap();
+        writeln!(f, "chr2\t300\t400").unwrap();
+        drop(f);
+
+        let result = read_bed(&bed_path).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result["chr1"].len(), 2);
+        assert_eq!(result["chr2"].len(), 1);
+        assert_eq!(result["chr1"][0].start, 100);
+        assert_eq!(result["chr1"][0].end, 200);
+        assert_eq!(result["chr2"][0].start, 300);
+        assert_eq!(result["chr2"][0].end, 400);
+    }
+
+    #[test]
+    fn test_process_bed_no_extension_errors() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let bad_path = temp_dir.path().join("no_extension");
+        std::fs::File::create(&bad_path).unwrap();
+        assert!(read_bed(&bad_path).is_err());
     }
 }

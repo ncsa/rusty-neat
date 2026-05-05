@@ -22,7 +22,7 @@ use common::file_tools::fasta_tools::read_fasta;
 use common::structs::variants::Variant;
 use common::structs::fasta_map::FastaMap;
 use common::models::mutation_model::MutationModel;
-use simple_rng::NeatRng;
+use common::rng::NeatRng;
 use utils::mutate_fasta::apply_mutations;
 
 pub fn run_neat(config: &Box<RunConfiguration>, rng: NeatRng) -> Result<(), GenerateReadsErrors> {

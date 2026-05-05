@@ -26,7 +26,7 @@ use thiserror::Error;
 use flate2::read::GzDecoder;
 use serde::{Deserialize, Serialize};
 use std::{fmt::{Display, Formatter}};
-use simple_rng::{NeatRng, NeatRngError};
+use crate::rng::{NeatRng, NeatRngError};
 
 use crate::models::lib::{model_reader, model_writer};
 use crate::models::sequencing_error_model::SeqModelError;
@@ -37,37 +37,13 @@ pub const QUALITY_OFFSET: usize = 33;
 #[derive(Debug, Error)]
 pub enum QualityModelError {
     #[error("Quality model initiation returned a distribution error: {0}")]
-    DistributionError(DistributionErrors),
+    DistributionError(#[from] DistributionErrors),
     #[error("Quality score creation reported an RNG Error: {0}")]
-    RngError(NeatRngError),
+    RngError(#[from] NeatRngError),
     #[error("Quality model return an IO error: {0}")]
-    IoError(io::Error),
+    IoError(#[from] io::Error),
     #[error("Serde error building default model: {0}")]
-    SerdeError(serde_json::Error),
-}
-
-impl From<serde_json::Error> for QualityModelError {
-    fn from(error: serde_json::Error) -> Self {
-        QualityModelError::SerdeError(error)
-    }
-}
-
-impl From<DistributionErrors> for QualityModelError {
-    fn from(error: DistributionErrors) -> Self {
-        QualityModelError::DistributionError(error)
-    }
-}
-
-impl From<NeatRngError> for QualityModelError {
-    fn from(error: NeatRngError) -> Self {
-        QualityModelError::RngError(error)
-    }
-}
-
-impl From<std::io::Error> for QualityModelError {
-    fn from(error: std::io::Error) -> Self {
-        QualityModelError::IoError(error)
-    }
+    SerdeError(#[from] serde_json::Error),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -82,14 +58,14 @@ pub struct QualityScoreModel {
     // on a per-run basis in a deterministic way (doubling positional weight arrays)
     pub assumed_read_length: usize,
     // Weights for the first position in the read length.
-    pub seed_dist: DiscreteDistribution,
+    pub seed_dist: DiscreteDistribution<usize>,
     // A matrix for each subsequent position along the read length after the first. Each row is a
     // discrete distribution, keyed the previous score. For example, for possible scores 0-41,
     // inclusive, there would be 42 vectors (one for each possible previous score), each giving the
     // distribution for the current position (one weight for each of 42 scores). This is based on
     // the original design in NEAT. Previous attempts to simplify this have not been able to
     // successfully reproduce quality scores.
-    pub distros_from_one: Vec<Vec<DiscreteDistribution>>,
+    pub distros_from_one: Vec<Vec<DiscreteDistribution<usize>>>,
 }
 
 impl Display for QualityScoreModel {
@@ -261,6 +237,43 @@ impl QualityScoreModel {
         }
     }
 
+    pub fn from_counts(
+        quality_score_options: Vec<usize>,
+        read_length: usize,
+        seed_weights: Vec<f64>,
+        trans_weights: Vec<Vec<Vec<f64>>>,
+    ) -> Result<Self, QualityModelError> {
+        // seed_dist values are actual quality scores (generate_quality_scores pushes the sampled
+        // value directly); distros_from_one values are indices into quality_score_options
+        // (generate_quality_scores indexes quality_score_options[sampled_index]).
+        let seed_dist = DiscreteDistribution::new(&seed_weights, &quality_score_options)?;
+        let n_scores = quality_score_options.len();
+        let score_indices: Vec<usize> = (0..n_scores).collect();
+        let uniform = vec![1.0f64; n_scores];
+        let mut distros_from_one: Vec<Vec<DiscreteDistribution<usize>>> = Vec::new();
+        for pos_weights in &trans_weights {
+            let mut row: Vec<DiscreteDistribution<usize>> = Vec::new();
+            for prev_weights in pos_weights {
+                // A prev_score that never appeared as a transition source has all-zero weights.
+                // Fall back to uniform so sample() doesn't always return the lowest score.
+                let weights = if prev_weights.iter().all(|&w| w == 0.0) {
+                    &uniform
+                } else {
+                    prev_weights
+                };
+                row.push(DiscreteDistribution::new(weights, &score_indices)?);
+            }
+            distros_from_one.push(row);
+        }
+        Ok(QualityScoreModel {
+            quality_score_options,
+            binned_scores: false,
+            assumed_read_length: read_length,
+            seed_dist,
+            distros_from_one,
+        })
+    }
+
     #[allow(unused)]
     /// we will write subutilities that use these features, eventually
     fn write_to_file(&self, filename: &PathBuf) -> std::io::Result<()> {
@@ -366,5 +379,84 @@ mod tests {
             .iter()
             .map(|x| assert!(model.quality_score_options.contains(x)))
             .collect()
+    }
+
+    #[test]
+    fn test_from_counts_basic() {
+        // 2 scores (Q30, Q40), read_length 3 → 2 transition positions
+        let options = vec![30usize, 40usize];
+        let seed_weights = vec![3.0, 1.0]; // 75% Q30 seed, 25% Q40 seed
+        let trans_weights = vec![
+            // position 0→1
+            vec![vec![3.0, 1.0], vec![0.0, 2.0]],
+            // position 1→2
+            vec![vec![1.0, 1.0], vec![1.0, 0.0]],
+        ];
+        let model = QualityScoreModel::from_counts(
+            options.clone(), 3, seed_weights, trans_weights,
+        ).unwrap();
+        assert_eq!(model.quality_score_options, options);
+        assert_eq!(model.assumed_read_length, 3);
+        assert_eq!(model.distros_from_one.len(), 2);
+        assert_eq!(model.distros_from_one[0].len(), 2);
+        // seed samples actual quality scores
+        let mut rng = NeatRng::new_from_seed(&vec!["seed".to_string()]).unwrap();
+        let s = model.seed_dist.sample(rng.random().unwrap()).unwrap();
+        assert!(options.contains(&s));
+        // generate_quality_scores must produce the right length
+        let scores = model.generate_quality_scores(3, &mut rng).unwrap();
+        assert_eq!(scores.len(), 3);
+        for &sc in &scores {
+            assert!(options.contains(&sc), "unexpected score {sc}");
+        }
+    }
+
+    #[test]
+    fn test_from_counts_zero_transition_row_uses_uniform_fallback() {
+        // Q40 appears in seed but never as a prev_score in any transition.
+        // Without the fix its row would be degenerate (always returns index 0 = Q30).
+        // With the fix its row is uniform: CDF should be [0.5, 1.0].
+        let options = vec![30usize, 40usize];
+        let seed_weights = vec![1.0, 1.0];
+        let trans_weights = vec![
+            // position 0→1: prev=Q30 has real data; prev=Q40 row is all zeros
+            vec![vec![2.0, 1.0], vec![0.0, 0.0]],
+        ];
+        let model = QualityScoreModel::from_counts(
+            options.clone(), 2, seed_weights, trans_weights,
+        ).unwrap();
+        // distros_from_one[pos=0][prev_idx=1] is the formerly-zero row for Q40
+        let zero_row = &model.distros_from_one[0][1];
+        let cdf = zero_row.weights().unwrap();
+        assert_eq!(cdf.len(), 2);
+        // Uniform over 2 values → CDF = [0.5, 1.0]
+        assert!(
+            (cdf[0] - 0.5).abs() < 1e-10,
+            "expected uniform CDF [0.5, 1.0], got {cdf:?}"
+        );
+        assert!((cdf[1] - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_from_counts_generates_only_observed_scores() {
+        // All scores produced by generate_quality_scores must be in quality_score_options.
+        let options = vec![20usize, 30usize, 40usize];
+        let n = options.len();
+        let seed_weights = vec![1.0; n];
+        let uniform_row = vec![1.0; n];
+        let trans_weights = vec![
+            vec![uniform_row.clone(), uniform_row.clone(), uniform_row.clone()],
+            vec![uniform_row.clone(), uniform_row.clone(), uniform_row.clone()],
+        ];
+        let model = QualityScoreModel::from_counts(
+            options.clone(), 3, seed_weights, trans_weights,
+        ).unwrap();
+        let mut rng = NeatRng::new_from_seed(&vec!["t".to_string()]).unwrap();
+        for _ in 0..50 {
+            let scores = model.generate_quality_scores(3, &mut rng).unwrap();
+            for &s in &scores {
+                assert!(options.contains(&s), "score {s} not in options");
+            }
+        }
     }
 }

@@ -10,3 +10,4 @@ pub mod fasta_map;
 pub mod distributions;
 pub mod mutated_map;
 pub mod bed_record;
+pub mod read_record;

@@ -2,9 +2,10 @@
 //! from the py/probability.py file in tag 2.1 of github.com/ncsa/neat
 //! (see also github.com/zstephens/neat-genreads). We may try the statrs Categorical distribution
 //! as well, as I think it does the same thing.
-use simple_rng::NeatRngError;
+use crate::rng::NeatRngError;
 use log::debug;
 use thiserror::Error;
+use std::fmt::Debug;
 use serde::{
     Deserialize, 
     Serialize
@@ -22,16 +23,21 @@ pub enum DistributionErrors {
     RngError(#[from] NeatRngError),
     #[error("Requested a value vector from an index-only model")]
     VectorNotFound,
+    #[error("Input values and weights vector must be of the same length")]
+    InputMismatchError
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DiscreteDistribution {
-    pub(crate) values: Vec<usize>,
+pub struct DiscreteDistribution<T> {
+    pub(crate) values: Vec<T>,
     pub(crate) weights: Vec<f64>,
 }
 
-impl DiscreteDistribution {
-    pub fn new(w_vec: &Vec<f64>, v_vec: &Vec<usize>) -> Result<Self, DistributionErrors> {
+impl<T: Clone + Debug + Serialize + for<'de> Deserialize<'de>> DiscreteDistribution<T> {
+    pub fn new(w_vec: &Vec<f64>, v_vec: &Vec<T>) -> Result<Self, DistributionErrors> {
+        if w_vec.len() != v_vec.len() {
+            return Err(DistributionErrors::InputMismatchError)
+        }
         let cumulative_probability = {
             let sum_weights: f64 = w_vec.iter().sum();
             if sum_weights > 0.0 {
@@ -40,7 +46,7 @@ impl DiscreteDistribution {
                 for weight in w_vec{
                     normalized_weights.push(weight / sum_weights);
                 }
-                cumulative_sum(&mut normalized_weights).unwrap()
+                cumulative_sum(&mut normalized_weights)?
             } else {
                 // Edge case. Really, this shouldn't be allowed in the data. We'll fix it when 
                 // we rebuild the models.
@@ -49,12 +55,12 @@ impl DiscreteDistribution {
         };
 
         Ok(DiscreteDistribution {
-            values: v_vec.to_owned(),
+            values: v_vec.to_vec(),
             weights: cumulative_probability,
         })
     }
 
-    pub fn values(&self) -> Result<Vec<usize>, DistributionErrors> {
+    pub fn values(&self) -> Result<Vec<T>, DistributionErrors> {
         // fetches the value matrix
         Ok(self.values.clone())
     }
@@ -64,7 +70,7 @@ impl DiscreteDistribution {
         Ok(self.weights.to_vec())
     }
 
-    pub fn sample(&self, rand: f64) -> Result<usize, DistributionErrors> {
+    pub fn sample(&self, rand: f64) -> Result<T, DistributionErrors> {
         // returns a random value for the distribution, based on cumulative probability
         // This is basically an icdf for a discrete distribution
         // We take a random number as an input to avoid copying the RNG around the program.
@@ -143,7 +149,7 @@ fn cumulative_sum(a: &mut Vec<f64>) -> Result<Vec<f64>, DistributionErrors> {
 
 #[cfg(test)]
 mod test {
-    use simple_rng::NeatRng;
+    use crate::rng::NeatRng;
     use super::*;
 
     #[test]
@@ -202,5 +208,40 @@ mod test {
         let rand = rng.random().unwrap();
         let x = d.sample(rand).unwrap();
         assert_eq!(x, 3);
+    }
+
+    #[test]
+    fn test_normal_distribution_params() {
+        let nd = NormalDistribution::new(100.0, 15.0).unwrap();
+        let (mean, std_dev) = nd.params().unwrap();
+        assert_eq!(mean, 100.0);
+        assert_eq!(std_dev, 15.0);
+    }
+
+    #[test]
+    fn test_normal_distribution_sample_median() {
+        // At p=0.5 the inverse CDF returns the mean exactly
+        let nd = NormalDistribution::new(200.0, 30.0).unwrap();
+        let median = nd.sample(0.5).unwrap();
+        assert!((median - 200.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_normal_distribution_sample_range() {
+        // Samples between 0 and 1 should all land within ±4 standard deviations
+        let nd = NormalDistribution::new(0.0, 1.0).unwrap();
+        for p in [0.001, 0.01, 0.1, 0.5, 0.9, 0.99, 0.999] {
+            let val = nd.sample(p).unwrap();
+            assert!(val.abs() < 4.0, "sample({}) = {} is outside ±4 sigma", p, val);
+        }
+    }
+
+    #[test]
+    fn test_normal_distribution_inverse_cdf_symmetry() {
+        // inverse_cdf(p) and inverse_cdf(1-p) should be symmetric around the mean
+        let nd = NormalDistribution::new(50.0, 10.0).unwrap();
+        let lo = nd.inverse_cdf(0.1).unwrap();
+        let hi = nd.inverse_cdf(0.9).unwrap();
+        assert!((lo + hi - 100.0).abs() < 1e-9);
     }
 }

@@ -3,7 +3,6 @@
 members = [
     "rneat",
     "common",
-    "simple_rng",
 ]
 
 resolver = "2"
@@ -14,3 +13,16 @@ edition = '2024'
 authors = ["Joshua Allen", "Mikolaj Kowalik", "See coauthors of Python Neat versions"]
 description = "Toolkit for generating simulated NGS read data in fastq and vcf formats. Feature set under development."
 repository = "https://github.com/ncsa/rusty-neat"
+
+[workspace.dependencies]
+thiserror = "2.0.16"
+chrono = "0.4.38"
+serde = { version = "1.0.197", features = ["derive"] }
+serde_derive = "1.0.197"
+serde_json = "1.0.115"
+serde_yml = "0.0.12"
+log = "0.4.21"
+tempfile = "3.14.0"
+flate2 = { version = "1.1.2", features = ["zlib-ng"], default-features = false }
+noodles = { version = "0.109.0", features = ["bam", "sam", "bgzf", "core"] }
+itertools = "0.14.0"

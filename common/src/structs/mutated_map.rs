@@ -9,7 +9,7 @@ use crate::structs::{
     variants::{Genotype, Variant, VariantError},
 };
 use std::collections::HashMap;
-use simple_rng::NeatRng;
+use crate::rng::NeatRng;
 use thiserror::Error;
 use std::path::PathBuf;
 use log::debug;
@@ -158,7 +158,7 @@ mod tests {
             &mut vec![1, 1], // homozygous
         ).unwrap();
         let map = MutatedMap::new(sequence_block, vec![variant]).unwrap();
-        let mut rng = simple_rng::NeatRng::new_from_seed(&vec![
+        let mut rng = NeatRng::new_from_seed(&vec![
             "test".to_string()
         ]).unwrap();
         // Homozygous must always return the alternate
@@ -179,7 +179,7 @@ mod tests {
             &mut vec![1, 0], // heterozygous
         ).unwrap();
         let map = MutatedMap::new(sequence_block, vec![variant]).unwrap();
-        let mut rng = simple_rng::NeatRng::new_from_seed(&vec![
+        let mut rng = NeatRng::new_from_seed(&vec![
             "test".to_string()
         ]).unwrap();
         // Heterozygous must return either ref or alt, never anything else

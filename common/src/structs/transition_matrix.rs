@@ -164,7 +164,7 @@ impl TransitionMatrix where {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use simple_rng::NeatRng;
+    use crate::rng::NeatRng;
 
     #[test]
     fn test_transition_matrix_build() {

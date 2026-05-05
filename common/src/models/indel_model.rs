@@ -8,7 +8,7 @@
 //! We have the variants separated out in the variants struct, into Insertion and Deletion, but they
 //! will share this model to avoid duplicating code, since code-wise they are closely linked.
 use serde::{Deserialize, Serialize};
-use simple_rng::{NeatRng, NeatRngError};
+use crate::rng::{NeatRng, NeatRngError};
 use thiserror::Error;
 use std::{io, path::PathBuf};
 use flate2::read::GzDecoder;

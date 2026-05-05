@@ -8,22 +8,21 @@ edition.workspace = true
 
 [dependencies]
 common = { path = "../common" }
-simple_rng = { path = "../simple_rng" }
-log = "0.4.21"
-chrono = "0.4.34"
+log = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+serde_json = { workspace = true }
+serde_yml = { workspace = true }
+serde = { workspace = true }
+tempfile = { workspace = true }
+flate2 = { workspace = true }
+noodles = { workspace = true }
+itertools = { workspace = true }
 simplelog = "0.12.2"
 clap = { version = "4.5.1", features = ["derive"] }
-itertools = "0.14.0"
 assert_fs = "1.1.1"
-serde_json = "1.0.114"
-serde_yml = "0.0.12"
-serde = { version = "1.0.197", features = ["derive"] }
-tempfile = "3.14.0"
-thiserror = "2.0.16"
-indicatif = {version = "0.18.0", features = ["rayon"]}
-flate2 = { version = "1.1.2", features = ['zlib-ng'], default-features = false }
+indicatif = { version = "0.18.0", features = ["rayon"] }
 same-file = "1.0.6"
 rust_search = "2.1.0"
-noodles = { version = "0.109.0", features = ["bam", "sam", "bgzf", "core"] }
 
 [dev-dependencies]

@@ -26,7 +26,7 @@ use thiserror::Error;
 use flate2::read::GzDecoder;
 use serde::{Deserialize, Serialize};
 use std::{fmt::{Display, Formatter}};
-use simple_rng::{NeatRng, NeatRngError};
+use crate::rng::{NeatRng, NeatRngError};
 
 use crate::models::lib::{model_reader, model_writer};
 use crate::models::sequencing_error_model::SeqModelError;

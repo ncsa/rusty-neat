@@ -6,20 +6,25 @@ description.workspace = true
 repository.workspace = true
 edition.workspace = true
 
+[[test]]
+name = "integration_tests"
+path = "common_tests/integration_tests.rs"
+
 [dependencies]
-simple_rng = { path = "../simple_rng" }
-serde = { version = "1.0.197", features = ["derive"] }
-serde_yml = "0.0.12"
-serde_json = "1.0.115"
-log = "0.4.21"
-serde_derive = "1.0.197"
-tempfile = "3.14.0"
-chrono = "0.4.38"
+serde = { workspace = true }
+serde_yml = { workspace = true }
+serde_json = { workspace = true }
+serde_derive = { workspace = true }
+log = { workspace = true }
+tempfile = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+flate2 = { workspace = true }
+noodles = { workspace = true }
+itertools = { workspace = true }
 bincode = "2.0.0-rc.3"
 walkdir = "2"
-thiserror = "2.0.16"
 statrs = "0.18.0"
 vectorize = "0.2.0"
 lazy_static = "1.5.0"
-itertools = "0.14.0"
-flate2 = { version = "1.1.2", features = ['zlib-ng'], default-features = false }
+bstr = "1"

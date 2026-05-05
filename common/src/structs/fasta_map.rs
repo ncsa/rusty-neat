@@ -14,7 +14,7 @@ use serde_json;
 use std::fs::{read_to_string, File};
 use std::path::PathBuf;
 use crate::structs::nucleotides::Nucleotide;
-use log::error;
+use log::*;
 
 #[derive(Error, Debug)]
 pub enum FastaMapError {
@@ -67,13 +67,15 @@ pub fn decode_block_filename(path_string: &PathBuf) -> Result<(usize, usize), Fa
     Ok((start, end))
 }
 
-#[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SequenceMap {
     // The purpose of this struct is to store where the N's were in the original fasta, since we
     // are overwriting those areas with random bases. This will help us place slightly more
     // meaningful mutations into the genome.
     pub region_type: RegionType,
+    // The start is relative to the sequence, not the reference
     pub start: usize,
+    // Likewise for the end
     pub end: usize,
 }
 
@@ -90,8 +92,8 @@ impl SequenceMap {
         }
     }
 
-    pub fn increment_end(&mut self, num: usize) {
-        self.end += num;
+    pub fn get_len(&self) -> usize {
+        self.end - self.start
     }
 }
 
@@ -111,6 +113,7 @@ pub struct SequenceBlock {
     pub ref_start: usize,
     pub ref_end: usize,
     pub sequence: Vec<Nucleotide>,
+    // We might want to refactor this out so we aren't storing the Vec<SequenceMaps> twice
     pub sequence_map: Vec<SequenceMap>,
 }
 
@@ -186,11 +189,7 @@ impl SequenceBlock {
     }
 
     pub fn get_len(&self) -> usize {
-        if self.ref_start >= self.ref_end {
-            self.ref_start - self.ref_end
-        } else {
-            self.ref_end - self.ref_start
-        }
+        self.ref_end - self.ref_start
     }
 
     pub fn get_seq_clone(&self) -> Result<Vec<Nucleotide>, FastaMapError> {
@@ -242,7 +241,11 @@ pub struct Contig {
     // This is a vector of filenames. Each filename represents a sequence block and can be accessed via the contig block
     // The naming convention of the filenames will follow this format: contigname_0001100000_0001200000.jfa
     // Where contigname = the short name of the contig, the first string of digits is the start point of that file and the second block of digits is the end point 
+    // We might still need this for order, or it might be deprecated
     pub blocks: Vec<PathBuf>,
+    // This is a vector of vectors of SequenceMaps indexed by the blocks in the
+    // blocks field above.
+    pub block_maps: HashMap<PathBuf, Vec<SequenceMap>>, 
 }
 
 impl Contig {
@@ -250,13 +253,115 @@ impl Contig {
         name: String,
         len: usize,
         blocks: Vec<PathBuf>,
+        block_maps: HashMap<PathBuf, Vec<SequenceMap>>,
     ) -> Result<Self, FastaMapError> {
-
+        match Self::verify_regions(&block_maps) {
+            Ok(()) => {
+                debug!("Block maps verified for {name}")
+            },
+            Err(err) => {
+                error!("Error verifying sequence maps: {err}");
+                return Err(
+                    FastaMapError::SeqMapValidationError
+                )
+            }
+        }
         Ok(Contig {
             name,
             contig_len: len,
             blocks,
+            block_maps,
         })
+    }
+
+    pub fn get_non_n_regions(&self) -> Result<Vec<&SequenceMap>, FastaMapError> {
+        let mut return_regions = Vec::new();
+        for (_, sequence_maps) in &self.block_maps {
+            for map in sequence_maps {
+                match map.region_type {
+                    RegionType::NonNRegion => return_regions.push(map),
+                    RegionType::NRegion => continue,
+                }
+            }
+        }
+        Ok(return_regions)
+    }
+
+    fn verify_regions(block_maps: &HashMap<PathBuf, Vec<SequenceMap>>) -> Result<(), FastaMapError> {
+        // assume we have only N-regions and then look for valid regions.
+        let mut all_ns = true;
+        let mut prev_end = 0;
+        for (_, sequence_maps) in block_maps {
+            for map in sequence_maps {
+                match map.region_type {
+                    RegionType::NRegion => {
+                        // We found a valid region
+                        if all_ns { all_ns = false }
+                        if prev_end > 0 {
+                            // prev_end == 0 means we are in the first loop, where we skip this block
+                            //
+                            // If prev_end != segment.1 means are regions are either overlapping or not fully inclusive.
+                            if prev_end != map.start {
+                                return Err(FastaMapError::SeqMapValidationError)
+                            }
+                        };
+                        // update prev_end for first and subsequent loops.
+                        prev_end = map.end;
+                    },
+                    RegionType::NonNRegion => {
+                        prev_end = map.end;
+                    },
+                }
+            }
+        };
+        Ok(())
+    }
+
+    fn find_matching_block(&self, request_start: usize, request_end: usize) -> Result<SequenceBlock, FastaMapError> {
+        for block in self.block_maps.keys() {
+            let (temp_start, temp_end) = decode_block_filename(block)?;
+            if (request_start >= temp_start) && (request_start < temp_end) {
+                if (request_end > temp_start) && (request_end <= temp_end) {
+                    // found our block
+                    return Ok(SequenceBlock::from(block)?)
+                }
+            }                
+        }
+        error!("Could not locate a matching sequence block: {request_start}, {request_end}");
+        Err(FastaMapError::CoordinateRetrievalError)
+    }
+
+    pub fn get_block_subseq(&self, request_start: usize, request_end: usize) -> Result<Vec<Nucleotide>, FastaMapError> {
+        // This function takes a request_start and request_end relative to the contig, 
+        // then it searches for a matching sequence block and then retrieves the subsequence from the 
+        // block. I think this should be roughly as fast as what we were doing before, but will take some
+        // refactoring to make it work.
+        //
+        // First we have to find the right block
+        let sequence_block: SequenceBlock = self.find_matching_block(request_start, request_end)?;
+        // We have to get our coordinates in scope for the sequence
+        let block_start = request_start - sequence_block.ref_start;
+        let block_end = request_end - sequence_block.ref_start;
+        // Fetches a subsequence of the original sequence
+        if request_start >= request_end {
+            error!("Bad coordinates for sequence block retrieval - start: {} >= end: {}", request_start, request_end);
+            Err(FastaMapError::BadCoordinatesError)
+        } else if (block_end <= sequence_block.ref_start) || 
+                  (block_start > sequence_block.ref_end) || 
+                  (block_end > sequence_block.ref_end) || 
+                  (block_start < sequence_block.ref_start) {
+            error!(
+                "Requested coordinates out of bounds of sequence block -
+                    request: ({}, {}), block ({}, {})",
+                    request_start, request_end, sequence_block.ref_start, sequence_block.ref_end,
+            );
+            return Err(FastaMapError::OutOfBoundsError)
+        } else {
+            // start for this function is expected to be a coordinate from the overall contig,
+            // so we modify by the known start and end point of this block to get the final
+            // coordinates
+            Ok(sequence_block.sequence[request_start..request_end].to_owned())
+        }
     }
 }
 
@@ -292,13 +397,14 @@ impl FastaMap {
 
 #[cfg(test)]
 mod tests {
-    use std::fs::remove_file;
     use crate::structs::fasta_map::RegionType::NonNRegion;
     use crate::structs::nucleotides::Nucleotide::*;
+    
     use super::*;
 
     #[test]
     fn test_sequence_block() {
+        let temp_dir = tempfile::tempdir().unwrap();
         let mut seq_block = SequenceBlock {
             contig: "chrom1".to_string(),
             ref_start: 0,
@@ -306,17 +412,14 @@ mod tests {
             sequence: vec![A,A,A,A,A,A,A,A,A,A,A,A,T,T,T,A,A,A,T,A],
             sequence_map: vec![SequenceMap::from(NonNRegion, 0, 20)]
         };
-        let filename = PathBuf::from("chrom1_000_020.json");
-        // Test write works
+        let filename = temp_dir.path().join("chrom1_000_020.json");
         let file = File::create(&filename).unwrap();
         seq_block.write_block(file).unwrap();
-        // let's read the file we just made and check the contents
         let seq_block_read = SequenceBlock::from(&filename).unwrap();
         assert_eq!(seq_block.contig, seq_block_read.contig);
         assert_eq!(seq_block.ref_start, seq_block_read.ref_start);
         assert_eq!(seq_block.ref_end, seq_block_read.ref_end);
         assert_eq!(seq_block.sequence, seq_block_read.sequence);
-        remove_file(filename).unwrap();
     }
 
     #[test]
@@ -329,12 +432,18 @@ mod tests {
     
     #[test]
     fn test_basic_map() {
-        let filename = PathBuf::from("chrom1_0000_0020.json");
-        let sequences = vec![filename];
+        let filename = PathBuf::from("chrom1_0000000000_0000000020.json");
+        let sequences = vec![filename.clone()];
+        let sequence_maps = vec![
+            SequenceMap::from(RegionType::NonNRegion, 0, 10), 
+            SequenceMap::from(RegionType::NRegion, 10, 20)
+        ];
+        let block_maps = HashMap::from([(filename, sequence_maps)]);
         let contig = Contig {
             name: "chrom1".to_string(),
             contig_len: 20,
             blocks: sequences,
+            block_maps,
         };
         let name_map = HashMap::from([
             ("chrom1".to_string(), ">chrom1 foo bar\n".to_string())
@@ -352,12 +461,99 @@ mod tests {
             name: \"chrom1\", \
             contig_len: 20, \
             blocks: [\
-                \"chrom1_0000_0020.json\"] }], \
+                \"chrom1_0000000000_0000000020.json\"], \
+            block_maps: {\"chrom1_0000000000_0000000020.json\": \
+            [SequenceMap { region_type: NonNRegion, start: 0, end: 10 }, \
+            SequenceMap { region_type: NRegion, start: 10, end: 20 }]} }], \
             name_map: {\"chrom1\": \">chrom1 foo bar\\n\"}, \
             contig_order: [\"chrom1\"] }";
 
         let test_out = format!("{:?}", fasta_map);
 
         assert_eq!(test_out, expected_output)
+    }
+
+    fn make_block() -> SequenceBlock {
+        SequenceBlock {
+            contig: "chr1".to_string(),
+            ref_start: 0,
+            ref_end: 20,
+            sequence: vec![A, A, A, A, A, C, C, C, C, C, G, G, G, G, G, T, T, T, T, T],
+            sequence_map: vec![],
+        }
+    }
+
+    #[test]
+    fn test_get_subseq_valid() {
+        let block = make_block();
+        let sub = block.get_subseq(5, 10).unwrap();
+        assert_eq!(sub, vec![C, C, C, C, C]);
+    }
+
+    #[test]
+    fn test_get_subseq_full() {
+        let block = make_block();
+        let sub = block.get_subseq(0, 20).unwrap();
+        assert_eq!(sub, block.sequence);
+    }
+
+    #[test]
+    fn test_get_subseq_bad_coords() {
+        let block = make_block();
+        let result = block.get_subseq(10, 5);
+        assert!(matches!(result, Err(FastaMapError::BadCoordinatesError)));
+    }
+
+    #[test]
+    fn test_get_subseq_out_of_bounds() {
+        let block = make_block();
+        // request_end exceeds ref_end
+        let result = block.get_subseq(15, 25);
+        assert!(matches!(result, Err(FastaMapError::OutOfBoundsError)));
+    }
+
+    #[test]
+    fn test_get_non_n_regions_mixed() {
+        let block = SequenceBlock {
+            contig: "chr1".to_string(),
+            ref_start: 0,
+            ref_end: 20,
+            sequence: vec![N; 20],
+            sequence_map: vec![
+                SequenceMap::from(RegionType::NRegion, 0, 5),
+                SequenceMap::from(NonNRegion, 5, 15),
+                SequenceMap::from(RegionType::NRegion, 15, 20),
+            ],
+        };
+        let regions = block.get_non_n_regions().unwrap();
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0].start, 5);
+        assert_eq!(regions[0].end, 15);
+    }
+
+    #[test]
+    fn test_get_non_n_regions_all_n() {
+        let block = SequenceBlock {
+            contig: "chr1".to_string(),
+            ref_start: 0,
+            ref_end: 20,
+            sequence: vec![N; 20],
+            sequence_map: vec![SequenceMap::from(RegionType::NRegion, 0, 20)],
+        };
+        let regions = block.get_non_n_regions().unwrap();
+        assert!(regions.is_empty());
+    }
+
+    #[test]
+    fn test_get_non_n_regions_all_non_n() {
+        let block = SequenceBlock {
+            contig: "chr1".to_string(),
+            ref_start: 0,
+            ref_end: 20,
+            sequence: vec![A; 20],
+            sequence_map: vec![SequenceMap::from(NonNRegion, 0, 20)],
+        };
+        let regions = block.get_non_n_regions().unwrap();
+        assert_eq!(regions.len(), 1);
     }
 }

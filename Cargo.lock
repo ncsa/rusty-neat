@@ -1124,7 +1124,6 @@ dependencies = [
  "indicatif",
  "itertools",
  "log",
- "noodles",
  "rust_search",
  "same-file",
  "serde",

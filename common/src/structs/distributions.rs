@@ -2,7 +2,7 @@
 //! from the py/probability.py file in tag 2.1 of github.com/ncsa/neat
 //! (see also github.com/zstephens/neat-genreads). We may try the statrs Categorical distribution
 //! as well, as I think it does the same thing.
-use simple_rng::NeatRngError;
+use crate::rng::NeatRngError;
 use log::debug;
 use thiserror::Error;
 use std::fmt::Debug;
@@ -149,7 +149,7 @@ fn cumulative_sum(a: &mut Vec<f64>) -> Result<Vec<f64>, DistributionErrors> {
 
 #[cfg(test)]
 mod test {
-    use simple_rng::NeatRng;
+    use crate::rng::NeatRng;
     use super::*;
 
     #[test]

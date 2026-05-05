@@ -21,7 +21,7 @@ use common::{
         mutated_map::MutatedMapError,
     }
 };
-use simple_rng::NeatRngError;
+use common::rng::NeatRngError;
 use thiserror::Error;
 use serde_yml;
 

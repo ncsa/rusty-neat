@@ -7,7 +7,7 @@ use std::io::{BufWriter, Write};
 use log::debug;
 use std::path::PathBuf;
 use std::collections::HashMap;
-use simple_rng::{NeatRng, NeatRngError};
+use crate::rng::{NeatRng, NeatRngError};
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use thiserror::Error;

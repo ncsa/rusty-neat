@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use walkdir::WalkDir;
 use common::file_tools::fasta_reader::{count_fasta, read_fasta};
 use common::structs::nucleotides::NucleotideSelector;
-use simple_rng::NeatRng;
+use common::rng::NeatRng;
 
 #[test]
 fn check_data() {

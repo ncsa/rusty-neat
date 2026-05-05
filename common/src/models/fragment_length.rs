@@ -4,7 +4,7 @@
 //! the data to be uniform enough that a mean and standard deviation will describe the set.
 
 use flate2::read::GzDecoder;
-use simple_rng::NeatRngError;
+use crate::rng::NeatRngError;
 use thiserror::Error;
 use std::io;
 use std::path::{PathBuf};

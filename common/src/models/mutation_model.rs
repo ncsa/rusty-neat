@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use flate2::read::GzDecoder;
 use thiserror::Error;
-use simple_rng::{NeatRng, NeatRngError};
+use crate::rng::{NeatRng, NeatRngError};
 use log::error;
 
 use crate::{models::snp_trinuc_model::TrinucFrame, structs::{
@@ -381,7 +381,7 @@ mod tests {
     #[test]
     fn test_generate_mutation_produces_variant() {
         let model = MutationModel::default().unwrap();
-        let mut rng = simple_rng::NeatRng::new_from_seed(&vec![
+        let mut rng = NeatRng::new_from_seed(&vec![
             "test".to_string(), "seed".to_string(),
         ]).unwrap();
         // 20-base sequence with room on both sides of position 5
@@ -397,8 +397,8 @@ mod tests {
         let model = MutationModel::default().unwrap();
         let seq = vec![A, C, G, T, A, C, G, T, A, C, G, T, A, C, G, T, A, C, G, T];
         let seed = vec!["det".to_string(), "seed".to_string()];
-        let mut rng1 = simple_rng::NeatRng::new_from_seed(&seed).unwrap();
-        let mut rng2 = simple_rng::NeatRng::new_from_seed(&seed).unwrap();
+        let mut rng1 = NeatRng::new_from_seed(&seed).unwrap();
+        let mut rng2 = NeatRng::new_from_seed(&seed).unwrap();
         let v1 = model.generate_mutation(&seq, 5, 2, &mut rng1).unwrap();
         let v2 = model.generate_mutation(&seq, 5, 2, &mut rng2).unwrap();
         assert_eq!(v1, v2);

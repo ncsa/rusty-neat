@@ -2,7 +2,7 @@ use common::file_tools::file_io::create_output_file;
 use common::structs::variants::VariantType;
 use tempfile;
 use log::{info, debug, error};
-use simple_rng::NeatRng;
+use common::rng::NeatRng;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::io::BufWriter;

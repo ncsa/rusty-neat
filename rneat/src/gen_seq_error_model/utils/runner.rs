@@ -300,7 +300,7 @@ mod tests {
         runner(&config).unwrap();
         assert!(output_path.exists());
         let model = SequencingErrorModel::from_file(&output_path).unwrap();
-        let scores = model.generate_quality_scores(50, &mut simple_rng::NeatRng::new_from_seed(
+        let scores = model.generate_quality_scores(50, &mut common::rng::NeatRng::new_from_seed(
             &vec!["test".to_string()]
         ).unwrap()).unwrap();
         assert_eq!(scores.len(), 50);
@@ -385,7 +385,7 @@ mod tests {
         let output_path = temp.path().join("model.json.gz");
         runner(&make_config(fastq_path, output_path.clone())).unwrap();
         let model = SequencingErrorModel::from_file(&output_path).unwrap();
-        let mut rng = simple_rng::NeatRng::new_from_seed(&vec!["s".to_string()]).unwrap();
+        let mut rng = common::rng::NeatRng::new_from_seed(&vec!["s".to_string()]).unwrap();
         let scores: Vec<usize> = (0..100)
             .map(|_| model.generate_quality_scores(3, &mut rng).unwrap()[2])
             .collect();
@@ -434,7 +434,7 @@ mod tests {
             error_rate > 0.0001 && error_rate < 0.05,
             "error_rate {error_rate} outside expected Illumina range [0.0001, 0.05]"
         );
-        let mut rng = simple_rng::NeatRng::new_from_seed(&vec!["h1n1".to_string()]).unwrap();
+        let mut rng = common::rng::NeatRng::new_from_seed(&vec!["h1n1".to_string()]).unwrap();
         let scores = model.generate_quality_scores(151, &mut rng).unwrap();
         assert_eq!(scores.len(), 151);
         assert!(scores.iter().all(|&s| s <= 94), "all scores should be ≤ MAX_SCORE");
@@ -470,7 +470,7 @@ mod tests {
         assert!(output_path.exists());
 
         let model = SequencingErrorModel::from_file(&output_path).unwrap();
-        let mut rng = simple_rng::NeatRng::new_from_seed(&vec!["seed".to_string()]).unwrap();
+        let mut rng = common::rng::NeatRng::new_from_seed(&vec!["seed".to_string()]).unwrap();
         let scores = model.generate_quality_scores(151, &mut rng).unwrap();
         assert_eq!(scores.len(), 151);
     }

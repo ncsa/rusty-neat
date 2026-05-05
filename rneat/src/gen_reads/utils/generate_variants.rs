@@ -1,5 +1,5 @@
 use log::{error, debug};
-use simple_rng::NeatRng;
+use common::rng::NeatRng;
 use crate::{
     common::{
         models::mutation_model::MutationModel,
@@ -63,7 +63,7 @@ mod tests {
         structs::fasta_map::{RegionType, SequenceBlock, SequenceMap},
     };
     use common::structs::nucleotides::Nucleotide;
-    use simple_rng::NeatRng;
+    use common::rng::NeatRng;
 
     fn make_block(len: usize) -> SequenceBlock {
         let sequence: Vec<Nucleotide> = (0..len)

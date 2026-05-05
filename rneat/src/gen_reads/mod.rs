@@ -10,7 +10,7 @@ use crate::{
         runner::run_neat
     }
 };
-use simple_rng::NeatRng;
+use common::rng::NeatRng;
 
 /// gen-reads is the primary read generation function of rneat. It reads a fasta file and generates a set of fastqs and/or a set of variants. It can now also filter reads by bed file.
 pub fn main(config: &PathBuf) -> Result<(), GenerateReadsErrors> {   

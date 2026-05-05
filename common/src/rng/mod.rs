@@ -142,7 +142,7 @@ impl NeatRng {
 
 #[cfg(test)]
 mod tests {
-    use super::*;    
+    use super::*;
 
     #[test]
     fn test_gen_bool() {

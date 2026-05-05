@@ -8,7 +8,7 @@ use crate::{
     nucleotides::{Nucleotide, ALLOWED_NUCS}, 
     transition_matrix::{TransitionMatrix, TransitionMatrixError}}
 };
-use simple_rng::{NeatRng, NeatRngError};
+use crate::rng::{NeatRng, NeatRngError};
 
 #[derive(Debug, Error)]
 pub enum SeqModelError{
@@ -193,7 +193,7 @@ impl SequencingErrorModel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use simple_rng::NeatRng;
+    use crate::rng::NeatRng;
 
     fn make_rng() -> NeatRng {
         NeatRng::new_from_seed(&vec![

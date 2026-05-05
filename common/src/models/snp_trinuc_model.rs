@@ -15,7 +15,7 @@ use std::ops::Index;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use std::collections::HashMap;
-use simple_rng::NeatRngError;
+use crate::rng::NeatRngError;
 use lazy_static::lazy_static;
 use crate::models::lib::{model_reader, model_writer};
 use crate::structs::transition_matrix::{TransitionMatrix, TransitionMatrixError};

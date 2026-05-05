@@ -10,7 +10,7 @@ use crate::{
 };
 use log::*;
 use std::collections::VecDeque;
-use simple_rng::NeatRng;
+use common::rng::NeatRng;
 
 pub fn generate_fragments(
     sequence_length: usize,
@@ -147,7 +147,7 @@ fn cover_dataset(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use simple_rng::NeatRng;
+    use common::rng::NeatRng;
 
     #[test]
     fn test_cover_dataset() {

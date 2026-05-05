@@ -31,7 +31,7 @@ use crate::structs::{
         NucleotideSelector,
     },
 };
-use simple_rng::{NeatRng, NeatRngError};
+use crate::rng::{NeatRng, NeatRngError};
 use thiserror::Error;
 
 pub const BUFSIZE: usize = 131_072usize; // i.e., 128kb

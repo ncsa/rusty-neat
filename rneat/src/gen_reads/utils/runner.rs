@@ -17,6 +17,7 @@ use crate::{
     common::{
         file_tools::{
             bam_writer::BamWriter,
+            bed_reader::read_bed,
             fasta_reader::read_fasta,
             fastq_tools::{
                 combine_temp_fastqs,
@@ -30,16 +31,17 @@ use crate::{
             quality_scores::QualityScoreModel,
             sequencing_error_model::SequencingErrorModel
         }, structs::{
-            fasta_map::SequenceBlock, 
-            mutated_map::MutatedMap, 
-            nucleotides::NucleotideSelector, 
+            bed_record::BedRecord,
+            fasta_map::{SequenceBlock, SequenceMap, RegionType},
+            mutated_map::MutatedMap,
+            nucleotides::NucleotideSelector,
             variants::Variant
         }
-    }, 
+    },
     gen_reads::{
-        errors::GenerateReadsErrors, 
+        errors::GenerateReadsErrors,
         utils::{
-            config::RunConfiguration, 
+            config::RunConfiguration,
             generate_variants::generate_variants,
             generate_fragments::generate_fragments,
         }
@@ -134,6 +136,16 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
     // Mutating the reference and recording the variant locations.
     info!("Generating simulated dataset");
 
+    // Load the target BED if provided. Regions outside the BED will be skipped entirely
+    // during generation, so no reads or variants are produced for those areas.
+    let target_bed = match &config.target_bed {
+        Some(path) => {
+            info!("Loading target BED: {}", path.display());
+            Some(read_bed(path)?)
+        },
+        None => None,
+    };
+
     // Open BAM writer if requested, using contig names+lengths from the fasta header.
     let mut bam_writer: Option<BamWriter> = if config.produce_bam {
         let contigs: Vec<(String, usize)> = fasta_map.contigs
@@ -163,18 +175,39 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
         let mut contig_files_r2: Vec<PathBuf> = Vec::new();
         let mut contig_maps: Vec<MutatedMap> = Vec::new();
         debug!("Processing {}", contig_name);
+
+        // Skip contigs entirely when a target BED is provided and the contig has no entries.
+        // This is the primary speedup for targeted-panel runs on large genomes.
+        if let Some(bed) = &target_bed {
+            if !bed.contains_key(contig_name) {
+                debug!("Skipping {} — not in target BED", contig_name);
+                bar.inc(1);
+                continue;
+            }
+        }
+
         for block_filename in contig_blocks {
             let mut block_variants: Vec<Variant> = Vec::new();
             debug!("Processing block {:?}", block_filename);
             // Set up current block
             let current_block = SequenceBlock::from(&block_filename)?;
-            // First we have to create the region weights data based on the fasta 
+            // First we have to create the region weights data based on the fasta
             // map and maybe gc-bias later at some point
             // filter down to minimal regions to search
             debug!("    > Generating bias map.");
-            let regions_of_interest = current_block.get_non_n_regions()?;
+            let raw_regions = current_block.get_non_n_regions()?;
+            // Intersect non-N regions with the target BED (if provided). SequenceMap
+            // coordinates are block-local, so we convert to global contig space for the
+            // comparison, then back to block-local for downstream use.
+            let regions_of_interest: Vec<SequenceMap> = if let Some(bed) = &target_bed {
+                let contig_beds = bed.get(contig_name).map(|v| v.as_slice()).unwrap_or(&[]);
+                let block_offset = current_block.get_start()?;
+                intersect_with_bed(&raw_regions, contig_beds, block_offset)
+            } else {
+                raw_regions.into_iter().cloned().collect()
+            };
             if regions_of_interest.is_empty() {
-                // This block is all N's so we can skip
+                // This block is all N's or entirely outside the target BED
                 continue
             }
             let mut bias_map: Vec<f64> = vec![0.0; current_block.get_len()];
@@ -250,7 +283,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
                         },
                         Err(error) => return Err(error),
                     }
-                    
+
                 }
                 block_frags.clone()
             };
@@ -470,4 +503,34 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
         }
     }
     Ok(files_written.clone())
+}
+
+/// Intersects a set of non-N regions (block-local coordinates) with BED records
+/// (global contig coordinates) and returns only the overlapping sub-intervals,
+/// still expressed in block-local coordinates.
+///
+/// `block_offset` is `SequenceBlock::ref_start` — the global contig position at
+/// which this block begins.
+fn intersect_with_bed(
+    regions: &[&SequenceMap],
+    bed_records: &[BedRecord],
+    block_offset: usize,
+) -> Vec<SequenceMap> {
+    let mut out = Vec::new();
+    for region in regions {
+        let global_start = region.start + block_offset;
+        let global_end = region.end + block_offset;
+        for bed in bed_records {
+            let isect_start = global_start.max(bed.start);
+            let isect_end = global_end.min(bed.end);
+            if isect_start < isect_end {
+                out.push(SequenceMap::from(
+                    RegionType::NonNRegion,
+                    isect_start - block_offset,
+                    isect_end - block_offset,
+                ));
+            }
+        }
+    }
+    out
 }

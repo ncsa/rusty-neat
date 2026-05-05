@@ -64,6 +64,8 @@ pub struct RunConfiguration {
     pub mutation_model: Option<PathBuf>,
     pub fragment_model: Option<PathBuf>,
     pub sequence_error_model: Option<PathBuf>,
+    // optional BED filter applied during generation (not post-processing)
+    pub target_bed: Option<PathBuf>,
 }
 
 // The config builder allows us to construct a config in multiple different ways, depending
@@ -116,6 +118,7 @@ impl ConfigBuilder {
                     mutation_model: None,
                     fragment_model: None,
                     sequence_error_model: None,
+                    target_bed: None,
                 }
             },
             None => {
@@ -405,6 +408,22 @@ impl RunConfiguration {
                             }
                         }
                     },
+                    "target_bed" => {
+                        let tb_val = value.as_str();
+                        match tb_val {
+                            Some(name) => {
+                                let filename = PathBuf::from(name);
+                                if filename.is_file() {
+                                    configuration.target_bed = Some(filename);
+                                } else {
+                                    return Err(GenerateReadsErrors::FileNotFound(name.to_string()))
+                                }
+                            },
+                            None => {
+                                return Err(GenerateReadsErrors::ConfigReadError("target_bed".to_string(), "path to file".to_string()))
+                            }
+                        }
+                    },
                     _ => continue,
                 },
             }
@@ -497,6 +516,10 @@ impl RunConfiguration {
             self.output_bam = Some(bam);
         }
 
+        if let Some(bed) = &self.target_bed {
+            info!("  >target BED (generation-time filter): {}", bed.display());
+        }
+
         match &self.rng_seed {
             Some(seed) => {
                 // User supplied seed
@@ -557,6 +580,7 @@ mod tests {
             mutation_model: None,
             fragment_model: None,
             sequence_error_model: None,
+            target_bed: None,
         };
 
         println!("{:?}", test_configuration);

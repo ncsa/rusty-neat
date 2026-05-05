@@ -217,7 +217,7 @@ mod tests {
 
     #[test]
     fn test_seed_rng() {
-        let sequnce = vec![
+        let sequence = vec![
             0, 0, 2, 0, 3, 3, 3, 3, 0, 0, 0, 0, 0, 2, 2, 2, 4, 4, 4, 4
         ];
         let read_length = 10;
@@ -229,7 +229,7 @@ mod tests {
         ]).unwrap();
         let fragment_model = FragmentLengthModel::default().unwrap();
         let run1 = generate_fragments(
-            sequnce.len(),
+            sequence.len(),
             read_length,
             0,
             0,
@@ -240,7 +240,7 @@ mod tests {
 
         let fragment_model = FragmentLengthModel::default().unwrap();
         let run2 = generate_fragments(
-            sequnce.len(),
+            sequence.len(),
             read_length,
             0,
             0,

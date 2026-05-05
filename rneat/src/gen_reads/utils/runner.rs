@@ -341,6 +341,12 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
                 }
             } 
             contig_maps.push(mutated_map);
+            if let Some(bam) = bam_writer.as_mut() {
+                bam.flush_up_to(current_block.get_end()?)?;
+            }
+        }
+        if let Some(bam) = bam_writer.as_mut() {
+            bam.flush_all()?;
         }
         mutated_maps.insert(contig_name.clone(), contig_maps.clone());
         all_fastq_files.insert(contig_name.clone(), (contig_files_r1, contig_files_r2));
@@ -348,34 +354,46 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
     }
 
     bar.finish_and_clear();
-    
+
     if config.produce_fastq {
-        // First we need to shuffle the output order using a HashMap that maps
-        // The original filename: read number to a final read number. Will need
-        // to keep pairs together during this
-        //
         info!("Producing final fastq(s) file(s)");
-        let bar: ProgressBar = ProgressBar::new(all_fastq_files.len() as u64);
+
+        // Warn when the genome is large enough that loading all reads into memory
+        // for the global shuffle may be impractical. For human-scale genomes (>500 Mbp)
+        // consider post-processing with `seqkit shuffle` instead.
+        let total_genome_bp: usize = fasta_map.contigs.iter().map(|c| c.contig_len).sum();
+        if total_genome_bp > 500_000_000 {
+            log::warn!(
+                "Genome is {:.1} Gbp. The global FASTQ shuffle loads all reads into memory. \
+                 For large genomes, consider running `seqkit shuffle` on the output instead.",
+                total_genome_bp as f64 / 1e9
+            );
+        }
+
+        // Collect all per-block temp files across all contigs so we can shuffle
+        // reads globally rather than per-contig.
+        let mut all_r1: Vec<PathBuf> = Vec::new();
+        let mut all_r2: Vec<PathBuf> = Vec::new();
+        for (r1_files, r2_files) in all_fastq_files.into_values() {
+            all_r1.extend(r1_files);
+            all_r2.extend(r2_files);
+        }
+
         match &config.output_fastq_1 {
             Some(filename1) => {
-                // If this is already a file, this will clear it.
                 create_output_file(filename1, config.overwrite_output)?;
                 if config.paired_ended {
                     match &config.output_fastq_2 {
                         Some(filename2) => {
-                            // If this is already a file, this will clear it.
                             create_output_file(filename2, config.overwrite_output)?;
-                            for (_contig, temp_fastqs) in all_fastq_files {
-                                combine_temp_fastqs(
-                                    temp_fastqs.0,
-                                    temp_fastqs.1,
-                                    filename1,
-                                    Some(filename2),
-                                    true,
-                                    rng,
-                                )?;
-                                bar.inc(1);
-                            }
+                            combine_temp_fastqs(
+                                all_r1,
+                                all_r2,
+                                filename1,
+                                Some(filename2),
+                                true,
+                                rng,
+                            )?;
                         },
                         None => {
                             error!("Produce fastq true and paired-ended true, but output_fastq_2 was missing.");
@@ -383,24 +401,21 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
                         }
                     }
                 } else {
-                    for (_contig, temp_fastqs) in all_fastq_files {
-                        combine_temp_fastqs(
-                            temp_fastqs.0,
-                            vec![],
-                            filename1,
-                            None,
-                            true,
-                            rng,
-                        )?;
-                        bar.inc(1);
-                    }
+                    combine_temp_fastqs(
+                        all_r1,
+                        vec![],
+                        filename1,
+                        None,
+                        true,
+                        rng,
+                    )?;
                 }
             },
             None => {
                 error!("Produce fastq true but output_fastq_1 was missing.");
                 return Err(GenerateReadsErrors::ConfigError)
             },
-        } 
+        }
     }
 
     let mut files_written = Vec::new();

@@ -34,6 +34,7 @@ pub struct BamWriter {
     writer: bam::io::Writer<bgzf::io::Writer<std::fs::File>>,
     header: sam::Header,
     pub contig_index: HashMap<String, usize>,
+    carry: Vec<RecordBuf>,
 }
 
 impl BamWriter {
@@ -58,6 +59,7 @@ impl BamWriter {
             writer,
             header,
             contig_index,
+            carry: Vec::new(),
         })
     }
 
@@ -93,6 +95,63 @@ impl BamWriter {
             &record.quality_scores,
         );
         self.write_record(&bam_record)
+    }
+
+    /// Buffer a read for deferred coordinate-sorted output.
+    /// Call `flush_up_to` after each block and `flush_all` after each contig.
+    pub fn stage_read_record(&mut self, record: &ReadRecord) -> Result<(), BamWriterError> {
+        let ref_id = self.contig_id(&record.contig)?;
+        let mate_ref_id = self.contig_id(&record.mate_contig)?;
+        let cigar = rle_to_cigar(&record.cigar_ops);
+        let flags = read_flags(record.is_paired, record.is_reverse);
+        let bam_record = build_bam_record(
+            &record.name,
+            ref_id,
+            record.position,
+            flags,
+            60,
+            cigar,
+            mate_ref_id,
+            record.mate_position,
+            record.template_length,
+            &record.sequence,
+            &record.quality_scores,
+        );
+        self.carry.push(bam_record);
+        Ok(())
+    }
+
+    /// Sort the carry buffer and write all records whose 0-based alignment start
+    /// is less than `flush_pos`. Records at or beyond `flush_pos` are retained
+    /// for the next flush (they may be joined by records from the next block).
+    pub fn flush_up_to(&mut self, flush_pos: usize) -> Result<(), BamWriterError> {
+        self.carry.sort_unstable_by_key(|r| {
+            r.alignment_start().map(|p| p.get()).unwrap_or(0)
+        });
+        // alignment_start is 1-based; 0-based pos = p.get() - 1 < flush_pos ↔ p.get() <= flush_pos
+        let split = self.carry.partition_point(|r| {
+            r.alignment_start().map(|p| p.get()).unwrap_or(0) <= flush_pos
+        });
+        for record in self.carry.drain(..split) {
+            self.writer.write_alignment_record(&self.header, &record)?;
+        }
+        Ok(())
+    }
+
+    /// Sort and write all remaining buffered records, then clear the carry.
+    /// Call once after all blocks of a contig are processed.
+    pub fn flush_all(&mut self) -> Result<(), BamWriterError> {
+        self.carry.sort_unstable_by_key(|r| {
+            r.alignment_start().map(|p| p.get()).unwrap_or(0)
+        });
+        for record in self.carry.drain(..) {
+            self.writer.write_alignment_record(&self.header, &record)?;
+        }
+        Ok(())
+    }
+
+    pub fn carry_len(&self) -> usize {
+        self.carry.len()
     }
 }
 
@@ -188,6 +247,84 @@ mod tests {
     use std::path::PathBuf;
     use crate::structs::read_record::ReadRecord;
     use tempfile::tempdir;
+
+    fn make_read(name: &str, pos: usize) -> ReadRecord {
+        ReadRecord {
+            name: name.to_string(),
+            sequence: "ACGT".to_string(),
+            quality_scores: vec![30, 30, 30, 30],
+            cigar_ops: vec!['M', 'M', 'M', 'M'],
+            is_paired: false,
+            is_reverse: false,
+            contig: "chr1".to_string(),
+            position: pos,
+            mate_contig: "chr1".to_string(),
+            mate_position: 0,
+            template_length: 0,
+        }
+    }
+
+    fn read_bam_positions(path: &PathBuf) -> Vec<usize> {
+        let file = std::fs::File::open(path).unwrap();
+        let mut reader = bam::io::Reader::new(file);
+        reader.read_header().unwrap();
+        reader.records()
+            .map(|r| {
+                r.unwrap()
+                    .alignment_start()
+                    .unwrap()  // Option<Result<Position>> → Result<Position>
+                    .unwrap()  // Result<Position>         → Position
+                    .get() - 1
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_flush_all_sorts_and_writes() {
+        let temp = tempdir().unwrap();
+        let bam_path = temp.path().join("sorted.bam");
+        let contigs = vec![("chr1".to_string(), 100_000usize)];
+        {
+            let mut writer = BamWriter::new(&bam_path, &contigs).unwrap();
+            writer.stage_read_record(&make_read("r3", 300)).unwrap();
+            writer.stage_read_record(&make_read("r1", 100)).unwrap();
+            writer.stage_read_record(&make_read("r2", 200)).unwrap();
+            assert_eq!(writer.carry_len(), 3);
+            writer.flush_all().unwrap();
+            assert_eq!(writer.carry_len(), 0);
+        } // drop writes BGZF EOF block
+        assert_eq!(read_bam_positions(&bam_path), vec![100, 200, 300]);
+    }
+
+    #[test]
+    fn test_flush_up_to_partitions_carry() {
+        let temp = tempdir().unwrap();
+        let bam_path = temp.path().join("windowed.bam");
+        let contigs = vec![("chr1".to_string(), 100_000usize)];
+        {
+            let mut writer = BamWriter::new(&bam_path, &contigs).unwrap();
+            writer.stage_read_record(&make_read("r1", 100)).unwrap();
+            writer.stage_read_record(&make_read("r3", 900)).unwrap();
+            writer.stage_read_record(&make_read("r2", 500)).unwrap();
+            // flush_pos=600: 0-based pos < 600 → writes 100 and 500, carries 900
+            writer.flush_up_to(600).unwrap();
+            assert_eq!(writer.carry_len(), 1);
+            writer.flush_all().unwrap();
+            assert_eq!(writer.carry_len(), 0);
+        }
+        assert_eq!(read_bam_positions(&bam_path), vec![100, 500, 900]);
+    }
+
+    #[test]
+    fn test_flush_up_to_empty_carry_is_noop() {
+        let temp = tempdir().unwrap();
+        let bam_path = temp.path().join("empty.bam");
+        let contigs = vec![("chr1".to_string(), 1_000usize)];
+        let mut writer = BamWriter::new(&bam_path, &contigs).unwrap();
+        writer.flush_up_to(500).unwrap();
+        writer.flush_all().unwrap();
+        assert_eq!(writer.carry_len(), 0);
+    }
 
     #[test]
     fn test_read_flags_single_ended() {

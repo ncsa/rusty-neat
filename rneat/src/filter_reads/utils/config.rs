@@ -36,7 +36,7 @@ impl RunConfiguration {
                 error,
             ),
         };
-        // Uses serde_yaml to read the file into a HashMap
+        // Uses serde_yml to read the file into a HashMap
         let scrape_config: HashMap<String, Value> = serde_yml::from_reader(file)
             .expect("Error reading yaml file!");
         // Fill in the bed_file first, all hinges on that

@@ -66,6 +66,8 @@ pub struct RunConfiguration {
     pub sequence_error_model: Option<PathBuf>,
     // optional BED filter applied during generation (not post-processing)
     pub target_bed: Option<PathBuf>,
+    // optional VCF of variants to force into the simulation
+    pub input_vcf: Option<PathBuf>,
 }
 
 // The config builder allows us to construct a config in multiple different ways, depending
@@ -119,6 +121,7 @@ impl ConfigBuilder {
                     fragment_model: None,
                     sequence_error_model: None,
                     target_bed: None,
+                    input_vcf: None,
                 }
             },
             None => {
@@ -150,7 +153,7 @@ impl RunConfiguration {
                 error,
             ),
         };
-        // Uses serde_yaml to read the file into a HashMap
+        // Uses serde_yml to read the file into a HashMap
         let scrape_config: HashMap<String, Value> = serde_yml::from_reader(file)?;
         // create a default and update it
         let mut config_builder = ConfigBuilder::new();
@@ -424,6 +427,22 @@ impl RunConfiguration {
                             }
                         }
                     },
+                    "input_vcf" => {
+                        let iv_val = value.as_str();
+                        match iv_val {
+                            Some(name) => {
+                                let filename = PathBuf::from(name);
+                                if filename.is_file() {
+                                    configuration.input_vcf = Some(filename);
+                                } else {
+                                    return Err(GenerateReadsErrors::FileNotFound(name.to_string()))
+                                }
+                            },
+                            None => {
+                                return Err(GenerateReadsErrors::ConfigReadError("input_vcf".to_string(), "path to file".to_string()))
+                            }
+                        }
+                    },
                     _ => continue,
                 },
             }
@@ -519,6 +538,9 @@ impl RunConfiguration {
         if let Some(bed) = &self.target_bed {
             info!("  >target BED (generation-time filter): {}", bed.display());
         }
+        if let Some(vcf) = &self.input_vcf {
+            info!("  >input VCF (forced variants): {}", vcf.display());
+        }
 
         match &self.rng_seed {
             Some(seed) => {
@@ -581,6 +603,7 @@ mod tests {
             fragment_model: None,
             sequence_error_model: None,
             target_bed: None,
+            input_vcf: None,
         };
 
         println!("{:?}", test_configuration);

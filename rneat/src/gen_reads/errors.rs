@@ -6,6 +6,7 @@ use common::{
         bed_reader::BedReaderError,
         fasta_reader::FastaReaderError,
         fastq_tools::FastqToolsError,
+        vcf_tools::VcfToolsError,
     },
     
     models::{
@@ -83,6 +84,8 @@ pub enum GenerateReadsErrors {
     FqToolsError(#[from] FastqToolsError),
     #[error("Bed reader error: {0}")]
     BedError(#[from] BedReaderError),
+    #[error("Input VCF error: {0}")]
+    InputVcfError(#[from] VcfToolsError),
     #[error("BAM writer error: {0}")]
     BamWriterError(#[from] BamWriterError),
     #[error("Sequence too short to process")]

@@ -49,6 +49,10 @@ fragment_st_dev: .
 # At least one of produce_fastq, produce_vcf, or produce_bam must be true.
 produce_fastq: true
 
+# Shuffle FASTQ reads before writing the final output. Set to false to preserve the generated ordering.
+# For large genomes, disabling shuffle avoids loading all reads into memory at once. (default: true)
+shuffle_fastq: true
+
 # Produce a gzipped VCF file recording all inserted variants. (default: false)
 produce_vcf: false
 

@@ -190,7 +190,7 @@ mod tests {
             coverage, 
             &mut rng
         ).unwrap();
-        assert_eq!(cover[0], (10, 310))
+        assert_eq!(cover[0], (15, 315))
     }
 
     #[test]
@@ -212,7 +212,7 @@ mod tests {
             &fragment_model,
             &mut rng,
         ).unwrap();
-        assert!(reads.contains(&(0, 560)));
+        assert!(reads.contains(&(0, 382)));
     }
 
     #[test]

@@ -98,13 +98,10 @@ impl NeatRng {
         Ok(self.random().unwrap() < frac)
     }
 
-    pub fn shuffle_in_place<T: Clone>(&mut self, a: &mut Vec<T>) -> Result<(), NeatRngError> {
-        // reverse iterator
-        for i in (0..=(a.len() - 1)).rev() {
-            let j = (self.random().unwrap() * i as f64).floor() as usize;
-            let temp = a[i].clone();
-            a[i] = a[j].clone();
-            a[j] = temp.clone();
+    pub fn shuffle_in_place<T>(&mut self, a: &mut Vec<T>) -> Result<(), NeatRngError> {
+        for i in (1..a.len()).rev() {
+            let j = (self.random().unwrap() * (i + 1) as f64).floor() as usize;
+            a.swap(i, j);
         }
         Ok(())
     }
@@ -182,9 +179,9 @@ mod tests {
             "world".to_string(),
         ]).unwrap();
         rng.shuffle_in_place(&mut my_vec).unwrap();
-        assert_eq!(my_vec, vec![5.0, 7.0, 6.0, 3.0, 2.0, 1.0, 9.0, 4.0, 8.0]);
+        assert_eq!(my_vec, vec![7.0, 3.0, 6.0, 4.0, 2.0, 1.0, 9.0, 5.0, 8.0]);
         rng.shuffle_in_place(&mut my_vec).unwrap();
-        assert_eq!(my_vec, vec![4.0, 9.0, 1.0, 8.0, 3.0, 7.0, 2.0, 6.0, 5.0]);
+        assert_eq!(my_vec, vec![9.0, 8.0, 5.0, 4.0, 3.0, 2.0, 6.0, 7.0, 1.0]);
     }
 
     #[test]

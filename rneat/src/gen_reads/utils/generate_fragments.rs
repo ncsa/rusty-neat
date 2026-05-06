@@ -10,7 +10,9 @@ use crate::{
 };
 use log::*;
 use std::collections::VecDeque;
+use common::models::gc_bias_model::GcBiasModel;
 use common::rng::NeatRng;
+use common::structs::fasta_map::{FastaMapError, SequenceBlock};
 
 pub fn generate_fragments(
     sequence_length: usize,
@@ -75,6 +77,32 @@ pub fn generate_fragments(
     } else {
         Ok(fragments)
     }
+}
+
+pub fn apply_gc_bias_to_fragments(
+    fragments: Vec<(usize, usize)>,
+    sequence_block: &SequenceBlock,
+    gc_bias_model: &GcBiasModel,
+    rng: &mut NeatRng,
+) -> Result<Vec<(usize, usize)>, GenerateReadsErrors> {
+    let max_weight = gc_bias_model.max_weight();
+    let mut retained = Vec::new();
+
+    for (start, end) in fragments {
+        let seq = sequence_block.get_subseq(start, end)?;
+        let weight = gc_bias_model.weight_for_sequence(&seq);
+        let accept_prob = if max_weight > 0.0 {
+            weight / max_weight
+        } else {
+            0.0
+        };
+
+        if rng.random()? < accept_prob {
+            retained.push((start, end));
+        }
+    }
+
+    Ok(retained)
 }
 
 fn cover_dataset(
@@ -144,10 +172,350 @@ fn cover_dataset(
     Ok(fragment_set)
 }
 
+pub fn estimate_region_mean_gc_weight(
+    sequence_block: &SequenceBlock,
+    region_start: usize,
+    region_end: usize,
+    gc_window_size: usize,
+    gc_bias_model: &GcBiasModel,
+) -> Result<f64, FastaMapError> {
+    const DEFAULT_STRIDE: usize = 25;
+    const MIN_WEIGHT: f64 = 1e-6;
+
+    if region_start >= region_end {
+        return Err(FastaMapError::BadCoordinatesError);
+    }
+
+    let region_len = region_end - region_start;
+
+    if region_len == 0 {
+        return Err(FastaMapError::BadCoordinatesError);
+    }
+
+    let window_size = gc_window_size.min(region_len);
+
+    if window_size == 0 {
+        return Ok(MIN_WEIGHT);
+    }
+
+    let stride = DEFAULT_STRIDE.min(window_size).max(1);
+
+    let mut total_weight = 0.0;
+    let mut sampled_windows = 0usize;
+
+    let last_start = region_end - window_size;
+    let mut start = region_start;
+
+    while start <= last_start {
+        let end = start + window_size;
+        let sequence = sequence_block.get_subseq(start, end)?;
+        let weight = gc_bias_model.weight_for_sequence(&sequence);
+
+        total_weight += weight;
+        sampled_windows += 1;
+
+        start += stride;
+    }
+
+    if sampled_windows == 0 {
+        return Ok(MIN_WEIGHT);
+    }
+
+    let mean_weight = total_weight / sampled_windows as f64;
+
+    Ok(mean_weight.max(MIN_WEIGHT))
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use common::rng::NeatRng;
+    use common::models::gc_bias_model::GcBiasModel;
+    use common::structs::fasta_map::{RegionType, SequenceBlock, SequenceMap};
+    use common::structs::nucleotides::Nucleotide::{A, C, G, T};
+
+    fn make_rng() -> NeatRng {
+        NeatRng::new_from_seed(&vec!["gc-bias-test".to_string()]).unwrap()
+    }
+
+    fn make_sequence_block(sequence: Vec<common::structs::nucleotides::Nucleotide>) -> SequenceBlock {
+        let len = sequence.len();
+        SequenceBlock {
+            contig: "chr1".to_string(),
+            ref_start: 0,
+            ref_end: len,
+            sequence,
+            sequence_map: vec![SequenceMap::from(RegionType::NonNRegion, 0, len)],
+        }
+    }
+
+    fn weights_with_value(value: f64) -> Vec<f64> {
+        vec![value; 101]
+    }
+
+    #[test]
+    fn test_apply_gc_bias_to_fragments_keeps_all_fragments_with_default_model() {
+        let sequence_block = make_sequence_block(vec![
+            A, C, G, T, A, C, G, T, A, C, G, T,
+        ]);
+        let fragments = vec![(0, 4), (2, 6), (4, 8), (8, 12)];
+        let model = GcBiasModel::default();
+        let mut rng = make_rng();
+
+        let retained = apply_gc_bias_to_fragments(
+            fragments.clone(),
+            &sequence_block,
+            &model,
+            &mut rng,
+        ).unwrap();
+
+        assert_eq!(retained, fragments);
+    }
+
+    #[test]
+    fn test_apply_gc_bias_to_fragments_rejects_zero_weight_fragments() {
+        let sequence_block = make_sequence_block(vec![
+            A, A, A, A, // 0% GC
+            C, G, C, G, // 100% GC
+            A, C, G, T, // 50% GC
+        ]);
+
+        let fragments = vec![
+            (0, 4),  // 0% GC
+            (4, 8),  // 100% GC
+            (8, 12), // 50% GC
+        ];
+
+        let mut weights = weights_with_value(0.0);
+        weights[50] = 1.0;
+
+        let model = GcBiasModel::from_weights(weights).unwrap();
+        let mut rng = make_rng();
+
+        let retained = apply_gc_bias_to_fragments(
+            fragments,
+            &sequence_block,
+            &model,
+            &mut rng,
+        ).unwrap();
+
+        assert_eq!(retained, vec![(8, 12)]);
+    }
+
+    #[test]
+    fn test_apply_gc_bias_to_fragments_uses_relative_weight_against_max_weight() {
+        let sequence_block = make_sequence_block(vec![
+            A, C, G, T, // 50% GC, weight 0.5
+            C, G, C, G, // 100% GC, weight 1.0
+        ]);
+
+        let fragments = vec![
+            (0, 4),
+            (4, 8),
+        ];
+
+        let mut weights = weights_with_value(0.0);
+        weights[50] = 0.5;
+        weights[100] = 1.0;
+
+        let model = GcBiasModel::from_weights(weights).unwrap();
+
+        assert!((model.max_weight() - 1.0).abs() < 1e-12);
+        assert!((model.weight_for_sequence(&sequence_block.sequence[0..4]) - 0.5).abs() < 1e-12);
+        assert!((model.weight_for_sequence(&sequence_block.sequence[4..8]) - 1.0).abs() < 1e-12);
+
+        let mut rng = make_rng();
+
+        let retained = apply_gc_bias_to_fragments(
+            fragments,
+            &sequence_block,
+            &model,
+            &mut rng,
+        ).unwrap();
+
+        // The 100% GC fragment has accept_prob 1.0 and must always be retained.
+        assert!(
+            retained.contains(&(4, 8)),
+            "Expected max-weight fragment to be retained"
+        );
+
+        // The 50% GC fragment has accept_prob 0.5, so it may or may not be retained
+        // depending on the deterministic RNG draw. We do not assert either outcome here.
+        assert!(
+            retained.iter().all(|fragment| *fragment == (0, 4) || *fragment == (4, 8)),
+            "Unexpected retained fragment list: {:?}",
+            retained
+        );
+    }
+
+    #[test]
+    fn test_apply_gc_bias_to_fragments_returns_error_for_out_of_bounds_fragment() {
+        let sequence_block = make_sequence_block(vec![A, C, G, T]);
+        let fragments = vec![(0, 4), (2, 10)];
+        let model = GcBiasModel::default();
+        let mut rng = make_rng();
+
+        let result = apply_gc_bias_to_fragments(
+            fragments,
+            &sequence_block,
+            &model,
+            &mut rng,
+        );
+
+        assert!(
+            result.is_err(),
+            "Expected out-of-bounds fragment to return an error"
+        );
+    }
+
+    #[test]
+    fn test_estimate_region_mean_gc_weight_uniform_model() {
+        let sequence_block = make_sequence_block(vec![
+            A, A, A, A,
+            A, C, G, T,
+            C, G, C, G,
+            A, C, G, T,
+        ]);
+        let model = GcBiasModel::default();
+
+        let mean_weight = estimate_region_mean_gc_weight(
+            &sequence_block,
+            0,
+            sequence_block.sequence.len(),
+            4,
+            &model,
+        ).unwrap();
+
+        assert!((mean_weight - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_estimate_region_mean_gc_weight_averages_sampled_windows() {
+        let sequence_block = make_sequence_block(vec![
+            A, A, A, A, // 0% GC, weight 0.2
+            A, C, G, T, // 50% GC, weight 1.0
+            C, G, C, G, // 100% GC, weight 0.4
+        ]);
+
+        let mut weights = weights_with_value(0.0);
+        weights[0] = 0.2;
+        weights[50] = 1.0;
+        weights[100] = 0.4;
+
+        let model = GcBiasModel::from_weights(weights).unwrap();
+
+        let mean_weight = estimate_region_mean_gc_weight(
+            &sequence_block,
+            0,
+            12,
+            4,
+            &model,
+        ).unwrap();
+
+        let expected = (0.2 + 1.0 + 0.4) / 3.0;
+        assert!(
+            (mean_weight - expected).abs() < 1e-12,
+            "Expected {}, got {}",
+            expected,
+            mean_weight
+        );
+    }
+
+    #[test]
+    fn test_estimate_region_mean_gc_weight_uses_whole_region_when_window_is_larger() {
+        let sequence_block = make_sequence_block(vec![
+            A, C, G, T, // 50% GC
+        ]);
+
+        let mut weights = weights_with_value(0.0);
+        weights[50] = 0.75;
+
+        let model = GcBiasModel::from_weights(weights).unwrap();
+
+        let mean_weight = estimate_region_mean_gc_weight(
+            &sequence_block,
+            0,
+            4,
+            100,
+            &model,
+        ).unwrap();
+
+        assert!((mean_weight - 0.75).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_estimate_region_mean_gc_weight_rejects_empty_region() {
+        let sequence_block = make_sequence_block(vec![A, C, G, T]);
+        let model = GcBiasModel::default();
+
+        let result = estimate_region_mean_gc_weight(
+            &sequence_block,
+            2,
+            2,
+            4,
+            &model,
+        );
+
+        assert!(
+            result.is_err(),
+            "Expected empty region to return an error"
+        );
+    }
+
+    #[test]
+    fn test_estimate_region_mean_gc_weight_rejects_reversed_region() {
+        let sequence_block = make_sequence_block(vec![A, C, G, T]);
+        let model = GcBiasModel::default();
+
+        let result = estimate_region_mean_gc_weight(
+            &sequence_block,
+            3,
+            2,
+            4,
+            &model,
+        );
+
+        assert!(
+            result.is_err(),
+            "Expected reversed region to return an error"
+        );
+    }
+
+    #[test]
+    fn test_estimate_region_mean_gc_weight_clamps_zero_mean_to_minimum() {
+        let sequence_block = make_sequence_block(vec![
+            A, A, A, A,
+            A, C, G, T,
+            C, G, C, G,
+        ]);
+
+        let mut weights = weights_with_value(0.0);
+        weights[0] = 0.0;
+        weights[50] = 0.0;
+        weights[100] = 1.0;
+
+        let model = GcBiasModel::from_weights(weights).unwrap();
+
+        // Only sample the first two windows, both of which have zero weight.
+        let mean_weight = estimate_region_mean_gc_weight(
+            &sequence_block,
+            0,
+            8,
+            4,
+            &model,
+        ).unwrap();
+
+        assert!(
+            mean_weight > 0.0,
+            "Expected zero mean to be clamped to a small positive value"
+        );
+        assert!(
+            mean_weight <= 1e-5,
+            "Expected clamped mean to be very small; got {}",
+            mean_weight
+        );
+    }
 
     #[test]
     fn test_cover_dataset() {

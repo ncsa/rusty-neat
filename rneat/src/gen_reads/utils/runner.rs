@@ -12,7 +12,7 @@ use flate2::{
     Compression,
     write::GzEncoder
 };
-
+use common::models::gc_bias_model::GcBiasModel;
 use crate::{
     common::{
         file_tools::{
@@ -39,15 +39,21 @@ use crate::{
         }
     },
     gen_reads::{
-        errors::GenerateReadsErrors,
+        errors::{
+            GenerateReadsErrors,
+            GenerateReadsErrors::GenerateFragmentsError
+        },
         utils::{
             config::RunConfiguration,
             generate_variants::generate_variants,
-            generate_fragments::generate_fragments,
+            generate_fragments::{
+                generate_fragments,
+                apply_gc_bias_to_fragments,
+                estimate_region_mean_gc_weight,
+            },
         }
     }
 };
-
 
 pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec<PathBuf>, GenerateReadsErrors> {
     // We'll need a temp dir to store file fragments
@@ -115,6 +121,15 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
         }
     };
 
+    // load GC-bias model, if provided.
+    let gc_bias_model = match &config.gc_bias_model {
+        Some(path) => {
+            info!("Loading GC Bias model: {}", path.display());
+            GcBiasModel::from_file(path)?
+        },
+        None => GcBiasModel::default(),
+    };
+
     // This model provides an alternate base for N based on a simple equal weight distribution.
     info!("Initialize Nucleotide selector");
     let nuc_sub_model: NucleotideSelector = {
@@ -137,7 +152,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
     info!("Generating simulated dataset");
 
     // Load the target BED if provided. Regions outside the BED will be skipped entirely
-    // during generation, so no reads or variants are produced for those areas.
+    // during read-generation, so no reads or variants are produced for those areas.
     let target_bed = match &config.target_bed {
         Some(path) => {
             info!("Loading target BED: {}", path.display());
@@ -201,9 +216,8 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
             debug!("Processing block {:?}", block_filename);
             // Set up current block
             let current_block = SequenceBlock::from(&block_filename)?;
-            // First we have to create the region weights data based on the fasta
-            // map and maybe gc-bias later at some point
-            // filter down to minimal regions to search
+            // First, we have to create the region weights data based on the fasta
+            // map and filter down to minimal regions to search
             debug!("    > Generating bias map.");
             let raw_regions = current_block.get_non_n_regions()?;
             // Intersect non-N regions with the target BED (if provided). SequenceMap
@@ -234,7 +248,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
             // Extract any user-supplied variants that fall in this block.
             // VCF POS is 1-based contig-global; convert to 0-based block-local.
             // Zero out those positions in bias_map so random generation doesn't
-            // double-mutate them, and reduce the random mutation budget accordingly.
+            // double-mutate them and reduce the random mutation budget accordingly.
             let block_start = current_block.get_start()?;
             let block_end   = current_block.get_end()?;
             let mut block_variants: Vec<Variant> = if let Some(iv) = &input_variants {
@@ -320,22 +334,49 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
                 }
                 let mut block_frags = Vec::new();
                 for (frag_start, frag_end) in temp_regions {
+
+                    let expected_retention = estimate_region_mean_gc_weight(
+                        &current_block,
+                        frag_start,
+                        frag_end,
+                        config.read_len,
+                        &gc_bias_model,
+                    )?;
+                    let effective_coverage = (config.coverage as f64 / expected_retention.max(f64::EPSILON))
+                        .round() as usize;
+
+                    // let effective_coverage: usize = if config.gc_bias_normalize_coverage
+                    //     .unwrap_or(true) {
+                    //     match &gc_bias_model {
+                    //         Some(model) => (config.coverage as f64 / model
+                    //             .mean_weight().max(0.000001)).round() as usize,
+                    //         None => config.coverage,
+                    //     }
+                    // } else {
+                    //     config.coverage
+                    // };
+
                     let result = generate_fragments(
                         frag_end-frag_start,
                         config.read_len,
                         max_del_len,
                         frag_start,
-                        config.coverage,
+                        effective_coverage,
                         &fragment_length_model,
                         rng,
                     );
-                    match result {
-                        Ok(frags) => {
-                            if !frags.is_empty() {
-                                block_frags.extend_from_slice(&frags);
-                            }
-                        },
-                        Err(error) => return Err(error),
+
+                    let frags = match &gc_bias_model.is_uniform() {
+                        true => apply_gc_bias_to_fragments(
+                            result?, &current_block, &gc_bias_model, rng
+                        )?,
+                        false => result?
+                    };
+
+                    if !frags.is_empty() {
+                        block_frags.extend_from_slice(&frags);
+                    } else {
+                        return Err(GenerateFragmentsError)
                     }
 
                 }

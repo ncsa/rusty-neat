@@ -123,3 +123,16 @@ target_bed: .
 # at mutation_rate. Set mutation_rate: 0 to disable random variants entirely.
 # Omit (or set to .) to generate variants purely at random. (default: none)
 input_vcf: .
+
+# --------------- GC Bias --------------------------
+
+# GC-Bias is the tendency for regions rich in GC to be undersampled during
+# lab prep of the sample, which causes higher coverage in the remaining areas.
+# To override the default GC Bias, you can input the path to a valid GC Bias model here.
+gc_bias_model: .
+
+# GC Bias comes with a slight limitation, which is that as rneat simulates the coverage,
+# it will generate reads, then throw out a percentage of them to simulate the GC Bias effect.
+# This can cause overall undersampling within the sample. By default, NEAT will attempt to
+# correct this undersampling. If you prefer to accept lower coverage, then set this to false
+gc_bias_normalize_coverage: true

@@ -69,6 +69,10 @@ pub struct RunConfiguration {
     pub target_bed: Option<PathBuf>,
     // optional VCF of variants to force into the simulation
     pub input_vcf: Option<PathBuf>,
+    // optional gc-bias model
+    pub(crate) gc_bias_model: Option<PathBuf>,
+    // normalize coverage true or false
+    pub(crate) gc_bias_normalize_coverage: Option<bool>,
 }
 
 // The config builder allows us to construct a config in multiple different ways, depending
@@ -124,6 +128,8 @@ impl ConfigBuilder {
                     sequence_error_model: None,
                     target_bed: None,
                     input_vcf: None,
+                    gc_bias_model: None,
+                    gc_bias_normalize_coverage: Some(true),
                 }
             },
             None => {
@@ -456,6 +462,37 @@ impl RunConfiguration {
                             }
                         }
                     },
+                    "gc_bias_model" => { 
+                        let gc_val = value.as_str();
+                        match gc_val {
+                            Some(name) => {
+                                let filename = PathBuf::from(name);
+                                if filename.is_file() {
+                                    configuration.gc_bias_model = Some(filename)
+                                } else {
+                                    return Err(GenerateReadsErrors::FileNotFound(name.to_string()))
+                                }
+                            },
+                            None => {
+                                return Err(GenerateReadsErrors::ConfigReadError(
+                                    "gc_bias_model".to_string(), "path to file".to_string()
+                                ))
+                            }
+                        }
+                    },
+                    "gc_bias_normalize_coverage" => {
+                        let nc_option = value.as_bool();
+                        match nc_option {
+                            Some(_nc_opt) => {
+                                configuration.gc_bias_normalize_coverage = nc_option;
+                            },
+                            None => {
+                                return Err(GenerateReadsErrors::ConfigReadError(
+                                    "gc_bias_normalize_coverage".to_string(), "boolean".to_string()
+                                ))
+                            }
+                        }
+                    },
                     _ => continue,
                 },
             }
@@ -466,7 +503,7 @@ impl RunConfiguration {
 
     pub fn update_and_log(&mut self) -> Result<(), GenerateReadsErrors> {
         // This does a final check of the configuration for valid items. It will print info
-        // message of the items, to work as a record and to assist in debugging any issues that
+        // messages of the items, to work as a record and to assist in debugging any issues that
         // come up.
         if !self.reference.is_file() {
             error!("File not found: {}", &self.reference.display());
@@ -573,7 +610,7 @@ impl RunConfiguration {
 
             None => {
                 // Since no seed was provided, we'll use a datetime stamp with nanoseconds
-                // The seed can be any space separated or tab separated series of strings
+                // The seed can be any space-separated or tab-separated series of strings
                 // e.g., "Every good boy does Fine"
                 // seeds are case-sensitive
                 let raw_string = Utc::now().format("%Y %m %d %H %M %S %f").to_string();
@@ -622,6 +659,8 @@ mod tests {
             sequence_error_model: None,
             target_bed: None,
             input_vcf: None,
+            gc_bias_model: None,
+            gc_bias_normalize_coverage: Some(true)
         };
 
         println!("{:?}", test_configuration);

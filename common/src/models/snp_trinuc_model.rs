@@ -335,14 +335,6 @@ impl SnpTrinucModel {
     }
 
     #[allow(unused)]
-    /// need to think about the gc bias model of Neat2
-    fn generate_gc_bias(&self, _input_sequence: &Vec<u8>) -> Vec<usize> {
-        todo!()
-        // We need some way to use this model to GC bias positions of SNPs,
-        // but it's not clear yet how.
-    }
-
-    #[allow(unused)]
     /// we will write utilities to use this, eventually
     fn write_out(&self, filename: &PathBuf) -> std::io::Result<()> {
         // Uses the serde_json crate to write out the json form of the model. This will help us

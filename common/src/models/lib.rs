@@ -28,7 +28,7 @@ where
     let filein = File::open(filename)
         .expect(&format!("Error opening file {:?}", &filename));
     let reader = GzDecoder::new(BufReader::new(filein));
-    let value: T = serde_json::from_reader(reader).unwrap();
+    let value: T = serde_json::from_reader(reader)?;
     Ok(value)
 }
 
@@ -41,6 +41,6 @@ where
     let filein = File::open(filename)
         .expect(&format!("Error opening file {:?}", &filename));
     let reader = BufReader::new(filein);
-    let value: T = serde_json::from_reader(reader).unwrap();
+    let value: T = serde_json::from_reader(reader)?;
     Ok(value)
 }

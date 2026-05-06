@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::string::String;
 use std::{env, fs};
-use crate::gen_reads::errors::GenerateReadsErrors;
+use crate::gen_reads::errors::GenerateReadsError;
 use crate::{
     common::file_tools::folder_tools::check_create_dir,
 };
@@ -41,7 +41,7 @@ pub struct RunConfiguration {
     pub reference: PathBuf,
     pub read_len: usize,
     pub coverage: usize,
-    pub mutation_rate: f64,
+    pub mutation_rate: Option<f64>,
     pub ploidy: usize,
     pub paired_ended: bool,
     pub fragment_mean: Option<f64>,
@@ -103,7 +103,7 @@ impl ConfigBuilder {
                     reference: ref_buf,
                     read_len: 151, 
                     coverage: 10, 
-                    mutation_rate: 0.001, 
+                    mutation_rate: None,
                     ploidy: 2, 
                     paired_ended: false, 
                     fragment_mean: None, 
@@ -147,7 +147,7 @@ impl RunConfiguration {
         ConfigBuilder::new()
     }
 
-    pub fn from_yaml_file(yaml_file: &PathBuf) -> Result<RunConfiguration, GenerateReadsErrors> {
+    pub fn from_yaml_file(yaml_file: &PathBuf) -> Result<RunConfiguration, GenerateReadsError> {
         // Reads an input configuration file from yaml using the serde package. Then sets the
         // parameters based on the inputs. A "." value means to use the default value.
 
@@ -174,11 +174,11 @@ impl RunConfiguration {
                 if ref_buf.is_file() {
                     config_builder.reference = Some(str.to_string());
                 } else {
-                    return Err(GenerateReadsErrors::FileNotFound(str.to_owned()))
+                    return Err(GenerateReadsError::FileNotFound(str.to_owned()))
                 }
             },
             None => {
-                return Err(GenerateReadsErrors::MissingReferenceError)
+                return Err(GenerateReadsError::MissingReferenceError)
             }
         }
         // Creates a default configuration with the reference value, which we can then update.
@@ -195,7 +195,7 @@ impl RunConfiguration {
                                 configuration.read_len = rl_opt as usize;
                             },
                             None => {
-                                return Err(GenerateReadsErrors::ConfigReadError("read_len".to_string(), "integer".to_string()))
+                                return Err(GenerateReadsError::ConfigReadError("read_len".to_string(), "integer".to_string()))
                             }
                         }
                     },
@@ -206,18 +206,18 @@ impl RunConfiguration {
                                 configuration.coverage = cov_opt as usize;
                             },
                             None => {
-                                return Err(GenerateReadsErrors::ConfigReadError("coverage".to_string(), "integer".to_string()))
+                                return Err(GenerateReadsError::ConfigReadError("coverage".to_string(), "integer".to_string()))
                             }
                         }
                     },
                     "mutation_rate" => {
                         let mr_option = value.as_f64();
                         match mr_option {
-                            Some(mr_opt) => {
-                                configuration.mutation_rate = mr_opt;
+                            Some(_data) => {
+                                configuration.mutation_rate = mr_option;
                             },
                             None => {
-                                return Err(GenerateReadsErrors::ConfigReadError("mutation_rate".to_string(), "float".to_string()))
+                                return Err(GenerateReadsError::ConfigReadError("mutation_rate".to_string(), "float".to_string()))
                             }
                         }
                     },
@@ -228,7 +228,7 @@ impl RunConfiguration {
                                 configuration.ploidy = pl_opt as usize;
                             },
                             None => {
-                                return Err(GenerateReadsErrors::ConfigReadError("ploidy".to_string(), "integer".to_string()))
+                                return Err(GenerateReadsError::ConfigReadError("ploidy".to_string(), "integer".to_string()))
                             }
                         }
                     },
@@ -239,7 +239,7 @@ impl RunConfiguration {
                                 configuration.paired_ended = pe_opt;
                             },
                             None => {
-                                return Err(GenerateReadsErrors::ConfigReadError("paired_ended".to_string(), "boolean".to_string()))
+                                return Err(GenerateReadsError::ConfigReadError("paired_ended".to_string(), "boolean".to_string()))
                             }
                         }
                     },
@@ -250,7 +250,7 @@ impl RunConfiguration {
                                 configuration.fragment_mean = Some(fm_opt);
                             },
                             None => {
-                                return Err(GenerateReadsErrors::ConfigReadError("fragment_mean".to_string(), "float".to_string()))
+                                return Err(GenerateReadsError::ConfigReadError("fragment_mean".to_string(), "float".to_string()))
                             }
                         }
                     },
@@ -261,7 +261,7 @@ impl RunConfiguration {
                                 configuration.fragment_st_dev = Some(fsd_opt);
                             },
                             None => {
-                                return Err(GenerateReadsErrors::ConfigReadError("frament_st_dev".to_string(), "float".to_string()))
+                                return Err(GenerateReadsError::ConfigReadError("frament_st_dev".to_string(), "float".to_string()))
                             }
                         }
                     },
@@ -272,7 +272,7 @@ impl RunConfiguration {
                                 configuration.produce_fastq = pfq_opt;
                             },
                             None => {
-                                return Err(GenerateReadsErrors::ConfigReadError("produce_fastq".to_string(), "boolean".to_string()))
+                                return Err(GenerateReadsError::ConfigReadError("produce_fastq".to_string(), "boolean".to_string()))
                             }
                         }
                     },
@@ -283,7 +283,7 @@ impl RunConfiguration {
                                 configuration.produce_vcf = pvc_opt;
                             },
                             None => {
-                                return Err(GenerateReadsErrors::ConfigReadError("produce_vcf".to_string(), "boolean".to_string()))
+                                return Err(GenerateReadsError::ConfigReadError("produce_vcf".to_string(), "boolean".to_string()))
                             }
                         }
                     },
@@ -294,7 +294,7 @@ impl RunConfiguration {
                                 configuration.produce_bam = pb_opt;
                             },
                             None => {
-                                return Err(GenerateReadsErrors::ConfigReadError("produce_bam".to_string(), "boolean".to_string()))
+                                return Err(GenerateReadsError::ConfigReadError("produce_bam".to_string(), "boolean".to_string()))
                             }
                         }
                     },
@@ -305,7 +305,7 @@ impl RunConfiguration {
                                 configuration.shuffle_fastq = sf_opt;
                             },
                             None => {
-                                return Err(GenerateReadsErrors::ConfigReadError("shuffle_fastq".to_string(), "boolean".to_string()))
+                                return Err(GenerateReadsError::ConfigReadError("shuffle_fastq".to_string(), "boolean".to_string()))
                             }
                         }
                     },
@@ -316,7 +316,7 @@ impl RunConfiguration {
                                 configuration.rng_seed = Some(rs_opt.to_string());
                             },
                             None => {
-                                return Err(GenerateReadsErrors::ConfigReadError("rng_seed".to_string(), "String".to_string()))
+                                return Err(GenerateReadsError::ConfigReadError("rng_seed".to_string(), "String".to_string()))
                             }
                         }
                     },
@@ -327,7 +327,7 @@ impl RunConfiguration {
                                 configuration.overwrite_output = ow_opt;
                             },
                             None => {
-                                return Err(GenerateReadsErrors::ConfigReadError("overwrite_output".to_string(), "boolean".to_string()))
+                                return Err(GenerateReadsError::ConfigReadError("overwrite_output".to_string(), "boolean".to_string()))
                             }
                         }
                     },
@@ -338,7 +338,7 @@ impl RunConfiguration {
                                 configuration.minimum_mutations = mm_opt as usize;
                             },
                             None => {
-                                return Err(GenerateReadsErrors::ConfigReadError("minimum_mutations".to_string(), "Integer".to_string()))
+                                return Err(GenerateReadsError::ConfigReadError("minimum_mutations".to_string(), "Integer".to_string()))
                             }
                         }
                     },
@@ -350,7 +350,7 @@ impl RunConfiguration {
                                 configuration.output_dir = path;
                             },
                             None => {
-                                return Err(GenerateReadsErrors::ConfigReadError("output_dir".to_string(), "String".to_string()))
+                                return Err(GenerateReadsError::ConfigReadError("output_dir".to_string(), "String".to_string()))
                             }
                         }
                     },
@@ -362,7 +362,7 @@ impl RunConfiguration {
                                 configuration.output_filename = name.to_string();
                             },
                             None => {
-                                return Err(GenerateReadsErrors::ConfigReadError("output_filename".to_string(), "String".to_string()))
+                                return Err(GenerateReadsError::ConfigReadError("output_filename".to_string(), "String".to_string()))
                             }
                         }
                     },
@@ -374,11 +374,11 @@ impl RunConfiguration {
                                 if filename.is_file() {
                                     configuration.quality_score_model = Some(filename);
                                 } else {
-                                    return Err(GenerateReadsErrors::FileNotFound(name.to_string()))
+                                    return Err(GenerateReadsError::FileNotFound(name.to_string()))
                                 }
                             },
                             None => {
-                                return Err(GenerateReadsErrors::ConfigReadError("quality_score_model".to_string(), "path to file".to_string()))
+                                return Err(GenerateReadsError::ConfigReadError("quality_score_model".to_string(), "path to file".to_string()))
                             }
                         }
                     },
@@ -390,11 +390,11 @@ impl RunConfiguration {
                                 if filename.is_file() {
                                     configuration.mutation_model = Some(filename);
                                 } else {
-                                    return Err(GenerateReadsErrors::FileNotFound(name.to_string()))
+                                    return Err(GenerateReadsError::FileNotFound(name.to_string()))
                                 }
                             },
                             None => {
-                                return Err(GenerateReadsErrors::ConfigReadError("mutation_model".to_string(), "path to file".to_string()))
+                                return Err(GenerateReadsError::ConfigReadError("mutation_model".to_string(), "path to file".to_string()))
                             }
                         }
                     },
@@ -406,11 +406,11 @@ impl RunConfiguration {
                                 if filename.is_file() {
                                     configuration.fragment_model = Some(filename);
                                 } else {
-                                    return Err(GenerateReadsErrors::FileNotFound(name.to_string()))
+                                    return Err(GenerateReadsError::FileNotFound(name.to_string()))
                                 }
                             },
                             None => {
-                                return Err(GenerateReadsErrors::ConfigReadError("fragment_model".to_string(), "path to file".to_string()))
+                                return Err(GenerateReadsError::ConfigReadError("fragment_model".to_string(), "path to file".to_string()))
                             }
                         }
                     },
@@ -422,11 +422,11 @@ impl RunConfiguration {
                                 if filename.is_file() {
                                     configuration.sequence_error_model = Some(filename);
                                 } else {
-                                    return Err(GenerateReadsErrors::FileNotFound(name.to_string()))
+                                    return Err(GenerateReadsError::FileNotFound(name.to_string()))
                                 }
                             },
                             None => {
-                                return Err(GenerateReadsErrors::ConfigReadError("sequence_error_model".to_string(), "path to file".to_string()))
+                                return Err(GenerateReadsError::ConfigReadError("sequence_error_model".to_string(), "path to file".to_string()))
                             }
                         }
                     },
@@ -438,11 +438,11 @@ impl RunConfiguration {
                                 if filename.is_file() {
                                     configuration.target_bed = Some(filename);
                                 } else {
-                                    return Err(GenerateReadsErrors::FileNotFound(name.to_string()))
+                                    return Err(GenerateReadsError::FileNotFound(name.to_string()))
                                 }
                             },
                             None => {
-                                return Err(GenerateReadsErrors::ConfigReadError("target_bed".to_string(), "path to file".to_string()))
+                                return Err(GenerateReadsError::ConfigReadError("target_bed".to_string(), "path to file".to_string()))
                             }
                         }
                     },
@@ -454,15 +454,15 @@ impl RunConfiguration {
                                 if filename.is_file() {
                                     configuration.input_vcf = Some(filename);
                                 } else {
-                                    return Err(GenerateReadsErrors::FileNotFound(name.to_string()))
+                                    return Err(GenerateReadsError::FileNotFound(name.to_string()))
                                 }
                             },
                             None => {
-                                return Err(GenerateReadsErrors::ConfigReadError("input_vcf".to_string(), "path to file".to_string()))
+                                return Err(GenerateReadsError::ConfigReadError("input_vcf".to_string(), "path to file".to_string()))
                             }
                         }
                     },
-                    "gc_bias_model" => { 
+                    "gc_bias_model" => {
                         let gc_val = value.as_str();
                         match gc_val {
                             Some(name) => {
@@ -470,11 +470,11 @@ impl RunConfiguration {
                                 if filename.is_file() {
                                     configuration.gc_bias_model = Some(filename)
                                 } else {
-                                    return Err(GenerateReadsErrors::FileNotFound(name.to_string()))
+                                    return Err(GenerateReadsError::FileNotFound(name.to_string()))
                                 }
                             },
                             None => {
-                                return Err(GenerateReadsErrors::ConfigReadError(
+                                return Err(GenerateReadsError::ConfigReadError(
                                     "gc_bias_model".to_string(), "path to file".to_string()
                                 ))
                             }
@@ -487,7 +487,7 @@ impl RunConfiguration {
                                 configuration.gc_bias_normalize_coverage = nc_option;
                             },
                             None => {
-                                return Err(GenerateReadsErrors::ConfigReadError(
+                                return Err(GenerateReadsError::ConfigReadError(
                                     "gc_bias_normalize_coverage".to_string(), "boolean".to_string()
                                 ))
                             }
@@ -501,13 +501,13 @@ impl RunConfiguration {
         Ok(configuration)
     }
 
-    pub fn update_and_log(&mut self) -> Result<(), GenerateReadsErrors> {
+    pub fn update_and_log(&mut self) -> Result<(), GenerateReadsError> {
         // This does a final check of the configuration for valid items. It will print info
         // messages of the items, to work as a record and to assist in debugging any issues that
         // come up.
         if !self.reference.is_file() {
             error!("File not found: {}", &self.reference.display());
-            return Err(GenerateReadsErrors::MissingReferenceError)
+            return Err(GenerateReadsError::MissingReferenceError)
         }
         info!(
             "Running rusty-neat to generate reads on {} with...",
@@ -515,7 +515,10 @@ impl RunConfiguration {
         );
         info!("  >read length: {}", &self.read_len);
         info!("  >coverage: {}", &self.coverage);
-        info!("  >mutation rate: {}", &self.mutation_rate);
+        match self.mutation_rate {
+            Some(rate) => info!("  >mutation rate: {}", rate),
+            None => (),
+        }
         info!("  >ploidy: {}", &self.ploidy);
         info!("  >paired ended: {}", &self.paired_ended);
         if self.overwrite_output {
@@ -537,7 +540,7 @@ impl RunConfiguration {
         // No point in running if we aren't producing files
         if !(self.produce_fastq | self.produce_vcf | self.produce_bam) {
             error!("All file types set to false, no files would be produced.");
-            return Err(GenerateReadsErrors::ConfigError)
+            return Err(GenerateReadsError::ConfigError)
         }
 
         if self.paired_ended {
@@ -546,7 +549,7 @@ impl RunConfiguration {
                     "Paired ended is set to true, but fragment mean \
                     and standard deviation were not set."
                 );
-                return Err(GenerateReadsErrors::ConfigError)
+                return Err(GenerateReadsError::ConfigError)
             }
             if self.produce_fastq {
                 info!("\t> fragment mean: {}", self.fragment_mean.unwrap());
@@ -634,7 +637,7 @@ mod tests {
             reference: PathBuf::from("Hello.world"),
             read_len: 100,
             coverage: 22,
-            mutation_rate: 0.09,
+            mutation_rate: Some(0.09),
             ploidy: 3,
             paired_ended: true,
             fragment_mean: Option::from(333.0),
@@ -667,7 +670,7 @@ mod tests {
         assert_eq!(test_configuration.reference, PathBuf::from("Hello.world"));
         assert_eq!(test_configuration.read_len, 100);
         assert_eq!(test_configuration.coverage, 22);
-        assert_eq!(test_configuration.mutation_rate, 0.09);
+        assert_eq!(test_configuration.mutation_rate, Some(0.09));
         assert_eq!(test_configuration.ploidy, 3);
         assert_eq!(test_configuration.paired_ended, true);
         assert_eq!(test_configuration.fragment_mean.unwrap(), 333.0);
@@ -771,7 +774,7 @@ mod tests {
         config_builder.reference = Some("test_data/references/H1N1.fa".to_string());
         let mut config = config_builder.build();
         config.produce_fastq = false;
-        assert!(matches!(config.update_and_log(), Err(GenerateReadsErrors::ConfigError)));
+        assert!(matches!(config.update_and_log(), Err(GenerateReadsError::ConfigError)));
     }
 
     #[test]
@@ -780,7 +783,7 @@ mod tests {
         config_builder.reference = Some("test_data/references/H1N1.fa".to_string());
         let mut config = config_builder.build();
         config.paired_ended = true;
-        assert!(matches!(config.update_and_log(), Err(GenerateReadsErrors::ConfigError)));
+        assert!(matches!(config.update_and_log(), Err(GenerateReadsError::ConfigError)));
     }
 
     #[test]
@@ -790,7 +793,7 @@ mod tests {
         let mut config = config_builder.build();
         config.paired_ended = true;
         config.fragment_st_dev = Some(10.0);
-        assert!(matches!(config.update_and_log(), Err(GenerateReadsErrors::ConfigError)));
+        assert!(matches!(config.update_and_log(), Err(GenerateReadsError::ConfigError)));
     }
 
     #[test]
@@ -800,6 +803,6 @@ mod tests {
         let mut config = config_builder.build();
         config.paired_ended = true;
         config.fragment_mean = Some(100.0);
-        assert!(matches!(config.update_and_log(), Err(GenerateReadsErrors::ConfigError)));
+        assert!(matches!(config.update_and_log(), Err(GenerateReadsError::ConfigError)));
     }
 }

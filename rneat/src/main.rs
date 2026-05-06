@@ -10,6 +10,7 @@ pub mod gen_reads;
 pub mod gen_mut_model;
 pub mod gen_seq_error_model;
 pub mod gen_frag_length_model;
+pub mod gen_gc_bias_model;
 
 use std::env;
 use std::time;
@@ -29,12 +30,13 @@ use log::*;
 use clap::{value_parser, Arg, ArgAction, Command};
 use std::path::PathBuf;
 
-use crate::gen_mut_model::errors::GenMutationModelError;
-use crate::gen_seq_error_model::errors::GenSeqErrorModelError;
-use crate::gen_frag_length_model::errors::GenFragLengthModelError;
 use crate::{
+    gen_mut_model::errors::GenMutationModelError,
+    gen_seq_error_model::errors::GenSeqErrorModelError,
+    gen_frag_length_model::errors::GenFragLengthModelError,
     filter_reads::errors::FilterReadsError,
-    gen_reads::errors::GenerateReadsErrors,
+    gen_reads::errors::GenerateReadsError,
+    gen_gc_bias_model::errors::GenGcBiasModelError,
 };
 /// This script parses arguments and checks them before submitting to the submodules, which currently 
 /// include `gen-reads` and `filter-files`. As more are added, this can be expanded or refactored
@@ -43,7 +45,7 @@ use crate::{
 pub enum NeatErrors {
 	// Errors specific to each submodule
     #[error("Error while generating read dataset {0}")]
-    GenerateReadsError(#[from] GenerateReadsErrors),
+    GenerateReadsError(#[from] GenerateReadsError),
     #[error("Error while filtering reads with bed file {0}")]
     FilterReadsError(#[from] FilterReadsError),
     #[error("Error while generating mutation model {0}")]

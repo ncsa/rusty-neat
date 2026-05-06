@@ -1,14 +1,13 @@
 use common::file_tools::file_io::create_output_file;
 use common::structs::variants::VariantType;
 use tempfile;
-use log::{info, debug, error};
+use log::{info, debug, warn, error};
 use common::rng::NeatRng;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::io::BufWriter;
 
-use indicatif::ProgressBar;
-use flate2::{ 
+use flate2::{
     Compression,
     write::GzEncoder
 };
@@ -40,8 +39,7 @@ use crate::{
     },
     gen_reads::{
         errors::{
-            GenerateReadsErrors,
-            GenerateReadsErrors::GenerateFragmentsError
+            GenerateReadsError,
         },
         utils::{
             config::RunConfiguration,
@@ -55,7 +53,7 @@ use crate::{
     }
 };
 
-pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec<PathBuf>, GenerateReadsErrors> {
+pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec<PathBuf>, GenerateReadsError> {
     // We'll need a temp dir to store file fragments
     let working_dir = tempfile::tempdir().unwrap();
     info!("Created temp dir at {:?}", working_dir);
@@ -72,6 +70,12 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
                 MutationModel::default()?
             }
         }
+    };
+    // Putting code here to determine whether to use the model's mutation_rate, or the custom
+    // mutation rate from the config.
+    let run_mutation_rate = match config.mutation_rate {
+        Some(rate) => rate,
+        None => mutation_model.mutation_rate
     };
 
     // Fragment Length Model
@@ -188,9 +192,6 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
     let mut mutated_maps: HashMap<String, Vec<MutatedMap>> = HashMap::new();
     // All files written indexed by contig_name, separated by read1/read2
     let mut all_fastq_files: HashMap<String, (Vec<PathBuf>, Vec<PathBuf>)> = HashMap::new();
-    let bar: ProgressBar = ProgressBar::new(fasta_map.contigs.len() as u64);
-    // to display bar
-    bar.tick();
     // iterate over contigs. 
     for contig in &fasta_map.contigs {
         // Iterate over blocks within the contig
@@ -207,7 +208,6 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
         if let Some(bed) = &target_bed {
             if !bed.contains_key(contig_name) {
                 debug!("Skipping {} — not in target BED", contig_name);
-                bar.inc(1);
                 continue;
             }
         }
@@ -283,7 +283,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
             debug!("Seeded {} user variant(s) into block {:?}", block_variants.len(), block_filename);
 
             // determine the number of additional random mutations for this segment
-            let num_mutations = (num_mutable_area * config.mutation_rate)
+            let num_mutations = (num_mutable_area * run_mutation_rate)
                 .trunc()
                 as usize;
             debug!("Adding {} mutations to block {:?}", num_mutations, block_filename);
@@ -367,18 +367,15 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
                     );
 
                     let frags = match &gc_bias_model.is_uniform() {
-                        true => apply_gc_bias_to_fragments(
+                        false => apply_gc_bias_to_fragments(
                             result?, &current_block, &gc_bias_model, rng
                         )?,
-                        false => result?
+                        true => result?
                     };
 
                     if !frags.is_empty() {
                         block_frags.extend_from_slice(&frags);
-                    } else {
-                        return Err(GenerateFragmentsError)
                     }
-
                 }
                 block_frags.clone()
             };
@@ -478,10 +475,9 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
         }
         mutated_maps.insert(contig_name.clone(), contig_maps.clone());
         all_fastq_files.insert(contig_name.clone(), (contig_files_r1, contig_files_r2));
-        bar.inc(1);
     }
 
-    bar.finish_and_clear();
+    info!("Read generation complete, producing output files");
 
     if config.produce_fastq {
         info!("Producing final fastq(s) file(s)");
@@ -491,7 +487,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
         // consider post-processing with `seqkit shuffle` instead.
         let total_genome_bp: usize = fasta_map.contigs.iter().map(|c| c.contig_len).sum();
         if total_genome_bp > 500_000_000 {
-            log::warn!(
+            warn!(
                 "Genome is {:.1} Gbp. The global FASTQ shuffle loads all reads into memory. \
                  For large genomes, consider running `seqkit shuffle` on the output instead.",
                 total_genome_bp as f64 / 1e9
@@ -525,7 +521,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
                         },
                         None => {
                             error!("Produce fastq true and paired-ended true, but output_fastq_2 was missing.");
-                            return Err(GenerateReadsErrors::ConfigError)
+                            return Err(GenerateReadsError::ConfigError)
                         }
                     }
                 } else {
@@ -541,7 +537,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
             },
             None => {
                 error!("Produce fastq true but output_fastq_1 was missing.");
-                return Err(GenerateReadsErrors::ConfigError)
+                return Err(GenerateReadsError::ConfigError)
             },
         }
     }
@@ -593,7 +589,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
             },
             Err(error) => {
                 error!("Error writing vcf file!");
-                return Err(GenerateReadsErrors::IoError(error))
+                return Err(GenerateReadsError::IoError(error))
             },
         }
     }
@@ -610,7 +606,7 @@ fn filter_input_vcf(
         let mut kept = Vec::new();
         for v in variants {
             if v.variant_type == VariantType::Complex {
-                log::warn!(
+                warn!(
                     "Skipping complex variant at {}:{} (multi-base REF and ALT that is not \
                      a simple indel) — not yet supported",
                     contig, v.location

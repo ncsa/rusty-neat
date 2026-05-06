@@ -1,7 +1,7 @@
 pub mod errors;
 pub mod utils;
 use log::*;
-use errors::GenerateReadsErrors;
+use errors::GenerateReadsError;
 
 #[cfg(test)]
 mod tests {
@@ -246,7 +246,7 @@ use crate::{
 use common::rng::NeatRng;
 
 /// gen-reads is the primary read generation function of rneat. It reads a fasta file and generates a set of fastqs and/or a set of variants. It can now also filter reads by bed file.
-pub fn main(config: &PathBuf) -> Result<(), GenerateReadsErrors> {   
+pub fn main(config: &PathBuf) -> Result<(), GenerateReadsError> {   
     info!("////////////// Welcome to rusty-neat read generator! \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\");
     // set up the config struct based on whether there was an input config. Input config
     // overrides any other inputs.
@@ -291,7 +291,7 @@ pub fn main(config: &PathBuf) -> Result<(), GenerateReadsErrors> {
         },
         Err(error) => {
             error!("runner returned an error {:?}", error);
-            Err(GenerateReadsErrors::RunnerError)
+            Err(GenerateReadsError::RunnerError)
         },
     }
 }

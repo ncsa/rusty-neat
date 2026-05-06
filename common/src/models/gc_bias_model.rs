@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use serde_derive::{Serialize, Deserialize};
 use thiserror::Error;
-use crate::models::lib::model_reader;
+use crate::models::lib::{model_reader, model_writer};
 use crate::structs::nucleotides::Nucleotide;
 
 #[derive(Error, Debug)]
@@ -34,6 +34,11 @@ impl GcBiasModel {
     pub fn from_file(path: &PathBuf) -> Result<Self, GcBiasModelError> {
         let data: GcBiasModel = model_reader(path)?;
         Ok(data)
+    }
+
+    pub fn write_to_file(&self, path: &PathBuf) -> Result<(), GcBiasModelError> {
+        model_writer(self, path)?;
+        Ok(())
     }
 
     pub fn from_weights(weights_by_percent_gc: Vec<f64>) -> Result<Self, GcBiasModelError> {
@@ -88,14 +93,18 @@ impl GcBiasModel {
     }
 
     pub fn weight_for_sequence(&self, sequence: &[Nucleotide]) -> f64 {
-        let gc_fraction = sequence
+        let gc_count = sequence
             .iter()
             .filter(|&nuc| *nuc == Nucleotide::G || *nuc == Nucleotide::C)
-            .count() as f64
-            / sequence
+            .count() as f64;
+        let sequence_count = sequence
             .iter()
             .filter(|&base| *base != Nucleotide::N)
             .count() as f64;
+        if sequence_count == 0.0 {
+            return 1.0
+        }
+        let gc_fraction = gc_count / sequence_count;
         self.weight_for_gc_fraction(gc_fraction)
     }
 

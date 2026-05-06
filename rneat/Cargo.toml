@@ -20,9 +20,5 @@ noodles = { workspace = true }
 itertools = { workspace = true }
 simplelog = "0.12.2"
 clap = { version = "4.5.1", features = ["derive"] }
-assert_fs = "1.1.1"
-indicatif = { version = "0.18.0", features = ["rayon"] }
-same-file = "1.0.6"
-rust_search = "2.1.0"
 
 [dev-dependencies]

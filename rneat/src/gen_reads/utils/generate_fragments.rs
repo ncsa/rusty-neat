@@ -6,7 +6,7 @@
 // fragments.
 use crate::{
     common::models::fragment_length::FragmentLengthModel, 
-    gen_reads::errors::GenerateReadsErrors
+    gen_reads::errors::GenerateReadsError
 };
 use log::*;
 use std::collections::VecDeque;
@@ -22,7 +22,7 @@ pub fn generate_fragments(
     coverage: usize,
     fragment_model: &FragmentLengthModel,
     rng: &mut NeatRng,
-) -> Result<Vec<(usize, usize)>, GenerateReadsErrors> {
+) -> Result<Vec<(usize, usize)>, GenerateReadsError> {
     // Takes:
     // sequence_length: The length of the sequence to generate reads for.
     // read_length: the length ef the reads for this run
@@ -84,7 +84,7 @@ pub fn apply_gc_bias_to_fragments(
     sequence_block: &SequenceBlock,
     gc_bias_model: &GcBiasModel,
     rng: &mut NeatRng,
-) -> Result<Vec<(usize, usize)>, GenerateReadsErrors> {
+) -> Result<Vec<(usize, usize)>, GenerateReadsError> {
     let max_weight = gc_bias_model.max_weight();
     let mut retained = Vec::new();
 
@@ -112,7 +112,7 @@ fn cover_dataset(
     mut fragment_pool: Vec<usize>,
     coverage: usize,
     rng: &mut NeatRng,
-) -> Result<Vec<(usize, usize)>, GenerateReadsErrors> {
+) -> Result<Vec<(usize, usize)>, GenerateReadsError> {
     // Takes:
     // span_length: Total number of bases in the sequence
     // read_length: The length of the reads for this run

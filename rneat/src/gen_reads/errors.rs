@@ -28,7 +28,7 @@ use thiserror::Error;
 use serde_yml;
 
 #[derive(Debug, Error)]
-pub enum GenerateReadsErrors {
+pub enum GenerateReadsError {
     #[error("Invalid CLI inputs: {0}")]
     CliError(String),
     #[error("NEAT generate-reads requires a reference to proceed.")]

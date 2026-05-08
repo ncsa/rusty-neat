@@ -34,5 +34,5 @@ window_size: 100
 # Use same value as window_size for non-overlapping windows.
 window_stride: 100
 
-# Bins with fewer windows than this are filled by interpolation.
+# Bins with fewer windows than this receive a neutral weight of 1.0 (no bias applied).
 min_windows_per_bin: 10

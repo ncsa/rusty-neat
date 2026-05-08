@@ -54,9 +54,11 @@ pub enum NeatErrors {
     GenSeqErrorModel(#[from] GenSeqErrorModelError),
     #[error("Error while generating fragment length model {0}")]
     GenFragLengthModel(#[from] GenFragLengthModelError),
+    #[error("Error while generating GC bias model {0}")]
+    GenGcBiasModel(#[from] GenGcBiasModelError),
 }
 
-fn neat_commands() -> [Command; 5] {
+fn neat_commands() -> [Command; 6] {
 	// These are the submodule commands. Any new commands added should go here.
     let configuration_arg = Arg::new("configuration_yaml")
         .long("configuration-yaml")
@@ -94,6 +96,12 @@ fn neat_commands() -> [Command; 5] {
             ),
         Command::new("gen-frag-length-model")
             .about("Generate a fragment length model from a BAM or SAM file")
+            .arg_required_else_help(true)
+            .arg(
+                &configuration_arg
+            ),
+        Command::new("gen-gc-bias-model")
+            .about("Generate a GC bias model from a reference FASTA and coverage file")
             .arg_required_else_help(true)
             .arg(
                 &configuration_arg
@@ -319,6 +327,32 @@ fn main() -> Result<(), NeatErrors> {
                     match result {
                         Err(error) => return Err(NeatErrors::GenFragLengthModel(error)),
                         Ok(()) => info!("rneat gen-frag-length-model completed successfully"),
+                    }
+                }
+            }
+        },
+        Some(("gen-gc-bias-model", _)) => {
+            if let Some(("gen-gc-bias-model", cmd)) = subcommand {
+                info!("Running rneat gen-gc-bias-model");
+                if cmd.contains_id("configuration_yaml") {
+                    let file = cmd.get_one::<PathBuf>("configuration_yaml")
+                            .expect("Must provide a path with configuration-yaml")
+                            .to_path_buf();
+
+                    if !file.is_file() {
+                        return Err(
+                            NeatErrors::FilterReadsError(
+                                FilterReadsError::CliError(
+                                    "Must supply a configuration file to run gen-gc-bias-model!".to_string()
+                                )
+                            )
+                        )
+                    }
+                    info!("Running gen-gc-bias-model to generate a GC bias model.");
+                    let result = gen_gc_bias_model::main(&file);
+                    match result {
+                        Err(error) => return Err(NeatErrors::GenGcBiasModel(error)),
+                        Ok(()) => info!("rneat gen-gc-bias-model completed successfully"),
                     }
                 }
             }

@@ -30,8 +30,9 @@ overwrite_output: false
 # Window size used to compute GC% and mean coverage.
 window_size: 100
 
-# Step between windows.
-# Use same value as window_size for non-overlapping windows.
+# Step between windows. Must not exceed window_size.
+# Use same value as window_size for non-overlapping windows (recommended).
+# Values smaller than window_size produce overlapping windows.
 window_stride: 100
 
 # Bins with fewer windows than this receive a neutral weight of 1.0 (no bias applied).

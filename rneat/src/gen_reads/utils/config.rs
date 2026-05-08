@@ -72,7 +72,7 @@ pub struct RunConfiguration {
     // optional gc-bias model
     pub(crate) gc_bias_model: Option<PathBuf>,
     // normalize coverage true or false
-    pub(crate) gc_bias_normalize_coverage: Option<bool>,
+    pub(crate) gc_bias_normalize_coverage: bool,
 }
 
 // The config builder allows us to construct a config in multiple different ways, depending
@@ -129,7 +129,7 @@ impl ConfigBuilder {
                     target_bed: None,
                     input_vcf: None,
                     gc_bias_model: None,
-                    gc_bias_normalize_coverage: Some(true),
+                    gc_bias_normalize_coverage: true,
                 }
             },
             None => {
@@ -481,11 +481,8 @@ impl RunConfiguration {
                         }
                     },
                     "gc_bias_normalize_coverage" => {
-                        let nc_option = value.as_bool();
-                        match nc_option {
-                            Some(_nc_opt) => {
-                                configuration.gc_bias_normalize_coverage = nc_option;
-                            },
+                        match value.as_bool() {
+                            Some(v) => configuration.gc_bias_normalize_coverage = v,
                             None => {
                                 return Err(GenerateReadsError::ConfigReadError(
                                     "gc_bias_normalize_coverage".to_string(), "boolean".to_string()
@@ -599,7 +596,7 @@ impl RunConfiguration {
             info!("  >GC bias model: {}", gc_model.display());
             info!(
                 "  >GC bias coverage normalization: {}",
-                self.gc_bias_normalize_coverage.unwrap_or(true)
+                self.gc_bias_normalize_coverage
             );
         }
 
@@ -671,7 +668,7 @@ mod tests {
             target_bed: None,
             input_vcf: None,
             gc_bias_model: None,
-            gc_bias_normalize_coverage: Some(true)
+            gc_bias_normalize_coverage: true
         };
 
         println!("{:?}", test_configuration);

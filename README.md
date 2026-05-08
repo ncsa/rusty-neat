@@ -426,8 +426,10 @@ overwrite_output: false
 # Default: 100
 window_size: 100
 
-# Step between successive windows. Use the same value as window_size for
-# non-overlapping windows (recommended for unbiased sampling). Default: window_size
+# Step between successive windows. Must not exceed window_size.
+# Use the same value as window_size for non-overlapping windows (recommended).
+# Values smaller than window_size produce overlapping windows.
+# Default: window_size
 window_stride: 100
 
 # Bins with fewer windows than this receive a neutral weight of 1.0 rather than
@@ -479,6 +481,8 @@ gunzip coverage.txt.gz
 **Large genomes:** The tool is designed to handle human-scale genomes without excessive memory use. It indexes the coverage file once, then loads each contig's data separately rather than holding the entire genome in RAM. Peak memory use is proportional to the longest contig, not total genome size.
 
 **Long reads:** Set `window_size` to approximately your typical read length (e.g. 5000–50000 for ONT or PacBio). Larger windows mean fewer windows per contig and faster model building. Non-overlapping windows (`window_stride: window_size`) are recommended so each observation is independent.
+
+**If the model has no effect in gen-reads:** If every GC% bin in your reference has fewer observations than `min_windows_per_bin`, all weights will be neutral (1.0) and no bias will be applied. This is logged as a warning. To diagnose, lower `min_windows_per_bin` or increase the region covered (use a larger reference or remove the BED restriction).
 
 **Using the model in gen-reads:**
 

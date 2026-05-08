@@ -348,7 +348,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
                             config.coverage,
                             &gc_bias_model,
                             &fragment_length_model,
-                            config.gc_bias_normalize_coverage.unwrap_or(true),
+                            config.gc_bias_normalize_coverage,
                             rng,
                         )?
                     };

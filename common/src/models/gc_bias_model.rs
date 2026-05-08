@@ -4,7 +4,10 @@ use thiserror::Error;
 use crate::models::lib::{model_reader, model_writer};
 use crate::structs::nucleotides::Nucleotide;
 
-fn default_window_size() -> usize { 150 }
+// Used as the serde default for legacy model files that pre-date the window_size field.
+// The Default impl also uses this, but the default model is always uniform (is_uniform=true),
+// so the value is never read during simulation.
+fn default_window_size() -> usize { 100 }
 
 #[derive(Error, Debug)]
 pub enum GcBiasModelError {
@@ -422,8 +425,8 @@ mod tests {
     }
 
     #[test]
-    fn test_default_window_size_is_150() {
-        assert_eq!(GcBiasModel::default().window_size(), 150);
+    fn test_default_window_size_is_100() {
+        assert_eq!(GcBiasModel::default().window_size(), 100);
     }
 
     #[test]
@@ -444,6 +447,6 @@ mod tests {
         encoder.finish().unwrap();
 
         let loaded = GcBiasModel::from_file(&path).unwrap();
-        assert_eq!(loaded.window_size(), 150, "Legacy file missing window_size should default to 150");
+        assert_eq!(loaded.window_size(), 100, "Legacy file missing window_size should default to 100");
     }
 }

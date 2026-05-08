@@ -340,13 +340,11 @@ fn main() -> Result<(), NeatErrors> {
                             .to_path_buf();
 
                     if !file.is_file() {
-                        return Err(
-                            NeatErrors::FilterReadsError(
-                                FilterReadsError::CliError(
-                                    "Must supply a configuration file to run gen-gc-bias-model!".to_string()
-                                )
+                        return Err(NeatErrors::GenGcBiasModel(
+                            GenGcBiasModelError::ConfigError(
+                                "Must supply a valid configuration file to run gen-gc-bias-model!".to_string()
                             )
-                        )
+                        ))
                     }
                     info!("Running gen-gc-bias-model to generate a GC bias model.");
                     let result = gen_gc_bias_model::main(&file);

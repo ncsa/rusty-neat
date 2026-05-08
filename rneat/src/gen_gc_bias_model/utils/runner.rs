@@ -88,16 +88,28 @@ pub fn runner(path: &PathBuf) -> Result<(), GenGcBiasModelError> {
         ));
     }
 
+    // Only well-populated bins contribute to the reference mean. Including sparse bins
+    // risks a single anomalous window (e.g. a repetitive region) inflating the mean and
+    // pushing all other weights below 1.0.
     let overall_mean = {
         let weight_sum: f64 = (0..=100usize)
-            .filter(|&i| gc_window_count[i] > 0)
+            .filter(|&i| gc_window_count[i] >= config.min_windows_per_bin)
             .map(|i| gc_weight_sum[i])
             .sum();
         let count_sum: usize = (0..=100usize)
-            .filter(|&i| gc_window_count[i] > 0)
+            .filter(|&i| gc_window_count[i] >= config.min_windows_per_bin)
             .map(|i| gc_window_count[i])
             .sum();
-        weight_sum / count_sum as f64
+        if count_sum == 0 {
+            warn!(
+                "No GC bins met min_windows_per_bin ({}); all weights will be neutral (1.0). \
+                 Try lowering min_windows_per_bin or using a larger genome/region.",
+                config.min_windows_per_bin
+            );
+            1.0
+        } else {
+            weight_sum / count_sum as f64
+        }
     };
 
     let weights: Vec<f64> = (0..=100usize)
@@ -136,7 +148,7 @@ fn accumulate_region(
         .iter()
         .filter(|&&n| n == Nucleotide::G || n == Nucleotide::C)
         .count();
-    let mut n_count: usize = first.iter().filter(|&&n| n == Nucleotide::N).count();
+    let mut n_count: usize = first.iter().filter(|&&n| n == Nucleotide::N || n == Nucleotide::X).count();
 
     let mut cov_sum: u64 = (0..window_size)
         .map(|i| cov.depth_at(region_start + i) as u64)
@@ -162,12 +174,12 @@ fn accumulate_region(
         for j in 0..window_stride {
             match sequence[w + j] {
                 Nucleotide::G | Nucleotide::C => gc_count -= 1,
-                Nucleotide::N => n_count -= 1,
+                Nucleotide::N | Nucleotide::X => n_count -= 1,
                 _ => {}
             }
             match sequence[w + window_size + j] {
                 Nucleotide::G | Nucleotide::C => gc_count += 1,
-                Nucleotide::N => n_count += 1,
+                Nucleotide::N | Nucleotide::X => n_count += 1,
                 _ => {}
             }
             cov_sum -= cov.depth_at(w + j) as u64;
@@ -185,11 +197,11 @@ fn non_n_regions(sequence: &[Nucleotide]) -> Vec<(usize, usize)> {
 
     for (i, &nuc) in sequence.iter().enumerate() {
         match (nuc, region_start) {
-            (Nucleotide::N, Some(s)) => {
+            (Nucleotide::N | Nucleotide::X, Some(s)) => {
                 regions.push((s, i));
                 region_start = None;
             }
-            (Nucleotide::N, None) | (Nucleotide::X, _) => {}
+            (Nucleotide::N | Nucleotide::X, None) => {}
             (_, None) => region_start = Some(i),
             (_, Some(_)) => {}
         }
@@ -239,8 +251,24 @@ mod tests {
         assert!(regions.is_empty());
     }
 
-    // Tests for accumulate_region — tested via runner integration below.
-    // The end-to-end runner tests cover accumulation correctness.
+    // Tests for non_n_regions: X bases
+    #[test]
+    fn test_non_n_regions_x_closes_region() {
+        // X is a buffer-fill placeholder and should split regions just like N.
+        let mut seq = make_sequence("ACGT");
+        seq.push(Nucleotide::X);
+        seq.extend(make_sequence("ACGT"));
+        let regions = non_n_regions(&seq);
+        assert_eq!(regions, vec![(0, 4), (5, 9)]);
+    }
+
+    #[test]
+    fn test_non_n_regions_x_at_start_is_skipped() {
+        let mut seq = vec![Nucleotide::X, Nucleotide::X];
+        seq.extend(make_sequence("ACGT"));
+        let regions = non_n_regions(&seq);
+        assert_eq!(regions, vec![(2, 6)]);
+    }
 
     fn write_temp(content: &str) -> NamedTempFile {
         let mut f = NamedTempFile::new().unwrap();
@@ -408,9 +436,6 @@ min_windows_per_bin: {}
     fn test_all_n_contig_is_skipped() {
         let fasta_content = ">chr1\nNNNNNNNNNN\n";
         let ref_file = write_temp(fasta_content);
-        let cov_lines: String = (1..=10).map(|i| format!("chr1\t{}\t10\n", i)).collect();
-        let cov_file = write_temp(&cov_lines);
-
         let out = NamedTempFile::new().unwrap();
         let out_path = out.path().to_path_buf();
         drop(out);
@@ -436,5 +461,104 @@ min_windows_per_bin: {}
 
         // Should not panic or error — all-N window is simply skipped
         runner(&config_file.path().to_path_buf()).unwrap();
+    }
+
+    #[test]
+    fn test_sparse_bin_excluded_from_overall_mean() {
+        // 2 low-GC windows at depth 10 (will be well-populated, min_windows=2).
+        // 1 high-GC window at depth 1000 (sparse — exactly 1, below min_windows=2).
+        //
+        // If the sparse high-GC bin were included in overall_mean:
+        //   mean = (2*10*100 + 1*1000*100) / (200 + 100) = (2000+100000)/300 ≈ 340
+        //   low-GC weight = (10/340) ≈ 0.03  ← wrong
+        //
+        // Correct (excluding sparse bin):
+        //   mean = (2*10*100) / 200 = 10
+        //   low-GC weight = 10/10 = 1.0
+        let low_gc: String = "AT".repeat(50);  // 100 bp, 0% GC
+        let high_gc: String = "GC".repeat(50); // 100 bp, 100% GC
+        // 2 low-GC windows + 1 high-GC window = 300 bp total
+        let seq = format!("{}{}{}", low_gc, low_gc, high_gc);
+        let fasta = format!(">chr1\n{}\n", seq);
+        let ref_file = write_temp(&fasta);
+
+        let cov_lines: String = (1..=200).map(|i| format!("chr1\t{}\t10\n", i))
+            .chain((201..=300).map(|i| format!("chr1\t{}\t1000\n", i)))
+            .collect();
+        let cov_file = write_temp(&cov_lines);
+
+        let out = NamedTempFile::new().unwrap();
+        let out_path = out.path().to_path_buf();
+        drop(out);
+
+        let config_file = write_config(
+            &ref_file.path().to_path_buf(),
+            &cov_file.path().to_path_buf(),
+            &out_path,
+            100, // window_size
+            100, // window_stride (non-overlapping)
+            2,   // min_windows_per_bin: low-GC has 2 (passes), high-GC has 1 (sparse)
+            true,
+        );
+
+        runner(&config_file.path().to_path_buf()).unwrap();
+
+        let model = GcBiasModel::from_file(&out_path).unwrap();
+        // Low-GC bin (0%) should be ~1.0 since its mean coverage equals overall mean
+        let w_low = model.weight_for_gc_fraction(0.0);
+        assert!(
+            (w_low - 1.0).abs() < 1e-6,
+            "Expected low-GC weight ~1.0, got {} (sparse high-GC bin may have inflated mean)",
+            w_low
+        );
+        // High-GC bin (100%) is sparse → neutral weight 1.0
+        let w_high = model.weight_for_gc_fraction(1.0);
+        assert_eq!(w_high, 1.0, "Expected sparse high-GC bin to have neutral weight 1.0");
+    }
+
+    #[test]
+    fn test_overlapping_windows_correct_gc_counts() {
+        // Use overlapping windows (window_stride < window_size) and verify the
+        // sliding GC window maintains correct counts across multiple strides.
+        //
+        // Sequence: AAAAGGGGAAAA (12 bp)
+        // window_size=4, window_stride=2
+        // Windows: [0,4)=AAAA(0%GC), [2,6)=AAGG(50%GC), [4,8)=GGGG(100%GC),
+        //          [6,10)=GGAA(50%GC), [8,12)=AAAA(0%GC)
+        // All at uniform depth → all relative weights should be 1.0
+        let seq = "AAAAGGGGAAAA";
+        let fasta = format!(">chr1\n{}\n", seq);
+        let ref_file = write_temp(&fasta);
+
+        let cov_lines: String = (1..=12).map(|i| format!("chr1\t{}\t10\n", i)).collect();
+        let cov_file = write_temp(&cov_lines);
+
+        let out = NamedTempFile::new().unwrap();
+        let out_path = out.path().to_path_buf();
+        drop(out);
+
+        let config_file = write_config(
+            &ref_file.path().to_path_buf(),
+            &cov_file.path().to_path_buf(),
+            &out_path,
+            4,  // window_size
+            2,  // window_stride (overlapping)
+            1,  // min_windows_per_bin
+            true,
+        );
+
+        runner(&config_file.path().to_path_buf()).unwrap();
+
+        let model = GcBiasModel::from_file(&out_path).unwrap();
+        // Uniform coverage → all populated bins should have weight ~1.0
+        for &gc_frac in &[0.0f64, 0.5, 1.0] {
+            let w = model.weight_for_gc_fraction(gc_frac);
+            assert!(
+                (w - 1.0).abs() < 1e-6,
+                "Expected weight ~1.0 at GC {:.0}%, got {}",
+                gc_frac * 100.0,
+                w
+            );
+        }
     }
 }

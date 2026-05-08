@@ -40,16 +40,17 @@ pub struct GcBiasModel {
     window_size: usize,
 }
 
-impl GcBiasModel {
-    pub fn default() -> Self {
-        let weights = vec![1.0; 101];
+impl Default for GcBiasModel {
+    fn default() -> Self {
         Self {
-            weights_by_percent_gc: weights,
+            weights_by_percent_gc: vec![1.0; 101],
             is_uniform: true,
             window_size: default_window_size(),
         }
     }
+}
 
+impl GcBiasModel {
     pub fn from_file(path: &PathBuf) -> Result<Self, GcBiasModelError> {
         let data: GcBiasModel = model_reader(path)?;
         // Re-validate rather than trusting stored is_uniform; catches hand-edited files

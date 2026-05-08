@@ -13,6 +13,7 @@ use std::collections::VecDeque;
 use common::models::gc_bias_model::GcBiasModel;
 use common::rng::NeatRng;
 use common::structs::fasta_map::SequenceBlock;
+use common::structs::nucleotides::Nucleotide;
 
 pub fn generate_fragments(
     sequence_length: usize,
@@ -84,6 +85,9 @@ pub fn generate_fragments(
 /// Each entry `prefix_sum[i+1] = prefix_sum[i] + weight(window starting at region_start + i)`.
 /// The model's `window_size` is clamped to `region_len` so short regions are handled gracefully.
 /// Returns `None` when the region is empty; the caller maps that to zero fragments.
+///
+/// Uses a sliding window to maintain a running GC and N count, avoiding per-position
+/// Vec allocations that would dominate cost on large chromosomes.
 fn build_gc_weight_prefix_sum(
     sequence_block: &SequenceBlock,
     region_start: usize,
@@ -96,12 +100,50 @@ fn build_gc_weight_prefix_sum(
     let region_len = region_end - region_start;
     let window = gc_bias_model.window_size().min(region_len);
     let n_positions = region_len - window + 1;
+
+    let seq = &sequence_block.sequence[region_start..region_end];
+
+    // Initialise counts for the first window.
+    let mut gc_count: usize = seq[..window]
+        .iter()
+        .filter(|&&n| n == Nucleotide::G || n == Nucleotide::C)
+        .count();
+    let mut n_count: usize = seq[..window]
+        .iter()
+        .filter(|&&n| n == Nucleotide::N)
+        .count();
+
+    let weight_at = |gc: usize, n: usize| -> f64 {
+        let called = window - n;
+        if called == 0 {
+            1.0  // all-N window: neutral, never filtered
+        } else {
+            gc_bias_model.weight_for_gc_fraction(gc as f64 / called as f64)
+        }
+    };
+
     let mut prefix_sum = vec![0.0f64; n_positions + 1];
-    for i in 0..n_positions {
-        let pos = region_start + i;
-        let seq = sequence_block.get_subseq(pos, pos + window)?;
-        prefix_sum[i + 1] = prefix_sum[i] + gc_bias_model.weight_for_sequence(&seq);
+    prefix_sum[1] = weight_at(gc_count, n_count);
+
+    // Slide the window one base at a time, updating counts incrementally.
+    for i in 1..n_positions {
+        let outgoing = seq[i - 1];
+        let incoming = seq[i + window - 1];
+
+        match outgoing {
+            Nucleotide::G | Nucleotide::C => gc_count -= 1,
+            Nucleotide::N => n_count -= 1,
+            _ => {}
+        }
+        match incoming {
+            Nucleotide::G | Nucleotide::C => gc_count += 1,
+            Nucleotide::N => n_count += 1,
+            _ => {}
+        }
+
+        prefix_sum[i + 1] = prefix_sum[i] + weight_at(gc_count, n_count);
     }
+
     Ok(Some(prefix_sum))
 }
 

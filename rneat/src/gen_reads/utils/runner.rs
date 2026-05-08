@@ -325,14 +325,8 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
             }
 
             let block_fragments: Vec<(usize, usize)> = {
-                let mut temp_regions: Vec<(usize, usize)> = Vec::new();
-                // find matching region.
-                // if next region is within a read, maybe we'll use the whole thing.
-                for region in regions_of_interest {
-                    temp_regions.push((region.start, region.end));
-                }
                 let mut block_frags = Vec::new();
-                for (frag_start, frag_end) in temp_regions {
+                for (frag_start, frag_end) in regions_of_interest.into_iter().map(|r| (r.start, r.end)) {
 
                     let frags = if gc_bias_model.is_uniform() {
                         generate_fragments(

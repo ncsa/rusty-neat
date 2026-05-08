@@ -1,5 +1,6 @@
 use thiserror::Error;
 use common::file_tools::bed_reader::BedReaderError;
+use common::models::gc_bias_model::GcBiasModelError;
 
 #[derive(Error, Debug)]
 pub enum GenGcBiasModelError {
@@ -10,5 +11,9 @@ pub enum GenGcBiasModelError {
     #[error("Serde error: {0}")]
     SerdeError(#[from] serde_yml::Error),
     #[error("Error reading bed: {0}")]
-    BedReadError(#[from] BedReaderError)
+    BedReadError(#[from] BedReaderError),
+    #[error("Error building GC bias model: {0}")]
+    GcBiasModelError(#[from] GcBiasModelError),
+    #[error("Error parsing coverage file: {0}")]
+    CoverageParseError(String),
 }

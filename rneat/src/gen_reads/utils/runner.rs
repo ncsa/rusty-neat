@@ -46,8 +46,7 @@ use crate::{
             generate_variants::generate_variants,
             generate_fragments::{
                 generate_fragments,
-                apply_gc_bias_to_fragments,
-                estimate_region_mean_gc_weight,
+                generate_weighted_fragments,
             },
         }
     }
@@ -335,50 +334,29 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
                 let mut block_frags = Vec::new();
                 for (frag_start, frag_end) in temp_regions {
 
-                    // Cap inflation so a near-zero mean weight can't generate an
-                    // unbounded number of fragments that are immediately rejected.
-                    const MAX_COVERAGE_MULTIPLIER: usize = 100;
-
-                    let effective_coverage = if gc_bias_model.is_uniform()
-                        || !config.gc_bias_normalize_coverage.unwrap_or(true)
-                    {
-                        config.coverage
+                    let frags = if gc_bias_model.is_uniform() {
+                        generate_fragments(
+                            frag_end - frag_start,
+                            config.read_len,
+                            max_del_len,
+                            frag_start,
+                            config.coverage,
+                            &fragment_length_model,
+                            rng,
+                        )?
                     } else {
-                        let mean_weight = estimate_region_mean_gc_weight(
+                        generate_weighted_fragments(
                             &current_block,
                             frag_start,
                             frag_end,
+                            config.read_len,
+                            max_del_len,
+                            config.coverage,
                             &gc_bias_model,
-                        )?;
-                        let inflated = (config.coverage as f64 / mean_weight).round() as usize;
-                        let cap = config.coverage.saturating_mul(MAX_COVERAGE_MULTIPLIER);
-                        if inflated > cap {
-                            warn!(
-                                "GC bias coverage inflation capped at {}x for region \
-                                 {}:{}-{} (mean weight {:.4}); target coverage may not \
-                                 be reached in this region",
-                                MAX_COVERAGE_MULTIPLIER, contig_name, frag_start, frag_end,
-                                mean_weight
-                            );
-                        }
-                        inflated.min(cap)
-                    };
-
-                    let result = generate_fragments(
-                        frag_end-frag_start,
-                        config.read_len,
-                        max_del_len,
-                        frag_start,
-                        effective_coverage,
-                        &fragment_length_model,
-                        rng,
-                    );
-
-                    let frags = match &gc_bias_model.is_uniform() {
-                        false => apply_gc_bias_to_fragments(
-                            result?, &current_block, &gc_bias_model, rng
-                        )?,
-                        true => result?
+                            &fragment_length_model,
+                            config.gc_bias_normalize_coverage.unwrap_or(true),
+                            rng,
+                        )?
                     };
 
                     if !frags.is_empty() {

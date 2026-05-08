@@ -20,6 +20,7 @@ SUB-COMMANDS:
   gen-mut-model          Generates a mutation model from real VCF data
   gen-seq-error-model    Generates a sequencing error model from real FASTQ data
   gen-frag-length-model  Generates a fragment length model from a BAM or SAM file
+  gen-gc-bias-model      Generates a GC bias model from a reference FASTA and coverage file
   help                   Print this message or the help of the given subcommand(s)
 
 Options:
@@ -148,9 +149,41 @@ When `target_bed` is set, `gen-reads` skips contigs absent from the BED entirely
 
 The BED contig names must match the short names derived from the reference FASTA (the text after `>` up to the first space or `|`). Both `.bed` and `.bed.gz` inputs are accepted.
 
+Input Variants VCF
+==================
+You can supply a VCF of variants to force into the simulation:
+
+```yaml
+input_vcf: /path/to/variants.vcf.gz
+```
+
+`rneat` will place every variant from the VCF into the corresponding position in the simulated reads and the output VCF. Random variants are still generated at `mutation_rate` for all positions not covered by the input VCF; set `mutation_rate: 0` to disable random variants entirely and simulate only the provided set.
+
+**Requirements**
+
+- The VCF must be single-sample (one sample column).
+- Every record must include `GT` in the FORMAT field. `rneat` uses the genotype to determine whether to apply the variant to all reads covering the position (homozygous, e.g. `1/1`) or only a probabilistic subset (heterozygous, e.g. `0/1`). Records without `GT` are rejected.
+- Contig names must match the short names derived from the reference FASTA (text after `>` up to the first space or `|`). Variants on unrecognised contigs are skipped with a warning.
+- Both `.vcf` and `.vcf.gz` files are accepted.
+
+**Supported variant types**
+
+| Type | Condition | Handled |
+|------|-----------|---------|
+| SNP | REF and ALT both single base | Yes |
+| Insertion | single-base REF, multi-base ALT | Yes |
+| Deletion | multi-base REF, single-base ALT | Yes |
+| Complex | multi-base REF **and** multi-base ALT | **No** — skipped with warning |
+
+**Current caveats**
+
+- *Multi-allelic records*: only the first ALT allele is used; additional alleles are silently ignored. Split multi-allelic records with `bcftools norm -m -` before passing to `rneat`.
+- *REF allele verification*: `rneat` does not check that the REF field matches the reference sequence at that position. Mismatches will produce biologically incorrect output without any warning.
+- *Structural variants / breakends*: records whose REF and ALT are both multi-base strings (complex variants) are skipped with a logged warning and do not appear in the output.
+
 FASTQ Shuffling
 ===============
-`rneat` globally shuffles all generated reads before writing the final FASTQ, so no chromosome ordering is visible in the output — matching real sequencer output. All reads from all contigs are collected into memory together and shuffled in a single pass before being written.
+`rneat` globally shuffles all generated reads before writing the final FASTQ by default, so no chromosome ordering is visible in the output — matching real sequencer output. Set `shuffle_fastq: false` in `gen-reads` config to preserve the generated ordering and avoid the in-memory global shuffle.
 
 **Large genome note:** The global shuffle loads every read record into RAM at once. This is fine for small to moderate genomes (viral, bacterial, small eukaryotes), but becomes impractical for mammalian-scale genomes at typical coverage depths (e.g. human 30× ≈ 900 M reads ≈ hundreds of GB). For those cases, run the post-processing shuffle instead:
 
@@ -351,6 +384,117 @@ A    C    G    T
 ```
 
 That's it so far! Test out the features and let us know what you think!
+
+Generating a GC Bias Model
+====================
+`rneat` can learn a GC bias model from a reference FASTA and a per-base coverage file using the `rneat gen-gc-bias-model` subcommand. It tiles the reference in fixed-size windows, computes the GC% of each window, looks up the mean coverage over that window, and accumulates the data into a 101-bin weight table (one bin per integer GC percentage, 0–100%). The resulting model can be passed to `gen-reads` to make fragment start positions favour regions whose GC content matches the coverage bias observed in your data.
+
+```bash
+$ rneat gen-gc-bias-model -c gen_gc_bias_model_config.yml
+```
+
+The output is a gzipped JSON model file that can be passed directly to `gen-reads` via its `gc_bias_model` config key.
+
+Copy `template_config/gen_gc_bias_model.yml` to a directory of your choosing and fill in the fields:
+
+```yaml
+# required: reference FASTA used to compute GC content
+# Both plain and gzipped (.fa.gz) references are accepted.
+reference: /path/to/reference.fa
+
+# required: per-base coverage file produced by samtools or bedtools
+coverage_file: /path/to/coverage.txt
+
+# required: format of the coverage file
+# samtools-depth        → samtools depth output  (CHROM  1-based-pos  depth)
+# bedtools-genomecov-d  → bedtools genomecov -d  (CHROM  1-based-pos  depth)
+# bedtools-genomecov-dz → bedtools genomecov -dz (CHROM  0-based-pos  depth, nonzero only)
+coverage_format: samtools-depth
+
+# optional: BED file restricting model inference to target regions
+# Use "." (dot) to use the entire reference (default)
+bed_file: .
+
+# required: output path for the generated model; should end in .json.gz
+output_file: /path/to/gc_bias_model.json.gz
+
+# optional: set to true to overwrite an existing output file (default: false)
+overwrite_output: false
+
+# Window size in base pairs for GC% and coverage averaging.
+# Should match the typical read length (or fragment length for long reads).
+# Default: 100
+window_size: 100
+
+# Step between successive windows. Must not exceed window_size.
+# Use the same value as window_size for non-overlapping windows (recommended).
+# Values smaller than window_size produce overlapping windows.
+# Default: window_size
+window_stride: 100
+
+# Bins with fewer windows than this receive a neutral weight of 1.0 rather than
+# a learned weight. Increase this to require more evidence before trusting a bin.
+# Default: 10
+min_windows_per_bin: 10
+```
+
+**Generating the coverage file:**
+
+The recommended command is:
+
+```bash
+samtools depth -a -q 20 -F 1796 aligned.bam > coverage.txt
+```
+
+- `-a` outputs all positions including zero-depth sites (required for `samtools-depth` and `bedtools-genomecov-d` formats)
+- `-q 20` excludes reads with mapping quality below 20
+- `-F 1796` excludes unmapped, secondary, duplicate, and supplementary reads
+
+Getting these filters wrong silently produces a biased model, so use this command as-is unless you have a specific reason to deviate.
+
+If you prefer bedtools or need smaller files:
+
+```bash
+# bedtools genomecov -d (1-based, all positions)
+bedtools genomecov -d -ibam aligned.bam > coverage.txt
+
+# bedtools genomecov -dz (0-based, nonzero positions only; smaller files)
+bedtools genomecov -dz -ibam aligned.bam > coverage.txt
+```
+
+Note that bedtools does not expose MAPQ or flag filtering as simply as samtools; if duplicate removal or MAPQ filtering matters for your dataset, pre-filter the BAM first:
+
+```bash
+samtools view -b -q 20 -F 1796 aligned.bam > filtered.bam
+samtools index filtered.bam
+bedtools genomecov -dz -ibam filtered.bam > coverage.txt
+```
+
+Set `coverage_format` in your config to match whichever command you used.
+
+**Coverage file must be plain text.** Gzipped coverage files are not supported. If yours is compressed, decompress it first:
+
+```bash
+gunzip coverage.txt.gz
+```
+
+**Large genomes:** The tool is designed to handle human-scale genomes without excessive memory use. It indexes the coverage file once, then loads each contig's data separately rather than holding the entire genome in RAM. Peak memory use is proportional to the longest contig, not total genome size.
+
+**Long reads:** Set `window_size` to approximately your typical read length (e.g. 5000–50000 for ONT or PacBio). Larger windows mean fewer windows per contig and faster model building. Non-overlapping windows (`window_stride: window_size`) are recommended so each observation is independent.
+
+**If the model has no effect in gen-reads:** If every GC% bin in your reference has fewer observations than `min_windows_per_bin`, all weights will be neutral (1.0) and no bias will be applied. This is logged as a warning. To diagnose, lower `min_windows_per_bin` or increase the region covered (use a larger reference or remove the BED restriction).
+
+**Using the model in gen-reads:**
+
+```yaml
+# in gen_reads_config.yml
+gc_bias_model: /path/to/gc_bias_model.json.gz
+
+# optional: inflate fragment count to compensate for low-weight regions
+# true (default): total coverage stays close to the requested depth
+# false: coverage in low-GC regions will be lower than requested
+gc_bias_normalize_coverage: true
+```
 
 Generating a Fragment Length Model
 ====================

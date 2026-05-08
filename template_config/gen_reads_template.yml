@@ -49,6 +49,10 @@ fragment_st_dev: .
 # At least one of produce_fastq, produce_vcf, or produce_bam must be true.
 produce_fastq: true
 
+# Shuffle FASTQ reads before writing the final output. Set to false to preserve the generated ordering.
+# For large genomes, disabling shuffle avoids loading all reads into memory at once. (default: true)
+shuffle_fastq: true
+
 # Produce a gzipped VCF file recording all inserted variants. (default: false)
 produce_vcf: false
 
@@ -105,3 +109,30 @@ fragment_model: .
 # Coordinates must use the same contig names as the reference FASTA.
 # Omit (or set to .) to generate reads over the full reference. (default: none)
 target_bed: .
+
+# --------------- forced variants ---------------
+
+# Optional VCF file (.vcf or .vcf.gz) of variants to force into the simulation.
+# The VCF must be single-sample and every record must have a GT field in FORMAT.
+# Accepted variant types: SNPs and indels (insertion / deletion).
+# Complex variants (multi-base REF and multi-base ALT that are not a simple indel)
+# are skipped with a warning — they are not yet supported.
+# Contig names must match the short names in the reference FASTA.
+#
+# Positions not covered by the input VCF still receive randomly generated variants
+# at mutation_rate. Set mutation_rate: 0 to disable random variants entirely.
+# Omit (or set to .) to generate variants purely at random. (default: none)
+input_vcf: .
+
+# --------------- GC Bias --------------------------
+
+# GC-Bias is the tendency for regions rich in GC to be undersampled during
+# lab prep of the sample, which causes higher coverage in the remaining areas.
+# To override the default GC Bias, you can input the path to a valid GC Bias model here.
+gc_bias_model: .
+
+# GC Bias comes with a slight limitation, which is that as rneat simulates the coverage,
+# it will generate reads, then throw out a percentage of them to simulate the GC Bias effect.
+# This can cause overall undersampling within the sample. By default, NEAT will attempt to
+# correct this undersampling. If you prefer to accept lower coverage, then set this to false
+gc_bias_normalize_coverage: true

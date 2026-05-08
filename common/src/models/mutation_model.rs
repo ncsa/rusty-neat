@@ -222,7 +222,7 @@ impl MutationModel {
         let ref_base = reference_sequence[variant_location];
         // For insertions and SNPs, the reference will be the ref_base
         let mut reference: Vec<Nucleotide> = vec![ref_base];
-        // For deletions, the alternato will be the ref_base
+        // For deletions, the alternate will be the ref_base
         let mut alternate: Vec<Nucleotide> = vec![ref_base];
         match variant_type {
             VariantType::SNP => {

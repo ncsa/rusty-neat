@@ -11,7 +11,12 @@ use flate2::Compression;
 use thiserror::Error;
 use log::*;
 
-use crate::file_tools::file_io::{create_output_file, read_gzip_lines, read_lines};
+use crate::file_tools::file_io::{
+    create_output_file, 
+    read_gzip_lines, 
+    read_lines, 
+    is_gzipped_file,
+};
 use crate::structs::nucleotides::{sequence_array_to_string};
 use crate::structs::mutated_map::MutatedMap;
 use crate::structs::variants::{Variant, VariantError};
@@ -106,17 +111,12 @@ pub fn write_vcf(
 }
 
 pub fn read_vcf(vcf_file: PathBuf) -> Result<HashMap<String, Vec<Variant>>, VcfToolsError> {
-    let ext = vcf_file.extension();
-    match ext {
-        Some(ext) => {
-            if ext == "gz" {
-                return process_gzip_vcf(&vcf_file)
-            } else {
-                return process_vcf(&vcf_file)
-            }
-        },
-        None => panic!("file extonsion unknown! {:?}", vcf_file),
+    if is_gzipped_file(&vcf_file)? {
+        process_gzip_vcf(&vcf_file)
+    } else {
+        process_vcf(&vcf_file)
     }
+        
 }
 
 fn process_gzip_vcf(filename: &PathBuf) -> Result<HashMap<String, Vec<Variant>>, VcfToolsError> {

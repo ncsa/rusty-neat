@@ -9,7 +9,7 @@ use crate::{
             variants::Variant
         }
     }, 
-    gen_reads::errors::GenerateReadsErrors
+    gen_reads::errors::GenerateReadsError
 };
 
 pub fn generate_variants(
@@ -19,7 +19,7 @@ pub fn generate_variants(
     num_mutations: usize,
     ploidy: usize,
     rng: &mut NeatRng,
-) -> Result<Option<Vec<Variant>>, GenerateReadsErrors>{
+) -> Result<Option<Vec<Variant>>, GenerateReadsError>{
     // Variants for this contig, organized by location. Each location may have only one variant.
     // And we may need to implement a further check that there aren't other types of overlaps.
     // This will simply overwrite any existing value, so we just capture the last variant at each
@@ -31,7 +31,7 @@ pub fn generate_variants(
     let block_len = sequence_block.get_len();
     if region_weights.len() != block_len {
         error!("Region weights did not match block length");
-        return Err(GenerateReadsErrors::GenerateVariantsError)
+        return Err(GenerateReadsError::GenerateVariantsError)
     }
     // The keys are the position of each variant added.
     let mut block_variants: Vec<Variant> = Vec::new();

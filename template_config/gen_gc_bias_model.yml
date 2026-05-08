@@ -1,0 +1,39 @@
+# Reference FASTA used to compute GC content.
+reference: .
+
+# Per-base coverage file.
+# Supported:
+#   samtools-depth
+#   bedtools-genomecov-d
+#   bedtools-genomecov-dz
+coverage_file: .
+
+# Coverage file format.
+# samtools-depth and bedtools-genomecov-d are:
+#   contig  1-based-position  depth
+#
+# bedtools-genomecov-dz is:
+#   contig  0-based-position  depth
+# and usually omits zero-coverage positions.
+coverage_format: samtools-depth
+
+# Optional BED file limiting model inference to target regions.
+# Use "." to disable.
+bed_file: .
+
+# Output GC-bias model.
+output_file: gc_bias_model.json.gz
+
+# Refuse to overwrite output unless true.
+overwrite_output: false
+
+# Window size used to compute GC% and mean coverage.
+window_size: 100
+
+# Step between windows. Must not exceed window_size.
+# Use same value as window_size for non-overlapping windows (recommended).
+# Values smaller than window_size produce overlapping windows.
+window_stride: 100
+
+# Bins with fewer windows than this receive a neutral weight of 1.0 (no bias applied).
+min_windows_per_bin: 10

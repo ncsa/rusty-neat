@@ -78,6 +78,15 @@ impl Read for VectorBuffer {
     }
 }
 
+pub fn is_gzipped_file(filename: &PathBuf) -> Result<bool> {
+    let mut file = File::open(filename)?;
+    let mut magic = [0u8; 2];
+
+    let bytes_read = file.read(&mut magic)?;
+
+    Ok(bytes_read == 2 && magic == [0x1f, 0x8b])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

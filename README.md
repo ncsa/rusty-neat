@@ -438,17 +438,34 @@ min_windows_per_bin: 10
 
 **Generating the coverage file:**
 
-Any tool that outputs per-base depth in tab-separated format works. The most common options are:
+The recommended command is:
 
 ```bash
-# samtools depth (recommended — 1-based, all positions output)
-samtools depth -a aligned.bam > coverage.txt
+samtools depth -a -q 20 -F 1796 aligned.bam > coverage.txt
+```
 
+- `-a` outputs all positions including zero-depth sites (required for `samtools-depth` and `bedtools-genomecov-d` formats)
+- `-q 20` excludes reads with mapping quality below 20
+- `-F 1796` excludes unmapped, secondary, duplicate, and supplementary reads
+
+Getting these filters wrong silently produces a biased model, so use this command as-is unless you have a specific reason to deviate.
+
+If you prefer bedtools or need smaller files:
+
+```bash
 # bedtools genomecov -d (1-based, all positions)
 bedtools genomecov -d -ibam aligned.bam > coverage.txt
 
 # bedtools genomecov -dz (0-based, nonzero positions only; smaller files)
 bedtools genomecov -dz -ibam aligned.bam > coverage.txt
+```
+
+Note that bedtools does not expose MAPQ or flag filtering as simply as samtools; if duplicate removal or MAPQ filtering matters for your dataset, pre-filter the BAM first:
+
+```bash
+samtools view -b -q 20 -F 1796 aligned.bam > filtered.bam
+samtools index filtered.bam
+bedtools genomecov -dz -ibam filtered.bam > coverage.txt
 ```
 
 Set `coverage_format` in your config to match whichever command you used.

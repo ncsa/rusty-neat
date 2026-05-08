@@ -20,6 +20,7 @@ SUB-COMMANDS:
   gen-mut-model          Generates a mutation model from real VCF data
   gen-seq-error-model    Generates a sequencing error model from real FASTQ data
   gen-frag-length-model  Generates a fragment length model from a BAM or SAM file
+  gen-gc-bias-model      Generates a GC bias model from a reference FASTA and coverage file
   help                   Print this message or the help of the given subcommand(s)
 
 Options:
@@ -383,6 +384,113 @@ A    C    G    T
 ```
 
 That's it so far! Test out the features and let us know what you think!
+
+Generating a GC Bias Model
+====================
+`rneat` can learn a GC bias model from a reference FASTA and a per-base coverage file using the `rneat gen-gc-bias-model` subcommand. It tiles the reference in fixed-size windows, computes the GC% of each window, looks up the mean coverage over that window, and accumulates the data into a 101-bin weight table (one bin per integer GC percentage, 0–100%). The resulting model can be passed to `gen-reads` to make fragment start positions favour regions whose GC content matches the coverage bias observed in your data.
+
+```bash
+$ rneat gen-gc-bias-model -c gen_gc_bias_model_config.yml
+```
+
+The output is a gzipped JSON model file that can be passed directly to `gen-reads` via its `gc_bias_model` config key.
+
+Copy `template_config/gen_gc_bias_model.yml` to a directory of your choosing and fill in the fields:
+
+```yaml
+# required: reference FASTA used to compute GC content
+# Both plain and gzipped (.fa.gz) references are accepted.
+reference: /path/to/reference.fa
+
+# required: per-base coverage file produced by samtools or bedtools
+coverage_file: /path/to/coverage.txt
+
+# required: format of the coverage file
+# samtools-depth        → samtools depth output  (CHROM  1-based-pos  depth)
+# bedtools-genomecov-d  → bedtools genomecov -d  (CHROM  1-based-pos  depth)
+# bedtools-genomecov-dz → bedtools genomecov -dz (CHROM  0-based-pos  depth, nonzero only)
+coverage_format: samtools-depth
+
+# optional: BED file restricting model inference to target regions
+# Use "." (dot) to use the entire reference (default)
+bed_file: .
+
+# required: output path for the generated model; should end in .json.gz
+output_file: /path/to/gc_bias_model.json.gz
+
+# optional: set to true to overwrite an existing output file (default: false)
+overwrite_output: false
+
+# Window size in base pairs for GC% and coverage averaging.
+# Should match the typical read length (or fragment length for long reads).
+# Default: 100
+window_size: 100
+
+# Step between successive windows. Use the same value as window_size for
+# non-overlapping windows (recommended for unbiased sampling). Default: window_size
+window_stride: 100
+
+# Bins with fewer windows than this receive a neutral weight of 1.0 rather than
+# a learned weight. Increase this to require more evidence before trusting a bin.
+# Default: 10
+min_windows_per_bin: 10
+```
+
+**Generating the coverage file:**
+
+The recommended command is:
+
+```bash
+samtools depth -a -q 20 -F 1796 aligned.bam > coverage.txt
+```
+
+- `-a` outputs all positions including zero-depth sites (required for `samtools-depth` and `bedtools-genomecov-d` formats)
+- `-q 20` excludes reads with mapping quality below 20
+- `-F 1796` excludes unmapped, secondary, duplicate, and supplementary reads
+
+Getting these filters wrong silently produces a biased model, so use this command as-is unless you have a specific reason to deviate.
+
+If you prefer bedtools or need smaller files:
+
+```bash
+# bedtools genomecov -d (1-based, all positions)
+bedtools genomecov -d -ibam aligned.bam > coverage.txt
+
+# bedtools genomecov -dz (0-based, nonzero positions only; smaller files)
+bedtools genomecov -dz -ibam aligned.bam > coverage.txt
+```
+
+Note that bedtools does not expose MAPQ or flag filtering as simply as samtools; if duplicate removal or MAPQ filtering matters for your dataset, pre-filter the BAM first:
+
+```bash
+samtools view -b -q 20 -F 1796 aligned.bam > filtered.bam
+samtools index filtered.bam
+bedtools genomecov -dz -ibam filtered.bam > coverage.txt
+```
+
+Set `coverage_format` in your config to match whichever command you used.
+
+**Coverage file must be plain text.** Gzipped coverage files are not supported. If yours is compressed, decompress it first:
+
+```bash
+gunzip coverage.txt.gz
+```
+
+**Large genomes:** The tool is designed to handle human-scale genomes without excessive memory use. It indexes the coverage file once, then loads each contig's data separately rather than holding the entire genome in RAM. Peak memory use is proportional to the longest contig, not total genome size.
+
+**Long reads:** Set `window_size` to approximately your typical read length (e.g. 5000–50000 for ONT or PacBio). Larger windows mean fewer windows per contig and faster model building. Non-overlapping windows (`window_stride: window_size`) are recommended so each observation is independent.
+
+**Using the model in gen-reads:**
+
+```yaml
+# in gen_reads_config.yml
+gc_bias_model: /path/to/gc_bias_model.json.gz
+
+# optional: inflate fragment count to compensate for low-weight regions
+# true (default): total coverage stays close to the requested depth
+# false: coverage in low-GC regions will be lower than requested
+gc_bias_normalize_coverage: true
+```
 
 Generating a Fragment Length Model
 ====================

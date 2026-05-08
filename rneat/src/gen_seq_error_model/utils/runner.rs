@@ -12,6 +12,7 @@ use common::{
     },
     structs::transition_matrix::TransitionMatrix,
 };
+use common::file_tools::file_io::is_gzipped_file;
 use crate::gen_seq_error_model::{
     errors::GenSeqErrorModelError,
     utils::config::RunConfiguration,
@@ -47,13 +48,7 @@ fn build_transition_matrix_from_counts(
 }
 
 pub fn runner(config: &RunConfiguration) -> Result<(), GenSeqErrorModelError> {
-    let is_gz = config
-        .fastq_file
-        .extension()
-        .map(|e| e == "gz")
-        .unwrap_or(false);
-
-    let lines: Vec<String> = if is_gz {
+    let lines: Vec<String> = if is_gzipped_file(&config.fastq_file)? {
         read_gzip_lines(&config.fastq_file)?
             .collect::<Result<Vec<_>, _>>()?
     } else {

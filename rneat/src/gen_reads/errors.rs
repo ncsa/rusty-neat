@@ -14,6 +14,7 @@ use common::{
         mutation_model::MutationModelError, 
         quality_scores::QualityModelError, 
         sequencing_error_model::SeqModelError,
+        gc_bias_model::GcBiasModelError,
     }, 
     
     structs::{
@@ -27,7 +28,7 @@ use thiserror::Error;
 use serde_yml;
 
 #[derive(Debug, Error)]
-pub enum GenerateReadsErrors {
+pub enum GenerateReadsError {
     #[error("Invalid CLI inputs: {0}")]
     CliError(String),
     #[error("NEAT generate-reads requires a reference to proceed.")]
@@ -90,4 +91,6 @@ pub enum GenerateReadsErrors {
     BamWriterError(#[from] BamWriterError),
     #[error("Sequence too short to process")]
     ShortSequence,
+    #[error("GC Bias model threw an error: {0}")]
+    BiasModelError(#[from] GcBiasModelError),
 }

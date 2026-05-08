@@ -9,3 +9,4 @@ pub mod sequencing_error_model;
 pub mod snp_trinuc_model;
 pub mod fragment_length;
 mod lib;
+pub mod gc_bias_model;

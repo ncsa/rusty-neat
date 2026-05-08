@@ -1,18 +1,17 @@
 use common::file_tools::file_io::create_output_file;
 use common::structs::variants::VariantType;
 use tempfile;
-use log::{info, debug, error};
+use log::{info, debug, warn, error};
 use common::rng::NeatRng;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::io::BufWriter;
 
-use indicatif::ProgressBar;
-use flate2::{ 
+use flate2::{
     Compression,
     write::GzEncoder
 };
-
+use common::models::gc_bias_model::GcBiasModel;
 use crate::{
     common::{
         file_tools::{
@@ -39,17 +38,21 @@ use crate::{
         }
     },
     gen_reads::{
-        errors::GenerateReadsErrors,
+        errors::{
+            GenerateReadsError,
+        },
         utils::{
             config::RunConfiguration,
             generate_variants::generate_variants,
-            generate_fragments::generate_fragments,
+            generate_fragments::{
+                generate_fragments,
+                generate_weighted_fragments,
+            },
         }
     }
 };
 
-
-pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec<PathBuf>, GenerateReadsErrors> {
+pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec<PathBuf>, GenerateReadsError> {
     // We'll need a temp dir to store file fragments
     let working_dir = tempfile::tempdir().unwrap();
     info!("Created temp dir at {:?}", working_dir);
@@ -66,6 +69,12 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
                 MutationModel::default()?
             }
         }
+    };
+    // Putting code here to determine whether to use the model's mutation_rate, or the custom
+    // mutation rate from the config.
+    let run_mutation_rate = match config.mutation_rate {
+        Some(rate) => rate,
+        None => mutation_model.mutation_rate
     };
 
     // Fragment Length Model
@@ -115,6 +124,15 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
         }
     };
 
+    // load GC-bias model, if provided.
+    let gc_bias_model = match &config.gc_bias_model {
+        Some(path) => {
+            info!("Loading GC Bias model: {}", path.display());
+            GcBiasModel::from_file(path)?
+        },
+        None => GcBiasModel::default(),
+    };
+
     // This model provides an alternate base for N based on a simple equal weight distribution.
     info!("Initialize Nucleotide selector");
     let nuc_sub_model: NucleotideSelector = {
@@ -137,7 +155,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
     info!("Generating simulated dataset");
 
     // Load the target BED if provided. Regions outside the BED will be skipped entirely
-    // during generation, so no reads or variants are produced for those areas.
+    // during read-generation, so no reads or variants are produced for those areas.
     let target_bed = match &config.target_bed {
         Some(path) => {
             info!("Loading target BED: {}", path.display());
@@ -173,9 +191,6 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
     let mut mutated_maps: HashMap<String, Vec<MutatedMap>> = HashMap::new();
     // All files written indexed by contig_name, separated by read1/read2
     let mut all_fastq_files: HashMap<String, (Vec<PathBuf>, Vec<PathBuf>)> = HashMap::new();
-    let bar: ProgressBar = ProgressBar::new(fasta_map.contigs.len() as u64);
-    // to display bar
-    bar.tick();
     // iterate over contigs. 
     for contig in &fasta_map.contigs {
         // Iterate over blocks within the contig
@@ -192,7 +207,6 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
         if let Some(bed) = &target_bed {
             if !bed.contains_key(contig_name) {
                 debug!("Skipping {} — not in target BED", contig_name);
-                bar.inc(1);
                 continue;
             }
         }
@@ -201,9 +215,8 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
             debug!("Processing block {:?}", block_filename);
             // Set up current block
             let current_block = SequenceBlock::from(&block_filename)?;
-            // First we have to create the region weights data based on the fasta
-            // map and maybe gc-bias later at some point
-            // filter down to minimal regions to search
+            // First, we have to create the region weights data based on the fasta
+            // map and filter down to minimal regions to search
             debug!("    > Generating bias map.");
             let raw_regions = current_block.get_non_n_regions()?;
             // Intersect non-N regions with the target BED (if provided). SequenceMap
@@ -234,7 +247,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
             // Extract any user-supplied variants that fall in this block.
             // VCF POS is 1-based contig-global; convert to 0-based block-local.
             // Zero out those positions in bias_map so random generation doesn't
-            // double-mutate them, and reduce the random mutation budget accordingly.
+            // double-mutate them and reduce the random mutation budget accordingly.
             let block_start = current_block.get_start()?;
             let block_end   = current_block.get_end()?;
             let mut block_variants: Vec<Variant> = if let Some(iv) = &input_variants {
@@ -269,7 +282,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
             debug!("Seeded {} user variant(s) into block {:?}", block_variants.len(), block_filename);
 
             // determine the number of additional random mutations for this segment
-            let num_mutations = (num_mutable_area * config.mutation_rate)
+            let num_mutations = (num_mutable_area * run_mutation_rate)
                 .trunc()
                 as usize;
             debug!("Adding {} mutations to block {:?}", num_mutations, block_filename);
@@ -312,34 +325,39 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
             }
 
             let block_fragments: Vec<(usize, usize)> = {
-                let mut temp_regions: Vec<(usize, usize)> = Vec::new();
-                // find matching region.
-                // if next region is within a read, maybe we'll use the whole thing.
-                for region in regions_of_interest {
-                    temp_regions.push((region.start, region.end));
-                }
                 let mut block_frags = Vec::new();
-                for (frag_start, frag_end) in temp_regions {
-                    let result = generate_fragments(
-                        frag_end-frag_start,
-                        config.read_len,
-                        max_del_len,
-                        frag_start,
-                        config.coverage,
-                        &fragment_length_model,
-                        rng,
-                    );
-                    match result {
-                        Ok(frags) => {
-                            if !frags.is_empty() {
-                                block_frags.extend_from_slice(&frags);
-                            }
-                        },
-                        Err(error) => return Err(error),
-                    }
+                for (frag_start, frag_end) in regions_of_interest.into_iter().map(|r| (r.start, r.end)) {
 
+                    let frags = if gc_bias_model.is_uniform() {
+                        generate_fragments(
+                            frag_end - frag_start,
+                            config.read_len,
+                            max_del_len,
+                            frag_start,
+                            config.coverage,
+                            &fragment_length_model,
+                            rng,
+                        )?
+                    } else {
+                        generate_weighted_fragments(
+                            &current_block,
+                            frag_start,
+                            frag_end,
+                            config.read_len,
+                            max_del_len,
+                            config.coverage,
+                            &gc_bias_model,
+                            &fragment_length_model,
+                            config.gc_bias_normalize_coverage.unwrap_or(true),
+                            rng,
+                        )?
+                    };
+
+                    if !frags.is_empty() {
+                        block_frags.extend_from_slice(&frags);
+                    }
                 }
-                block_frags.clone()
+                block_frags
             };
 
             let mutated_map = MutatedMap::new(
@@ -437,10 +455,9 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
         }
         mutated_maps.insert(contig_name.clone(), contig_maps.clone());
         all_fastq_files.insert(contig_name.clone(), (contig_files_r1, contig_files_r2));
-        bar.inc(1);
     }
 
-    bar.finish_and_clear();
+    info!("Read generation complete, producing output files");
 
     if config.produce_fastq {
         info!("Producing final fastq(s) file(s)");
@@ -450,7 +467,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
         // consider post-processing with `seqkit shuffle` instead.
         let total_genome_bp: usize = fasta_map.contigs.iter().map(|c| c.contig_len).sum();
         if total_genome_bp > 500_000_000 {
-            log::warn!(
+            warn!(
                 "Genome is {:.1} Gbp. The global FASTQ shuffle loads all reads into memory. \
                  For large genomes, consider running `seqkit shuffle` on the output instead.",
                 total_genome_bp as f64 / 1e9
@@ -484,7 +501,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
                         },
                         None => {
                             error!("Produce fastq true and paired-ended true, but output_fastq_2 was missing.");
-                            return Err(GenerateReadsErrors::ConfigError)
+                            return Err(GenerateReadsError::ConfigError)
                         }
                     }
                 } else {
@@ -500,7 +517,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
             },
             None => {
                 error!("Produce fastq true but output_fastq_1 was missing.");
-                return Err(GenerateReadsErrors::ConfigError)
+                return Err(GenerateReadsError::ConfigError)
             },
         }
     }
@@ -552,7 +569,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
             },
             Err(error) => {
                 error!("Error writing vcf file!");
-                return Err(GenerateReadsErrors::IoError(error))
+                return Err(GenerateReadsError::IoError(error))
             },
         }
     }
@@ -569,7 +586,7 @@ fn filter_input_vcf(
         let mut kept = Vec::new();
         for v in variants {
             if v.variant_type == VariantType::Complex {
-                log::warn!(
+                warn!(
                     "Skipping complex variant at {}:{} (multi-base REF and ALT that is not \
                      a simple indel) — not yet supported",
                     contig, v.location

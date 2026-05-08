@@ -7,7 +7,7 @@ use std::{
     path::PathBuf
 };
 use crate::{
-    file_tools::file_io::{read_gzip_lines, read_lines}, 
+    file_tools::file_io::{read_gzip_lines, read_lines, is_gzipped_file},
     structs::bed_record::{BedErrors, BedRecord}
 };
 
@@ -21,8 +21,6 @@ pub enum BedReaderError {
     BedRecordError(#[from] BedErrors),
     #[error("Error parsing ints from the bed file: {0}")]
     ParserError(#[from] ParseIntError),
-    #[error("File has an unknown or missing file extension: {0}")]
-    FileExtensionUnknown(String)
 }
 
 pub fn read_bed(
@@ -34,31 +32,21 @@ pub fn read_bed(
             bed_path
         )))
     } 
-    let ext = bed_path.extension();
-    match ext {
-        Some(ext) => {
-            if ext == "gz" {
-                return process_gzip_bed(&bed_path)
-            } else {
-                return process_bed(&bed_path)
-            }
-        },
-        None => {
-            return Err(BedReaderError::FileExtensionUnknown(
-                format!("file: {:?}", bed_path)
-            ))
-        }
+    if is_gzipped_file(bed_path)? {
+        process_gzip_bed(bed_path)
+    } else {
+        process_bed(bed_path)
     }
 }
 
 fn process_gzip_bed(filename: &PathBuf) -> Result<HashMap<String, Vec<BedRecord>>, BedReaderError> {
     let reader = read_gzip_lines(filename)?;
-    return Ok(read_open_bed(reader).expect("Problem processing lines of gzipped bed file"))
+    Ok(read_open_bed(reader).expect("Problem processing lines of gzipped bed file"))
 }
 
 fn process_bed(filename: &PathBuf) -> Result<HashMap<String, Vec<BedRecord>>, BedReaderError> {
     let reader = read_lines(filename)?;
-    return Ok(read_open_bed(reader).expect("Error processing bed file"))
+    Ok(read_open_bed(reader).expect("Error processing bed file"))
 }
     
 fn read_open_bed<P: Read> (reader: Lines<BufReader<P>>) -> Result<HashMap<String, Vec<BedRecord>>, BedReaderError> {
@@ -120,10 +108,17 @@ mod tests {
     }
 
     #[test]
-    fn test_process_bed_no_extension_errors() {
+    fn test_process_bed_no_extension_succeeds() {
         let temp_dir = tempfile::tempdir().unwrap();
         let bad_path = temp_dir.path().join("no_extension");
-        std::fs::File::create(&bad_path).unwrap();
-        assert!(read_bed(&bad_path).is_err());
+        let mut f = std::fs::File::create(&bad_path).unwrap();
+        writeln!(f, "chr1\t100\t200").unwrap();
+        drop(f);
+        let result = read_bed(&bad_path).unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result["chr1"].len(), 1);
+        assert_eq!(result["chr1"][0].start, 100);
+        assert_eq!(result["chr1"][0].end, 200);
     }
 }

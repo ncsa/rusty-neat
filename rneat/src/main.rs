@@ -10,6 +10,7 @@ pub mod gen_reads;
 pub mod gen_mut_model;
 pub mod gen_seq_error_model;
 pub mod gen_frag_length_model;
+pub mod gen_gc_bias_model;
 
 use std::env;
 use std::time;
@@ -29,12 +30,13 @@ use log::*;
 use clap::{value_parser, Arg, ArgAction, Command};
 use std::path::PathBuf;
 
-use crate::gen_mut_model::errors::GenMutationModelError;
-use crate::gen_seq_error_model::errors::GenSeqErrorModelError;
-use crate::gen_frag_length_model::errors::GenFragLengthModelError;
 use crate::{
+    gen_mut_model::errors::GenMutationModelError,
+    gen_seq_error_model::errors::GenSeqErrorModelError,
+    gen_frag_length_model::errors::GenFragLengthModelError,
     filter_reads::errors::FilterReadsError,
-    gen_reads::errors::GenerateReadsErrors,
+    gen_reads::errors::GenerateReadsError,
+    gen_gc_bias_model::errors::GenGcBiasModelError,
 };
 /// This script parses arguments and checks them before submitting to the submodules, which currently 
 /// include `gen-reads` and `filter-files`. As more are added, this can be expanded or refactored
@@ -43,7 +45,7 @@ use crate::{
 pub enum NeatErrors {
 	// Errors specific to each submodule
     #[error("Error while generating read dataset {0}")]
-    GenerateReadsError(#[from] GenerateReadsErrors),
+    GenerateReadsError(#[from] GenerateReadsError),
     #[error("Error while filtering reads with bed file {0}")]
     FilterReadsError(#[from] FilterReadsError),
     #[error("Error while generating mutation model {0}")]
@@ -52,9 +54,11 @@ pub enum NeatErrors {
     GenSeqErrorModel(#[from] GenSeqErrorModelError),
     #[error("Error while generating fragment length model {0}")]
     GenFragLengthModel(#[from] GenFragLengthModelError),
+    #[error("Error while generating GC bias model {0}")]
+    GenGcBiasModel(#[from] GenGcBiasModelError),
 }
 
-fn neat_commands() -> [Command; 5] {
+fn neat_commands() -> [Command; 6] {
 	// These are the submodule commands. Any new commands added should go here.
     let configuration_arg = Arg::new("configuration_yaml")
         .long("configuration-yaml")
@@ -92,6 +96,12 @@ fn neat_commands() -> [Command; 5] {
             ),
         Command::new("gen-frag-length-model")
             .about("Generate a fragment length model from a BAM or SAM file")
+            .arg_required_else_help(true)
+            .arg(
+                &configuration_arg
+            ),
+        Command::new("gen-gc-bias-model")
+            .about("Generate a GC bias model from a reference FASTA and coverage file")
             .arg_required_else_help(true)
             .arg(
                 &configuration_arg
@@ -317,6 +327,32 @@ fn main() -> Result<(), NeatErrors> {
                     match result {
                         Err(error) => return Err(NeatErrors::GenFragLengthModel(error)),
                         Ok(()) => info!("rneat gen-frag-length-model completed successfully"),
+                    }
+                }
+            }
+        },
+        Some(("gen-gc-bias-model", _)) => {
+            if let Some(("gen-gc-bias-model", cmd)) = subcommand {
+                info!("Running rneat gen-gc-bias-model");
+                if cmd.contains_id("configuration_yaml") {
+                    let file = cmd.get_one::<PathBuf>("configuration_yaml")
+                            .expect("Must provide a path with configuration-yaml")
+                            .to_path_buf();
+
+                    if !file.is_file() {
+                        return Err(
+                            NeatErrors::FilterReadsError(
+                                FilterReadsError::CliError(
+                                    "Must supply a configuration file to run gen-gc-bias-model!".to_string()
+                                )
+                            )
+                        )
+                    }
+                    info!("Running gen-gc-bias-model to generate a GC bias model.");
+                    let result = gen_gc_bias_model::main(&file);
+                    match result {
+                        Err(error) => return Err(NeatErrors::GenGcBiasModel(error)),
+                        Ok(()) => info!("rneat gen-gc-bias-model completed successfully"),
                     }
                 }
             }

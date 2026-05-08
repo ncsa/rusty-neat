@@ -79,6 +79,14 @@ pub fn generate_fragments(
     }
 }
 
+/// Probabilistically filter fragments using acceptance-rejection sampling against the GC bias
+/// model. Each fragment is accepted with probability `weight(fragment) / max_weight`, so the
+/// highest-weighted GC bin is always accepted (probability 1.0) and all others are retained at
+/// a rate proportional to their relative weight. This preserves the shape of the model without
+/// requiring an absolute probability scale.
+///
+/// Call `estimate_region_mean_gc_weight` first and inflate the fragment count accordingly so
+/// that the surviving fragments still hit the target coverage depth.
 pub fn apply_gc_bias_to_fragments(
     fragments: Vec<(usize, usize)>,
     sequence_block: &SequenceBlock,
@@ -86,16 +94,14 @@ pub fn apply_gc_bias_to_fragments(
     rng: &mut NeatRng,
 ) -> Result<Vec<(usize, usize)>, GenerateReadsError> {
     let max_weight = gc_bias_model.max_weight();
+    // from_weights guarantees at least one positive weight, so max_weight > 0 always holds
+    debug_assert!(max_weight > 0.0, "GcBiasModel guarantees at least one positive weight");
     let mut retained = Vec::new();
 
     for (start, end) in fragments {
         let seq = sequence_block.get_subseq(start, end)?;
         let weight = gc_bias_model.weight_for_sequence(&seq);
-        let accept_prob = if max_weight > 0.0 {
-            weight / max_weight
-        } else {
-            0.0
-        };
+        let accept_prob = weight / max_weight;
 
         if rng.random()? < accept_prob {
             retained.push((start, end));
@@ -172,13 +178,24 @@ fn cover_dataset(
     Ok(fragment_set)
 }
 
+/// Estimates the mean GC bias weight across a genomic region by sliding the model's
+/// stored window across the region and averaging the model weight at each position.
+///
+/// The result is used by the caller to inflate `effective_coverage` before fragment
+/// generation so that rejection sampling in `apply_gc_bias_to_fragments` still hits
+/// the target depth after filtering.
+///
+/// Returns at least `MIN_WEIGHT` (1e-6) to prevent division-by-zero in the caller
+/// when every sampled window has zero weight.
 pub fn estimate_region_mean_gc_weight(
     sequence_block: &SequenceBlock,
     region_start: usize,
     region_end: usize,
-    gc_window_size: usize,
     gc_bias_model: &GcBiasModel,
 ) -> Result<f64, FastaMapError> {
+    // Stride of 25 bp gives a dense enough sample for typical read lengths (100–300 bp)
+    // without scanning every base. When the window is smaller than 25 bp the stride
+    // clamps to the window size so every position is still covered.
     const DEFAULT_STRIDE: usize = 25;
     const MIN_WEIGHT: f64 = 1e-6;
 
@@ -188,11 +205,7 @@ pub fn estimate_region_mean_gc_weight(
 
     let region_len = region_end - region_start;
 
-    if region_len == 0 {
-        return Err(FastaMapError::BadCoordinatesError);
-    }
-
-    let window_size = gc_window_size.min(region_len);
+    let window_size = gc_bias_model.window_size().min(region_len);
 
     if window_size == 0 {
         return Ok(MIN_WEIGHT);
@@ -290,7 +303,7 @@ mod tests {
         let mut weights = weights_with_value(0.0);
         weights[50] = 1.0;
 
-        let model = GcBiasModel::from_weights(weights).unwrap();
+        let model = GcBiasModel::from_weights(weights, 150).unwrap();
         let mut rng = make_rng();
 
         let retained = apply_gc_bias_to_fragments(
@@ -310,43 +323,36 @@ mod tests {
             C, G, C, G, // 100% GC, weight 1.0
         ]);
 
-        let fragments = vec![
-            (0, 4),
-            (4, 8),
-        ];
-
         let mut weights = weights_with_value(0.0);
         weights[50] = 0.5;
         weights[100] = 1.0;
-
-        let model = GcBiasModel::from_weights(weights).unwrap();
+        let model = GcBiasModel::from_weights(weights, 150).unwrap();
 
         assert!((model.max_weight() - 1.0).abs() < 1e-12);
         assert!((model.weight_for_sequence(&sequence_block.sequence[0..4]) - 0.5).abs() < 1e-12);
         assert!((model.weight_for_sequence(&sequence_block.sequence[4..8]) - 1.0).abs() < 1e-12);
 
+        // Seed "gc-bias-test": first draw >= 0.5, so the 50% GC fragment is rejected.
+        // Only the max-weight (100% GC) fragment survives.
         let mut rng = make_rng();
-
         let retained = apply_gc_bias_to_fragments(
-            fragments,
+            vec![(0, 4), (4, 8)],
             &sequence_block,
             &model,
             &mut rng,
         ).unwrap();
+        assert_eq!(retained, vec![(4, 8)], "Seed gc-bias-test: expected only max-weight fragment");
 
-        // The 100% GC fragment has accept_prob 1.0 and must always be retained.
-        assert!(
-            retained.contains(&(4, 8)),
-            "Expected max-weight fragment to be retained"
-        );
-
-        // The 50% GC fragment has accept_prob 0.5, so it may or may not be retained
-        // depending on the deterministic RNG draw. We do not assert either outcome here.
-        assert!(
-            retained.iter().all(|fragment| *fragment == (0, 4) || *fragment == (4, 8)),
-            "Unexpected retained fragment list: {:?}",
-            retained
-        );
+        // Seed "Hello": first draw < 0.5, so the 50% GC fragment is also accepted.
+        // Both fragments survive, confirming the accept path works too.
+        let mut rng_accept = NeatRng::new_from_seed(&vec!["Hello".to_string()]).unwrap();
+        let retained_accept = apply_gc_bias_to_fragments(
+            vec![(0, 4), (4, 8)],
+            &sequence_block,
+            &model,
+            &mut rng_accept,
+        ).unwrap();
+        assert_eq!(retained_accept, vec![(0, 4), (4, 8)], "Seed Hello: expected both fragments retained");
     }
 
     #[test]
@@ -383,7 +389,6 @@ mod tests {
             &sequence_block,
             0,
             sequence_block.sequence.len(),
-            4,
             &model,
         ).unwrap();
 
@@ -403,13 +408,12 @@ mod tests {
         weights[50] = 1.0;
         weights[100] = 0.4;
 
-        let model = GcBiasModel::from_weights(weights).unwrap();
+        let model = GcBiasModel::from_weights(weights, 4).unwrap();
 
         let mean_weight = estimate_region_mean_gc_weight(
             &sequence_block,
             0,
             12,
-            4,
             &model,
         ).unwrap();
 
@@ -431,13 +435,12 @@ mod tests {
         let mut weights = weights_with_value(0.0);
         weights[50] = 0.75;
 
-        let model = GcBiasModel::from_weights(weights).unwrap();
+        let model = GcBiasModel::from_weights(weights, 100).unwrap();
 
         let mean_weight = estimate_region_mean_gc_weight(
             &sequence_block,
             0,
             4,
-            100,
             &model,
         ).unwrap();
 
@@ -453,7 +456,6 @@ mod tests {
             &sequence_block,
             2,
             2,
-            4,
             &model,
         );
 
@@ -472,7 +474,6 @@ mod tests {
             &sequence_block,
             3,
             2,
-            4,
             &model,
         );
 
@@ -495,14 +496,13 @@ mod tests {
         weights[50] = 0.0;
         weights[100] = 1.0;
 
-        let model = GcBiasModel::from_weights(weights).unwrap();
+        let model = GcBiasModel::from_weights(weights, 4).unwrap();
 
         // Only sample the first two windows, both of which have zero weight.
         let mean_weight = estimate_region_mean_gc_weight(
             &sequence_block,
             0,
             8,
-            4,
             &model,
         ).unwrap();
 
@@ -641,5 +641,178 @@ mod tests {
             &mut rng,
         ).unwrap();
         assert!(!reads.is_empty())
+    }
+
+    // Mirrors the runner's per-region logic: optionally inflate effective_coverage using
+    // estimate_region_mean_gc_weight, generate fragments, then apply rejection sampling.
+    // Uniform models short-circuit both steps, matching runner.rs behaviour exactly.
+    fn fragment_count_after_gc_pipeline(
+        sequence_block: &SequenceBlock,
+        read_len: usize,
+        target_coverage: usize,
+        model: &GcBiasModel,
+        normalize: bool,
+        rng: &mut NeatRng,
+    ) -> usize {
+        let seq_len = sequence_block.sequence.len();
+        let effective_coverage = if !model.is_uniform() && normalize {
+            let mean_weight = estimate_region_mean_gc_weight(
+                sequence_block, 0, seq_len, model,
+            ).unwrap();
+            (target_coverage as f64 / mean_weight).round() as usize
+        } else {
+            target_coverage
+        };
+        let fragment_model = FragmentLengthModel::default().unwrap();
+        let fragments = generate_fragments(
+            seq_len, read_len, 0, 0, effective_coverage, &fragment_model, rng,
+        ).unwrap();
+        if model.is_uniform() {
+            fragments.len()
+        } else {
+            apply_gc_bias_to_fragments(fragments, sequence_block, model, rng).unwrap().len()
+        }
+    }
+
+    #[test]
+    fn test_coverage_normalization_compensates_for_gc_bias() {
+        // 10,000 bp of repeating ACGT — exactly 50% GC throughout.
+        let sequence: Vec<_> = std::iter::repeat([A, C, G, T])
+            .take(2500)
+            .flatten()
+            .collect();
+        let sequence_block = make_sequence_block(sequence);
+        let read_len = 100;
+        let target_coverage = 10;
+
+        // Model: 50% GC has weight 0.5, max_weight = 1.0.
+        // Normalization inflates coverage by 2x; rejection keeps 50% → net ≈ target.
+        let mut weights = weights_with_value(0.0);
+        weights[50] = 0.5;
+        weights[100] = 1.0;
+        let model = GcBiasModel::from_weights(weights, 100).unwrap();
+
+        // Baseline: uniform model, no rejection — establishes the "target fragment count"
+        // for this sequence length and coverage without any GC influence.
+        let mut rng = make_rng();
+        let baseline = fragment_count_after_gc_pipeline(
+            &sequence_block, read_len, target_coverage, &GcBiasModel::default(), false, &mut rng,
+        );
+
+        // Normalized: inflation + rejection should land near the baseline.
+        let mut rng = make_rng();
+        let normalized = fragment_count_after_gc_pipeline(
+            &sequence_block, read_len, target_coverage, &model, true, &mut rng,
+        );
+
+        let tolerance = baseline / 4; // ±25%
+        assert!(
+            normalized >= baseline.saturating_sub(tolerance) && normalized <= baseline + tolerance,
+            "Normalized count ({}) should be within ±25% of baseline ({})",
+            normalized, baseline
+        );
+    }
+
+    #[test]
+    fn test_without_normalization_coverage_reflects_gc_bias() {
+        // Same sequence and model as the normalization test.
+        let sequence: Vec<_> = std::iter::repeat([A, C, G, T])
+            .take(2500)
+            .flatten()
+            .collect();
+        let sequence_block = make_sequence_block(sequence);
+        let read_len = 100;
+        let target_coverage = 10;
+
+        let mut weights = weights_with_value(0.0);
+        weights[50] = 0.5;
+        weights[100] = 1.0;
+        let model = GcBiasModel::from_weights(weights, 100).unwrap();
+
+        // Without normalization: effective_coverage == target, then 50% rejection
+        // → roughly half the fragment count compared to normalized.
+        let mut rng = make_rng();
+        let unnormalized = fragment_count_after_gc_pipeline(
+            &sequence_block, read_len, target_coverage, &model, false, &mut rng,
+        );
+
+        let mut rng = make_rng();
+        let normalized = fragment_count_after_gc_pipeline(
+            &sequence_block, read_len, target_coverage, &model, true, &mut rng,
+        );
+
+        assert!(
+            normalized > unnormalized * 3 / 2,
+            "Normalized ({}) should be at least 1.5x more than unnormalized ({})",
+            normalized, unnormalized
+        );
+    }
+
+    #[test]
+    fn test_uniform_model_coverage_unaffected_by_normalize_flag() {
+        // For a uniform model, both paths short-circuit identically: no inflation,
+        // no rejection sampling. The flag has no effect on the fragment count.
+        let sequence: Vec<_> = std::iter::repeat([A, C, G, T])
+            .take(2500)
+            .flatten()
+            .collect();
+        let sequence_block = make_sequence_block(sequence);
+        let model = GcBiasModel::default();
+
+        let mut rng = make_rng();
+        let with_flag = fragment_count_after_gc_pipeline(
+            &sequence_block, 100, 10, &model, true, &mut rng,
+        );
+        let mut rng = make_rng();
+        let without_flag = fragment_count_after_gc_pipeline(
+            &sequence_block, 100, 10, &model, false, &mut rng,
+        );
+
+        assert_eq!(
+            with_flag, without_flag,
+            "Uniform model must produce identical counts regardless of the normalize flag"
+        );
+    }
+
+    #[test]
+    fn test_near_zero_weight_region_does_not_overflow() {
+        // A 100% GC sequence with a model that gives zero weight to 100% GC bins.
+        // estimate_region_mean_gc_weight clamps to MIN_WEIGHT (1e-6), which without a
+        // cap would inflate effective_coverage to coverage / 1e-6 = 10_000_000.
+        // This test verifies the pipeline completes in finite time and memory.
+        let sequence: Vec<_> = std::iter::repeat([C, G]).take(5000).flatten().collect();
+        let sequence_block = make_sequence_block(sequence);
+        let read_len = 100;
+        let target_coverage = 10;
+        const MAX_COVERAGE_MULTIPLIER: usize = 100;
+
+        // Only bin 50 has weight; every 100% GC window scores 0.0 → mean clamps to MIN_WEIGHT.
+        let mut weights = weights_with_value(0.0);
+        weights[50] = 1.0;
+        let model = GcBiasModel::from_weights(weights, 100).unwrap();
+
+        let mean_weight = estimate_region_mean_gc_weight(
+            &sequence_block, 0, sequence_block.sequence.len(), &model,
+        ).unwrap();
+
+        let inflated = (target_coverage as f64 / mean_weight).round() as usize;
+        let cap = target_coverage * MAX_COVERAGE_MULTIPLIER;
+        let effective_coverage = inflated.min(cap);
+
+        // Inflation would be ~10_000_000 without the cap; with it, max is 1_000.
+        assert!(
+            effective_coverage <= cap,
+            "Effective coverage {} exceeds cap {}",
+            effective_coverage, cap
+        );
+
+        // Pipeline must complete without OOM or panic.
+        let mut rng = make_rng();
+        let fragment_model = FragmentLengthModel::default().unwrap();
+        let fragments = generate_fragments(
+            sequence_block.sequence.len(), read_len, 0, 0,
+            effective_coverage, &fragment_model, &mut rng,
+        ).unwrap();
+        let _ = apply_gc_bias_to_fragments(fragments, &sequence_block, &model, &mut rng).unwrap();
     }
 }

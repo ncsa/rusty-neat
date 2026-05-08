@@ -335,26 +335,34 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
                 let mut block_frags = Vec::new();
                 for (frag_start, frag_end) in temp_regions {
 
-                    let expected_retention = estimate_region_mean_gc_weight(
-                        &current_block,
-                        frag_start,
-                        frag_end,
-                        config.read_len,
-                        &gc_bias_model,
-                    )?;
-                    let effective_coverage = (config.coverage as f64 / expected_retention.max(f64::EPSILON))
-                        .round() as usize;
+                    // Cap inflation so a near-zero mean weight can't generate an
+                    // unbounded number of fragments that are immediately rejected.
+                    const MAX_COVERAGE_MULTIPLIER: usize = 100;
 
-                    // let effective_coverage: usize = if config.gc_bias_normalize_coverage
-                    //     .unwrap_or(true) {
-                    //     match &gc_bias_model {
-                    //         Some(model) => (config.coverage as f64 / model
-                    //             .mean_weight().max(0.000001)).round() as usize,
-                    //         None => config.coverage,
-                    //     }
-                    // } else {
-                    //     config.coverage
-                    // };
+                    let effective_coverage = if gc_bias_model.is_uniform()
+                        || !config.gc_bias_normalize_coverage.unwrap_or(true)
+                    {
+                        config.coverage
+                    } else {
+                        let mean_weight = estimate_region_mean_gc_weight(
+                            &current_block,
+                            frag_start,
+                            frag_end,
+                            &gc_bias_model,
+                        )?;
+                        let inflated = (config.coverage as f64 / mean_weight).round() as usize;
+                        let cap = config.coverage.saturating_mul(MAX_COVERAGE_MULTIPLIER);
+                        if inflated > cap {
+                            warn!(
+                                "GC bias coverage inflation capped at {}x for region \
+                                 {}:{}-{} (mean weight {:.4}); target coverage may not \
+                                 be reached in this region",
+                                MAX_COVERAGE_MULTIPLIER, contig_name, frag_start, frag_end,
+                                mean_weight
+                            );
+                        }
+                        inflated.min(cap)
+                    };
 
                     let result = generate_fragments(
                         frag_end-frag_start,
@@ -377,7 +385,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
                         block_frags.extend_from_slice(&frags);
                     }
                 }
-                block_frags.clone()
+                block_frags
             };
 
             let mutated_map = MutatedMap::new(

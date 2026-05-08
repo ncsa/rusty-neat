@@ -595,6 +595,14 @@ impl RunConfiguration {
             info!("  >input VCF (forced variants): {}", vcf.display());
         }
 
+        if let Some(gc_model) = &self.gc_bias_model {
+            info!("  >GC bias model: {}", gc_model.display());
+            info!(
+                "  >GC bias coverage normalization: {}",
+                self.gc_bias_normalize_coverage.unwrap_or(true)
+            );
+        }
+
         if self.produce_fastq {
             info!("  >shuffle FASTQ output: {}", self.shuffle_fastq);
         }

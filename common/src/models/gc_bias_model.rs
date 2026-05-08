@@ -4,6 +4,8 @@ use thiserror::Error;
 use crate::models::lib::{model_reader, model_writer};
 use crate::structs::nucleotides::Nucleotide;
 
+fn default_window_size() -> usize { 150 }
+
 #[derive(Error, Debug)]
 pub enum GcBiasModelError {
     #[error("GC bias model must contain exactly 101 weights")]
@@ -12,14 +14,30 @@ pub enum GcBiasModelError {
     InvalidWeight,
     #[error("GC bias model must contain at least one positive weight")]
     EmptyModel,
+    #[error("GC bias window size must be at least 1")]
+    InvalidWindowSize,
     #[error("GC bias model IO error: {0}")]
     IoError(#[from] std::io::Error),
 }
 
+/// Per-GC-content weight table used to bias fragment retention during read simulation.
+///
+/// Weights are stored as 101 `f64` values indexed by integer GC percentage (0 = 0%, 100 = 100%).
+/// The scale is relative, not absolute: only the ratio of a fragment's weight to `max_weight`
+/// matters. A weight of 0.0 means that GC% is never sequenced; equal weights mean no bias.
+///
+/// `window_size` records the number of bases used when computing per-window GC fractions during
+/// training (and later during coverage estimation). Storing it in the model ensures the same
+/// window is used at application time regardless of read length.
+///
+/// The `is_uniform` flag is computed at construction time and lets callers short-circuit
+/// sampling loops when no bias is present.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GcBiasModel {
     weights_by_percent_gc: Vec<f64>,
     is_uniform: bool,
+    #[serde(default = "default_window_size")]
+    window_size: usize,
 }
 
 impl GcBiasModel {
@@ -28,12 +46,14 @@ impl GcBiasModel {
         Self {
             weights_by_percent_gc: weights,
             is_uniform: true,
+            window_size: default_window_size(),
         }
     }
 
     pub fn from_file(path: &PathBuf) -> Result<Self, GcBiasModelError> {
         let data: GcBiasModel = model_reader(path)?;
-        Ok(data)
+        // Re-validate rather than trusting stored is_uniform; catches hand-edited files
+        Self::from_weights(data.weights_by_percent_gc, data.window_size)
     }
 
     pub fn write_to_file(&self, path: &PathBuf) -> Result<(), GcBiasModelError> {
@@ -41,44 +61,41 @@ impl GcBiasModel {
         Ok(())
     }
 
-    pub fn from_weights(weights_by_percent_gc: Vec<f64>) -> Result<Self, GcBiasModelError> {
-        // This function creates a GcBias model from a vector of weights. The length must
-        // be exactly 101, where each index represents a percentage of GC
-        // in the read (0-100,inclusive). Presumably the only thing different the
-        // data-generated model will be that the list length is already vetted and
-        // it tells us it is uniform or not.
-        //
-        // We have to enforce the length
+    pub fn from_weights(weights_by_percent_gc: Vec<f64>, window_size: usize) -> Result<Self, GcBiasModelError> {
+        if window_size == 0 {
+            return Err(GcBiasModelError::InvalidWindowSize);
+        }
         if weights_by_percent_gc.len() != 101 {
             return Err(GcBiasModelError::InvalidBinCount)
         }
-        // check if uniform and for invalid values
         let first_item = weights_by_percent_gc[0];
-        // fail right away in this case
         if first_item.is_infinite() || first_item.is_nan() || first_item < 0.0 {
             return Err(GcBiasModelError::InvalidWeight)
         }
-        // assume uniform and look for an exception
         let mut is_uniform = true;
         for item in &weights_by_percent_gc[1..] {
             if item.is_nan() || (*item < 0.0) || item.is_infinite() {
                 return Err(GcBiasModelError::InvalidWeight)
-            } else if (*item != first_item) && (is_uniform == true) {
+            } else if *item != first_item && is_uniform {
                 is_uniform = false;
             }
         }
-        if (is_uniform == true) && (first_item == 0.0) {
-            // uniformly zero is not allowed
+        if is_uniform && first_item == 0.0 {
             return Err(GcBiasModelError::EmptyModel)
         }
         Ok(Self {
             weights_by_percent_gc,
             is_uniform,
+            window_size,
         })
     }
 
     pub fn is_uniform(&self) -> bool {
         self.is_uniform
+    }
+
+    pub fn window_size(&self) -> usize {
+        self.window_size
     }
 
     pub fn weight_for_gc_fraction(&self, gc_fraction: f64) -> f64 {
@@ -92,6 +109,9 @@ impl GcBiasModel {
         self.weights_by_percent_gc[index]
     }
 
+    /// Returns the model weight for the GC fraction of `sequence`, ignoring N bases.
+    /// An empty slice or an all-N slice returns 1.0 (neutral) so N-masked regions are
+    /// never filtered out regardless of the model's other weights.
     pub fn weight_for_sequence(&self, sequence: &[Nucleotide]) -> f64 {
         let gc_count = sequence
             .iter()
@@ -145,7 +165,7 @@ mod tests {
 
     #[test]
     fn test_from_weights_rejects_too_few_bins() {
-        let result = GcBiasModel::from_weights(vec![1.0; 100]);
+        let result = GcBiasModel::from_weights(vec![1.0; 100], 150);
 
         assert!(
             matches!(result, Err(GcBiasModelError::InvalidBinCount)),
@@ -156,7 +176,7 @@ mod tests {
 
     #[test]
     fn test_from_weights_rejects_too_many_bins() {
-        let result = GcBiasModel::from_weights(vec![1.0; 102]);
+        let result = GcBiasModel::from_weights(vec![1.0; 102], 150);
 
         assert!(
             matches!(result, Err(GcBiasModelError::InvalidBinCount)),
@@ -170,7 +190,7 @@ mod tests {
         let mut weights = weights_with_value(1.0);
         weights[30] = -0.1;
 
-        let result = GcBiasModel::from_weights(weights);
+        let result = GcBiasModel::from_weights(weights, 150);
 
         assert!(
             matches!(result, Err(GcBiasModelError::InvalidWeight)),
@@ -184,7 +204,7 @@ mod tests {
         let mut weights = weights_with_value(1.0);
         weights[50] = f64::NAN;
 
-        let result = GcBiasModel::from_weights(weights);
+        let result = GcBiasModel::from_weights(weights, 150);
 
         assert!(
             matches!(result, Err(GcBiasModelError::InvalidWeight)),
@@ -198,7 +218,7 @@ mod tests {
         let mut weights = weights_with_value(1.0);
         weights[50] = f64::INFINITY;
 
-        let result = GcBiasModel::from_weights(weights);
+        let result = GcBiasModel::from_weights(weights, 150);
 
         assert!(
             matches!(result, Err(GcBiasModelError::InvalidWeight)),
@@ -209,7 +229,7 @@ mod tests {
 
     #[test]
     fn test_from_weights_rejects_all_zero_weights() {
-        let result = GcBiasModel::from_weights(weights_with_value(0.0));
+        let result = GcBiasModel::from_weights(weights_with_value(0.0), 150);
 
         assert!(
             matches!(result, Err(GcBiasModelError::EmptyModel)),
@@ -226,7 +246,7 @@ mod tests {
         weights[50] = 1.0;
         weights[100] = 0.2;
 
-        let model = GcBiasModel::from_weights(weights).unwrap();
+        let model = GcBiasModel::from_weights(weights, 150).unwrap();
 
         assert!((model.weight_for_gc_fraction(0.00) - 0.1).abs() < 1e-12);
         assert!((model.weight_for_gc_fraction(0.30) - 0.3).abs() < 1e-12);
@@ -240,7 +260,7 @@ mod tests {
         weights[50] = 0.5;
         weights[51] = 0.51;
 
-        let model = GcBiasModel::from_weights(weights).unwrap();
+        let model = GcBiasModel::from_weights(weights, 150).unwrap();
 
         assert!((model.weight_for_gc_fraction(0.504) - 0.5).abs() < 1e-12);
         assert!((model.weight_for_gc_fraction(0.505) - 0.51).abs() < 1e-12);
@@ -251,7 +271,7 @@ mod tests {
         let mut weights = weights_with_value(0.0);
         weights[0] = 0.25;
 
-        let model = GcBiasModel::from_weights(weights).unwrap();
+        let model = GcBiasModel::from_weights(weights, 150).unwrap();
 
         assert!((model.weight_for_gc_fraction(-0.10) - 0.25).abs() < 1e-12);
     }
@@ -261,7 +281,7 @@ mod tests {
         let mut weights = weights_with_value(0.0);
         weights[100] = 0.75;
 
-        let model = GcBiasModel::from_weights(weights).unwrap();
+        let model = GcBiasModel::from_weights(weights, 150).unwrap();
 
         assert!((model.weight_for_gc_fraction(1.10) - 0.75).abs() < 1e-12);
     }
@@ -271,7 +291,7 @@ mod tests {
         let mut weights = weights_with_value(0.0);
         weights[0] = 0.2;
 
-        let model = GcBiasModel::from_weights(weights).unwrap();
+        let model = GcBiasModel::from_weights(weights, 150).unwrap();
         let sequence = vec![A, A, T, T, A, T];
 
         assert!((model.weight_for_sequence(&sequence) - 0.2).abs() < 1e-12);
@@ -282,7 +302,7 @@ mod tests {
         let mut weights = weights_with_value(0.0);
         weights[50] = 1.0;
 
-        let model = GcBiasModel::from_weights(weights).unwrap();
+        let model = GcBiasModel::from_weights(weights, 150).unwrap();
         let sequence = vec![A, C, G, T];
 
         assert!((model.weight_for_sequence(&sequence) - 1.0).abs() < 1e-12);
@@ -293,7 +313,7 @@ mod tests {
         let mut weights = weights_with_value(0.0);
         weights[100] = 0.4;
 
-        let model = GcBiasModel::from_weights(weights).unwrap();
+        let model = GcBiasModel::from_weights(weights, 150).unwrap();
         let sequence = vec![C, G, G, C, C, G];
 
         assert!((model.weight_for_sequence(&sequence) - 0.4).abs() < 1e-12);
@@ -304,12 +324,31 @@ mod tests {
         let mut weights = weights_with_value(0.0);
         weights[50] = 0.8;
 
-        let model = GcBiasModel::from_weights(weights).unwrap();
+        let model = GcBiasModel::from_weights(weights, 150).unwrap();
 
         // Ignoring N bases leaves A, C, G, T => 2 GC / 4 called bases = 50% GC.
         let sequence = vec![A, C, G, T, N, N];
 
         assert!((model.weight_for_sequence(&sequence) - 0.8).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_weight_for_sequence_empty_slice_returns_neutral() {
+        let model = GcBiasModel::default();
+        // No bases at all: sequence_count == 0, returns the neutral fallback 1.0
+        assert!((model.weight_for_sequence(&[]) - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_weight_for_sequence_all_n_returns_neutral() {
+        let mut weights = weights_with_value(0.0);
+        weights[50] = 0.75;
+        let model = GcBiasModel::from_weights(weights, 150).unwrap();
+
+        // All-N: sequence_count == 0, returns 1.0 regardless of the model's other weights.
+        // N-masked regions are treated as neutral so they are never filtered out.
+        let sequence = vec![N, N, N, N];
+        assert!((model.weight_for_sequence(&sequence) - 1.0).abs() < 1e-12);
     }
 
     #[test]
@@ -319,7 +358,7 @@ mod tests {
         weights[50] = 1.25;
         weights[70] = 0.75;
 
-        let model = GcBiasModel::from_weights(weights).unwrap();
+        let model = GcBiasModel::from_weights(weights, 150).unwrap();
 
         assert!((model.max_weight() - 1.25).abs() < 1e-12);
     }
@@ -330,9 +369,80 @@ mod tests {
         weights[0] = 0.0;
         weights[100] = 2.0;
 
-        let model = GcBiasModel::from_weights(weights).unwrap();
+        let model = GcBiasModel::from_weights(weights, 150).unwrap();
 
         // Sum is still 101.0 because one bin changed 1 -> 0 and one changed 1 -> 2.
         assert!((model.mean_weight() - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_roundtrip_write_and_read() {
+        let mut weights = weights_with_value(0.5);
+        weights[30] = 0.3;
+        weights[50] = 1.0;
+        weights[70] = 0.8;
+
+        let original = GcBiasModel::from_weights(weights, 200).unwrap();
+
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = PathBuf::from(tmp.path());
+
+        original.write_to_file(&path).unwrap();
+        let loaded = GcBiasModel::from_file(&path).unwrap();
+
+        assert_eq!(original.is_uniform(), loaded.is_uniform());
+        assert_eq!(original.window_size(), loaded.window_size());
+        assert!((original.max_weight() - loaded.max_weight()).abs() < 1e-12);
+        for pct in 0..=100 {
+            let gc = pct as f64 / 100.0;
+            assert!(
+                (original.weight_for_gc_fraction(gc) - loaded.weight_for_gc_fraction(gc)).abs() < 1e-12,
+                "Mismatch at {}% GC after roundtrip",
+                pct
+            );
+        }
+    }
+
+    #[test]
+    fn test_from_weights_rejects_zero_window_size() {
+        let result = GcBiasModel::from_weights(weights_with_value(1.0), 0);
+
+        assert!(
+            matches!(result, Err(GcBiasModelError::InvalidWindowSize)),
+            "Expected InvalidWindowSize for window_size=0; got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_window_size_accessor_returns_stored_value() {
+        let model = GcBiasModel::from_weights(weights_with_value(1.0), 75).unwrap();
+        assert_eq!(model.window_size(), 75);
+    }
+
+    #[test]
+    fn test_default_window_size_is_150() {
+        assert_eq!(GcBiasModel::default().window_size(), 150);
+    }
+
+    #[test]
+    fn test_legacy_file_without_window_size_gets_default() {
+        // A model file written before window_size was added should deserialize
+        // with window_size == default_window_size() == 150.
+        use std::io::Write;
+        use flate2::{Compression, write::GzEncoder};
+
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = PathBuf::from(tmp.path());
+
+        // JSON without the window_size field, gzip-compressed to match model_writer format.
+        let legacy_json = r#"{"weights_by_percent_gc":[1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0],"is_uniform":true}"#;
+        let file = std::fs::File::create(&path).unwrap();
+        let mut encoder = GzEncoder::new(file, Compression::default());
+        encoder.write_all(legacy_json.as_bytes()).unwrap();
+        encoder.finish().unwrap();
+
+        let loaded = GcBiasModel::from_file(&path).unwrap();
+        assert_eq!(loaded.window_size(), 150, "Legacy file missing window_size should default to 150");
     }
 }

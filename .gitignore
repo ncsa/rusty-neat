@@ -11,4 +11,4 @@
 /common/target
 
 # Runtime log
-.neat.log
+*.log

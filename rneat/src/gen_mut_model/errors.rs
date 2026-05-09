@@ -1,9 +1,9 @@
 use thiserror::Error;
 use std::num::ParseIntError;
 use common::{
-    file_tools::{bed_reader::BedReaderError, fasta_reader::FastaReaderError, vcf_tools::VcfToolsError},
+    file_tools::{bed_reader::BedReaderError, fasta_stream::FastaStreamError, vcf_tools::VcfToolsError},
     models::mutation_model::MutationModelError,
-    structs::{fasta_map::FastaMapError, transition_matrix::TransitionMatrixError},
+    structs::transition_matrix::TransitionMatrixError,
 };
 
 #[derive(Error, Debug)]
@@ -34,10 +34,8 @@ pub enum GenMutationModelError {
     VcfReaderError(#[from] VcfToolsError),
     #[error("Error generating trinucleotide counts: {0}")]
     TrinucCountError(String),
-    #[error("Error reading data from FastaMap: {0}")]
-    FastaMapError(#[from] FastaMapError),
-    #[error("Error while reading in fasta file: {0}")]
-    FastaReaderError(#[from] FastaReaderError),
+    #[error("Error streaming FASTA file: {0}")]
+    FastaStreamError(#[from] FastaStreamError),
     #[error("Variant location did not match reference: {0}")]
     BaseMismatch(String),
     #[error("Error building mutation model: {0}")]

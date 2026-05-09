@@ -13,11 +13,11 @@ use flate2::write::GzEncoder;
 use thiserror::Error;
 
 use crate::structs::mutated_map::{MutatedMap, MutatedMapError};
-use crate::structs::fasta_map::{FastaMapError, SequenceBlock};
+use crate::structs::sequence_block::{SequenceBlock, SequenceBlockError};
 use crate::structs::nucleotides::Nucleotide;
 use crate::structs::read_record::ReadRecord;
 use crate::file_tools::file_io::{append_to_file, read_gzip_lines};
-use crate::file_tools::bam_writer::BamWriter;
+use crate::file_tools::bam_writer::BamRecordStager;
 use crate::models::quality_scores::QualityScoreModel;
 use crate::models::sequencing_error_model::{SeqModelError, SequencingErrorModel, SequencingErrorType};
 use crate::structs::nucleotides::Nucleotide::N;
@@ -33,8 +33,8 @@ pub enum FastqToolsError {
     FastqReadError(String),
     #[error("Mismatch between indexing and reads set for block {0}")]
     InvalidFastqBlock(String),
-    #[error("Fastq Tools reported a FastaMap error: {0}")]
-    FastaMapError(#[from] FastaMapError),
+    #[error("Fastq Tools reported a SequenceBlock error: {0}")]
+    SequenceBlockError(#[from] SequenceBlockError),
     #[error("Fastq tools reported a error model error: {0}")]
     ErrorModelError(#[from] SeqModelError),
     #[error("Fastq tools reported an IO error: {0}")]
@@ -77,6 +77,7 @@ fn reverse_complement(sequence: Vec<Nucleotide>) -> Vec<Nucleotide> {
 pub fn write_block_fastq<T: Write, W: Write> (
     block_fragments: Vec<(usize, usize)>,
     block_map: &MutatedMap,
+    sequence_block: &SequenceBlock,
     paired_ended: bool,
     buffer1: &mut GzEncoder<T>,
     buffer2: &mut GzEncoder<W>,
@@ -85,10 +86,9 @@ pub fn write_block_fastq<T: Write, W: Write> (
     quality_score_model: &QualityScoreModel,
     sequencing_error_model: &SequencingErrorModel,
     rng: &mut NeatRng,
-    mut bam_writer: Option<&mut BamWriter>,
+    mut bam_writer: Option<&mut dyn BamRecordStager>,
 ) -> Result<(), FastqToolsError> {
-    debug!("writing reads for {:?}", block_map.sequence_block);
-    let sequence_block: SequenceBlock = SequenceBlock::from(&block_map.sequence_block)?;
+    debug!("writing reads for {}", sequence_block.contig);
     for (start, end) in block_fragments {
         let fragment = sequence_block.get_subseq(start, end)?;
         let mut read1_variants: HashMap<usize, &Variant> = HashMap::new();
@@ -291,7 +291,7 @@ fn generate_read(
     template_length: i32,
     is_paired: bool,
 ) -> Result<ReadRecord, FastqToolsError> {
-    if sequence.len() <= read_length {
+    if sequence.len() < read_length {
         return Err(FastqToolsError::TruncatedRead(format!("{:?}", sequence)))
     }
 
@@ -530,7 +530,7 @@ mod tests {
         // Verifies that when a SequenceBlock has ref_start > 0, the read names in the
         // output FASTQ use reference-relative positions, not block-local positions.
         use crate::structs::{
-            fasta_map::{RegionType, SequenceBlock, SequenceMap},
+            sequence_block::{RegionType, SequenceBlock, SequenceMap},
             mutated_map::MutatedMap,
         };
         let temp_dir = tempfile::tempdir().unwrap();
@@ -546,11 +546,7 @@ mod tests {
             sequence: sequence.clone(),
             sequence_map: vec![SequenceMap::from(RegionType::NonNRegion, 0, seq_len)],
         };
-        let block_path = temp_dir.path().join(
-            format!("chr1_{:010}_{:010}.json", ref_start, ref_start + seq_len)
-        );
-        std::fs::write(&block_path, serde_json::to_string(&block).unwrap()).unwrap();
-        let mutated_map = MutatedMap::new(block_path, vec![]).unwrap();
+        let mutated_map = MutatedMap::from_interval(ref_start, ref_start + seq_len, vec![]).unwrap();
         let frag_start: usize = 5;
         let frag_end: usize = 25;
         let fragments = vec![(frag_start, frag_end)];
@@ -564,7 +560,7 @@ mod tests {
         let quality_model = QualityScoreModel::default().unwrap();
         let mut rng = NeatRng::new_from_seed(&vec!["test".to_string()]).unwrap();
         write_block_fastq(
-            fragments, &mutated_map, false,
+            fragments, &mutated_map, &block, false,
             &mut buf1, &mut buf2,
             10, "chr1",
             &quality_model, &seq_err_model, &mut rng,

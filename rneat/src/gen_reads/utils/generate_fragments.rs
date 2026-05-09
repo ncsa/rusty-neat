@@ -12,7 +12,7 @@ use log::*;
 use std::collections::VecDeque;
 use common::models::gc_bias_model::GcBiasModel;
 use common::rng::NeatRng;
-use common::structs::fasta_map::SequenceBlock;
+use common::structs::sequence_block::SequenceBlock;
 use common::structs::nucleotides::Nucleotide;
 
 pub fn generate_fragments(
@@ -21,21 +21,19 @@ pub fn generate_fragments(
     max_del_len: usize,
     start: usize,
     coverage: usize,
+    paired_ended: bool,
     fragment_model: &FragmentLengthModel,
     rng: &mut NeatRng,
 ) -> Result<Vec<(usize, usize)>, GenerateReadsError> {
     // Takes:
     // sequence_length: The length of the sequence to generate reads for.
-    // read_length: the length ef the reads for this run
+    // read_length: the length of the reads for this run
     // coverage: the average depth of coverage for this run
+    // paired_ended: when false, read_length is used as the fragment length so that
+    //   coverage is computed in read-length steps rather than insert-size steps.
     // rng: the random number generator for the run
     // Returns:
-    // HashSet of vectors representing the read sequences, stored on the heap in box.
-    //
-    // This takes a mutated sequence and produces a set of reads based on the mutated sequence. For
-    // paired ended reads, this will generate a set of reads from each end, by taking the reverse
-    // complement in the output
-    //
+    // A vector of (start, end) pairs representing fragment coordinates.
     let mut fragment_pool: Vec<usize> = Vec::new();
     // First thing we'll do is throw out regions where we can't get a full read.
     // Adding the 2 * max_del_len should ensure we are sufficiently padded.
@@ -43,20 +41,34 @@ pub fn generate_fragments(
         debug!("Sequence length was too short, maybe because of a small bed region.");
         return Ok(Vec::new())
     }
-    
-    let num_frags = (sequence_length / read_length) * coverage;
-    // add fragments to the fragment pool
-    for _ in 0..num_frags {
-        let frag = fragment_model.generate_fragment(rng.random()?)?;
-        // filter fragments
-        if frag < read_length {
-            continue
-        } else {
-            fragment_pool.push(frag);
+
+    let num_frags = sequence_length.saturating_mul(coverage) / read_length;
+    if paired_ended {
+        // For paired-end reads the physical fragment length (insert size) determines spacing.
+        // Keep sampling until num_frags valid fragments are collected so that the pool has
+        // full size diversity even when the model's distribution overlaps with read_length.
+        let max_attempts = num_frags.saturating_mul(10);
+        let mut attempts = 0;
+        while fragment_pool.len() < num_frags && attempts < max_attempts {
+            let frag = fragment_model.generate_fragment(rng.random()?)?;
+            if frag >= read_length {
+                fragment_pool.push(frag);
+            }
+            attempts += 1;
         }
+        if fragment_pool.len() < num_frags {
+            warn!(
+                "Fragment model produced only {}/{} valid fragments after {} attempts; \
+                 insert-size diversity may be reduced. Check that fragment_mean >> read_length.",
+                fragment_pool.len(), num_frags, attempts
+            );
+        }
+    } else {
+        // For single-end reads the fragment is exactly one read long; the fragment model
+        // is irrelevant for spacing and would cause under-coverage if its mean >> read_length.
+        fragment_pool = vec![read_length; num_frags];
     }
     if fragment_pool.is_empty() {
-        // Not sure if this should be a recoverable error.
         debug!("Fragment pool is empty.");
         return Ok(Vec::new())
     }
@@ -204,7 +216,7 @@ pub fn generate_weighted_fragments(
     let n_valid_positions = prefix_sum.len() - 1;
     let mean_weight = total_weight / n_valid_positions as f64;
 
-    let num_frags_base = (region_len / read_length) * coverage;
+    let num_frags_base = region_len.saturating_mul(coverage) / read_length;
     let num_frags = if normalize {
         let inflated = (num_frags_base as f64 / mean_weight).round() as usize;
         let cap = num_frags_base.saturating_mul(MAX_COVERAGE_MULTIPLIER);
@@ -224,11 +236,16 @@ pub fn generate_weighted_fragments(
         return Ok(Vec::new());
     }
 
+    // Keep sampling until num_frags fragments are placed so that fragment model
+    // rejection (frag_len < read_length) and edge clamping don't silently reduce coverage.
+    let max_attempts = num_frags.saturating_mul(10);
+    let mut attempts = 0;
     let mut fragments = Vec::with_capacity(num_frags);
-    for _ in 0..num_frags {
+    while fragments.len() < num_frags && attempts < max_attempts {
         let offset = sample_from_prefix_sum(&prefix_sum, total_weight, rng)?;
         let start = region_start + offset;
         let frag_len = fragment_model.generate_fragment(rng.random()?)?;
+        attempts += 1;
         if frag_len < read_length {
             continue;
         }
@@ -237,6 +254,13 @@ pub fn generate_weighted_fragments(
             continue;
         }
         fragments.push((start, end));
+    }
+    if fragments.len() < num_frags {
+        warn!(
+            "GC-weighted fragment generation placed {}/{} fragments after {} attempts; \
+             coverage may be below target in this region.",
+            fragments.len(), num_frags, attempts
+        );
     }
 
     fragments.sort_by_key(|&(s, _)| s);
@@ -251,62 +275,38 @@ fn cover_dataset(
     coverage: usize,
     rng: &mut NeatRng,
 ) -> Result<Vec<(usize, usize)>, GenerateReadsError> {
-    // Takes:
-    // span_length: Total number of bases in the sequence
-    // read_length: The length of the reads for this run
-    // fragment_pool: a vector of sizes for the fragments. If empty, it will instead be filled
-    // by the read_length (single ended reads)
-    // paired_ended: true or false if the run is paired ended mode or not.
-    // coverage: The coverage depth for the reads
-    // Returns:
-    // A vector of tuples (usize, usize), denoting the start and end positions of the fragment of
-    // DNA that was sequenced.
-    //
-    // This function selects the positions of the reads. It starts at the beginning and goes out
-    // one read length, then picks a random jump between 0 and half the read length to move
-    // And picks those coordinates for a second read. Once the tail of the read is past the end,
-    // we start over again at 0.
-    //
-    // Reads that will be start and end of the fragment.
-    let mut fragment_set: Vec<(usize, usize)> = vec![];
+    // Place exactly (span_length * coverage / read_length) fragments so that mean depth
+    // equals the target regardless of inter-fragment jitter size.  Stopping on fragment
+    // count rather than sweep count means the wildcard gap can be proportional to
+    // read_length without reducing mean coverage.
+    let target_count = span_length.saturating_mul(coverage) / read_length;
 
-    let mut cover_fragment_pool: VecDeque<usize>;
-    // shuffle the fragment pool
     rng.shuffle_in_place(&mut fragment_pool)?;
-    cover_fragment_pool = VecDeque::from(fragment_pool);
-    // Gap size to keep track of how many uncovered bases we have per layer, to help decide if we
-    // need more layers
-    let mut layer_count: usize = 0;
-    // start this party off somewhere random.
-    let mut start = ((rng.rand_int()?) as usize) % (read_length/4);
-    // create coverage number of layers
-    // TODO - make sure this doesn't get caught in an infinite loop.
-    while layer_count < coverage {
+    let mut cover_fragment_pool = VecDeque::from(fragment_pool);
+
+    let mut fragment_set: Vec<(usize, usize)> = Vec::with_capacity(target_count);
+    let mut start = (rng.rand_int()? as usize) % (read_length / 4).max(1);
+
+    while fragment_set.len() < target_count {
         let fragment_length = cover_fragment_pool.pop_front().unwrap();
-        let temp_end = start + fragment_length;
         cover_fragment_pool.push_back(fragment_length);
+
+        let temp_end = start + fragment_length;
         if temp_end > span_length {
-            // TODO some variation on this modulo idea will work for bacterial reads
-            start = temp_end % span_length;
-            layer_count += 1;
-            continue
+            // Restart from the beginning of the contig for the next sweep.
+            start = 0;
+            continue;
         }
-        // Read start ensures our fragments are within the sequence block
-        fragment_set.push((start+read_start, temp_end+read_start));
-        // Picks a number between zero and a quarter of a read length
-        let wildcard: usize = (rng.rand_u32().unwrap() % 10) as usize;
-        // adds to the start to give it some spice
-        start += temp_end + wildcard;
-        // sanity check. If we are out of bounds, take the modulo
+
+        fragment_set.push((start + read_start, temp_end + read_start));
+        let wildcard = (rng.rand_u32()? % (read_length as u32 / 4).max(1)) as usize;
+        start = temp_end + wildcard;
         if start >= span_length {
-            // get us back in bounds
-            start = start % span_length;
-            layer_count += 1;
+            start = 0;
         }
     }
-    fragment_set.sort_by(
-        |a, b| a.0.cmp(&b.0)
-    );
+
+    fragment_set.sort_by_key(|&(s, _)| s);
     Ok(fragment_set)
 }
 
@@ -316,7 +316,7 @@ mod tests {
     use super::*;
     use common::rng::NeatRng;
     use common::models::gc_bias_model::GcBiasModel;
-    use common::structs::fasta_map::{RegionType, SequenceBlock, SequenceMap};
+    use common::structs::sequence_block::{RegionType, SequenceBlock, SequenceMap};
     use common::structs::nucleotides::Nucleotide::{A, C, G, T};
 
     fn make_rng() -> NeatRng {
@@ -381,7 +381,12 @@ mod tests {
             coverage,
             &mut rng
         ).unwrap();
-        assert_eq!(cover[0], (15, 315))
+        // target_count = span / read_length * coverage = 1000 fragments.
+        assert_eq!(cover.len(), span_length / read_length * coverage);
+        // After a wrap the cursor resets to 0, so the sorted first fragment starts there.
+        assert_eq!(cover[0], (0, 300));
+        // All fragments must fit within the span and have the pool fragment length.
+        assert!(cover.iter().all(|&(s, e)| e <= span_length && e - s == 300));
     }
 
     #[test]
@@ -400,10 +405,13 @@ mod tests {
             0,
             0,
             coverage,
+            false,
             &fragment_model,
             &mut rng,
         ).unwrap();
-        assert!(reads.contains(&(0, 382)));
+        // With paired_ended=false every fragment is exactly read_length wide.
+        assert!(!reads.is_empty());
+        assert!(reads.iter().all(|(s, e)| e - s == read_length));
     }
 
     #[test]
@@ -425,10 +433,17 @@ mod tests {
             0,
             0,
             coverage,
+            false,
             &fragment_model,
             &mut rng,
         ).unwrap();
 
+        // Reset to the same seed for reproducibility check.
+        let mut rng2 = NeatRng::new_from_seed(&vec![
+            "Hello".to_string(),
+            "Cruel".to_string(),
+            "World".to_string(),
+        ]).unwrap();
         let fragment_model = FragmentLengthModel::default().unwrap();
         let run2 = generate_fragments(
             sequence.len(),
@@ -436,8 +451,9 @@ mod tests {
             0,
             0,
             coverage,
+            false,
             &fragment_model,
-            &mut rng,
+            &mut rng2,
         ).unwrap();
 
         assert_eq!(run1, run2)
@@ -445,7 +461,7 @@ mod tests {
 
     #[test]
     fn test_generate_reads_paired() {
-        let sequence: Vec<u8> = std::iter::repeat(0_u8).take(100_000).collect();
+        let seq_len = 100_000_usize;
         let read_length = 100;
         let coverage = 1;
         let mut rng = NeatRng::new_from_seed(&vec![
@@ -455,15 +471,38 @@ mod tests {
         ]).unwrap();
         let fragment_model = FragmentLengthModel::default().unwrap();
         let reads = generate_fragments(
-            sequence.len(),
+            seq_len,
             read_length,
             0,
             0,
             coverage,
+            true,
             &fragment_model,
             &mut rng,
         ).unwrap();
-        assert!(!reads.is_empty())
+        let expected = seq_len * coverage / read_length;
+        assert!(!reads.is_empty());
+        assert_eq!(reads.len(), expected, "Paired reads: expected {expected} fragments, got {}", reads.len());
+        assert!(reads.iter().all(|&(s, e)| e <= seq_len && e > s),
+            "All fragments must be within bounds and non-empty");
+    }
+
+    #[test]
+    fn test_paired_pool_fully_populated() {
+        // Fragment model with mean 600, st_dev 30 vs read_length 100 → near-zero rejection.
+        // The pool should be exactly num_frags entries so that fragment size diversity is full.
+        let seq_len = 50_000_usize;
+        let read_length = 100;
+        let coverage = 2;
+        let num_frags = seq_len * coverage / read_length;
+        let mut rng = NeatRng::new_from_seed(&vec!["pool-fill-test".to_string()]).unwrap();
+        let fragment_model = FragmentLengthModel::new_normal(600.0, 30.0).unwrap();
+        let reads = generate_fragments(
+            seq_len, read_length, 0, 0, coverage, true, &fragment_model, &mut rng,
+        ).unwrap();
+        // When rejection is near-zero the pool is full, so coverage should match exactly.
+        assert_eq!(reads.len(), num_frags,
+            "Expected full pool ({num_frags} fragments), got {}", reads.len());
     }
 
     // ── generate_weighted_fragments ──────────────────────────────────────────
@@ -616,6 +655,34 @@ mod tests {
             result.len() <= cap,
             "Fragment count {} should not exceed cap {}",
             result.len(), cap
+        );
+    }
+
+    #[test]
+    fn test_weighted_fragments_rejection_compensation() {
+        // Fragment model with mean very close to read_length causes high rejection
+        // (many sampled fragments fall below read_length). The while-loop must retry
+        // until num_frags fragments are placed, not stop early.
+        let read_length = 200;
+        let sequence_block = make_sequence_block(
+            std::iter::repeat([A, C, G, T]).take(5000).flatten().collect()
+        );
+        let (region_start, region_end) = (0, sequence_block.sequence.len());
+        let coverage = 5;
+        let num_frags_expected = (region_end - region_start) * coverage / read_length;
+        // mean=220 with st_dev=40 → P(frag < 200) ≈ 31% rejection rate
+        let fragment_model = FragmentLengthModel::new_normal(220.0, 40.0).unwrap();
+        let mut rng = make_rng();
+
+        let result = generate_weighted_fragments(
+            &sequence_block, region_start, region_end, read_length, 0, coverage,
+            &GcBiasModel::default(), &fragment_model, false, &mut rng,
+        ).unwrap();
+
+        assert_eq!(
+            result.len(), num_frags_expected,
+            "Expected {num_frags_expected} fragments despite high rejection rate, got {}",
+            result.len()
         );
     }
 }

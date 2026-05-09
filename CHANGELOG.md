@@ -60,6 +60,32 @@ Moved the code from a brach under NEAT (https://github.com/ncsa/neat) to its own
 - Added bed filtering functions. Now if you supply a "filter_output" bed file to your gen-reads run, it will produce the original files plus a filtered version showing only reads and variants that overlap with the regions in the bed.
 - It's also possible to run this utility separately with `rneat filter-reads`
 
+5/9/2026
+=========
+
+## rneat v1.4.0
+- `gen-reads` bug fix: `generate_read` in `fastq_tools.rs` was rejecting fragments whose length equals `read_length` (`<=` guard); all single-ended reads were silently discarded. Changed to `<` so fragments of exactly `read_length` are accepted.
+- `gen-reads` bug fix: `map_buffer` in `fasta_stream.rs` was treating soft-masked bases (`Maskeda/c/g/t`) as N-regions, excluding repeat-annotated but valid sequence from read generation. Only `N` and `X` now delimit true gap regions.
+- `gen-reads` bug fix: `generate_fragments` was drawing fragment lengths from the fragment model for single-ended runs, causing severe under-coverage when the model mean exceeds `read_length`. Single-ended fragments are now fixed at exactly `read_length`; the fragment model applies only to paired-ended runs.
+- `gen-reads` bug fix: `cover_dataset` accumulated `start` across loop iterations instead of resetting to `temp_end`, causing reads to pile up at the beginning of each region rather than spanning it evenly.
+- `gen-reads` / `mutation_model` bug fix: soft-masked nucleotides (`Maskeda/c/g/t`) were leaking into VCF REF/ALT fields and FASTQ read sequences as lowercase letters (`a/c/g/t`). `generate_mutation` now applies `check_base()` to the extracted `ref_base` and to each base of the deletion reference slice, unmasking all bases before they are written to output.
+- New integration tests in `gen-reads`: `test_paired_ended_bam_flags_correct` (SAM flags on every R1/R2 record), `test_paired_ended_insert_size_matches_model` (TLEN mean within ±20% of configured fragment mean), `test_input_vcf_snp_appears_in_bam_reads` (seeded input-VCF SNP visible in BAM reads at the correct position).
+
+
+- `gen-seq-error-model`: FASTQ input is now streamed one record at a time instead of being fully loaded into memory. Peak memory is bounded by a single record rather than the entire file, which matters for large (multi-GB) FASTQ inputs. The `max_reads` early-exit now also fires without reading the rest of the file.
+- `gen-mut-model`: Trinucleotide probability computation is now O(n) instead of O(n²). Transition counts are pre-grouped by reference frame once before the probability loop, eliminating a redundant linear scan per trinucleotide context.
+- `filter-reads` (`filter_fastq` and `filter_vcf`): Replaced `format!("{}\n", line)` heap allocations on every written line with two `write_all` calls (bytes + newline). Eliminated double HashMap lookups (`contains_key` + index) in favour of a single `get` call. Contig name reconstruction changed from a manual push loop to `join("_")`. The read-name prefix check simplified from `find` + index comparison to `starts_with`.
+- `filter-reads` config: Removed a redundant identity `match` on a bool.
+- `gen-frag-length-model`: `filter_lengths` no longer clones its input `Vec` before sorting — the owned value is sorted in place, eliminating one allocation proportional to the fragment count.
+- `gen-gc-bias-model`: `overall_mean` computation replaced two separate filtered iterations with a single `fold`, scanning the 101-bin array once instead of twice.
+- Streaming FASTA reader (`FastaStream`) moved from `gen-gc-bias-model` to the `common` crate, making it available to all subcommands. `gen-reads` now streams the reference one contig at a time instead of writing temp JSON block files, eliminating up to ~570 MB of disk I/O for human-scale genomes and capping peak memory to a single contig rather than the full genome.
+- Contig-level parallelism added to `gen-reads` via rayon `par_bridge`. All contigs are now processed concurrently using rayon's work-stealing thread pool regardless of whether BAM output is requested; the output ordering is preserved by sorting results by contig index before writing.
+- BAM creation is now fully parallel. Each contig worker writes its alignment records to a private temp BAM body file (no header, plain BGZF blocks). After all contigs finish, a single concatenation pass strips the BGZF EOF block from each intermediate file and assembles them in reference order into the final coordinate-sorted BAM. No `samtools sort` step is required.
+- New `num_threads` config key in `gen-reads`. Set to an integer to cap the rayon thread pool used for parallel contig processing. Omit (or set to `.`) to use all available cores (default). Set to `1` to disable parallelism entirely.
+- `NeatRng::derive_child(idx)` added to the common RNG: each parallel contig task derives a deterministic per-contig seed from the parent RNG state and the contig index, so results are fully reproducible regardless of thread scheduling.
+- Removed `fasta_reader` and `fasta_map` modules. `SequenceBlock`, `SequenceMap`, and `RegionType` now live in `common::structs::sequence_block`; `map_buffer` and `apply_n_substitution` moved to `common::file_tools::fasta_stream`. Eliminates the temp JSON block files that were written to disk for every contig.
+- `gen-mut-model` migrated to a single-pass `FastaStream` loop: trinucleotide counting and variant processing now share one iteration over each contig's sequence instead of two separate passes.
+
 5/3/2026
 =========
 

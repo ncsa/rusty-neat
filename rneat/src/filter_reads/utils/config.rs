@@ -53,18 +53,7 @@ impl RunConfiguration {
                 temp_key
             }
         };
-        let overwrite_choice = scrape_config["overwrite_output"].as_bool().unwrap();
-        let overwrite_output = {
-            match overwrite_choice {
-                value => {
-                    if value == true {
-                        true
-                    } else {
-                        false
-                    }
-                }
-            }
-        };
+        let overwrite_output = scrape_config["overwrite_output"].as_bool().unwrap();
         info!("Overwrite? {overwrite_output}");
         let file_map: HashMap<PathBuf, (PathBuf, bool, bool)> = {
             let mut temp_map = HashMap::new();

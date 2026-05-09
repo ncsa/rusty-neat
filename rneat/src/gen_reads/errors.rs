@@ -4,23 +4,23 @@ use common::{
     file_tools::{
         bam_writer::BamWriterError,
         bed_reader::BedReaderError,
-        fasta_reader::FastaReaderError,
+        fasta_stream::FastaStreamError,
         fastq_tools::FastqToolsError,
         vcf_tools::VcfToolsError,
     },
-    
+
     models::{
-        fragment_length::FragmentModelError, 
-        mutation_model::MutationModelError, 
-        quality_scores::QualityModelError, 
+        fragment_length::FragmentModelError,
+        mutation_model::MutationModelError,
+        quality_scores::QualityModelError,
         sequencing_error_model::SeqModelError,
         gc_bias_model::GcBiasModelError,
-    }, 
-    
+    },
+
     structs::{
-        distributions::DistributionErrors, 
-        fasta_map::FastaMapError,
+        distributions::DistributionErrors,
         mutated_map::MutatedMapError,
+        sequence_block::SequenceBlockError,
     }
 };
 use common::rng::NeatRngError;
@@ -61,10 +61,8 @@ pub enum GenerateReadsError {
     MutModelError(#[from] MutationModelError),
     #[error("Error creating sequencing error model: {0}")]
     SeqModelError(#[from] SeqModelError),
-    #[error("Error accessing FastaMap: {0}")]
-    FastaMapError(#[from] FastaMapError),
-    #[error("Error reading fasta file: {0}")]
-    FastaReaderError(#[from] FastaReaderError),
+    #[error("SequenceBlock error: {0}")]
+    SequenceBlockError(#[from] SequenceBlockError),
     #[error("Error creating distributions: {0}")]
     GenReadsDistroError(#[from] DistributionErrors),
     #[error("Error sampling distro: {0}")]
@@ -80,7 +78,7 @@ pub enum GenerateReadsError {
     #[error("Configuration reader reported an error parsing a bool: {0}")]
     ConfigParseBoolError(#[from] ParseBoolError),
     #[error("Main threw an error: {0}")]
-    MainError(#[from] Box<dyn std::error::Error>),
+    MainError(#[from] Box<dyn std::error::Error + Send + Sync>),
     #[error("FastqTools error: {0}")]
     FqToolsError(#[from] FastqToolsError),
     #[error("Bed reader error: {0}")]
@@ -93,4 +91,6 @@ pub enum GenerateReadsError {
     ShortSequence,
     #[error("GC Bias model threw an error: {0}")]
     BiasModelError(#[from] GcBiasModelError),
+    #[error("Error streaming FASTA: {0}")]
+    FastaStreamError(#[from] FastaStreamError),
 }

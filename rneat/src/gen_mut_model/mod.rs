@@ -9,10 +9,7 @@ use std::{
     collections::HashMap, 
     path::PathBuf
 };
-use common::{
-    file_tools::fasta_reader::read_fasta, 
-    structs::variants::Variant,
-};
+use common::structs::variants::Variant;
 use crate::gen_mut_model::{
     errors::GenMutationModelError, 
     utils::config::RunConfiguration,
@@ -50,25 +47,13 @@ pub fn main(config_file: &PathBuf) -> Result<(), GenMutationModelError> {
     } else {
         filtered_mutations = run_config.mutations
     }
-    // this will store our fasta file pieces
-    let temp_dir = tempfile::tempdir().unwrap();
-    // We want to read this fasta in as raw as possible, with no overlap. 
-    // We don't need to generate reads, so we only want the sequence.
-    let fasta_map = read_fasta(
-        &run_config.reference,
-        None,
-        0,
-        &temp_dir,
-        None,
-    ).expect("Error reading fasta file");
-
     runner(
-        fasta_map,
+        &run_config.reference,
         filtered_mutations,
         run_config.bed_table,
         &run_config.output_file,
         run_config.transition_matrix_file,
-    ).unwrap();
+    )?;
 
     Ok(())
 }

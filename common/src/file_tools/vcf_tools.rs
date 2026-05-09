@@ -231,10 +231,7 @@ mod tests {
             &vec![Nucleotide::G],
             &mut vec![1,1],
         ).unwrap();
-        let mutated_map = MutatedMap::new(
-            PathBuf::from("name_000100_000200.fa"),
-            vec![variant1, variant2]
-        ).unwrap();
+        let mutated_map = MutatedMap::from_interval(100, 200, vec![variant1, variant2]).unwrap();
         let mut mutated_maps = HashMap::new();
         mutated_maps.insert("chr1".to_string(), vec![mutated_map]);
         let fasta_order = Vec::from(["chr1".to_string()]);
@@ -279,12 +276,12 @@ mod tests {
     pub fn test_write_vcf_multi_contig() {
         let temp_dir = tempfile::tempdir().unwrap();
 
-        let map1 = MutatedMap::new(
-            PathBuf::from("chr1_000100_000200.fa"),
+        let map1 = MutatedMap::from_interval(
+            100, 200,
             vec![Variant::new(VariantType::SNP, 5, &vec![Nucleotide::A], &vec![Nucleotide::C], &mut vec![0, 1]).unwrap()],
         ).unwrap();
-        let map2 = MutatedMap::new(
-            PathBuf::from("chr2_000100_000200.fa"),
+        let map2 = MutatedMap::from_interval(
+            100, 200,
             vec![Variant::new(VariantType::SNP, 10, &vec![Nucleotide::G], &vec![Nucleotide::T], &mut vec![1, 1]).unwrap()],
         ).unwrap();
 

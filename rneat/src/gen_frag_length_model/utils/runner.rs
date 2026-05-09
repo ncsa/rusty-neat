@@ -46,18 +46,17 @@ pub fn runner(config: &RunConfiguration) -> Result<(), GenFragLengthModelError> 
 ///   - l > 0
 ///   - l <= median + FILTER_MEDDEV_M * MAD  (outlier ceiling)
 ///   - count(l) >= min_reads
-fn filter_lengths(tlens: Vec<usize>, min_reads: usize) -> Vec<usize> {
+fn filter_lengths(mut tlens: Vec<usize>, min_reads: usize) -> Vec<usize> {
     if min_reads == 0 {
         return tlens;
     }
 
-    let mut sorted = tlens.clone();
-    sorted.sort_unstable();
+    tlens.sort_unstable();
 
-    let median = median_f64(&sorted);
+    let median = median_f64(&tlens);
 
     // MAD = median(|x - median|)
-    let mut abs_devs: Vec<usize> = sorted
+    let mut abs_devs: Vec<usize> = tlens
         .iter()
         .map(|&x| (x as f64 - median).abs().round() as usize)
         .collect();

@@ -73,6 +73,8 @@ pub struct RunConfiguration {
     pub(crate) gc_bias_model: Option<PathBuf>,
     // normalize coverage true or false
     pub(crate) gc_bias_normalize_coverage: bool,
+    // maximum threads for parallel contig processing (None = rayon default = all cores)
+    pub num_threads: Option<usize>,
 }
 
 // The config builder allows us to construct a config in multiple different ways, depending
@@ -130,6 +132,7 @@ impl ConfigBuilder {
                     input_vcf: None,
                     gc_bias_model: None,
                     gc_bias_normalize_coverage: true,
+                    num_threads: None,
                 }
             },
             None => {
@@ -490,6 +493,16 @@ impl RunConfiguration {
                             }
                         }
                     },
+                    "num_threads" => {
+                        match value.as_u64() {
+                            Some(n) => configuration.num_threads = Some(n as usize),
+                            None => {
+                                return Err(GenerateReadsError::ConfigReadError(
+                                    "num_threads".to_string(), "integer".to_string()
+                                ))
+                            }
+                        }
+                    },
                     _ => continue,
                 },
             }
@@ -604,6 +617,13 @@ impl RunConfiguration {
             info!("  >shuffle FASTQ output: {}", self.shuffle_fastq);
         }
 
+        if !self.produce_bam {
+            match self.num_threads {
+                Some(n) => info!("  >parallel threads: {}", n),
+                None => info!("  >parallel threads: auto (all available cores)"),
+            }
+        }
+
         match &self.rng_seed {
             Some(seed) => {
                 // User supplied seed
@@ -668,7 +688,8 @@ mod tests {
             target_bed: None,
             input_vcf: None,
             gc_bias_model: None,
-            gc_bias_normalize_coverage: true
+            gc_bias_normalize_coverage: true,
+            num_threads: None,
         };
 
         println!("{:?}", test_configuration);

@@ -4,7 +4,7 @@
 pub mod file_io;
 pub mod folder_tools;
 pub mod fastq_tools;
-pub mod fasta_reader;
+pub mod fasta_stream;
 pub mod vcf_tools;
 pub mod bed_reader;
 pub mod bam_reader;

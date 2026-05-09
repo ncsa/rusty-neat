@@ -5,7 +5,7 @@ use crate::{
         models::mutation_model::MutationModel,
         structs::{
             distributions::DiscreteDistribution, 
-            fasta_map::SequenceBlock, 
+            sequence_block::SequenceBlock,
             variants::Variant
         }
     }, 
@@ -44,7 +44,7 @@ pub fn generate_variants(
         debug!("location: {}", location);
         block_variants.push(
             mutation_model.generate_mutation(
-                &sequence_block.get_seq_clone()?,
+                &sequence_block.sequence,
                 location,
                 ploidy,
                 rng,
@@ -60,7 +60,7 @@ mod tests {
     use super::*;
     use crate::common::{
         models::mutation_model::MutationModel,
-        structs::fasta_map::{RegionType, SequenceBlock, SequenceMap},
+        structs::sequence_block::{RegionType, SequenceBlock, SequenceMap},
     };
     use common::structs::nucleotides::Nucleotide;
     use common::rng::NeatRng;

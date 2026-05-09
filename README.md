@@ -8,7 +8,7 @@ As of now, `rneat` is still under development. We are working toward the goal of
 ## Prerequisites
 One of the packages requires cmake to use. For Debian/Ubuntu this should be a simple `sudo apt install cmake` and for RHEL/Rocky type distros this should be `sudo dnf install cmake`
 
-Download the executable in the release (current version 1.3.0).
+Download the executable in the release (current version 1.4.0).
 
 ```bash
 $ rneat --help
@@ -197,6 +197,32 @@ seqkit shuffle -2 sample_R1.fastq.gz sample_R2.fastq.gz \
 ```
 
 `seqkit` uses reservoir sampling and streams from disk, so its memory use is bounded regardless of file size. `rneat` will emit a warning at runtime when the reference genome exceeds 500 Mbp as a reminder that post-processing may be preferable.
+
+Parallel Processing
+===================
+`rneat gen-reads` processes contigs in parallel by default using rayon's work-stealing thread pool. Each contig is an independent unit of work — variant generation, fragment sampling, and FASTQ writing all happen concurrently across contigs — so multi-core machines see roughly linear speedup up to the number of contigs in the reference.
+
+**Thread count:**
+
+By default `rneat` uses all available logical cores. You can cap the thread count with the `num_threads` config key:
+
+```yaml
+# use 4 threads instead of all available cores
+num_threads: 4
+
+# disable parallelism entirely (useful for debugging or reproducibility testing)
+num_threads: 1
+```
+
+Omit `num_threads` (or set it to `.`) to restore the default all-cores behaviour.
+
+**BAM output is now fully parallel:**
+
+`rneat` uses a per-contig temp-file strategy: each contig worker writes its alignment records to a private temporary BAM body file, then a single concatenation pass assembles them in reference order into the final coordinate-sorted BAM. This means `produce_bam: true` no longer disables parallelism — all contigs are processed concurrently regardless of whether BAM output is requested.
+
+**Reproducibility:**
+
+Each contig's random number generator is derived deterministically from the parent seed and the contig's position in the reference, so output is identical across runs with the same seed even when the number of threads changes.
 
 Reading Bed Data
 ================

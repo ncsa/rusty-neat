@@ -1,17 +1,10 @@
-//! Note sure if these are structs or models or something in between
-//! The point of this is to store a map of valid regions, including
-//! the ref versus alt version at the positions where mutations occur.
-//! This allows us to choose when we write the fastq, whether to use
-//! the ref or alt version.
 use crate::structs::{
-    fasta_map::{FastaMapError, decode_block_filename},
     nucleotides::Nucleotide,
     variants::{Genotype, Variant, VariantError},
 };
 use std::collections::HashMap;
 use crate::rng::NeatRng;
 use thiserror::Error;
-use std::path::PathBuf;
 use log::debug;
 
 #[derive(Debug, Error)]
@@ -20,31 +13,21 @@ pub enum MutatedMapError {
     MutatePositionError(usize),
     #[error("Error retrieving location from variant")]
     VariantLocationError(#[from] VariantError),
-    #[error("Error from FastaMap: {0}")]
-    FastaMapError(#[from] FastaMapError),
 }
 
 #[derive(Debug, Clone)]
 pub struct MutatedMap {
-    // This is the index of positions for the variants
     pub flagged_positions: Vec<usize>,
-    // This is the filename of the sequence block we are mutating
-    pub sequence_block: PathBuf,
-    // start and end points of block
     pub block_interval: (usize, usize),
-    // The variant map, maps positions to the variant
     pub variant_map: HashMap<usize, Variant>,
 }
 
 impl MutatedMap {
-    pub fn new(
-        sequence_block: PathBuf,
-        variant_vec: Vec<Variant>
+    pub fn from_interval(
+        start: usize,
+        end: usize,
+        variant_vec: Vec<Variant>,
     ) -> Result<Self, MutatedMapError> {
-        // Reconstruct the range from the filename
-        let block_interval = decode_block_filename(&sequence_block)?;
-        // Build the variant_map; skip duplicate positions with a warning so the caller
-        // knows their requested mutation count may be slightly under-represented.
         let mut variant_map: HashMap<usize, Variant> = HashMap::new();
         let mut flagged_positions: Vec<usize> = Vec::new();
         for variant in variant_vec {
@@ -56,24 +39,19 @@ impl MutatedMap {
             variant_map.insert(location, variant);
             flagged_positions.push(location);
         }
-
         Ok(MutatedMap {
             flagged_positions,
-            sequence_block,
-            block_interval,
-            variant_map
+            block_interval: (start, end),
+            variant_map,
         })
     }
 
     pub fn is_flagged(&self, position: &usize) -> bool {
-        // Checks if this position is flagged
         self.flagged_positions.contains(position)
     }
 
-    pub fn contains(&self, (x, y): (usize, usize)) -> Result<bool, MutatedMapError> {
-        let first_clause = x >= self.block_interval.0;
-        let second_clause = y <= self.block_interval.1;
-        Ok(first_clause && second_clause)
+    pub fn contains(&self, (x, y): (usize, usize)) -> bool {
+        x >= self.block_interval.0 && y <= self.block_interval.1
     }
 
     pub fn mutate_position(
@@ -81,18 +59,13 @@ impl MutatedMap {
         position: usize,
         rng: &mut NeatRng,
     ) -> Result<Vec<Nucleotide>, MutatedMapError> {
-        // This method searches for a variant at the given position and decides whether to return
-        // the ref, the alt, or the original seq. Note that this function assumes that 
-        // the calling function has already checked thath position is within variant_map, or else
-        // this will throw an index out of range error.
         match self.variant_map[&position].genotype {
-            Genotype::Homozygous => return Ok(self.variant_map[&position].alternate.clone()),
+            Genotype::Homozygous => Ok(self.variant_map[&position].alternate.clone()),
             Genotype::Heterozygous => {
-                // 50/50 chance we mutate
                 if rng.gen_bool(0.5).unwrap() {
-                    return Ok(self.variant_map[&position].reference.clone())
+                    Ok(self.variant_map[&position].reference.clone())
                 } else {
-                    return Ok(self.variant_map[&position].alternate.clone())
+                    Ok(self.variant_map[&position].alternate.clone())
                 }
             }
         }
@@ -105,84 +78,41 @@ mod tests {
     use crate::structs::nucleotides::Nucleotide::{A, G};
     use crate::structs::variants::VariantType;
 
+    fn make_map(start: usize, end: usize, variant: Variant) -> MutatedMap {
+        MutatedMap::from_interval(start, end, vec![variant]).unwrap()
+    }
+
     #[test]
     fn test_is_flagged() {
-        let sequence_block = PathBuf::from("chr1_0001000_0002000.fa");
-
-        let variant = Variant::new(
-            VariantType::SNP,
-            1003,
-            &vec![A],
-            &vec![G],
-            &mut vec![1, 0],
-        ).unwrap();
-
-        let map = MutatedMap::new(
-            sequence_block,
-            vec![variant],
-        ).unwrap();
-
-        assert_eq!(map.is_flagged(&1003), true);
-        assert_eq!(map.is_flagged(&1007), false);
+        let variant = Variant::new(VariantType::SNP, 1003, &vec![A], &vec![G], &mut vec![1, 0]).unwrap();
+        let map = make_map(1000, 2000, variant);
+        assert!(map.is_flagged(&1003));
+        assert!(!map.is_flagged(&1007));
     }
 
     #[test]
     fn test_contains() {
-        let sequence_block = PathBuf::from("chr1_0001000_0002000.fa");
-
-        let variant = Variant::new(
-            VariantType::SNP,
-            1003,
-            &vec![A],
-            &vec![G],
-            &mut vec![1, 0],
-        ).unwrap();
-
-        let map = MutatedMap::new(
-            sequence_block,
-            vec![variant],
-        ).unwrap();
-
-        assert_eq!(map.contains((1003, 1300)).unwrap(), true);
-        assert_eq!(map.contains((1900, 2100)).unwrap(), false);
+        let variant = Variant::new(VariantType::SNP, 1003, &vec![A], &vec![G], &mut vec![1, 0]).unwrap();
+        let map = make_map(1000, 2000, variant);
+        assert!(map.contains((1003, 1300)));
+        assert!(!map.contains((1900, 2100)));
     }
 
     #[test]
     fn test_mutate_position_homozygous_always_returns_alt() {
-        let sequence_block = PathBuf::from("chr1_0001000_0002000.fa");
-        let variant = Variant::new(
-            VariantType::SNP,
-            1003,
-            &vec![A],
-            &vec![G],
-            &mut vec![1, 1], // homozygous
-        ).unwrap();
-        let map = MutatedMap::new(sequence_block, vec![variant]).unwrap();
-        let mut rng = NeatRng::new_from_seed(&vec![
-            "test".to_string()
-        ]).unwrap();
-        // Homozygous must always return the alternate
+        let variant = Variant::new(VariantType::SNP, 1003, &vec![A], &vec![G], &mut vec![1, 1]).unwrap();
+        let map = make_map(1000, 2000, variant);
+        let mut rng = NeatRng::new_from_seed(&vec!["test".to_string()]).unwrap();
         for _ in 0..10 {
-            let result = map.mutate_position(1003, &mut rng).unwrap();
-            assert_eq!(result, vec![G]);
+            assert_eq!(map.mutate_position(1003, &mut rng).unwrap(), vec![G]);
         }
     }
 
     #[test]
     fn test_mutate_position_heterozygous_returns_ref_or_alt() {
-        let sequence_block = PathBuf::from("chr1_0001000_0002000.fa");
-        let variant = Variant::new(
-            VariantType::SNP,
-            1003,
-            &vec![A],
-            &vec![G],
-            &mut vec![1, 0], // heterozygous
-        ).unwrap();
-        let map = MutatedMap::new(sequence_block, vec![variant]).unwrap();
-        let mut rng = NeatRng::new_from_seed(&vec![
-            "test".to_string()
-        ]).unwrap();
-        // Heterozygous must return either ref or alt, never anything else
+        let variant = Variant::new(VariantType::SNP, 1003, &vec![A], &vec![G], &mut vec![1, 0]).unwrap();
+        let map = make_map(1000, 2000, variant);
+        let mut rng = NeatRng::new_from_seed(&vec!["test".to_string()]).unwrap();
         let mut saw_ref = false;
         let mut saw_alt = false;
         for _ in 0..20 {

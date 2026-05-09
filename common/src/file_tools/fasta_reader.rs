@@ -5,7 +5,7 @@
 //! 
 //! The fasta file contains the sequences that will be broken up into smaller pieces
 //! read_fasta writes out json files to this temp dir to act as a database to facilitate 
-//! the simulationuse std::collections::HashMap;
+//! the simulation
 use std::collections::HashMap;
 use std::fs::File;
 use std::io;

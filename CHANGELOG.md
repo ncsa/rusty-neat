@@ -64,6 +64,12 @@ Moved the code from a brach under NEAT (https://github.com/ncsa/neat) to its own
 =========
 
 ## rneat v1.4.0
+- `gen-seq-error-model`: FASTQ input is now streamed one record at a time instead of being fully loaded into memory. Peak memory is bounded by a single record rather than the entire file, which matters for large (multi-GB) FASTQ inputs. The `max_reads` early-exit now also fires without reading the rest of the file.
+- `gen-mut-model`: Trinucleotide probability computation is now O(n) instead of O(n²). Transition counts are pre-grouped by reference frame once before the probability loop, eliminating a redundant linear scan per trinucleotide context.
+- `filter-reads` (`filter_fastq` and `filter_vcf`): Replaced `format!("{}\n", line)` heap allocations on every written line with two `write_all` calls (bytes + newline). Eliminated double HashMap lookups (`contains_key` + index) in favour of a single `get` call. Contig name reconstruction changed from a manual push loop to `join("_")`. The read-name prefix check simplified from `find` + index comparison to `starts_with`.
+- `filter-reads` config: Removed a redundant identity `match` on a bool.
+- `gen-frag-length-model`: `filter_lengths` no longer clones its input `Vec` before sorting — the owned value is sorted in place, eliminating one allocation proportional to the fragment count.
+- `gen-gc-bias-model`: `overall_mean` computation replaced two separate filtered iterations with a single `fold`, scanning the 101-bin array once instead of twice.
 - Streaming FASTA reader (`FastaStream`) moved from `gen-gc-bias-model` to the `common` crate, making it available to all subcommands. `gen-reads` now streams the reference one contig at a time instead of writing temp JSON block files, eliminating up to ~570 MB of disk I/O for human-scale genomes and capping peak memory to a single contig rather than the full genome.
 - Contig-level parallelism added to `gen-reads` via rayon `par_bridge`. All contigs are now processed concurrently using rayon's work-stealing thread pool regardless of whether BAM output is requested; the output ordering is preserved by sorting results by contig index before writing.
 - BAM creation is now fully parallel. Each contig worker writes its alignment records to a private temp BAM body file (no header, plain BGZF blocks). After all contigs finish, a single concatenation pass strips the BGZF EOF block from each intermediate file and assembles them in reference order into the final coordinate-sorted BAM. No `samtools sort` step is required.

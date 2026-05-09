@@ -92,14 +92,11 @@ pub fn runner(path: &PathBuf) -> Result<(), GenGcBiasModelError> {
     // risks a single anomalous window (e.g. a repetitive region) inflating the mean and
     // pushing all other weights below 1.0.
     let overall_mean = {
-        let weight_sum: f64 = (0..=100usize)
+        let (weight_sum, count_sum) = (0..=100usize)
             .filter(|&i| gc_window_count[i] >= config.min_windows_per_bin)
-            .map(|i| gc_weight_sum[i])
-            .sum();
-        let count_sum: usize = (0..=100usize)
-            .filter(|&i| gc_window_count[i] >= config.min_windows_per_bin)
-            .map(|i| gc_window_count[i])
-            .sum();
+            .fold((0.0f64, 0usize), |(ws, cs), i| {
+                (ws + gc_weight_sum[i], cs + gc_window_count[i])
+            });
         if count_sum == 0 {
             warn!(
                 "No GC bins met min_windows_per_bin ({}); all weights will be neutral (1.0). \

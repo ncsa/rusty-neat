@@ -48,22 +48,32 @@ fn build_transition_matrix_from_counts(
 }
 
 pub fn runner(config: &RunConfiguration) -> Result<(), GenSeqErrorModelError> {
-    let lines: Vec<String> = if is_gzipped_file(&config.fastq_file)? {
-        read_gzip_lines(&config.fastq_file)?
-            .collect::<Result<Vec<_>, _>>()?
-    } else {
-        read_lines(&config.fastq_file)?
-            .collect::<Result<Vec<_>, _>>()?
+    let mut iter: Box<dyn Iterator<Item = std::io::Result<String>>> =
+        if is_gzipped_file(&config.fastq_file)? {
+            Box::new(read_gzip_lines(&config.fastq_file)?)
+        } else {
+            Box::new(read_lines(&config.fastq_file)?)
+        };
+
+    // Read the first record to determine read_length before allocating transition_counts.
+    for _ in 0..3 {
+        match iter.next() {
+            Some(Ok(_)) => {}
+            Some(Err(e)) => return Err(e.into()),
+            None => return Err(GenSeqErrorModelError::MalformedFastq(
+                "FASTQ file has fewer than 4 lines".to_string(),
+            )),
+        }
+    }
+    let first_qual = match iter.next() {
+        Some(Ok(q)) => q,
+        Some(Err(e)) => return Err(e.into()),
+        None => return Err(GenSeqErrorModelError::MalformedFastq(
+            "FASTQ file has fewer than 4 lines".to_string(),
+        )),
     };
 
-    if lines.len() < 4 {
-        return Err(GenSeqErrorModelError::MalformedFastq(
-            "FASTQ file has fewer than 4 lines".to_string(),
-        ));
-    }
-
-    // Determine read length from the first record's quality line (index 3)
-    let read_length = lines[3].len();
+    let read_length = first_qual.len();
     if read_length == 0 {
         return Err(GenSeqErrorModelError::MalformedFastq(
             "Quality line in first record is empty".to_string(),
@@ -71,27 +81,28 @@ pub fn runner(config: &RunConfiguration) -> Result<(), GenSeqErrorModelError> {
     }
 
     let qual_offset = config.qual_offset;
-
     let mut seed_counts = vec![0usize; MAX_SCORE];
     let mut transition_counts = vec![vec![vec![0usize; MAX_SCORE]; MAX_SCORE]; read_length - 1];
     let mut global_counts = vec![0usize; MAX_SCORE];
     let mut total_bases: usize = 0;
     let mut reads_processed: usize = 0;
 
-    // Process all records: groups of 4 lines
-    let mut i = 0;
-    while i + 3 < lines.len() {
-        let qual_line = &lines[i + 3];
+    fn accumulate_qual(
+        qual_line: &str,
+        qual_offset: usize,
+        read_length: usize,
+        seed_counts: &mut [usize],
+        transition_counts: &mut [Vec<Vec<usize>>],
+        global_counts: &mut [usize],
+        total_bases: &mut usize,
+    ) -> bool {
         let scores: Vec<usize> = qual_line
             .bytes()
             .map(|b| (b as usize).saturating_sub(qual_offset).min(MAX_SCORE - 1))
             .collect();
-
         if scores.is_empty() {
-            i += 4;
-            continue;
+            return false;
         }
-
         seed_counts[scores[0]] += 1;
         for j in 1..scores.len().min(read_length) {
             transition_counts[j - 1][scores[j - 1]][scores[j]] += 1;
@@ -99,13 +110,39 @@ pub fn runner(config: &RunConfiguration) -> Result<(), GenSeqErrorModelError> {
         for &score in &scores {
             global_counts[score] += 1;
         }
-        total_bases += scores.len();
-        reads_processed += 1;
+        *total_bases += scores.len();
+        true
+    }
 
+    if accumulate_qual(
+        &first_qual, qual_offset, read_length,
+        &mut seed_counts, &mut transition_counts, &mut global_counts, &mut total_bases,
+    ) {
+        reads_processed += 1;
+    }
+
+    'records: loop {
         if config.max_reads > 0 && reads_processed >= config.max_reads {
             break;
         }
-        i += 4;
+        for _ in 0..3 {
+            match iter.next() {
+                None => break 'records,
+                Some(Ok(_)) => {}
+                Some(Err(e)) => return Err(e.into()),
+            }
+        }
+        let qual = match iter.next() {
+            None => break,
+            Some(Ok(q)) => q,
+            Some(Err(e)) => return Err(e.into()),
+        };
+        if accumulate_qual(
+            &qual, qual_offset, read_length,
+            &mut seed_counts, &mut transition_counts, &mut global_counts, &mut total_bases,
+        ) {
+            reads_processed += 1;
+        }
     }
 
     info!("Processed {} reads ({} bases)", reads_processed, total_bases);

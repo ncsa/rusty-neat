@@ -77,52 +77,22 @@ fn open_unzipped(filename: &PathBuf) -> ReaderType {
 }
 
 fn parse_fastq_record_name(line: &str) -> Result<(String, usize, usize), FilterLibError> {
-    // The rneat-generated record will have the pattern 
-    // "@neat_generated_<contig_name>_<10-digit first coord>_<10-digit second coord>_<read number>:<1 for Forward, 2 for Reverse>"
-    // Our goal is to extract contig_name and the two coordinates
-    //
-    // Start by checking if this is even a read
-    let result = line.find("@neat_generated_");
-    match result {
-        Some(index) => {
-            if index == 0 {
-                // valid read name
-            } else {
-                // We don't know what this is, calling it an error.
-                return Err(FilterLibError::MalformedLine(line.to_string()))
-            }
-        },
-        None => {
-            // This is probably just a quality score
-            return Err(FilterLibError::InvalidReadName)
-        }
-    }
-    let end = line.len();
-    // We can remove the strand number
-    let mut trimmed_line = line[..(end - 2)].to_string();
-    trimmed_line = trimmed_line[16..].to_string();
-    // What we have left should be <name_parts>_<start>_<end>_<read_number>
-    let split_line: Vec<&str> = trimmed_line.split('_').collect();
-    let length = split_line.len();
-    // start is 2 from the end
-    let start: usize = split_line[length-3].parse().unwrap();
-    // end is 1 from the end
-    let end: usize = split_line[length-2].parse().unwrap();
-    // However "contig_name" might contain an underscore, so we make sure we have the right coordinates
-    // Grab everything up to the start
-    let mut contig = String::new();
-    for i in 0..(length-3) {
-        // No underscore in the last loop
-        if i == (length-4) {
-            contig.push_str(split_line[i])
+    // gen_reads produces: "@RNEAT_generated_<contig>_<10-digit start>_<10-digit end>/N"
+    if !line.starts_with("@RNEAT_generated_") {
+        return if line.contains("@RNEAT_generated_") {
+            Err(FilterLibError::MalformedLine(line.to_string()))
         } else {
-            contig.push_str(split_line[i]);
-            // replace what "split" removed
-            contig.push('_');
-        }
+            Err(FilterLibError::InvalidReadName)
+        };
     }
+    // Slice off the "@RNEAT_generated_" prefix (17 chars) and "/N" strand suffix (2 chars).
+    let trimmed = &line[17..line.len() - 2];
+    let split_line: Vec<&str> = trimmed.split('_').collect();
+    let length = split_line.len();
+    let start: usize = split_line[length - 2].parse().unwrap();
+    let end: usize = split_line[length - 1].parse().unwrap();
+    let contig = split_line[..length - 2].join("_");
     Ok((contig, start, end))
-
 }
 
 pub fn filter_fastq(
@@ -158,35 +128,26 @@ pub fn filter_fastq(
                             return Err(FilterReadsError::FastqFilterError(format!("Filter error with line: {}", line)))
                         },
                         FilterLibError::InvalidReadName => {
-                            // In this case this is a q-score and, if included, we should write it
                             if include {
-                                out_file.write(format!("{}\n", line).as_bytes())?;
-                            };
+                                out_file.write_all(line.as_bytes())?;
+                                out_file.write_all(b"\n")?;
+                            }
                         },
                     }
                     // That line is processed and we can move on
                     continue
                 },
             }.unwrap(); // This unwrap will either continue us or be a region, so this is good to go.
-            if bed_table.contains_key(&contig) {
-                let mut found = false;
-                for record in &bed_table[&contig] {
-                    if record.overlaps(&contig, start, end) {
-                        // Found a match
-                        found = true;
-                        out_file.write(format!("{}\n", line).as_bytes())?;
-                        break
-                    }
-                }
+            include = if let Some(records) = bed_table.get(&contig) {
+                let found = records.iter().any(|r| r.overlaps(&contig, start, end));
                 if found {
-                    include = true;
-                } else {
-                    include = false;
+                    out_file.write_all(line.as_bytes())?;
+                    out_file.write_all(b"\n")?;
                 }
+                found
             } else {
-                // not in the bed at all, skip
-                include = false;
-            }
+                false
+            };
         } else {
             // this indicates an actual record line. Fastq has a format of
             //     @name
@@ -200,7 +161,8 @@ pub fn filter_fastq(
             // So once we find a name we want, we need to read in the next three lines or we messed up the read
             // Once we hit the next name, we'll turn this off if that one is not included
             if include {
-                out_file.write(format!("{}\n", line).as_bytes())?;
+                out_file.write_all(line.as_bytes())?;
+                out_file.write_all(b"\n")?;
             }
         }
     }
@@ -217,22 +179,16 @@ pub fn filter_vcf(
     let (infile, mut outfile) = prep_files_for_filtering(vcf_in, is_gzip, vcf_out)?;
     for line in infile {
         if line.starts_with("#") {
-            // header line, write out with no changes
-            outfile.write(format!("{}\n", line).as_bytes())?;
+            outfile.write_all(line.as_bytes())?;
+            outfile.write_all(b"\n")?;
         } else {
-            // break the line into a vector by tabs
             let line_vec: Vec<&str> = line.split('\t').collect();
-            // A vcf line has the format ["CHROM", "POS", "ID", "REF", "ALT", etc]
-            // The only ones we care about are CHROM [0] and POS [1]
             let chrom = line_vec[0];
             let pos: usize = line_vec[1].parse()?;
-            if bed_table.contains_key(line_vec[0]) {
-                for record in &bed_table[line_vec[0]] {
-                    if record.contains(chrom, pos) {
-                        // Found a match
-                        outfile.write(format!("{}\n", line).as_bytes())?;
-                        break
-                    }
+            if let Some(records) = bed_table.get(line_vec[0]) {
+                if records.iter().any(|r| r.contains(chrom, pos)) {
+                    outfile.write_all(line.as_bytes())?;
+                    outfile.write_all(b"\n")?;
                 }
             }
         }
@@ -267,7 +223,7 @@ mod tests {
 
     #[test]
     fn test_parse_record_name() {
-        let record_name = "@neat_generated_chrom_1_0000001000_0000002000_223:1".to_string();
+        let record_name = "@RNEAT_generated_chrom_1_0000001000_0000002000/1".to_string();
         assert_eq!(
             parse_fastq_record_name(&record_name).unwrap(),
             ("chrom_1".to_string(), 1000, 2000),
@@ -280,11 +236,11 @@ mod tests {
 
         // Two reads: first inside BED chr1:0-2000, second outside
         let fastq_content = concat!(
-            "@neat_generated_chr1_0000001000_0000002000_1:1\n",
+            "@RNEAT_generated_chr1_0000001000_0000002000/1\n",
             "ACGTACGT\n",
             "+\n",
             "IIIIIIII\n",
-            "@neat_generated_chr1_0000005000_0000006000_2:1\n",
+            "@RNEAT_generated_chr1_0000005000_0000006000/1\n",
             "TTTTTTTT\n",
             "+\n",
             "IIIIIIII\n",

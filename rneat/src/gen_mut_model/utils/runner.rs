@@ -127,6 +127,12 @@ pub fn runner(
         ));
     }
 
+    // Pre-group transition counts by reference frame to avoid an O(n²) scan.
+    let mut trans_by_ref: HashMap<TrinucFrame, HashMap<TrinucFrame, usize>> = HashMap::new();
+    for (&(ref_f, alt_f), &count) in &trinuc_transition_count {
+        trans_by_ref.entry(ref_f).or_default().insert(alt_f, count);
+    }
+
     // Compute probabilities.
     let mut trinuc_mut_prob: HashMap<TrinucFrame, f64> = HashMap::new();
     let mut trinuc_trans_prob: HashMap<(TrinucFrame, TrinucFrame), f64> = HashMap::new();
@@ -137,16 +143,13 @@ pub fn runner(
             trinuc_mut_prob.insert(*frame, 0.0);
             continue;
         }
-        let frame_count: usize = trinuc_transition_count
-            .iter()
-            .filter(|((ref_f, _), _)| *ref_f == *frame)
-            .map(|(_, &v)| v)
-            .sum();
+        let alts = trans_by_ref.get(frame);
+        let frame_count: usize = alts.map_or(0, |m| m.values().sum());
         trinuc_mut_prob.insert(*frame, (frame_count as f64) / (*count as f64));
         if frame_count > 0 {
-            for ((ref_f, alt_f), &tc) in &trinuc_transition_count {
-                if *ref_f == *frame {
-                    trinuc_trans_prob.insert((*ref_f, *alt_f), (tc as f64) / (frame_count as f64));
+            if let Some(alts) = alts {
+                for (&alt_f, &tc) in alts {
+                    trinuc_trans_prob.insert((*frame, alt_f), (tc as f64) / (frame_count as f64));
                 }
             }
         }

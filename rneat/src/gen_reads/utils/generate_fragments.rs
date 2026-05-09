@@ -42,7 +42,7 @@ pub fn generate_fragments(
         return Ok(Vec::new())
     }
 
-    let num_frags = (sequence_length / read_length) * coverage;
+    let num_frags = sequence_length.saturating_mul(coverage) / read_length;
     if paired_ended {
         // For paired-end reads the physical fragment length (insert size) determines spacing.
         for _ in 0..num_frags {
@@ -204,7 +204,7 @@ pub fn generate_weighted_fragments(
     let n_valid_positions = prefix_sum.len() - 1;
     let mean_weight = total_weight / n_valid_positions as f64;
 
-    let num_frags_base = (region_len / read_length) * coverage;
+    let num_frags_base = region_len.saturating_mul(coverage) / read_length;
     let num_frags = if normalize {
         let inflated = (num_frags_base as f64 / mean_weight).round() as usize;
         let cap = num_frags_base.saturating_mul(MAX_COVERAGE_MULTIPLIER);
@@ -251,61 +251,38 @@ fn cover_dataset(
     coverage: usize,
     rng: &mut NeatRng,
 ) -> Result<Vec<(usize, usize)>, GenerateReadsError> {
-    // Takes:
-    // span_length: Total number of bases in the sequence
-    // read_length: The length of the reads for this run
-    // fragment_pool: a vector of sizes for the fragments. If empty, it will instead be filled
-    // by the read_length (single ended reads)
-    // paired_ended: true or false if the run is paired ended mode or not.
-    // coverage: The coverage depth for the reads
-    // Returns:
-    // A vector of tuples (usize, usize), denoting the start and end positions of the fragment of
-    // DNA that was sequenced.
-    //
-    // This function selects the positions of the reads. It starts at the beginning and goes out
-    // one read length, then picks a random jump between 0 and half the read length to move
-    // And picks those coordinates for a second read. Once the tail of the read is past the end,
-    // we start over again at 0.
-    //
-    // Reads that will be start and end of the fragment.
-    let mut fragment_set: Vec<(usize, usize)> = vec![];
+    // Place exactly (span_length * coverage / read_length) fragments so that mean depth
+    // equals the target regardless of inter-fragment jitter size.  Stopping on fragment
+    // count rather than sweep count means the wildcard gap can be proportional to
+    // read_length without reducing mean coverage.
+    let target_count = span_length.saturating_mul(coverage) / read_length;
 
-    let mut cover_fragment_pool: VecDeque<usize>;
-    // shuffle the fragment pool
     rng.shuffle_in_place(&mut fragment_pool)?;
-    cover_fragment_pool = VecDeque::from(fragment_pool);
-    // Gap size to keep track of how many uncovered bases we have per layer, to help decide if we
-    // need more layers
-    let mut layer_count: usize = 0;
-    // start this party off somewhere random.
-    let mut start = ((rng.rand_int()?) as usize) % (read_length/4);
-    // create coverage number of layers
-    // TODO - make sure this doesn't get caught in an infinite loop.
-    while layer_count < coverage {
+    let mut cover_fragment_pool = VecDeque::from(fragment_pool);
+
+    let mut fragment_set: Vec<(usize, usize)> = Vec::with_capacity(target_count);
+    let mut start = (rng.rand_int()? as usize) % (read_length / 4).max(1);
+
+    while fragment_set.len() < target_count {
         let fragment_length = cover_fragment_pool.pop_front().unwrap();
-        let temp_end = start + fragment_length;
         cover_fragment_pool.push_back(fragment_length);
+
+        let temp_end = start + fragment_length;
         if temp_end > span_length {
-            // TODO some variation on this modulo idea will work for bacterial reads
-            start = temp_end % span_length;
-            layer_count += 1;
-            continue
+            // Restart from the beginning of the contig for the next sweep.
+            start = 0;
+            continue;
         }
-        // Read start ensures our fragments are within the sequence block
-        fragment_set.push((start+read_start, temp_end+read_start));
-        // Picks a number between zero and a quarter of a read length
-        let wildcard: usize = (rng.rand_u32().unwrap() % 10) as usize;
+
+        fragment_set.push((start + read_start, temp_end + read_start));
+        let wildcard = (rng.rand_u32()? % (read_length as u32 / 4).max(1)) as usize;
         start = temp_end + wildcard;
-        // sanity check. If we are out of bounds, take the modulo
         if start >= span_length {
-            // get us back in bounds
-            start = start % span_length;
-            layer_count += 1;
+            start = 0;
         }
     }
-    fragment_set.sort_by(
-        |a, b| a.0.cmp(&b.0)
-    );
+
+    fragment_set.sort_by_key(|&(s, _)| s);
     Ok(fragment_set)
 }
 
@@ -380,7 +357,12 @@ mod tests {
             coverage,
             &mut rng
         ).unwrap();
-        assert_eq!(cover[0], (15, 315))
+        // target_count = span / read_length * coverage = 1000 fragments.
+        assert_eq!(cover.len(), span_length / read_length * coverage);
+        // After a wrap the cursor resets to 0, so the sorted first fragment starts there.
+        assert_eq!(cover[0], (0, 300));
+        // All fragments must fit within the span and have the pool fragment length.
+        assert!(cover.iter().all(|&(s, e)| e <= span_length && e - s == 300));
     }
 
     #[test]

@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use log::*;
 
 use common::{
+    file_tools::fasta_stream::{FastaStream, non_n_regions},
     models::gc_bias_model::GcBiasModel,
     structs::nucleotides::Nucleotide,
 };
@@ -10,7 +11,6 @@ use crate::gen_gc_bias_model::{
     utils::{
         config::RunConfiguration,
         coverage_reader::{CoverageData, CoverageIndex},
-        fasta_stream::FastaStream,
     },
 };
 
@@ -190,85 +190,12 @@ fn accumulate_region(
     }
 }
 
-/// Returns the contiguous non-N regions of a sequence as `(start, end)` pairs.
-fn non_n_regions(sequence: &[Nucleotide]) -> Vec<(usize, usize)> {
-    let mut regions = Vec::new();
-    let mut region_start: Option<usize> = None;
-
-    for (i, &nuc) in sequence.iter().enumerate() {
-        match (nuc, region_start) {
-            (Nucleotide::N | Nucleotide::X, Some(s)) => {
-                regions.push((s, i));
-                region_start = None;
-            }
-            (Nucleotide::N | Nucleotide::X, None) => {}
-            (_, None) => region_start = Some(i),
-            (_, Some(_)) => {}
-        }
-    }
-    if let Some(s) = region_start {
-        regions.push((s, sequence.len()));
-    }
-    regions
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Write;
     use tempfile::NamedTempFile;
-
-    fn make_sequence(bases: &str) -> Vec<Nucleotide> {
-        bases.chars().map(Nucleotide::from).collect()
-    }
-
-    // Tests for non_n_regions
-    #[test]
-    fn test_non_n_regions_no_ns() {
-        let seq = make_sequence("ACGTACGT");
-        let regions = non_n_regions(&seq);
-        assert_eq!(regions, vec![(0, 8)]);
-    }
-
-    #[test]
-    fn test_non_n_regions_leading_n() {
-        let seq = make_sequence("NNACGT");
-        let regions = non_n_regions(&seq);
-        assert_eq!(regions, vec![(2, 6)]);
-    }
-
-    #[test]
-    fn test_non_n_regions_interior_n() {
-        let seq = make_sequence("ACGTNACGT");
-        let regions = non_n_regions(&seq);
-        assert_eq!(regions, vec![(0, 4), (5, 9)]);
-    }
-
-    #[test]
-    fn test_non_n_regions_all_n() {
-        let seq = make_sequence("NNNN");
-        let regions = non_n_regions(&seq);
-        assert!(regions.is_empty());
-    }
-
-    // Tests for non_n_regions: X bases
-    #[test]
-    fn test_non_n_regions_x_closes_region() {
-        // X is a buffer-fill placeholder and should split regions just like N.
-        let mut seq = make_sequence("ACGT");
-        seq.push(Nucleotide::X);
-        seq.extend(make_sequence("ACGT"));
-        let regions = non_n_regions(&seq);
-        assert_eq!(regions, vec![(0, 4), (5, 9)]);
-    }
-
-    #[test]
-    fn test_non_n_regions_x_at_start_is_skipped() {
-        let mut seq = vec![Nucleotide::X, Nucleotide::X];
-        seq.extend(make_sequence("ACGT"));
-        let regions = non_n_regions(&seq);
-        assert_eq!(regions, vec![(2, 6)]);
-    }
 
     fn write_temp(content: &str) -> NamedTempFile {
         let mut f = NamedTempFile::new().unwrap();
@@ -434,8 +361,6 @@ min_windows_per_bin: {}
 
     #[test]
     fn test_all_n_contig_is_skipped() {
-        let fasta_content = ">chr1\nNNNNNNNNNN\n";
-        let ref_file = write_temp(fasta_content);
         let out = NamedTempFile::new().unwrap();
         let out_path = out.path().to_path_buf();
         drop(out);

@@ -17,7 +17,8 @@ use crate::{
         file_tools::{
             bam_writer::BamWriter,
             bed_reader::read_bed,
-            fasta_reader::read_fasta,
+            fasta_reader::{map_buffer, apply_n_substitution},
+            fasta_stream::{FastaStream, scan_fasta_lengths},
             fastq_tools::{
                 combine_temp_fastqs,
                 write_block_fastq
@@ -139,21 +140,6 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
         NucleotideSelector::new()
     };
 
-    // The FastaMap struct consists of a vector of Contig objects, each describing a
-    // block of Sequence, broken up into chunks in the SequenceBlock objects. It also
-    // holds a name_map hashmap that links tho contig name from the Fasta with the shortname
-    info!("Reading fasta file: {}", &config.reference.display());    
-    let fasta_map = read_fasta(
-        &config.reference,
-        Some(&nuc_sub_model),
-        config.read_len,
-        &working_dir,
-        Some(rng),
-    )?;
-
-    // Mutating the reference and recording the variant locations.
-    info!("Generating simulated dataset");
-
     // Load the target BED if provided. Regions outside the BED will be skipped entirely
     // during read-generation, so no reads or variants are produced for those areas.
     let target_bed = match &config.target_bed {
@@ -175,286 +161,246 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
         None => None,
     };
 
-    // Open BAM writer if requested, using contig names+lengths from the fasta header.
+    // Pre-scan FASTA for contig lengths needed by the BAM header. This is a fast
+    // single-pass read that does not store sequences.
+    info!("Reading fasta file: {}", &config.reference.display());
     let mut bam_writer: Option<BamWriter> = if config.produce_bam {
-        let contigs: Vec<(String, usize)> = fasta_map.contigs
-            .iter()
-            .map(|c| (c.name.clone(), c.contig_len))
-            .collect();
+        let contigs = scan_fasta_lengths(&config.reference)?;
         let bam_path = config.output_bam.as_ref().expect("output_bam must be set when produce_bam is true");
         Some(BamWriter::new(bam_path, &contigs)?)
     } else {
         None
     };
 
-    // all variants will be a hashmap of the contig name indexing a variants.
     let mut mutated_maps: HashMap<String, Vec<MutatedMap>> = HashMap::new();
-    // All files written indexed by contig_name, separated by read1/read2
     let mut all_fastq_files: HashMap<String, (Vec<PathBuf>, Vec<PathBuf>)> = HashMap::new();
-    // iterate over contigs. 
-    for contig in &fasta_map.contigs {
-        // Iterate over blocks within the contig
-        // This is probably where we want to parallelize
-        let contig_blocks = &contig.blocks;
-        let contig_name = &contig.name;
-        let mut contig_files_r1: Vec<PathBuf> = Vec::new();
-        let mut contig_files_r2: Vec<PathBuf> = Vec::new();
-        let mut contig_maps: Vec<MutatedMap> = Vec::new();
+    let mut contig_order: Vec<String> = Vec::new();
+    let mut fasta_lengths: HashMap<String, usize> = HashMap::new();
+
+    info!("Generating simulated dataset");
+
+    let fasta = FastaStream::open(&config.reference)?;
+    for result in fasta {
+        let (contig_name, mut sequence) = result?;
+        let contig_len = sequence.len();
+        // Record all contigs for VCF header and output ordering.
+        contig_order.push(contig_name.clone());
+        fasta_lengths.insert(contig_name.clone(), contig_len);
         debug!("Processing {}", contig_name);
 
-        // Skip contigs entirely when a target BED is provided and the contig has no entries.
-        // This is the primary speedup for targeted-panel runs on large genomes.
+        // BED check before any expensive work on this contig.
         if let Some(bed) = &target_bed {
-            if !bed.contains_key(contig_name) {
+            if !bed.contains_key(&contig_name) {
                 debug!("Skipping {} — not in target BED", contig_name);
                 continue;
             }
         }
 
-        for block_filename in contig_blocks {
-            debug!("Processing block {:?}", block_filename);
-            // Set up current block
-            let current_block = SequenceBlock::from(&block_filename)?;
-            // First, we have to create the region weights data based on the fasta
-            // map and filter down to minimal regions to search
-            debug!("    > Generating bias map.");
-            let raw_regions = current_block.get_non_n_regions()?;
-            // Intersect non-N regions with the target BED (if provided). SequenceMap
-            // coordinates are block-local, so we convert to global contig space for the
-            // comparison, then back to block-local for downstream use.
-            let regions_of_interest: Vec<SequenceMap> = if let Some(bed) = &target_bed {
-                let contig_beds = bed.get(contig_name).map(|v| v.as_slice()).unwrap_or(&[]);
-                let block_offset = current_block.get_start()?;
-                intersect_with_bed(&raw_regions, contig_beds, block_offset)
-            } else {
-                raw_regions.into_iter().cloned().collect()
-            };
-            if regions_of_interest.is_empty() {
-                // This block is all N's or entirely outside the target BED
-                continue
-            }
-            let mut bias_map: Vec<f64> = vec![0.0; current_block.get_len()];
-            let mut num_mutable_area = 0.0;
-            for region in &regions_of_interest {
-                // all of these have RegionType::NonNRegion
-                // This is where we might apply bias
-                for j in region.start..region.end {
-                    bias_map[j] = 1.0;
-                    num_mutable_area += 1.0;
-                }
-            }
+        if sequence.is_empty() {
+            warn!("Contig {} has empty sequence, skipping", contig_name);
+            continue;
+        }
 
-            // Extract any user-supplied variants that fall in this block.
-            // VCF POS is 1-based contig-global; convert to 0-based block-local.
-            // Zero out those positions in bias_map so random generation doesn't
-            // double-mutate them and reduce the random mutation budget accordingly.
-            let block_start = current_block.get_start()?;
-            let block_end   = current_block.get_end()?;
-            let mut block_variants: Vec<Variant> = if let Some(iv) = &input_variants {
-                iv.get(contig_name)
-                    .map(|vs| {
-                        vs.iter()
-                            .filter(|v| {
-                                // VCF POS is 1-based; 0-based global = location - 1
-                                let pos0 = v.location.saturating_sub(1);
-                                pos0 >= block_start && pos0 < block_end
-                            })
-                            .filter_map(|v| {
-                                let local_pos = (v.location - 1) - block_start;
-                                if local_pos >= bias_map.len() {
-                                    return None;
-                                }
-                                // Only zero out if the position was mutable
-                                if bias_map[local_pos] > 0.0 {
-                                    bias_map[local_pos] = 0.0;
-                                    num_mutable_area -= 1.0;
-                                }
-                                let mut v2 = v.clone();
-                                v2.location = local_pos;
-                                Some(v2)
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default()
-            } else {
-                Vec::new()
-            };
-            debug!("Seeded {} user variant(s) into block {:?}", block_variants.len(), block_filename);
+        // Apply N-substitution in-place, then build an in-memory SequenceBlock.
+        apply_n_substitution(&mut sequence, &nuc_sub_model, rng)?;
+        let sequence_map = map_buffer(&sequence)?;
+        let current_block = SequenceBlock {
+            contig: contig_name.clone(),
+            ref_start: 0,
+            ref_end: contig_len,
+            sequence,
+            sequence_map,
+        };
 
-            // determine the number of additional random mutations for this segment
-            let num_mutations = (num_mutable_area * run_mutation_rate)
-                .trunc()
-                as usize;
-            debug!("Adding {} mutations to block {:?}", num_mutations, block_filename);
-            let mut max_del_len = 0;
-            // Update max_del_len from user variants already in the block
-            for v in &block_variants {
-                if v.variant_type == VariantType::Deletion && v.reference.len() > 1 {
-                    max_del_len = max_del_len.max(v.reference.len() - 1);
-                }
-            }
-            // Generate random mutations for unmutated positions
-            if num_mutations > 0 {
-                // first we generate variants for the block
-                let result: Option<Vec<Variant>> = generate_variants(
-                    &current_block, 
-                    &bias_map, 
-                    &mutation_model, 
-                    num_mutations, 
-                    config.ploidy, 
-                    rng
-                )?;
-                match result {
-                    Some(vec) => {
-                        // Add variants 
-                        for variant in vec {
-                            if variant.variant_type == VariantType::Deletion {
-                                // -1 because we're ignoring the reference base
-                                if variant.reference.len() - 1 > max_del_len {
-                                    // This will get us the maximum del length.
-                                    max_del_len = variant.reference.len() - 1
-                                }
-                            }
-                            block_variants.push(variant);
-                        }
-                    },
-                    None => {
-                        // No variants for this block
-                    }
-                }
-            }
-
-            let block_fragments: Vec<(usize, usize)> = {
-                let mut block_frags = Vec::new();
-                for (frag_start, frag_end) in regions_of_interest.into_iter().map(|r| (r.start, r.end)) {
-
-                    let frags = if gc_bias_model.is_uniform() {
-                        generate_fragments(
-                            frag_end - frag_start,
-                            config.read_len,
-                            max_del_len,
-                            frag_start,
-                            config.coverage,
-                            &fragment_length_model,
-                            rng,
-                        )?
-                    } else {
-                        generate_weighted_fragments(
-                            &current_block,
-                            frag_start,
-                            frag_end,
-                            config.read_len,
-                            max_del_len,
-                            config.coverage,
-                            &gc_bias_model,
-                            &fragment_length_model,
-                            config.gc_bias_normalize_coverage,
-                            rng,
-                        )?
-                    };
-
-                    if !frags.is_empty() {
-                        block_frags.extend_from_slice(&frags);
-                    }
-                }
-                block_frags
-            };
-
-            let mutated_map = MutatedMap::new(
-                block_filename.to_path_buf(),
-                block_variants,
-            )?;
-
-            if config.produce_fastq {
-                // Need a file name that helps us ID this fastq later
-                let mut file_to_write_1 = PathBuf::from(working_dir.path());
-                file_to_write_1
-                    .push(
-                        format!(
-                            "temp_{}_{:010}_{:010}_r1_tmp.fastq.gz",
-                            contig_name,
-                            current_block.get_start()?, 
-                            current_block.get_end()?,
-                        )
-                    );
-                let file1 = append_to_file(&file_to_write_1)?;
-                let writer1 = BufWriter::new(&file1);
-                let mut buffer1 = GzEncoder::new(
-                    writer1, Compression::default()
-                );
-                let read_name_prefix = format!(
-                    "RNEAT_generated_{}",
-                    current_block.contig,
-                );
-                if config.paired_ended {
-                    let mut file_to_write_2 = PathBuf::from(working_dir.path());
-                    file_to_write_2
-                        .push(
-                            format!(
-                                "temp_{}_{:010}_{:010}_r2_tmp.fastq.gz",
-                                contig_name,
-                                current_block.get_start()?, 
-                                current_block.get_end()?
-                            )
-                        );
-                    let file2 = append_to_file(&file_to_write_2)?;
-                    let writer2 = BufWriter::new(&file2);
-                    let mut buffer2 = GzEncoder::new(
-                        writer2, Compression::default()
-                    );
-                    debug!("Writing paired-ended block fastq files");
-                    write_block_fastq (
-                        block_fragments,
-                        &mutated_map,
-                        true,
-                        &mut buffer1,
-                        &mut buffer2,
-                        config.read_len,
-                        &read_name_prefix,
-                        &quality_score_model,
-                        &seq_error_model,
-                        rng,
-                        bam_writer.as_mut(),
-                    )?;
-                    contig_files_r1
-                        .push(file_to_write_1);
-                    contig_files_r2
-                        .push(file_to_write_2);
-                } else {
-                    debug!("Writing single-ended block fastq file");
-                    // Single-ended mode. We create a fake vector to hold the data we won't write.
-                    // dummy will be destroyed at the end of this block without being used.
-                    let dummy_data: VectorBuffer = VectorBuffer::new();
-                    let mut buffer2 = GzEncoder::new(
-                        dummy_data, Compression::default()
-                    );
-                    write_block_fastq (
-                        block_fragments,
-                        &mutated_map,
-                        false,
-                        &mut buffer1,
-                        &mut buffer2,
-                        config.read_len,
-                        &read_name_prefix,
-                        &quality_score_model,
-                        &seq_error_model,
-                        rng,
-                        bam_writer.as_mut(),
-                    )?;
-                    contig_files_r1
-                        .push(file_to_write_1)
-                }
-            } 
-            contig_maps.push(mutated_map);
-            if let Some(bam) = bam_writer.as_mut() {
-                bam.flush_up_to(current_block.get_end()?)?;
+        debug!("    > Generating bias map.");
+        let raw_regions = current_block.get_non_n_regions()?;
+        let regions_of_interest: Vec<SequenceMap> = if let Some(bed) = &target_bed {
+            let contig_beds = bed.get(&contig_name).map(|v| v.as_slice()).unwrap_or(&[]);
+            intersect_with_bed(&raw_regions, contig_beds, 0)
+        } else {
+            raw_regions.into_iter().cloned().collect()
+        };
+        if regions_of_interest.is_empty() {
+            continue;
+        }
+        let mut bias_map: Vec<f64> = vec![0.0; current_block.get_len()];
+        let mut num_mutable_area = 0.0_f64;
+        for region in &regions_of_interest {
+            for j in region.start..region.end {
+                bias_map[j] = 1.0;
+                num_mutable_area += 1.0;
             }
         }
+
+        // VCF POS is 1-based; with ref_start=0 the local position is simply location-1.
+        let block_end = contig_len;
+        let mut block_variants: Vec<Variant> = if let Some(iv) = &input_variants {
+            iv.get(&contig_name)
+                .map(|vs| {
+                    vs.iter()
+                        .filter(|v| {
+                            let pos0 = v.location.saturating_sub(1);
+                            pos0 < block_end
+                        })
+                        .filter_map(|v| {
+                            let local_pos = v.location - 1;
+                            if local_pos >= bias_map.len() {
+                                return None;
+                            }
+                            if bias_map[local_pos] > 0.0 {
+                                bias_map[local_pos] = 0.0;
+                                num_mutable_area -= 1.0;
+                            }
+                            let mut v2 = v.clone();
+                            v2.location = local_pos;
+                            Some(v2)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        debug!("Seeded {} user variant(s) into contig {}", block_variants.len(), contig_name);
+
+        let num_mutations = (num_mutable_area * run_mutation_rate).trunc() as usize;
+        debug!("Adding {} mutations to contig {}", num_mutations, contig_name);
+        let mut max_del_len = 0;
+        for v in &block_variants {
+            if v.variant_type == VariantType::Deletion && v.reference.len() > 1 {
+                max_del_len = max_del_len.max(v.reference.len() - 1);
+            }
+        }
+        if num_mutations > 0 {
+            let result: Option<Vec<Variant>> = generate_variants(
+                &current_block,
+                &bias_map,
+                &mutation_model,
+                num_mutations,
+                config.ploidy,
+                rng
+            )?;
+            match result {
+                Some(vec) => {
+                    for variant in vec {
+                        if variant.variant_type == VariantType::Deletion {
+                            if variant.reference.len() - 1 > max_del_len {
+                                max_del_len = variant.reference.len() - 1
+                            }
+                        }
+                        block_variants.push(variant);
+                    }
+                },
+                None => {}
+            }
+        }
+
+        let block_fragments: Vec<(usize, usize)> = {
+            let mut block_frags = Vec::new();
+            for (frag_start, frag_end) in regions_of_interest.into_iter().map(|r| (r.start, r.end)) {
+                let frags = if gc_bias_model.is_uniform() {
+                    generate_fragments(
+                        frag_end - frag_start,
+                        config.read_len,
+                        max_del_len,
+                        frag_start,
+                        config.coverage,
+                        &fragment_length_model,
+                        rng,
+                    )?
+                } else {
+                    generate_weighted_fragments(
+                        &current_block,
+                        frag_start,
+                        frag_end,
+                        config.read_len,
+                        max_del_len,
+                        config.coverage,
+                        &gc_bias_model,
+                        &fragment_length_model,
+                        config.gc_bias_normalize_coverage,
+                        rng,
+                    )?
+                };
+                if !frags.is_empty() {
+                    block_frags.extend_from_slice(&frags);
+                }
+            }
+            block_frags
+        };
+
+        let mutated_map = MutatedMap::from_interval(0, block_end, block_variants)?;
+
+        let mut contig_files_r1: Vec<PathBuf> = Vec::new();
+        let mut contig_files_r2: Vec<PathBuf> = Vec::new();
+
+        if config.produce_fastq {
+            let mut file_to_write_1 = PathBuf::from(working_dir.path());
+            file_to_write_1.push(format!(
+                "temp_{}_{:010}_{:010}_r1_tmp.fastq.gz",
+                contig_name,
+                current_block.get_start()?,
+                current_block.get_end()?,
+            ));
+            let file1 = append_to_file(&file_to_write_1)?;
+            let writer1 = BufWriter::new(&file1);
+            let mut buffer1 = GzEncoder::new(writer1, Compression::default());
+            let read_name_prefix = format!("RNEAT_generated_{}", current_block.contig);
+            if config.paired_ended {
+                let mut file_to_write_2 = PathBuf::from(working_dir.path());
+                file_to_write_2.push(format!(
+                    "temp_{}_{:010}_{:010}_r2_tmp.fastq.gz",
+                    contig_name,
+                    current_block.get_start()?,
+                    current_block.get_end()?,
+                ));
+                let file2 = append_to_file(&file_to_write_2)?;
+                let writer2 = BufWriter::new(&file2);
+                let mut buffer2 = GzEncoder::new(writer2, Compression::default());
+                debug!("Writing paired-ended contig fastq files");
+                write_block_fastq(
+                    block_fragments,
+                    &mutated_map,
+                    &current_block,
+                    true,
+                    &mut buffer1,
+                    &mut buffer2,
+                    config.read_len,
+                    &read_name_prefix,
+                    &quality_score_model,
+                    &seq_error_model,
+                    rng,
+                    bam_writer.as_mut(),
+                )?;
+                contig_files_r1.push(file_to_write_1);
+                contig_files_r2.push(file_to_write_2);
+            } else {
+                debug!("Writing single-ended contig fastq file");
+                let dummy_data: VectorBuffer = VectorBuffer::new();
+                let mut buffer2 = GzEncoder::new(dummy_data, Compression::default());
+                write_block_fastq(
+                    block_fragments,
+                    &mutated_map,
+                    &current_block,
+                    false,
+                    &mut buffer1,
+                    &mut buffer2,
+                    config.read_len,
+                    &read_name_prefix,
+                    &quality_score_model,
+                    &seq_error_model,
+                    rng,
+                    bam_writer.as_mut(),
+                )?;
+                contig_files_r1.push(file_to_write_1);
+            }
+        }
+
         if let Some(bam) = bam_writer.as_mut() {
             bam.flush_all()?;
         }
-        mutated_maps.insert(contig_name.clone(), contig_maps.clone());
-        all_fastq_files.insert(contig_name.clone(), (contig_files_r1, contig_files_r2));
+        mutated_maps.insert(contig_name.clone(), vec![mutated_map]);
+        all_fastq_files.insert(contig_name, (contig_files_r1, contig_files_r2));
     }
 
     info!("Read generation complete, producing output files");
@@ -465,7 +411,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
         // Warn when the genome is large enough that loading all reads into memory
         // for the global shuffle may be impractical. For human-scale genomes (>500 Mbp)
         // consider post-processing with `seqkit shuffle` instead.
-        let total_genome_bp: usize = fasta_map.contigs.iter().map(|c| c.contig_len).sum();
+        let total_genome_bp: usize = fasta_lengths.values().sum();
         if total_genome_bp > 500_000_000 {
             warn!(
                 "Genome is {:.1} Gbp. The global FASTQ shuffle loads all reads into memory. \
@@ -548,15 +494,9 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
 
     if let Some(filename) = &config.output_vcf {
         info!("Writing output vcf file");
-        // Maps contig to a total contig size, a required entry for a valid vcf file.
-        let mut fasta_lengths: HashMap<String, usize> = HashMap::new();
-        let contigs = fasta_map.contigs.clone();
-        for contig in contigs {
-            fasta_lengths.insert(contig.name.clone(), contig.contig_len);
-        }
         let result = write_vcf(
             &mutated_maps,
-            &fasta_map.contig_order,
+            &contig_order,
             &fasta_lengths,
             &config.reference,
             config.overwrite_output,

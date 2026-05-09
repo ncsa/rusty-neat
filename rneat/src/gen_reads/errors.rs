@@ -5,6 +5,7 @@ use common::{
         bam_writer::BamWriterError,
         bed_reader::BedReaderError,
         fasta_reader::FastaReaderError,
+        fasta_stream::FastaStreamError,
         fastq_tools::FastqToolsError,
         vcf_tools::VcfToolsError,
     },
@@ -93,4 +94,6 @@ pub enum GenerateReadsError {
     ShortSequence,
     #[error("GC Bias model threw an error: {0}")]
     BiasModelError(#[from] GcBiasModelError),
+    #[error("Error streaming FASTA: {0}")]
+    FastaStreamError(#[from] FastaStreamError),
 }

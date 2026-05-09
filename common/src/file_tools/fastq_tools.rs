@@ -77,6 +77,7 @@ fn reverse_complement(sequence: Vec<Nucleotide>) -> Vec<Nucleotide> {
 pub fn write_block_fastq<T: Write, W: Write> (
     block_fragments: Vec<(usize, usize)>,
     block_map: &MutatedMap,
+    sequence_block: &SequenceBlock,
     paired_ended: bool,
     buffer1: &mut GzEncoder<T>,
     buffer2: &mut GzEncoder<W>,
@@ -87,8 +88,7 @@ pub fn write_block_fastq<T: Write, W: Write> (
     rng: &mut NeatRng,
     mut bam_writer: Option<&mut BamWriter>,
 ) -> Result<(), FastqToolsError> {
-    debug!("writing reads for {:?}", block_map.sequence_block);
-    let sequence_block: SequenceBlock = SequenceBlock::from(&block_map.sequence_block)?;
+    debug!("writing reads for {}", sequence_block.contig);
     for (start, end) in block_fragments {
         let fragment = sequence_block.get_subseq(start, end)?;
         let mut read1_variants: HashMap<usize, &Variant> = HashMap::new();
@@ -564,7 +564,7 @@ mod tests {
         let quality_model = QualityScoreModel::default().unwrap();
         let mut rng = NeatRng::new_from_seed(&vec!["test".to_string()]).unwrap();
         write_block_fastq(
-            fragments, &mutated_map, false,
+            fragments, &mutated_map, &block, false,
             &mut buf1, &mut buf2,
             10, "chr1",
             &quality_model, &seq_err_model, &mut rng,

@@ -65,6 +65,32 @@ impl MutatedMap {
         })
     }
 
+    /// Construct a MutatedMap from explicit interval coordinates, bypassing filename parsing.
+    /// Used by the streaming FASTA path where no temp block file exists.
+    pub fn from_interval(
+        start: usize,
+        end: usize,
+        variant_vec: Vec<Variant>,
+    ) -> Result<Self, MutatedMapError> {
+        let mut variant_map: HashMap<usize, Variant> = HashMap::new();
+        let mut flagged_positions: Vec<usize> = Vec::new();
+        for variant in variant_vec {
+            let location = variant.get_loc()?;
+            if variant_map.contains_key(&location) {
+                debug!("Two mutations sampled at position {}; keeping first, discarding second", location);
+                continue;
+            }
+            variant_map.insert(location, variant);
+            flagged_positions.push(location);
+        }
+        Ok(MutatedMap {
+            flagged_positions,
+            sequence_block: PathBuf::new(),
+            block_interval: (start, end),
+            variant_map,
+        })
+    }
+
     pub fn is_flagged(&self, position: &usize) -> bool {
         // Checks if this position is flagged
         self.flagged_positions.contains(position)

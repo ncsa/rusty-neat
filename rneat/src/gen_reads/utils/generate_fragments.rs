@@ -21,21 +21,19 @@ pub fn generate_fragments(
     max_del_len: usize,
     start: usize,
     coverage: usize,
+    paired_ended: bool,
     fragment_model: &FragmentLengthModel,
     rng: &mut NeatRng,
 ) -> Result<Vec<(usize, usize)>, GenerateReadsError> {
     // Takes:
     // sequence_length: The length of the sequence to generate reads for.
-    // read_length: the length ef the reads for this run
+    // read_length: the length of the reads for this run
     // coverage: the average depth of coverage for this run
+    // paired_ended: when false, read_length is used as the fragment length so that
+    //   coverage is computed in read-length steps rather than insert-size steps.
     // rng: the random number generator for the run
     // Returns:
-    // HashSet of vectors representing the read sequences, stored on the heap in box.
-    //
-    // This takes a mutated sequence and produces a set of reads based on the mutated sequence. For
-    // paired ended reads, this will generate a set of reads from each end, by taking the reverse
-    // complement in the output
-    //
+    // A vector of (start, end) pairs representing fragment coordinates.
     let mut fragment_pool: Vec<usize> = Vec::new();
     // First thing we'll do is throw out regions where we can't get a full read.
     // Adding the 2 * max_del_len should ensure we are sufficiently padded.
@@ -43,20 +41,22 @@ pub fn generate_fragments(
         debug!("Sequence length was too short, maybe because of a small bed region.");
         return Ok(Vec::new())
     }
-    
+
     let num_frags = (sequence_length / read_length) * coverage;
-    // add fragments to the fragment pool
-    for _ in 0..num_frags {
-        let frag = fragment_model.generate_fragment(rng.random()?)?;
-        // filter fragments
-        if frag < read_length {
-            continue
-        } else {
-            fragment_pool.push(frag);
+    if paired_ended {
+        // For paired-end reads the physical fragment length (insert size) determines spacing.
+        for _ in 0..num_frags {
+            let frag = fragment_model.generate_fragment(rng.random()?)?;
+            if frag >= read_length {
+                fragment_pool.push(frag);
+            }
         }
+    } else {
+        // For single-end reads the fragment is exactly one read long; the fragment model
+        // is irrelevant for spacing and would cause under-coverage if its mean >> read_length.
+        fragment_pool = vec![read_length; num_frags];
     }
     if fragment_pool.is_empty() {
-        // Not sure if this should be a recoverable error.
         debug!("Fragment pool is empty.");
         return Ok(Vec::new())
     }
@@ -295,8 +295,7 @@ fn cover_dataset(
         fragment_set.push((start+read_start, temp_end+read_start));
         // Picks a number between zero and a quarter of a read length
         let wildcard: usize = (rng.rand_u32().unwrap() % 10) as usize;
-        // adds to the start to give it some spice
-        start += temp_end + wildcard;
+        start = temp_end + wildcard;
         // sanity check. If we are out of bounds, take the modulo
         if start >= span_length {
             // get us back in bounds
@@ -400,10 +399,13 @@ mod tests {
             0,
             0,
             coverage,
+            false,
             &fragment_model,
             &mut rng,
         ).unwrap();
-        assert!(reads.contains(&(0, 382)));
+        // With paired_ended=false every fragment is exactly read_length wide.
+        assert!(!reads.is_empty());
+        assert!(reads.iter().all(|(s, e)| e - s == read_length));
     }
 
     #[test]
@@ -425,10 +427,17 @@ mod tests {
             0,
             0,
             coverage,
+            false,
             &fragment_model,
             &mut rng,
         ).unwrap();
 
+        // Reset to the same seed for reproducibility check.
+        let mut rng2 = NeatRng::new_from_seed(&vec![
+            "Hello".to_string(),
+            "Cruel".to_string(),
+            "World".to_string(),
+        ]).unwrap();
         let fragment_model = FragmentLengthModel::default().unwrap();
         let run2 = generate_fragments(
             sequence.len(),
@@ -436,8 +445,9 @@ mod tests {
             0,
             0,
             coverage,
+            false,
             &fragment_model,
-            &mut rng,
+            &mut rng2,
         ).unwrap();
 
         assert_eq!(run1, run2)
@@ -460,6 +470,7 @@ mod tests {
             0,
             0,
             coverage,
+            true,
             &fragment_model,
             &mut rng,
         ).unwrap();

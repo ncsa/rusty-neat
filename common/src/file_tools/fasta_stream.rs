@@ -97,12 +97,14 @@ pub fn map_buffer(sequence: &[Nucleotide]) -> Vec<SequenceMap> {
     let mut map: Vec<SequenceMap> = Vec::new();
     let mut region_start = 0;
     let mut region_end = 1;
-    let mut inside_n_region = matches!(sequence[0], N | X | Maskeda | Maskedc | Maskedg | Maskedt);
+    // Soft-masked bases (Maskeda/c/g/t) represent repeat-annotated but valid sequence;
+    // treat them as regular bases for region mapping. Only N and X mark true gaps.
+    let mut inside_n_region = matches!(sequence[0], N | X);
 
     if inside_n_region {
         for base in &sequence[1..] {
             match base {
-                N | X | Maskeda | Maskedc | Maskedg | Maskedt => region_end += 1,
+                N | X => region_end += 1,
                 _ => {
                     map.push(SequenceMap::from(RegionType::NRegion, 0, region_end));
                     region_start = region_end;
@@ -120,7 +122,7 @@ pub fn map_buffer(sequence: &[Nucleotide]) -> Vec<SequenceMap> {
 
     for base in &sequence[region_end..] {
         match base {
-            N | X | Maskeda | Maskedc | Maskedg | Maskedt => {
+            N | X => {
                 if inside_n_region {
                     region_end += 1;
                 } else {

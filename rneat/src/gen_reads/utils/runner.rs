@@ -452,6 +452,7 @@ fn process_contig(
                     max_del_len,
                     frag_start,
                     ctx.config.coverage,
+                    ctx.config.paired_ended,
                     ctx.fragment_length_model,
                     &mut rng,
                 )?

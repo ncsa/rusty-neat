@@ -291,7 +291,7 @@ fn generate_read(
     template_length: i32,
     is_paired: bool,
 ) -> Result<ReadRecord, FastqToolsError> {
-    if sequence.len() <= read_length {
+    if sequence.len() < read_length {
         return Err(FastqToolsError::TruncatedRead(format!("{:?}", sequence)))
     }
 

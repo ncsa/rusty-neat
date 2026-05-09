@@ -219,7 +219,9 @@ impl MutationModel {
         // Select a type of mutation.
         let index = self.variant_dist.sample(rng.random()?)?;
         let mut variant_type = VariantType::from(index);
-        let ref_base = reference_sequence[variant_location];
+        // Unmask before use: soft-masked (a/c/g/t) and post-N-substitution bases
+        // must not appear as-is in VCF REF/ALT or FASTQ reads.
+        let ref_base = check_base(reference_sequence[variant_location]);
         // For insertions and SNPs, the reference will be the ref_base
         let mut reference: Vec<Nucleotide> = vec![ref_base];
         // For deletions, the alternate will be the ref_base
@@ -263,14 +265,16 @@ impl MutationModel {
                 // to how we appended bases to the reference in the insertion model.
                 if (variant_location + length as usize + 1) > reference_sequence.len() {
                     // Too close to the end, so let's skip this
-                    let ref_base = reference_sequence[variant_location];
+                    let ref_base = check_base(reference_sequence[variant_location]);
                     alternate = pick_random_snp(ref_base, rng)?;
                     variant_type = VariantType::SNP;
                 } else {
                     reference = reference_sequence
                         .get(variant_location..(variant_location + length as usize + 1))
                         .unwrap()
-                        .to_vec();
+                        .iter()
+                        .map(|&b| check_base(b))
+                        .collect();
                 }
             },
             _ => {

@@ -64,6 +64,14 @@ Moved the code from a brach under NEAT (https://github.com/ncsa/neat) to its own
 =========
 
 ## rneat v1.4.0
+- `gen-reads` bug fix: `generate_read` in `fastq_tools.rs` was rejecting fragments whose length equals `read_length` (`<=` guard); all single-ended reads were silently discarded. Changed to `<` so fragments of exactly `read_length` are accepted.
+- `gen-reads` bug fix: `map_buffer` in `fasta_stream.rs` was treating soft-masked bases (`Maskeda/c/g/t`) as N-regions, excluding repeat-annotated but valid sequence from read generation. Only `N` and `X` now delimit true gap regions.
+- `gen-reads` bug fix: `generate_fragments` was drawing fragment lengths from the fragment model for single-ended runs, causing severe under-coverage when the model mean exceeds `read_length`. Single-ended fragments are now fixed at exactly `read_length`; the fragment model applies only to paired-ended runs.
+- `gen-reads` bug fix: `cover_dataset` accumulated `start` across loop iterations instead of resetting to `temp_end`, causing reads to pile up at the beginning of each region rather than spanning it evenly.
+- `gen-reads` / `mutation_model` bug fix: soft-masked nucleotides (`Maskeda/c/g/t`) were leaking into VCF REF/ALT fields and FASTQ read sequences as lowercase letters (`a/c/g/t`). `generate_mutation` now applies `check_base()` to the extracted `ref_base` and to each base of the deletion reference slice, unmasking all bases before they are written to output.
+- New integration tests in `gen-reads`: `test_paired_ended_bam_flags_correct` (SAM flags on every R1/R2 record), `test_paired_ended_insert_size_matches_model` (TLEN mean within ±20% of configured fragment mean), `test_input_vcf_snp_appears_in_bam_reads` (seeded input-VCF SNP visible in BAM reads at the correct position).
+
+
 - `gen-seq-error-model`: FASTQ input is now streamed one record at a time instead of being fully loaded into memory. Peak memory is bounded by a single record rather than the entire file, which matters for large (multi-GB) FASTQ inputs. The `max_reads` early-exit now also fires without reading the rest of the file.
 - `gen-mut-model`: Trinucleotide probability computation is now O(n) instead of O(n²). Transition counts are pre-grouped by reference frame once before the probability loop, eliminating a redundant linear scan per trinucleotide context.
 - `filter-reads` (`filter_fastq` and `filter_vcf`): Replaced `format!("{}\n", line)` heap allocations on every written line with two `write_all` calls (bytes + newline). Eliminated double HashMap lookups (`contains_key` + index) in favour of a single `get` call. Contig name reconstruction changed from a manual push loop to `join("_")`. The read-name prefix check simplified from `find` + index comparison to `starts_with`.

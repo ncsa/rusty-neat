@@ -298,6 +298,192 @@ mod tests {
         );
     }
 
+    /// Every record in a paired-ended BAM must carry consistent SAM flags:
+    /// all reads have the SEGMENTED (0x1) bit set; R1 has FIRST_SEGMENT (0x40) and
+    /// MATE_REVERSE_COMPLEMENTED (0x20) but not REVERSE_COMPLEMENTED (0x10); R2 has
+    /// LAST_SEGMENT (0x80) and REVERSE_COMPLEMENTED (0x10). Also checks that the
+    /// number of R1 and R2 records match, which would catch any read-drop or
+    /// duplication in the BAM staging path.
+    #[test]
+    fn test_paired_ended_bam_flags_correct() {
+        use noodles::sam::alignment::record::Flags;
+
+        let out = tempdir().unwrap();
+        let config = make_config(&h1n1_reference(), out.path(), true);
+        let bam_path = config.output_bam.clone().unwrap();
+        run(config);
+
+        let mut reader = bam::io::Reader::new(std::fs::File::open(&bam_path).unwrap());
+        reader.read_header().unwrap();
+
+        let mut r1_count = 0usize;
+        let mut r2_count = 0usize;
+
+        for result in reader.records() {
+            let record = result.unwrap();
+            let flags = record.flags();
+
+            assert!(
+                flags.is_segmented(),
+                "PAIRED flag (0x1) must be set on every record in a paired-ended BAM"
+            );
+
+            if flags.is_first_segment() {
+                r1_count += 1;
+                assert!(
+                    !flags.is_reverse_complemented(),
+                    "R1 must not have REVERSE_COMPLEMENTED (0x10); flags={:?}", flags
+                );
+                assert!(
+                    flags.contains(Flags::MATE_REVERSE_COMPLEMENTED),
+                    "R1 must have MATE_REVERSE_COMPLEMENTED (0x20); flags={:?}", flags
+                );
+            } else {
+                assert!(
+                    flags.is_last_segment(),
+                    "Record is neither R1 (FIRST_SEGMENT) nor R2 (LAST_SEGMENT); flags={:?}", flags
+                );
+                r2_count += 1;
+                assert!(
+                    flags.is_reverse_complemented(),
+                    "R2 must have REVERSE_COMPLEMENTED (0x10); flags={:?}", flags
+                );
+            }
+        }
+
+        assert!(r1_count > 0, "Paired-ended BAM produced no R1 records");
+        assert_eq!(
+            r1_count, r2_count,
+            "R1 count ({r1_count}) must equal R2 count ({r2_count}) in a paired-ended BAM"
+        );
+    }
+
+    /// When a paired-ended run is configured with an explicit fragment_mean, the
+    /// template lengths (TLEN) recorded in the BAM should reflect that model.
+    /// make_config uses fragment_mean=200, fragment_st_dev=30 for paired runs.
+    /// We collect |TLEN| from R1 records and assert the mean is within ±20% of 200.
+    #[test]
+    fn test_paired_ended_insert_size_matches_model() {
+        let out = tempdir().unwrap();
+        let config = make_config(&h1n1_reference(), out.path(), true);
+        let bam_path = config.output_bam.clone().unwrap();
+        run(config);
+
+        let mut reader = bam::io::Reader::new(std::fs::File::open(&bam_path).unwrap());
+        reader.read_header().unwrap();
+
+        let mut tlens: Vec<f64> = Vec::new();
+        for result in reader.records() {
+            let record = result.unwrap();
+            let flags = record.flags();
+            // Collect only R1 records so each template is counted once.
+            if !flags.is_segmented() || !flags.is_first_segment() {
+                continue;
+            }
+            let tlen = record.template_length().unsigned_abs() as f64;
+            if tlen > 0.0 {
+                tlens.push(tlen);
+            }
+        }
+
+        assert!(!tlens.is_empty(), "No TLEN values found in paired-ended BAM");
+        let mean = tlens.iter().sum::<f64>() / tlens.len() as f64;
+        let expected = 200.0_f64;
+        let tolerance = 0.20;
+        assert!(
+            (mean - expected).abs() <= expected * tolerance,
+            "Mean insert size {mean:.1} is not within ±20% of expected {expected:.1} \
+             (fragment_mean=200, fragment_st_dev=30)"
+        );
+    }
+
+    /// Seeds a homozygous A→T SNP at H1N1_HA:100 via input VCF, runs with BAM
+    /// output enabled, then confirms that at least one aligned read covering that
+    /// position carries the T alt allele. This is the end-to-end check for variant
+    /// injection: the output VCF test only verifies the metadata path, not that reads
+    /// actually encode the mutation.
+    #[test]
+    fn test_input_vcf_snp_appears_in_bam_reads() {
+        let out = tempdir().unwrap();
+
+        let vcf_path = out.path().join("input.vcf");
+        std::fs::write(&vcf_path,
+            "##fileformat=VCFv4.2\n\
+             #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n\
+             H1N1_HA\t100\t.\tA\tT\t.\tPASS\t.\tGT\t1/1\n"
+        ).unwrap();
+
+        let mut yaml = NamedTempFile::new().unwrap();
+        write!(yaml,
+            "reference: {ref}\nread_len: 50\ncoverage: 10\n\
+             produce_fastq: true\nproduce_bam: true\nproduce_vcf: false\n\
+             output_dir: {out}\noutput_filename: vcf_bam_test\noverwrite_output: true\n\
+             rng_seed: vcf bam test\ninput_vcf: {vcf}\n",
+            ref = h1n1_reference().display(),
+            out = out.path().display(),
+            vcf = vcf_path.display(),
+        ).unwrap();
+        let config = RunConfiguration::from_yaml_file(&yaml.path().to_path_buf()).unwrap();
+        let bam_path = config.output_bam.clone().unwrap();
+        run(config);
+
+        let mut reader = bam::io::Reader::new(std::fs::File::open(&bam_path).unwrap());
+        let header = reader.read_header().unwrap();
+
+        // Locate H1N1_HA's 0-based contig index in the BAM header.
+        // BString::as_bytes() is crate-private; go through the public AsRef<[u8]> impl.
+        let ha_idx = header
+            .reference_sequences()
+            .iter()
+            .enumerate()
+            .find_map(|(i, (name, _))| {
+                let name_bytes: &[u8] = name.as_ref();
+                if name_bytes == b"H1N1_HA" { Some(i) } else { None }
+            })
+            .expect("H1N1_HA not found in BAM header");
+
+        // SNP at VCF position 100 (1-based) = 99 (0-based).
+        // A read of length 50 covers this position when its 0-based start is in [50, 99].
+        let variant_pos_0based: usize = 99;
+        let read_len: usize = 50;
+
+        let mut alt_seen = false;
+        for result in reader.records() {
+            let record = result.unwrap();
+            let ref_id = match record.reference_sequence_id() {
+                Some(Ok(id)) => id,
+                _ => continue,
+            };
+            if ref_id != ha_idx {
+                continue;
+            }
+            let aln_start_0based = match record.alignment_start() {
+                Some(Ok(p)) => p.get() - 1,
+                _ => continue,
+            };
+            if aln_start_0based > variant_pos_0based {
+                continue;
+            }
+            let offset = variant_pos_0based - aln_start_0based;
+            if offset >= read_len {
+                continue;
+            }
+            let sequence = record.sequence();
+            if let Some(base_byte) = sequence.get(offset) {
+                if (base_byte as char).to_ascii_uppercase() == 'T' {
+                    alt_seen = true;
+                    break;
+                }
+            }
+        }
+
+        assert!(
+            alt_seen,
+            "Expected at least one BAM read with T at H1N1_HA:100 (homozygous A→T SNP) \
+             but no such read was found"
+        );
+    }
+
     /// Supply a VCF with a single known SNP on H1N1_HA and verify it appears in the
     /// output VCF. The SNP is at 1-based position 100 (A→T); H1N1_HA position 99
     /// (0-based) is confirmed non-N so the variant will be applied.

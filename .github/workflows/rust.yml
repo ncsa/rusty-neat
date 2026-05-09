@@ -7,38 +7,43 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-
     strategy:
       matrix:
-        target: [x86_64-unknown-linux-gnu, x86_64-pc-windows-msvc, x86_64-apple-darwin]
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+
+    runs-on: ${{ matrix.os }}
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Rust
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
-          target: ${{ matrix.target }}
-          override: true
+          targets: ${{ matrix.target }}
 
       - name: Build release binary
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Prepare binary for upload
+        shell: bash
         run: |
           mkdir -p release
           if [[ "${{ matrix.target }}" == *"windows"* ]]; then
-            cp target/${{ matrix.target }}/release/your_binary.exe release/your_binary-${{ matrix.target }}.exe
+            cp target/${{ matrix.target }}/release/rneat.exe release/rneat-${{ matrix.target }}.exe
           else
-            cp target/${{ matrix.target }}/release/your_binary release/your_binary-${{ matrix.target }}
+            cp target/${{ matrix.target }}/release/rneat release/rneat-${{ matrix.target }}
           fi
 
       - name: Upload release asset
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
-          files: release/your_binary-${{ matrix.target }}*
+          files: release/rneat-${{ matrix.target }}*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

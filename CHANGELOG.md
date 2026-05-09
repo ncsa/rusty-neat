@@ -60,6 +60,15 @@ Moved the code from a brach under NEAT (https://github.com/ncsa/neat) to its own
 - Added bed filtering functions. Now if you supply a "filter_output" bed file to your gen-reads run, it will produce the original files plus a filtered version showing only reads and variants that overlap with the regions in the bed.
 - It's also possible to run this utility separately with `rneat filter-reads`
 
+5/9/2026
+=========
+
+## rneat v1.4.0
+- Streaming FASTA reader (`FastaStream`) moved from `gen-gc-bias-model` to the `common` crate, making it available to all subcommands. `gen-reads` now streams the reference one contig at a time instead of writing temp JSON block files, eliminating up to ~570 MB of disk I/O for human-scale genomes and capping peak memory to a single contig rather than the full genome.
+- Contig-level parallelism added to `gen-reads` via rayon `par_bridge`. When `produce_bam: false`, all contigs are processed concurrently using rayon's work-stealing thread pool; the output ordering is preserved by sorting results by contig index before writing. BAM output continues to use a sequential loop because coordinate-sorted writes must occur in reference order.
+- New `num_threads` config key in `gen-reads`. Set to an integer to cap the rayon thread pool used for parallel contig processing. Omit (or set to `.`) to use all available cores (default). Set to `1` to disable parallelism entirely. Has no effect when `produce_bam: true`.
+- `NeatRng::derive_child(idx)` added to the common RNG: each parallel contig task derives a deterministic per-contig seed from the parent RNG state and the contig index, so results are fully reproducible regardless of thread scheduling.
+
 5/3/2026
 =========
 

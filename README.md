@@ -560,3 +560,7 @@ Only reads that satisfy all of the following are used:
 
 **Outlier filtering:**  
 Fragment lengths that exceed `median + 10 × MAD` (median absolute deviation) are removed before fitting. This mirrors the filtering in Python NEAT's fragment length modeler. If no lengths survive the filter, lower `min_reads` or set it to `0`.
+
+**Zenodo release**
+
+[![DOI](https://zenodo.org/badge/765847780.svg)](https://doi.org/10.5281/zenodo.20100558)

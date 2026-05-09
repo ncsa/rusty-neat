@@ -17,7 +17,7 @@ use crate::structs::sequence_block::{SequenceBlock, SequenceBlockError};
 use crate::structs::nucleotides::Nucleotide;
 use crate::structs::read_record::ReadRecord;
 use crate::file_tools::file_io::{append_to_file, read_gzip_lines};
-use crate::file_tools::bam_writer::BamWriter;
+use crate::file_tools::bam_writer::BamRecordStager;
 use crate::models::quality_scores::QualityScoreModel;
 use crate::models::sequencing_error_model::{SeqModelError, SequencingErrorModel, SequencingErrorType};
 use crate::structs::nucleotides::Nucleotide::N;
@@ -86,7 +86,7 @@ pub fn write_block_fastq<T: Write, W: Write> (
     quality_score_model: &QualityScoreModel,
     sequencing_error_model: &SequencingErrorModel,
     rng: &mut NeatRng,
-    mut bam_writer: Option<&mut BamWriter>,
+    mut bam_writer: Option<&mut dyn BamRecordStager>,
 ) -> Result<(), FastqToolsError> {
     debug!("writing reads for {}", sequence_block.contig);
     for (start, end) in block_fragments {

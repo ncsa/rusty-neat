@@ -192,6 +192,112 @@ mod tests {
         assert_eq!(count, 0, "Expected no reads when BED references only unknown contigs, got {count}");
     }
 
+    /// When produce_fastq=false and produce_bam=true, read staging only happens inside
+    /// the produce_fastq block. The BAM is therefore header-only (0 records) but must
+    /// still be a valid, readable file. This test locks in that behavior so any future
+    /// change to stage reads regardless of produce_fastq will be caught.
+    #[test]
+    fn test_bam_only_no_fastq_produces_readable_empty_bam() {
+        let out = tempdir().unwrap();
+
+        let mut yaml = NamedTempFile::new().unwrap();
+        write!(yaml,
+            "reference: {ref}\nread_len: 50\ncoverage: 2\n\
+             produce_fastq: false\nproduce_bam: true\nproduce_vcf: false\n\
+             output_dir: {out}\noutput_filename: bam_only_test\noverwrite_output: true\n\
+             rng_seed: bam only test\npaired_ended: false\n",
+            ref = h1n1_reference().display(),
+            out = out.path().display(),
+        ).unwrap();
+        let config = RunConfiguration::from_yaml_file(&yaml.path().to_path_buf()).unwrap();
+        let bam_path = config.output_bam.clone().unwrap();
+        // The config builder sets output_fastq_1 for single-ended runs unconditionally;
+        // what matters is that the FASTQ file is never written to disk.
+        let fastq_path = config.output_fastq_1.clone();
+
+        run(config);
+
+        if let Some(ref fq) = fastq_path {
+            assert!(!fq.exists(),
+                "FASTQ file must not be created when produce_fastq=false");
+        }
+
+        assert!(bam_path.exists(), "BAM file must exist even with produce_fastq=false");
+
+        // Verify the file is a structurally valid BAM (readable header + alignment section).
+        // Record count is 0 because staging happens inside the produce_fastq block.
+        let mut reader = bam::io::Reader::new(std::fs::File::open(&bam_path).unwrap());
+        let header = reader.read_header().unwrap();
+        let n_ref_seqs = header.reference_sequences().len();
+        assert_eq!(n_ref_seqs, 8,
+            "H1N1 BAM header should list 8 reference sequences, got {n_ref_seqs}");
+
+        let record_count = reader.records().count();
+        assert_eq!(record_count, 0,
+            "expected 0 BAM records when produce_fastq=false (staging skipped), got {record_count}");
+    }
+
+    /// Running with an explicit num_threads exercises the ThreadPoolBuilder path in
+    /// run_neat. Verifies the BAM is non-empty, sorted, and has the same record count
+    /// as the FASTQ — which confirms the parallel-gather and sort-by-idx logic are
+    /// correct under an explicitly-sized thread pool.
+    #[test]
+    fn test_bam_explicit_num_threads_sorted_and_consistent() {
+        let out = tempdir().unwrap();
+
+        // Start from make_config and inject num_threads afterward (the field is pub).
+        let mut config = make_config(&h1n1_reference(), out.path(), false);
+        config.num_threads = Some(2);
+
+        let bam_path = config.output_bam.clone().unwrap();
+        let fastq_path = config.output_fastq_1.clone().unwrap();
+        run(config);
+
+        let positions = bam_positions(&bam_path);
+        assert!(!positions.is_empty(), "BAM should contain records with num_threads=2");
+
+        for window in positions.windows(2) {
+            assert!(
+                window[0] <= window[1],
+                "BAM is not coordinate-sorted with num_threads=2: {:?} followed by {:?}",
+                window[0], window[1]
+            );
+        }
+
+        let fastq_count = fastq_record_count(&fastq_path);
+        assert_eq!(
+            positions.len(), fastq_count,
+            "BAM record count ({}) must equal FASTQ record count ({}) with num_threads=2",
+            positions.len(), fastq_count
+        );
+    }
+
+    /// An explicit thread count must produce deterministic output: the same seed with
+    /// num_threads=2 and the default (None) pool should yield identical BAM positions.
+    #[test]
+    fn test_bam_num_threads_deterministic_matches_default() {
+        let out_explicit = tempdir().unwrap();
+        let out_default = tempdir().unwrap();
+
+        let mut config_explicit = make_config(&h1n1_reference(), out_explicit.path(), false);
+        config_explicit.num_threads = Some(2);
+        let bam_explicit = config_explicit.output_bam.clone().unwrap();
+
+        let config_default = make_config(&h1n1_reference(), out_default.path(), false);
+        let bam_default = config_default.output_bam.clone().unwrap();
+
+        run(config_explicit);
+        run(config_default);
+
+        let positions_explicit = bam_positions(&bam_explicit);
+        let positions_default = bam_positions(&bam_default);
+
+        assert_eq!(
+            positions_explicit, positions_default,
+            "Same seed must yield identical BAM positions regardless of num_threads"
+        );
+    }
+
     /// Supply a VCF with a single known SNP on H1N1_HA and verify it appears in the
     /// output VCF. The SNP is at 1-based position 100 (A→T); H1N1_HA position 99
     /// (0-based) is confirmed non-N so the variant will be applied.

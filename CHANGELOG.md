@@ -65,9 +65,12 @@ Moved the code from a brach under NEAT (https://github.com/ncsa/neat) to its own
 
 ## rneat v1.4.0
 - Streaming FASTA reader (`FastaStream`) moved from `gen-gc-bias-model` to the `common` crate, making it available to all subcommands. `gen-reads` now streams the reference one contig at a time instead of writing temp JSON block files, eliminating up to ~570 MB of disk I/O for human-scale genomes and capping peak memory to a single contig rather than the full genome.
-- Contig-level parallelism added to `gen-reads` via rayon `par_bridge`. When `produce_bam: false`, all contigs are processed concurrently using rayon's work-stealing thread pool; the output ordering is preserved by sorting results by contig index before writing. BAM output continues to use a sequential loop because coordinate-sorted writes must occur in reference order.
-- New `num_threads` config key in `gen-reads`. Set to an integer to cap the rayon thread pool used for parallel contig processing. Omit (or set to `.`) to use all available cores (default). Set to `1` to disable parallelism entirely. Has no effect when `produce_bam: true`.
+- Contig-level parallelism added to `gen-reads` via rayon `par_bridge`. All contigs are now processed concurrently using rayon's work-stealing thread pool regardless of whether BAM output is requested; the output ordering is preserved by sorting results by contig index before writing.
+- BAM creation is now fully parallel. Each contig worker writes its alignment records to a private temp BAM body file (no header, plain BGZF blocks). After all contigs finish, a single concatenation pass strips the BGZF EOF block from each intermediate file and assembles them in reference order into the final coordinate-sorted BAM. No `samtools sort` step is required.
+- New `num_threads` config key in `gen-reads`. Set to an integer to cap the rayon thread pool used for parallel contig processing. Omit (or set to `.`) to use all available cores (default). Set to `1` to disable parallelism entirely.
 - `NeatRng::derive_child(idx)` added to the common RNG: each parallel contig task derives a deterministic per-contig seed from the parent RNG state and the contig index, so results are fully reproducible regardless of thread scheduling.
+- Removed `fasta_reader` and `fasta_map` modules. `SequenceBlock`, `SequenceMap`, and `RegionType` now live in `common::structs::sequence_block`; `map_buffer` and `apply_n_substitution` moved to `common::file_tools::fasta_stream`. Eliminates the temp JSON block files that were written to disk for every contig.
+- `gen-mut-model` migrated to a single-pass `FastaStream` loop: trinucleotide counting and variant processing now share one iteration over each contig's sequence instead of two separate passes.
 
 5/3/2026
 =========

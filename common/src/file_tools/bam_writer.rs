@@ -1,6 +1,8 @@
 use std::collections::HashMap;
+use std::io::{BufWriter, Write};
 use std::num::NonZero;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use noodles::bam;
 use noodles::bgzf;
@@ -155,6 +157,176 @@ impl BamWriter {
     }
 }
 
+const BGZF_EOF_LEN: usize = 28;
+const BGZF_EOF_BLOCK: [u8; BGZF_EOF_LEN] = [
+    0x1f, 0x8b, 0x08, 0x04, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0xff, 0x06, 0x00, 0x42, 0x43, 0x02, 0x00,
+    0x1b, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00,
+];
+
+/// Shared BAM header context for parallel per-contig writers.
+/// Build once per run and wrap in `Arc` to share across threads.
+pub struct BamContext {
+    pub(crate) header: sam::Header,
+    pub(crate) contig_index: HashMap<String, usize>,
+}
+
+impl BamContext {
+    pub fn new(contigs: &[(String, usize)]) -> Self {
+        let mut builder = sam::Header::builder();
+        let mut contig_index = HashMap::new();
+        for (i, (name, length)) in contigs.iter().enumerate() {
+            let len = NonZero::<usize>::new(*length)
+                .unwrap_or_else(|| NonZero::<usize>::new(1).unwrap());
+            builder = builder.add_reference_sequence(
+                name.as_bytes().to_vec(),
+                Map::<ReferenceSequence>::new(len),
+            );
+            contig_index.insert(name.clone(), i);
+        }
+        Self { header: builder.build(), contig_index }
+    }
+}
+
+/// Abstraction over BAM record staging for both single-file and per-contig writers.
+pub trait BamRecordStager {
+    fn stage_read_record(&mut self, record: &ReadRecord) -> Result<(), BamWriterError>;
+    fn flush_up_to(&mut self, flush_pos: usize) -> Result<(), BamWriterError>;
+}
+
+impl BamRecordStager for BamWriter {
+    fn stage_read_record(&mut self, record: &ReadRecord) -> Result<(), BamWriterError> {
+        let ref_id = self.contig_id(&record.contig)?;
+        let mate_ref_id = self.contig_id(&record.mate_contig)?;
+        let cigar = rle_to_cigar(&record.cigar_ops);
+        let flags = read_flags(record.is_paired, record.is_reverse);
+        let bam_record = build_bam_record(
+            &record.name, ref_id, record.position, flags, 60, cigar,
+            mate_ref_id, record.mate_position, record.template_length,
+            &record.sequence, &record.quality_scores,
+        );
+        self.carry.push(bam_record);
+        Ok(())
+    }
+
+    fn flush_up_to(&mut self, flush_pos: usize) -> Result<(), BamWriterError> {
+        self.carry.sort_unstable_by_key(|r| {
+            r.alignment_start().map(|p| p.get()).unwrap_or(0)
+        });
+        let split = self.carry.partition_point(|r| {
+            r.alignment_start().map(|p| p.get()).unwrap_or(0) <= flush_pos
+        });
+        for record in self.carry.drain(..split) {
+            self.writer.write_alignment_record(&self.header, &record)?;
+        }
+        Ok(())
+    }
+}
+
+/// Per-contig BAM writer that writes alignment records only (no header).
+/// Intended to be concatenated with a header via `concat_temp_bams`.
+pub struct BamBodyWriter {
+    writer: bam::io::Writer<bgzf::io::Writer<std::fs::File>>,
+    context: Arc<BamContext>,
+    carry: Vec<RecordBuf>,
+    pub path: PathBuf,
+}
+
+impl BamBodyWriter {
+    pub fn new(path: PathBuf, context: Arc<BamContext>) -> Result<Self, BamWriterError> {
+        let file = std::fs::File::create(&path)?;
+        // Do not write a header — this file holds only alignment record BGZF blocks.
+        let writer = bam::io::Writer::new(file);
+        Ok(Self { writer, context, carry: Vec::new(), path })
+    }
+
+    fn contig_id(&self, name: &str) -> Result<usize, BamWriterError> {
+        self.context.contig_index
+            .get(name)
+            .copied()
+            .ok_or_else(|| BamWriterError::UnknownContig(name.to_string()))
+    }
+
+    pub fn flush_all(&mut self) -> Result<(), BamWriterError> {
+        self.carry.sort_unstable_by_key(|r| {
+            r.alignment_start().map(|p| p.get()).unwrap_or(0)
+        });
+        for record in self.carry.drain(..) {
+            self.writer.write_alignment_record(&self.context.header, &record)?;
+        }
+        Ok(())
+    }
+}
+
+impl BamRecordStager for BamBodyWriter {
+    fn stage_read_record(&mut self, record: &ReadRecord) -> Result<(), BamWriterError> {
+        let ref_id = self.contig_id(&record.contig)?;
+        let mate_ref_id = self.contig_id(&record.mate_contig)?;
+        let cigar = rle_to_cigar(&record.cigar_ops);
+        let flags = read_flags(record.is_paired, record.is_reverse);
+        let bam_record = build_bam_record(
+            &record.name, ref_id, record.position, flags, 60, cigar,
+            mate_ref_id, record.mate_position, record.template_length,
+            &record.sequence, &record.quality_scores,
+        );
+        self.carry.push(bam_record);
+        Ok(())
+    }
+
+    fn flush_up_to(&mut self, flush_pos: usize) -> Result<(), BamWriterError> {
+        self.carry.sort_unstable_by_key(|r| {
+            r.alignment_start().map(|p| p.get()).unwrap_or(0)
+        });
+        let split = self.carry.partition_point(|r| {
+            r.alignment_start().map(|p| p.get()).unwrap_or(0) <= flush_pos
+        });
+        for record in self.carry.drain(..split) {
+            self.writer.write_alignment_record(&self.context.header, &record)?;
+        }
+        Ok(())
+    }
+}
+
+/// Concatenate per-contig temp BAM body files into a final coordinate-sorted BAM.
+///
+/// Writes the header once, then appends each body file (stripping its BGZF EOF block),
+/// and terminates the output with a single BGZF EOF block.
+pub fn concat_temp_bams(
+    context: &BamContext,
+    body_files: &[PathBuf],
+    output_path: &PathBuf,
+) -> Result<(), BamWriterError> {
+    // Serialize the header to bytes, finishing with a BGZF EOF block.
+    let mut header_bytes: Vec<u8> = Vec::new();
+    {
+        let mut writer = bam::io::Writer::new(&mut header_bytes);
+        writer.write_header(&context.header)?;
+        let _ = writer.into_inner().finish()?;
+    }
+    // Strip the trailing BGZF EOF so body files can be appended directly.
+    let header_end = header_bytes.len().saturating_sub(BGZF_EOF_LEN);
+
+    let output_file = std::fs::File::create(output_path)?;
+    let mut out = BufWriter::new(output_file);
+    out.write_all(&header_bytes[..header_end])?;
+
+    if body_files.is_empty() {
+        out.write_all(&BGZF_EOF_BLOCK)?;
+    } else {
+        for (i, body_path) in body_files.iter().enumerate() {
+            let body_bytes = std::fs::read(body_path)?;
+            if i < body_files.len() - 1 {
+                let strip_end = body_bytes.len().saturating_sub(BGZF_EOF_LEN);
+                out.write_all(&body_bytes[..strip_end])?;
+            } else {
+                out.write_all(&body_bytes)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 fn rle_to_cigar(char_ops: &[char]) -> Cigar {
     if char_ops.is_empty() {
         return [Op::new(CigarKind::Match, 1)].into_iter().collect();
@@ -245,6 +417,7 @@ pub fn build_bam_record(
 mod tests {
     use super::*;
     use std::path::PathBuf;
+    use std::sync::Arc;
     use crate::structs::read_record::ReadRecord;
     use tempfile::tempdir;
 
@@ -372,5 +545,79 @@ mod tests {
         };
         writer.write_read_record(&record).unwrap();
         assert!(bam_path.exists());
+    }
+
+    #[test]
+    fn test_concat_temp_bams_single_body_file() {
+        // Exercises the branch where is_last=true fires on the first (and only) iteration,
+        // i.e. the EOF block is kept intact rather than stripped.
+        let temp = tempdir().unwrap();
+        let contigs = vec![("chr1".to_string(), 100_000usize)];
+        let context = Arc::new(BamContext::new(&contigs));
+
+        let body = temp.path().join("body_only.bam");
+        {
+            let mut bw = BamBodyWriter::new(body.clone(), Arc::clone(&context)).unwrap();
+            // Stage out-of-order to confirm flush_all sorts.
+            bw.stage_read_record(&make_read("r2", 200)).unwrap();
+            bw.stage_read_record(&make_read("r1", 100)).unwrap();
+            bw.flush_all().unwrap();
+        }
+
+        let out = temp.path().join("single.bam");
+        concat_temp_bams(&context, &[body], &out).unwrap();
+
+        let positions = read_bam_positions(&out);
+        assert_eq!(positions, vec![100, 200],
+            "single-body concat: expected [100, 200], got: {:?}", positions);
+    }
+
+    #[test]
+    fn test_concat_temp_bams_produces_readable_bam() {
+        let temp = tempdir().unwrap();
+        let contigs = vec![
+            ("chr1".to_string(), 100_000usize),
+            ("chr2".to_string(), 50_000usize),
+        ];
+        let context = Arc::new(BamContext::new(&contigs));
+
+        // Write two body files
+        let body1 = temp.path().join("body_chr1.bam");
+        {
+            let mut bw = BamBodyWriter::new(body1.clone(), Arc::clone(&context)).unwrap();
+            bw.stage_read_record(&make_read("r1", 100)).unwrap();
+            bw.stage_read_record(&make_read("r2", 200)).unwrap();
+            bw.flush_all().unwrap();
+        } // EOF written on drop
+
+        let body2 = temp.path().join("body_chr2.bam");
+        {
+            let mut bw = BamBodyWriter::new(body2.clone(), Arc::clone(&context)).unwrap();
+            bw.stage_read_record(&make_read("r3", 300)).unwrap();
+            bw.flush_all().unwrap();
+        }
+
+        let out = temp.path().join("final.bam");
+        concat_temp_bams(&context, &[body1, body2], &out).unwrap();
+
+        // Verify the result is a readable BAM with 3 records
+        let positions = read_bam_positions(&out);
+        assert_eq!(positions, vec![100, 200, 300],
+            "expected [100, 200, 300], got: {:?}", positions);
+    }
+
+    #[test]
+    fn test_concat_temp_bams_empty_body_files() {
+        let temp = tempdir().unwrap();
+        let contigs = vec![("chr1".to_string(), 1_000usize)];
+        let context = Arc::new(BamContext::new(&contigs));
+        let out = temp.path().join("empty.bam");
+        concat_temp_bams(&context, &[], &out).unwrap();
+
+        let file = std::fs::File::open(&out).unwrap();
+        let mut reader = bam::io::Reader::new(file);
+        reader.read_header().unwrap();
+        let count = reader.records().count();
+        assert_eq!(count, 0);
     }
 }

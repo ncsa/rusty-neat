@@ -7,6 +7,7 @@ use common::rng::NeatRng;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::io::BufWriter;
+use std::sync::Arc;
 
 use flate2::{
     Compression,
@@ -16,7 +17,7 @@ use common::models::gc_bias_model::GcBiasModel;
 use crate::{
     common::{
         file_tools::{
-            bam_writer::BamWriter,
+            bam_writer::{BamBodyWriter, BamContext, BamRecordStager, concat_temp_bams},
             bed_reader::read_bed,
             fasta_stream::{FastaStream, map_buffer, apply_n_substitution, scan_fasta_lengths},
             fastq_tools::{
@@ -64,6 +65,7 @@ struct ContigContext<'a> {
     seq_error_model: &'a SequencingErrorModel,
     working_dir: &'a std::path::Path,
     base_rng: NeatRng,
+    bam_context: Option<Arc<BamContext>>,
 }
 
 struct ContigResult {
@@ -77,6 +79,7 @@ struct ProcessedContigData {
     mutated_map: MutatedMap,
     r1_files: Vec<PathBuf>,
     r2_files: Vec<PathBuf>,
+    bam_body_file: Option<PathBuf>,
 }
 
 pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec<PathBuf>, GenerateReadsError> {
@@ -158,10 +161,9 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
     };
 
     info!("Reading fasta file: {}", &config.reference.display());
-    let mut bam_writer: Option<BamWriter> = if config.produce_bam {
+    let bam_context: Option<Arc<BamContext>> = if config.produce_bam {
         let contigs = scan_fasta_lengths(&config.reference)?;
-        let bam_path = config.output_bam.as_ref().expect("output_bam must be set when produce_bam is true");
-        Some(BamWriter::new(bam_path, &contigs)?)
+        Some(Arc::new(BamContext::new(&contigs)))
     } else {
         None
     };
@@ -179,52 +181,40 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
         seq_error_model: &seq_error_model,
         working_dir: working_dir.path(),
         base_rng: *rng,
+        bam_context,
     };
 
     let mut mutated_maps: HashMap<String, Vec<MutatedMap>> = HashMap::new();
     let mut all_fastq_files: HashMap<String, (Vec<PathBuf>, Vec<PathBuf>)> = HashMap::new();
     let mut contig_order: Vec<String> = Vec::new();
     let mut fasta_lengths: HashMap<String, usize> = HashMap::new();
+    let mut bam_body_files: HashMap<String, PathBuf> = HashMap::new();
 
     info!("Generating simulated dataset");
 
-    if config.produce_bam {
-        // Sequential path — BAM coordinate-sorted writes must be in contig order.
-        let fasta = FastaStream::open(&config.reference)?;
-        for (idx, result) in fasta.enumerate() {
+    // All contigs processed in parallel; BAM workers each write a temp body file.
+    let fasta = FastaStream::open(&config.reference)?;
+    let parallel_iter = fasta
+        .enumerate()
+        .par_bridge()
+        .map(|(idx, result)| -> Result<ContigResult, GenerateReadsError> {
             let (name, seq) = result?;
-            let child_rng = rng.derive_child(idx as u64);
-            let cr = process_contig(idx, name, seq, &ctx, child_rng, bam_writer.as_mut())?;
-            if let Some(bam) = bam_writer.as_mut() {
-                bam.flush_all()?;
-            }
-            collect_contig_result(cr, &mut contig_order, &mut fasta_lengths, &mut mutated_maps, &mut all_fastq_files);
-        }
-    } else {
-        // Parallel path — process contigs concurrently when no BAM output is needed.
-        let fasta = FastaStream::open(&config.reference)?;
-        let parallel_iter = fasta
-            .enumerate()
-            .par_bridge()
-            .map(|(idx, result)| -> Result<ContigResult, GenerateReadsError> {
-                let (name, seq) = result?;
-                let child_rng = ctx.base_rng.derive_child(idx as u64);
-                process_contig(idx, name, seq, &ctx, child_rng, None)
-            });
-        let collected: Result<Vec<ContigResult>, _> = match config.num_threads {
-            Some(n) => rayon::ThreadPoolBuilder::new()
-                .num_threads(n)
-                .build()
-                .map_err(|e| GenerateReadsError::CliError(format!("Failed to build thread pool: {}", e)))?
-                .install(|| parallel_iter.collect()),
-            None => parallel_iter.collect(),
-        };
-        // par_bridge does not preserve order — restore contig order by idx.
-        let mut results = collected?;
-        results.sort_unstable_by_key(|r| r.idx);
-        for cr in results {
-            collect_contig_result(cr, &mut contig_order, &mut fasta_lengths, &mut mutated_maps, &mut all_fastq_files);
-        }
+            let child_rng = ctx.base_rng.derive_child(idx as u64);
+            process_contig(idx, name, seq, &ctx, child_rng)
+        });
+    let collected: Result<Vec<ContigResult>, _> = match config.num_threads {
+        Some(n) => rayon::ThreadPoolBuilder::new()
+            .num_threads(n)
+            .build()
+            .map_err(|e| GenerateReadsError::CliError(format!("Failed to build thread pool: {}", e)))?
+            .install(|| parallel_iter.collect()),
+        None => parallel_iter.collect(),
+    };
+    // par_bridge does not preserve order — restore contig order by idx.
+    let mut results = collected?;
+    results.sort_unstable_by_key(|r| r.idx);
+    for cr in results {
+        collect_contig_result(cr, &mut contig_order, &mut fasta_lengths, &mut mutated_maps, &mut all_fastq_files, &mut bam_body_files);
     }
 
     info!("Read generation complete, producing output files");
@@ -304,8 +294,13 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
         }
     }
 
-    if let Some(bam_path) = &config.output_bam {
-        if config.produce_bam {
+    if config.produce_bam {
+        if let (Some(bam_ctx), Some(bam_path)) = (ctx.bam_context.as_ref(), &config.output_bam) {
+            info!("Assembling BAM from {} temp body file(s)", bam_body_files.len());
+            let ordered_bodies: Vec<PathBuf> = contig_order.iter()
+                .filter_map(|name| bam_body_files.remove(name))
+                .collect();
+            concat_temp_bams(bam_ctx, &ordered_bodies, bam_path)?;
             info!("Successfully wrote BAM file: {:?}", bam_path);
             files_written.push(bam_path.clone());
         }
@@ -341,7 +336,6 @@ fn process_contig(
     mut sequence: Vec<Nucleotide>,
     ctx: &ContigContext,
     mut rng: NeatRng,
-    bam_writer: Option<&mut BamWriter>,
 ) -> Result<ContigResult, GenerateReadsError> {
     let contig_len = sequence.len();
     debug!("Processing {}", contig_name);
@@ -487,6 +481,16 @@ fn process_contig(
     let mut contig_files_r1: Vec<PathBuf> = Vec::new();
     let mut contig_files_r2: Vec<PathBuf> = Vec::new();
 
+    // Create a per-contig BAM body writer if BAM output is requested.
+    let mut bam_body_writer: Option<BamBodyWriter> = if let Some(bam_ctx) = &ctx.bam_context {
+        let bam_temp_path = PathBuf::from(ctx.working_dir).join(format!(
+            "temp_bam_{:06}_{}.bam", idx, contig_name
+        ));
+        Some(BamBodyWriter::new(bam_temp_path, Arc::clone(bam_ctx))?)
+    } else {
+        None
+    };
+
     if ctx.config.produce_fastq {
         let mut file_to_write_1 = PathBuf::from(ctx.working_dir);
         file_to_write_1.push(format!(
@@ -499,6 +503,8 @@ fn process_contig(
         let writer1 = BufWriter::new(&file1);
         let mut buffer1 = GzEncoder::new(writer1, Compression::default());
         let read_name_prefix = format!("RNEAT_generated_{}", current_block.contig);
+        let bam_stager: Option<&mut dyn BamRecordStager> =
+            bam_body_writer.as_mut().map(|w| w as &mut dyn BamRecordStager);
         if ctx.config.paired_ended {
             let mut file_to_write_2 = PathBuf::from(ctx.working_dir);
             file_to_write_2.push(format!(
@@ -523,7 +529,7 @@ fn process_contig(
                 ctx.quality_score_model,
                 ctx.seq_error_model,
                 &mut rng,
-                bam_writer,
+                bam_stager,
             )?;
             contig_files_r1.push(file_to_write_1);
             contig_files_r2.push(file_to_write_2);
@@ -543,11 +549,19 @@ fn process_contig(
                 ctx.quality_score_model,
                 ctx.seq_error_model,
                 &mut rng,
-                bam_writer,
+                bam_stager,
             )?;
             contig_files_r1.push(file_to_write_1);
         }
     }
+
+    // Flush and finalize the BAM body file; the bgzf EOF is written on drop.
+    let bam_body_file = if let Some(mut bw) = bam_body_writer {
+        bw.flush_all()?;
+        Some(bw.path.clone())
+    } else {
+        None
+    };
 
     Ok(ContigResult {
         idx,
@@ -557,6 +571,7 @@ fn process_contig(
             mutated_map,
             r1_files: contig_files_r1,
             r2_files: contig_files_r2,
+            bam_body_file,
         }),
     })
 }
@@ -567,12 +582,16 @@ fn collect_contig_result(
     fasta_lengths: &mut HashMap<String, usize>,
     mutated_maps: &mut HashMap<String, Vec<MutatedMap>>,
     all_fastq_files: &mut HashMap<String, (Vec<PathBuf>, Vec<PathBuf>)>,
+    bam_body_files: &mut HashMap<String, PathBuf>,
 ) {
     contig_order.push(cr.name.clone());
     fasta_lengths.insert(cr.name.clone(), cr.len);
     if let Some(data) = cr.data {
         mutated_maps.insert(cr.name.clone(), vec![data.mutated_map]);
-        all_fastq_files.insert(cr.name, (data.r1_files, data.r2_files));
+        all_fastq_files.insert(cr.name.clone(), (data.r1_files, data.r2_files));
+        if let Some(bam_path) = data.bam_body_file {
+            bam_body_files.insert(cr.name, bam_path);
+        }
     }
 }
 

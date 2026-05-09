@@ -216,9 +216,9 @@ num_threads: 1
 
 Omit `num_threads` (or set it to `.`) to restore the default all-cores behaviour.
 
-**BAM output requires sequential processing:**
+**BAM output is now fully parallel:**
 
-When `produce_bam: true`, `rneat` switches to a sequential contig loop regardless of `num_threads`. BAM records must be written in coordinate-sorted order, which prevents concurrent contig processing. FASTQ and VCF output is unaffected — if you only need those, leave `produce_bam: false` to keep parallelism active.
+`rneat` uses a per-contig temp-file strategy: each contig worker writes its alignment records to a private temporary BAM body file, then a single concatenation pass assembles them in reference order into the final coordinate-sorted BAM. This means `produce_bam: true` no longer disables parallelism — all contigs are processed concurrently regardless of whether BAM output is requested.
 
 **Reproducibility:**
 

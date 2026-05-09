@@ -3,7 +3,11 @@ use std::path::PathBuf;
 use thiserror::Error;
 use crate::{
     file_tools::file_io::{is_gzipped_file, read_gzip_lines, read_lines},
-    structs::nucleotides::Nucleotide,
+    rng::{NeatRng, NeatRngError},
+    structs::{
+        nucleotides::{Nucleotide, Nucleotide::{N, X, Maskeda, Maskedc, Maskedg, Maskedt}, NucleotideSelector},
+        sequence_block::{RegionType, SequenceMap},
+    },
 };
 
 #[derive(Debug, Error)]
@@ -80,6 +84,82 @@ fn parse_contig_name(header: &str) -> String {
         .next()
         .unwrap_or("")
         .to_string()
+}
+
+/// Builds a `Vec<SequenceMap>` that partitions `sequence` into contiguous N/non-N runs.
+///
+/// The returned map covers the full sequence without gaps or overlaps.
+/// Never returns an error; the `Result` wrapper is kept for call-site compatibility.
+pub fn map_buffer(sequence: &[Nucleotide]) -> Vec<SequenceMap> {
+    if sequence.is_empty() {
+        return Vec::new();
+    }
+    let mut map: Vec<SequenceMap> = Vec::new();
+    let mut region_start = 0;
+    let mut region_end = 1;
+    let mut inside_n_region = matches!(sequence[0], N | X | Maskeda | Maskedc | Maskedg | Maskedt);
+
+    if inside_n_region {
+        for base in &sequence[1..] {
+            match base {
+                N | X | Maskeda | Maskedc | Maskedg | Maskedt => region_end += 1,
+                _ => {
+                    map.push(SequenceMap::from(RegionType::NRegion, 0, region_end));
+                    region_start = region_end;
+                    region_end = region_start + 1;
+                    inside_n_region = false;
+                    break;
+                }
+            }
+        }
+        if inside_n_region {
+            map.push(SequenceMap::from(RegionType::NRegion, 0, region_end));
+            return map;
+        }
+    }
+
+    for base in &sequence[region_end..] {
+        match base {
+            N | X | Maskeda | Maskedc | Maskedg | Maskedt => {
+                if inside_n_region {
+                    region_end += 1;
+                } else {
+                    inside_n_region = true;
+                    map.push(SequenceMap::from(RegionType::NonNRegion, region_start, region_end));
+                    region_start = region_end;
+                    region_end = region_start + 1;
+                }
+            }
+            _ => {
+                if inside_n_region {
+                    inside_n_region = false;
+                    map.push(SequenceMap::from(RegionType::NRegion, region_start, region_end));
+                    region_start = region_end;
+                    region_end = region_start + 1;
+                } else {
+                    region_end += 1;
+                }
+            }
+        }
+    }
+
+    let region_type = if inside_n_region { RegionType::NRegion } else { RegionType::NonNRegion };
+    map.push(SequenceMap::from(region_type, region_start, region_end));
+    map
+}
+
+/// Replaces each N base in `sequence` with a randomly sampled masked base in-place.
+pub fn apply_n_substitution(
+    sequence: &mut Vec<Nucleotide>,
+    selector: &NucleotideSelector,
+    rng: &mut NeatRng,
+) -> Result<(), NeatRngError> {
+    for base in sequence.iter_mut() {
+        if *base == N {
+            *base = selector.sample_bases(rng.random()?).get_masked();
+        }
+    }
+    Ok(())
 }
 
 /// Returns the contiguous non-N/non-X regions of a sequence as `(start, end)` pairs.

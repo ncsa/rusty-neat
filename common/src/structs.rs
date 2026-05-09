@@ -6,7 +6,7 @@
 pub mod nucleotides;
 pub mod transition_matrix;
 pub mod variants;
-pub mod fasta_map;
+pub mod sequence_block;
 pub mod distributions;
 pub mod mutated_map;
 pub mod bed_record;

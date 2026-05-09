@@ -13,7 +13,7 @@ use flate2::write::GzEncoder;
 use thiserror::Error;
 
 use crate::structs::mutated_map::{MutatedMap, MutatedMapError};
-use crate::structs::fasta_map::{FastaMapError, SequenceBlock};
+use crate::structs::sequence_block::{SequenceBlock, SequenceBlockError};
 use crate::structs::nucleotides::Nucleotide;
 use crate::structs::read_record::ReadRecord;
 use crate::file_tools::file_io::{append_to_file, read_gzip_lines};
@@ -33,8 +33,8 @@ pub enum FastqToolsError {
     FastqReadError(String),
     #[error("Mismatch between indexing and reads set for block {0}")]
     InvalidFastqBlock(String),
-    #[error("Fastq Tools reported a FastaMap error: {0}")]
-    FastaMapError(#[from] FastaMapError),
+    #[error("Fastq Tools reported a SequenceBlock error: {0}")]
+    SequenceBlockError(#[from] SequenceBlockError),
     #[error("Fastq tools reported a error model error: {0}")]
     ErrorModelError(#[from] SeqModelError),
     #[error("Fastq tools reported an IO error: {0}")]
@@ -530,7 +530,7 @@ mod tests {
         // Verifies that when a SequenceBlock has ref_start > 0, the read names in the
         // output FASTQ use reference-relative positions, not block-local positions.
         use crate::structs::{
-            fasta_map::{RegionType, SequenceBlock, SequenceMap},
+            sequence_block::{RegionType, SequenceBlock, SequenceMap},
             mutated_map::MutatedMap,
         };
         let temp_dir = tempfile::tempdir().unwrap();
@@ -546,11 +546,7 @@ mod tests {
             sequence: sequence.clone(),
             sequence_map: vec![SequenceMap::from(RegionType::NonNRegion, 0, seq_len)],
         };
-        let block_path = temp_dir.path().join(
-            format!("chr1_{:010}_{:010}.json", ref_start, ref_start + seq_len)
-        );
-        std::fs::write(&block_path, serde_json::to_string(&block).unwrap()).unwrap();
-        let mutated_map = MutatedMap::new(block_path, vec![]).unwrap();
+        let mutated_map = MutatedMap::from_interval(ref_start, ref_start + seq_len, vec![]).unwrap();
         let frag_start: usize = 5;
         let frag_end: usize = 25;
         let fragments = vec![(frag_start, frag_end)];

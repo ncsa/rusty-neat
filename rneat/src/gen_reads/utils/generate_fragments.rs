@@ -12,7 +12,7 @@ use log::*;
 use std::collections::VecDeque;
 use common::models::gc_bias_model::GcBiasModel;
 use common::rng::NeatRng;
-use common::structs::fasta_map::SequenceBlock;
+use common::structs::sequence_block::SequenceBlock;
 use common::structs::nucleotides::Nucleotide;
 
 pub fn generate_fragments(
@@ -316,7 +316,7 @@ mod tests {
     use super::*;
     use common::rng::NeatRng;
     use common::models::gc_bias_model::GcBiasModel;
-    use common::structs::fasta_map::{RegionType, SequenceBlock, SequenceMap};
+    use common::structs::sequence_block::{RegionType, SequenceBlock, SequenceMap};
     use common::structs::nucleotides::Nucleotide::{A, C, G, T};
 
     fn make_rng() -> NeatRng {

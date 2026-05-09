@@ -18,8 +18,7 @@ use crate::{
         file_tools::{
             bam_writer::BamWriter,
             bed_reader::read_bed,
-            fasta_reader::{map_buffer, apply_n_substitution},
-            fasta_stream::{FastaStream, scan_fasta_lengths},
+            fasta_stream::{FastaStream, map_buffer, apply_n_substitution, scan_fasta_lengths},
             fastq_tools::{
                 combine_temp_fastqs,
                 write_block_fastq
@@ -33,7 +32,7 @@ use crate::{
             sequencing_error_model::SequencingErrorModel
         }, structs::{
             bed_record::BedRecord,
-            fasta_map::{SequenceBlock, SequenceMap, RegionType},
+            sequence_block::{SequenceBlock, SequenceMap, RegionType},
             mutated_map::MutatedMap,
             nucleotides::{NucleotideSelector, Nucleotide},
             variants::Variant
@@ -360,7 +359,7 @@ fn process_contig(
     }
 
     apply_n_substitution(&mut sequence, ctx.nuc_sub_model, &mut rng)?;
-    let sequence_map = map_buffer(&sequence)?;
+    let sequence_map = map_buffer(&sequence);
     let current_block = SequenceBlock {
         contig: contig_name.clone(),
         ref_start: 0,
@@ -370,7 +369,7 @@ fn process_contig(
     };
 
     debug!("    > Generating bias map.");
-    let raw_regions = current_block.get_non_n_regions()?;
+    let raw_regions = current_block.get_non_n_regions();
     let regions_of_interest: Vec<SequenceMap> = if let Some(bed) = ctx.target_bed {
         let contig_beds = bed.get(&contig_name).map(|v| v.as_slice()).unwrap_or(&[]);
         intersect_with_bed(&raw_regions, contig_beds, 0)
@@ -493,8 +492,8 @@ fn process_contig(
         file_to_write_1.push(format!(
             "temp_{}_{:010}_{:010}_r1_tmp.fastq.gz",
             contig_name,
-            current_block.get_start()?,
-            current_block.get_end()?,
+            current_block.ref_start,
+            current_block.ref_end,
         ));
         let file1 = append_to_file(&file_to_write_1)?;
         let writer1 = BufWriter::new(&file1);
@@ -505,8 +504,8 @@ fn process_contig(
             file_to_write_2.push(format!(
                 "temp_{}_{:010}_{:010}_r2_tmp.fastq.gz",
                 contig_name,
-                current_block.get_start()?,
-                current_block.get_end()?,
+                current_block.ref_start,
+                current_block.ref_end,
             ));
             let file2 = append_to_file(&file_to_write_2)?;
             let writer2 = BufWriter::new(&file2);

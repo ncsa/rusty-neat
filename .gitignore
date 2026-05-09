@@ -9,3 +9,6 @@
 
 /target
 /common/target
+
+# Runtime log
+.neat.log

@@ -18,6 +18,7 @@ tempfile = { workspace = true }
 flate2 = { workspace = true }
 noodles = { workspace = true }
 itertools = { workspace = true }
+rayon = { workspace = true }
 simplelog = "0.12.2"
 clap = { version = "4.5.1", features = ["derive"] }
 

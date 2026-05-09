@@ -124,6 +124,16 @@ impl NeatRng {
         Ok((ret_num % (u32::MAX as u64)) as u32)
     }
 
+    pub fn derive_child(&self, idx: u64) -> NeatRng {
+        let seeds = vec![
+            format!("{}", self.s0.to_bits() ^ idx),
+            format!("{}", self.s1.to_bits() ^ idx.wrapping_mul(0x9e3779b97f4a7c15)),
+            format!("{}", self.s2.to_bits() ^ idx.wrapping_mul(0x6c62272e07bb0142)),
+            format!("{}", (self.c as u64) ^ idx),
+        ];
+        NeatRng::new_from_seed(&seeds).unwrap()
+    }
+
     pub fn choose<T: Clone>(&mut self, a: &Vec<T>) -> Result<T, NeatRngError> {
         // Randomly select based on which calculation comes up as 0 first
         // since i = 0 will force j = 0, this will always return an element

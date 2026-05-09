@@ -17,13 +17,13 @@ pub enum FastaStreamError {
 /// Only one contig's sequence is held in memory at a time, making this suitable for
 /// large reference genomes without the temp-file overhead of `read_fasta`.
 pub struct FastaStream {
-    lines: Box<dyn Iterator<Item = io::Result<String>>>,
+    lines: Box<dyn Iterator<Item = io::Result<String>> + Send>,
     pending_name: Option<String>,
 }
 
 impl FastaStream {
     pub fn open(path: &PathBuf) -> Result<Self, FastaStreamError> {
-        let lines: Box<dyn Iterator<Item = io::Result<String>>> =
+        let lines: Box<dyn Iterator<Item = io::Result<String>> + Send> =
             if is_gzipped_file(path)? {
                 Box::new(read_gzip_lines(path)?)
             } else {

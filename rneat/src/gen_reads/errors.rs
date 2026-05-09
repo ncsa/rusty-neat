@@ -81,7 +81,7 @@ pub enum GenerateReadsError {
     #[error("Configuration reader reported an error parsing a bool: {0}")]
     ConfigParseBoolError(#[from] ParseBoolError),
     #[error("Main threw an error: {0}")]
-    MainError(#[from] Box<dyn std::error::Error>),
+    MainError(#[from] Box<dyn std::error::Error + Send + Sync>),
     #[error("FastqTools error: {0}")]
     FqToolsError(#[from] FastqToolsError),
     #[error("Bed reader error: {0}")]

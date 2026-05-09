@@ -136,3 +136,11 @@ gc_bias_model: .
 # This can cause overall undersampling within the sample. By default, NEAT will attempt to
 # correct this undersampling. If you prefer to accept lower coverage, then set this to false
 gc_bias_normalize_coverage: true
+
+# --------------- performance ---------------
+
+# Maximum number of threads to use for parallel contig processing.
+# Only applies when produce_bam is false — BAM output requires sequential processing.
+# Set to 1 to disable parallelism entirely. Omit (or set to .) to use all available cores.
+# (default: auto)
+num_threads: .

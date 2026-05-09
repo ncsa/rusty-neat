@@ -204,16 +204,24 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
     } else {
         // Parallel path — process contigs concurrently when no BAM output is needed.
         let fasta = FastaStream::open(&config.reference)?;
-        let mut results: Vec<ContigResult> = fasta
+        let parallel_iter = fasta
             .enumerate()
             .par_bridge()
             .map(|(idx, result)| -> Result<ContigResult, GenerateReadsError> {
                 let (name, seq) = result?;
                 let child_rng = ctx.base_rng.derive_child(idx as u64);
                 process_contig(idx, name, seq, &ctx, child_rng, None)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+            });
+        let collected: Result<Vec<ContigResult>, _> = match config.num_threads {
+            Some(n) => rayon::ThreadPoolBuilder::new()
+                .num_threads(n)
+                .build()
+                .map_err(|e| GenerateReadsError::CliError(format!("Failed to build thread pool: {}", e)))?
+                .install(|| parallel_iter.collect()),
+            None => parallel_iter.collect(),
+        };
         // par_bridge does not preserve order — restore contig order by idx.
+        let mut results = collected?;
         results.sort_unstable_by_key(|r| r.idx);
         for cr in results {
             collect_contig_result(cr, &mut contig_order, &mut fasta_lengths, &mut mutated_maps, &mut all_fastq_files);

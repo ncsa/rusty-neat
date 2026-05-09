@@ -284,8 +284,10 @@ fn cover_dataset(
     rng.shuffle_in_place(&mut fragment_pool)?;
     let mut cover_fragment_pool = VecDeque::from(fragment_pool);
 
+    let pool_size = cover_fragment_pool.len();
     let mut fragment_set: Vec<(usize, usize)> = Vec::with_capacity(target_count);
     let mut start = (rng.rand_int()? as usize) % (read_length / 4).max(1);
+    let mut non_placing_streak = 0usize;
 
     while fragment_set.len() < target_count {
         let fragment_length = cover_fragment_pool.pop_front().unwrap();
@@ -295,8 +297,25 @@ fn cover_dataset(
         if temp_end > span_length {
             // Restart from the beginning of the contig for the next sweep.
             start = 0;
+            // Only count fragments that can NEVER fit (length > span), not fragments
+            // that merely overshot from a high start position and will fit after restart.
+            if fragment_length > span_length {
+                non_placing_streak += 1;
+                // If we've seen pool_size consecutive fragments that are each individually
+                // larger than the span, every fragment in the pool is too large — break.
+                if non_placing_streak >= pool_size {
+                    debug!(
+                        "All fragments exceed span of {} bp; stopping early with {} fragments placed.",
+                        span_length, fragment_set.len()
+                    );
+                    break;
+                }
+            } else {
+                non_placing_streak = 0;
+            }
             continue;
         }
+        non_placing_streak = 0;
 
         fragment_set.push((start + read_start, temp_end + read_start));
         let wildcard = (rng.rand_u32()? % (read_length as u32 / 4).max(1)) as usize;
@@ -684,5 +703,23 @@ mod tests {
             "Expected {num_frags_expected} fragments despite high rejection rate, got {}",
             result.len()
         );
+    }
+
+    #[test]
+    fn test_cover_dataset_fragment_larger_than_span_terminates() {
+        // Regression test: when every fragment in the pool is larger than the contig,
+        // cover_dataset must terminate rather than loop forever.
+        // Mirrors the yeast long-read scenario: fragment_mean=30000, small scaffold.
+        let span_length = 5_000;
+        let read_length = 1_000;
+        let coverage = 5;
+        // Pool of fragments all larger than the span.
+        let fragment_pool = vec![30_000_usize; 10];
+        let mut rng = NeatRng::new_from_seed(&vec!["termination-test".to_string()]).unwrap();
+
+        let result = cover_dataset(span_length, read_length, 0, fragment_pool, coverage, &mut rng).unwrap();
+
+        // No fragments should be placed (none can fit), but the call must return.
+        assert!(result.is_empty(), "No fragments should be placed when all exceed span");
     }
 }

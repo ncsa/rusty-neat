@@ -297,7 +297,7 @@ fn extract_key_name(full_name: &str) -> String {
     full_name[..delim_index].to_string()
 }
 
-fn map_buffer(sequence: &[Nucleotide]) -> Result<Vec<SequenceMap>, FastaReaderError> {
+pub fn map_buffer(sequence: &[Nucleotide]) -> Result<Vec<SequenceMap>, FastaReaderError> {
     // This is a 2D vector map representing the regions of the string of DNA.
     // example: If a DNA strand looks like this:
     //     NNNNNNNNAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAANNNNN
@@ -388,6 +388,20 @@ fn map_buffer(sequence: &[Nucleotide]) -> Result<Vec<SequenceMap>, FastaReaderEr
     }
     map.push(SequenceMap::from(region, region_start, region_end));
     Ok(map)
+}
+
+/// Replaces each N base in `sequence` with a randomly sampled masked base in-place.
+pub fn apply_n_substitution(
+    sequence: &mut Vec<Nucleotide>,
+    selector: &NucleotideSelector,
+    rng: &mut NeatRng,
+) -> Result<(), FastaReaderError> {
+    for base in sequence.iter_mut() {
+        if *base == N {
+            *base = selector.sample_bases(rng.random()?).get_masked();
+        }
+    }
+    Ok(())
 }
 
 fn process_buffer_into_sequenceblock(

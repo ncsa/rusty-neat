@@ -5,6 +5,7 @@ use common::{
         bam_writer::BamWriterError,
         bed_reader::BedReaderError,
         fasta_reader::FastaReaderError,
+        fasta_stream::FastaStreamError,
         fastq_tools::FastqToolsError,
         vcf_tools::VcfToolsError,
     },
@@ -80,7 +81,7 @@ pub enum GenerateReadsError {
     #[error("Configuration reader reported an error parsing a bool: {0}")]
     ConfigParseBoolError(#[from] ParseBoolError),
     #[error("Main threw an error: {0}")]
-    MainError(#[from] Box<dyn std::error::Error>),
+    MainError(#[from] Box<dyn std::error::Error + Send + Sync>),
     #[error("FastqTools error: {0}")]
     FqToolsError(#[from] FastqToolsError),
     #[error("Bed reader error: {0}")]
@@ -93,4 +94,6 @@ pub enum GenerateReadsError {
     ShortSequence,
     #[error("GC Bias model threw an error: {0}")]
     BiasModelError(#[from] GcBiasModelError),
+    #[error("Error streaming FASTA: {0}")]
+    FastaStreamError(#[from] FastaStreamError),
 }

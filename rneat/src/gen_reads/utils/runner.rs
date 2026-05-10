@@ -468,6 +468,7 @@ fn process_contig(
                     ctx.gc_bias_model,
                     ctx.fragment_length_model,
                     ctx.config.gc_bias_normalize_coverage,
+                    ctx.config.paired_ended,
                     ctx.config.long_reads,
                     &mut rng,
                 )?

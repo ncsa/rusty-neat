@@ -50,13 +50,20 @@ pub fn generate_fragments(
         return Ok(Vec::new())
     }
 
-    let num_frags = sequence_length.saturating_mul(coverage) / read_length;
+    // Each paired-end fragment produces two reads (R1 + R2), so halve the fragment count
+    // so that mean per-base read depth matches the requested coverage value.
+    let num_frags = if paired_ended {
+        sequence_length.saturating_mul(coverage) / (2 * read_length).max(1)
+    } else {
+        sequence_length.saturating_mul(coverage) / read_length
+    };
     if paired_ended {
         // For paired-end reads the physical fragment length (insert size) determines spacing.
         // Keep sampling until num_frags valid fragments are collected so that the pool has
         // full size diversity even when the model's distribution overlaps with read_length.
         let max_attempts = num_frags.saturating_mul(10);
         let mut attempts = 0;
+        fragment_pool.reserve(num_frags);
         while fragment_pool.len() < num_frags && attempts < max_attempts {
             let frag = fragment_model.generate_fragment(rng.random()?)?;
             // In long-read mode accept all fragments; in short-read mode discard those
@@ -88,9 +95,9 @@ pub fn generate_fragments(
     let fragments: Vec<(usize, usize)> = cover_dataset(
         sequence_length,
         read_length,
+        num_frags,
         start,
         fragment_pool,
-        coverage,
         rng
     )?;
 
@@ -202,6 +209,7 @@ pub fn generate_weighted_fragments(
     gc_bias_model: &GcBiasModel,
     fragment_model: &FragmentLengthModel,
     normalize: bool,
+    paired_ended: bool,
     long_reads: bool,
     rng: &mut NeatRng,
 ) -> Result<Vec<(usize, usize)>, GenerateReadsError> {
@@ -228,7 +236,13 @@ pub fn generate_weighted_fragments(
     let n_valid_positions = prefix_sum.len() - 1;
     let mean_weight = total_weight / n_valid_positions as f64;
 
-    let num_frags_base = region_len.saturating_mul(coverage) / read_length;
+    // Same paired-end correction as generate_fragments: each fragment yields two reads,
+    // so halve the count so that mean per-base read depth matches requested coverage.
+    let num_frags_base = if paired_ended {
+        region_len.saturating_mul(coverage) / (2 * read_length).max(1)
+    } else {
+        region_len.saturating_mul(coverage) / read_length
+    };
     let num_frags = if normalize {
         let inflated = (num_frags_base as f64 / mean_weight).round() as usize;
         let cap = num_frags_base.saturating_mul(MAX_COVERAGE_MULTIPLIER);
@@ -285,16 +299,14 @@ pub fn generate_weighted_fragments(
 fn cover_dataset(
     span_length: usize,
     read_length: usize,
+    target_count: usize,
     read_start: usize,
     mut fragment_pool: Vec<usize>,
-    coverage: usize,
     rng: &mut NeatRng,
 ) -> Result<Vec<(usize, usize)>, GenerateReadsError> {
-    // Place exactly (span_length * coverage / read_length) fragments so that mean depth
-    // equals the target regardless of inter-fragment jitter size.  Stopping on fragment
-    // count rather than sweep count means the wildcard gap can be proportional to
-    // read_length without reducing mean coverage.
-    let target_count = span_length.saturating_mul(coverage) / read_length;
+    // Places exactly target_count fragments so that mean depth equals the requested
+    // coverage. Stopping on fragment count rather than sweep count means the wildcard
+    // gap can be proportional to read_length without reducing mean coverage.
 
     rng.shuffle_in_place(&mut fragment_pool)?;
     let mut cover_fragment_pool = VecDeque::from(fragment_pool);
@@ -385,12 +397,13 @@ mod tests {
             "Cruel".to_string(),
             "World".to_string(),
         ]).unwrap();
+        let target_count = span_length * coverage / read_length;
         let cover = cover_dataset(
             span_length,
             read_length,
+            target_count,
             0,
             fragment_pool,
-            coverage,
             &mut rng
         ).unwrap();
         assert_eq!(cover[0], (0, 10))
@@ -407,16 +420,16 @@ mod tests {
             "Cruel".to_string(),
             "World".to_string(),
         ]).unwrap();
+        let target_count = span_length / read_length * coverage;
         let cover = cover_dataset(
             span_length,
             read_length,
+            target_count,
             0,
             fragment_pool,
-            coverage,
             &mut rng
         ).unwrap();
-        // target_count = span / read_length * coverage = 1000 fragments.
-        assert_eq!(cover.len(), span_length / read_length * coverage);
+        assert_eq!(cover.len(), target_count);
         // After a wrap the cursor resets to 0, so the sorted first fragment starts there.
         assert_eq!(cover[0], (0, 300));
         // All fragments must fit within the span and have the pool fragment length.
@@ -518,7 +531,9 @@ mod tests {
             &fragment_model,
             &mut rng,
         ).unwrap();
-        let expected = seq_len * coverage / read_length;
+        // Paired-end produces 2 reads per fragment, so fragment count is halved to keep
+        // per-base read depth equal to the requested coverage.
+        let expected = seq_len * coverage / (2 * read_length);
         assert!(!reads.is_empty());
         assert_eq!(reads.len(), expected, "Paired reads: expected {expected} fragments, got {}", reads.len());
         assert!(reads.iter().all(|&(s, e)| e <= seq_len && e > s),
@@ -532,7 +547,7 @@ mod tests {
         let seq_len = 50_000_usize;
         let read_length = 100;
         let coverage = 2;
-        let num_frags = seq_len * coverage / read_length;
+        let num_frags = seq_len * coverage / (2 * read_length);
         let mut rng = NeatRng::new_from_seed(&vec!["pool-fill-test".to_string()]).unwrap();
         let fragment_model = FragmentLengthModel::new_normal(600.0, 30.0).unwrap();
         let reads = generate_fragments(
@@ -556,7 +571,7 @@ mod tests {
 
         let result = generate_weighted_fragments(
             &sequence_block, 0, 50, 30, 10, 5,
-            &GcBiasModel::default(), &fragment_model, false, false, &mut rng,
+            &GcBiasModel::default(), &fragment_model, false, false, false, &mut rng,
         ).unwrap();
 
         assert!(result.is_empty(), "Region too short should return no fragments");
@@ -573,7 +588,7 @@ mod tests {
         let mut rng = make_rng();
 
         let result = generate_weighted_fragments(
-            &sequence_block, 0, 500, 10, 0, 5, &model, &fragment_model, false, false, &mut rng,
+            &sequence_block, 0, 500, 10, 0, 5, &model, &fragment_model, false, false, false, &mut rng,
         ).unwrap();
 
         assert!(result.is_empty(), "All-zero-weight region should produce no fragments");
@@ -589,7 +604,7 @@ mod tests {
 
         let fragments = generate_weighted_fragments(
             &sequence_block, 0, 2000, 100, 0, 10,
-            &GcBiasModel::default(), &fragment_model, false, false, &mut rng,
+            &GcBiasModel::default(), &fragment_model, false, false, false, &mut rng,
         ).unwrap();
 
         assert!(!fragments.is_empty(), "Valid region with uniform model should produce fragments");
@@ -606,7 +621,7 @@ mod tests {
 
         let fragments = generate_weighted_fragments(
             &sequence_block, region_start, region_end, 100, 0, 5,
-            &GcBiasModel::default(), &fragment_model, false, false, &mut rng,
+            &GcBiasModel::default(), &fragment_model, false, false, false, &mut rng,
         ).unwrap();
 
         for (start, end) in &fragments {
@@ -625,13 +640,13 @@ mod tests {
         let mut rng1 = make_rng();
         let run1 = generate_weighted_fragments(
             &sequence_block, 0, 2000, 100, 0, 5,
-            &GcBiasModel::default(), &fragment_model, false, false, &mut rng1,
+            &GcBiasModel::default(), &fragment_model, false, false, false, &mut rng1,
         ).unwrap();
 
         let mut rng2 = make_rng();
         let run2 = generate_weighted_fragments(
             &sequence_block, 0, 2000, 100, 0, 5,
-            &GcBiasModel::default(), &fragment_model, false, false, &mut rng2,
+            &GcBiasModel::default(), &fragment_model, false, false, false, &mut rng2,
         ).unwrap();
 
         assert_eq!(run1, run2, "Same seed must produce identical fragment sets");
@@ -651,12 +666,12 @@ mod tests {
 
         let mut rng = make_rng();
         let unnormalized = generate_weighted_fragments(
-            &sequence_block, 0, 10000, 100, 0, 10, &model, &fragment_model, false, false, &mut rng,
+            &sequence_block, 0, 10000, 100, 0, 10, &model, &fragment_model, false, false, false, &mut rng,
         ).unwrap();
 
         let mut rng = make_rng();
         let normalized = generate_weighted_fragments(
-            &sequence_block, 0, 10000, 100, 0, 10, &model, &fragment_model, true, false, &mut rng,
+            &sequence_block, 0, 10000, 100, 0, 10, &model, &fragment_model, true, false, false, &mut rng,
         ).unwrap();
 
         assert!(
@@ -684,7 +699,7 @@ mod tests {
         let mut rng = make_rng();
         let result = generate_weighted_fragments(
             &sequence_block, 0, sequence_block.sequence.len(),
-            read_len, 0, target_coverage, &model, &fragment_model, true, false, &mut rng,
+            read_len, 0, target_coverage, &model, &fragment_model, true, false, false, &mut rng,
         ).unwrap();
 
         let base_frags = (sequence_block.sequence.len() / read_len) * target_coverage;
@@ -714,7 +729,7 @@ mod tests {
 
         let result = generate_weighted_fragments(
             &sequence_block, region_start, region_end, read_length, 0, coverage,
-            &GcBiasModel::default(), &fragment_model, false, false, &mut rng,
+            &GcBiasModel::default(), &fragment_model, false, false, false, &mut rng,
         ).unwrap();
 
         assert_eq!(
@@ -736,7 +751,8 @@ mod tests {
         let fragment_pool = vec![30_000_usize; 10];
         let mut rng = NeatRng::new_from_seed(&vec!["termination-test".to_string()]).unwrap();
 
-        let result = cover_dataset(span_length, read_length, 0, fragment_pool, coverage, &mut rng).unwrap();
+        let target_count = span_length * coverage / read_length;
+        let result = cover_dataset(span_length, read_length, target_count, 0, fragment_pool, &mut rng).unwrap();
 
         // No fragments should be placed (none can fit), but the call must return.
         assert!(result.is_empty(), "No fragments should be placed when all exceed span");

@@ -58,8 +58,8 @@ produce_vcf: false
 
 # Produce a BAM file whose reads match the FASTQ exactly (same sequence, quality scores,
 # variants, and sequencing errors applied). CIGAR strings reflect both genomic variants
-# and sequencing error indels. Run `samtools sort` + `samtools index` before use with
-# most downstream tools. (default: false)
+# and sequencing error indels. The output is written in coordinate-sorted order, so
+# `samtools index` is all that is needed before use with downstream tools. (default: false)
 produce_bam: false
 
 # --------------- output location ---------------
@@ -158,7 +158,8 @@ long_reads: false
 # --------------- performance ---------------
 
 # Maximum number of threads to use for parallel contig processing.
-# Only applies when produce_bam is false — BAM output requires sequential processing.
+# Applies to all output modes including BAM — each contig writes to a private temp file
+# and a final pass assembles them in coordinate order.
 # Set to 1 to disable parallelism entirely. Omit (or set to .) to use all available cores.
 # (default: auto)
 num_threads: .

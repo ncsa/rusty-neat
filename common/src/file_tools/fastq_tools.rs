@@ -82,6 +82,7 @@ pub fn write_block_fastq<T: Write, W: Write> (
     buffer1: &mut GzEncoder<T>,
     buffer2: &mut GzEncoder<W>,
     read_length: usize,
+    long_reads: bool,
     read_name_prefix: &str,
     quality_score_model: &QualityScoreModel,
     sequencing_error_model: &SequencingErrorModel,
@@ -91,18 +92,25 @@ pub fn write_block_fastq<T: Write, W: Write> (
     debug!("writing reads for {}", sequence_block.contig);
     for (start, end) in block_fragments {
         let fragment = sequence_block.get_subseq(start, end)?;
+        // In long-read mode a fragment may be shorter than read_length; truncate the read
+        // to the actual fragment length rather than discarding it.
+        let effective_read_len = if long_reads {
+            fragment.len().min(read_length)
+        } else {
+            read_length
+        };
         let mut read1_variants: HashMap<usize, &Variant> = HashMap::new();
         let mut reads1_flagged: Vec<usize> = Vec::new();
         let mut read2_variants: HashMap<usize, &Variant> = HashMap::new();
         let mut reads2_flagged: Vec<usize> = Vec::new();
         for (pos, variant) in &block_map.variant_map {
-            if (start..(start+read_length)).contains(&pos) {
+            if (start..(start+effective_read_len)).contains(&pos) {
                 let var_pos = pos - start;
                 read1_variants.insert(var_pos, variant);
                 reads1_flagged.push(var_pos);
             }
-            if end > read_length {
-                if paired_ended == true && ((end-read_length)..end).contains(&pos) {
+            if end > effective_read_len {
+                if paired_ended && ((end-effective_read_len)..end).contains(&pos) {
                     let var_pos = (end - 1) - pos;
                     read2_variants.insert(var_pos, variant);
                     reads2_flagged.push(var_pos);
@@ -115,19 +123,19 @@ pub fn write_block_fastq<T: Write, W: Write> (
         let abs_end = end + ref_start;
         let base_name = format!("{}_{:010}_{:010}", read_name_prefix, abs_start, abs_end);
 
-        let r2_start = if paired_ended && abs_end >= read_length {
-            abs_end - read_length
+        let r2_start = if paired_ended && abs_end >= effective_read_len {
+            abs_end - effective_read_len
         } else {
             0
         };
         let tlen = if paired_ended { (abs_end - abs_start) as i32 } else { 0 };
 
-        let quality_scores_1 = quality_score_model.generate_quality_scores(read_length, rng)?;
+        let quality_scores_1 = quality_score_model.generate_quality_scores(effective_read_len, rng)?;
         let r1_record = match generate_read(
             &fragment,
             &reads1_flagged,
             &read1_variants,
-            read_length,
+            effective_read_len,
             format!("{}/1", base_name),
             Strand::Forward,
             quality_scores_1,
@@ -152,15 +160,15 @@ pub fn write_block_fastq<T: Write, W: Write> (
         }
 
         if paired_ended {
-            let quality_scores_2 = quality_score_model.generate_quality_scores(read_length, rng)?;
-            let r2_pos = if abs_end >= read_length { abs_end - read_length } else { 0 };
+            let quality_scores_2 = quality_score_model.generate_quality_scores(effective_read_len, rng)?;
+            let r2_pos = if abs_end >= effective_read_len { abs_end - effective_read_len } else { 0 };
             let tlen_r2 = -((abs_end - abs_start) as i32);
 
             let r2_record = match generate_read(
                 &reverse_complement(fragment),
                 &reads2_flagged,
                 &read2_variants,
-                read_length,
+                effective_read_len,
                 format!("{}/2", base_name),
                 Strand::Reverse,
                 quality_scores_2,
@@ -562,7 +570,7 @@ mod tests {
         write_block_fastq(
             fragments, &mutated_map, &block, false,
             &mut buf1, &mut buf2,
-            10, "chr1",
+            10, false, "chr1",
             &quality_model, &seq_err_model, &mut rng,
             None,
         ).unwrap();

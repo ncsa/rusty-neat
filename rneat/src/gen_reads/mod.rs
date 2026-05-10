@@ -192,12 +192,12 @@ mod tests {
         assert_eq!(count, 0, "Expected no reads when BED references only unknown contigs, got {count}");
     }
 
-    /// When produce_fastq=false and produce_bam=true, read staging only happens inside
-    /// the produce_fastq block. The BAM is therefore header-only (0 records) but must
-    /// still be a valid, readable file. This test locks in that behavior so any future
-    /// change to stage reads regardless of produce_fastq will be caught.
+    /// When produce_fastq=false and produce_bam=true, reads must still be generated and
+    /// staged into the BAM body writer. The output BAM must be a valid, non-empty,
+    /// coordinate-sorted file — identical in record count to a paired FASTQ run with the
+    /// same seed and coverage.
     #[test]
-    fn test_bam_only_no_fastq_produces_readable_empty_bam() {
+    fn test_bam_only_no_fastq_produces_records() {
         let out = tempdir().unwrap();
 
         let mut yaml = NamedTempFile::new().unwrap();
@@ -211,8 +211,6 @@ mod tests {
         ).unwrap();
         let config = RunConfiguration::from_yaml_file(&yaml.path().to_path_buf()).unwrap();
         let bam_path = config.output_bam.clone().unwrap();
-        // The config builder sets output_fastq_1 for single-ended runs unconditionally;
-        // what matters is that the FASTQ file is never written to disk.
         let fastq_path = config.output_fastq_1.clone();
 
         run(config);
@@ -222,19 +220,24 @@ mod tests {
                 "FASTQ file must not be created when produce_fastq=false");
         }
 
-        assert!(bam_path.exists(), "BAM file must exist even with produce_fastq=false");
+        assert!(bam_path.exists(), "BAM file must exist with produce_bam=true");
 
-        // Verify the file is a structurally valid BAM (readable header + alignment section).
-        // Record count is 0 because staging happens inside the produce_fastq block.
         let mut reader = bam::io::Reader::new(std::fs::File::open(&bam_path).unwrap());
         let header = reader.read_header().unwrap();
         let n_ref_seqs = header.reference_sequences().len();
         assert_eq!(n_ref_seqs, 8,
             "H1N1 BAM header should list 8 reference sequences, got {n_ref_seqs}");
 
-        let record_count = reader.records().count();
-        assert_eq!(record_count, 0,
-            "expected 0 BAM records when produce_fastq=false (staging skipped), got {record_count}");
+        let positions = bam_positions(&bam_path);
+        assert!(!positions.is_empty(),
+            "BAM must contain records when produce_bam=true even if produce_fastq=false");
+
+        // Records must be in coordinate-sorted order.
+        for window in positions.windows(2) {
+            assert!(window[0] <= window[1],
+                "BAM not coordinate-sorted in BAM-only mode: {:?} followed by {:?}",
+                window[0], window[1]);
+        }
     }
 
     /// Running with an explicit num_threads exercises the ThreadPoolBuilder path in

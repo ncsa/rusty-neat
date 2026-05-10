@@ -75,6 +75,9 @@ pub struct RunConfiguration {
     pub(crate) gc_bias_normalize_coverage: bool,
     // maximum threads for parallel contig processing (None = rayon default = all cores)
     pub num_threads: Option<usize>,
+    // when true, fragments shorter than read_len are kept and produce truncated reads
+    // (long-read platforms); when false, such fragments are discarded (short-read default)
+    pub long_reads: bool,
 }
 
 // The config builder allows us to construct a config in multiple different ways, depending
@@ -133,6 +136,7 @@ impl ConfigBuilder {
                     gc_bias_model: None,
                     gc_bias_normalize_coverage: true,
                     num_threads: None,
+                    long_reads: false,
                 }
             },
             None => {
@@ -503,6 +507,16 @@ impl RunConfiguration {
                             }
                         }
                     },
+                    "long_reads" => {
+                        match value.as_bool() {
+                            Some(lr) => configuration.long_reads = lr,
+                            None => {
+                                return Err(GenerateReadsError::ConfigReadError(
+                                    "long_reads".to_string(), "boolean".to_string()
+                                ))
+                            }
+                        }
+                    },
                     _ => continue,
                 },
             }
@@ -531,6 +545,9 @@ impl RunConfiguration {
         }
         info!("  >ploidy: {}", &self.ploidy);
         info!("  >paired ended: {}", &self.paired_ended);
+        if self.long_reads {
+            info!("  >long reads mode: enabled (short fragments produce truncated reads)");
+        }
         if self.overwrite_output {
             warn!("Overwriting any existing files.")
         }
@@ -690,6 +707,7 @@ mod tests {
             gc_bias_model: None,
             gc_bias_normalize_coverage: true,
             num_threads: None,
+            long_reads: false,
         };
 
         println!("{:?}", test_configuration);

@@ -1,14 +1,14 @@
 # The rusty-neat project
-Weclome to `rneat`, a Rust port of NEAT (https://github.com/ncsa/neat), a genetic simulation program that creates next-gen-looking fastq files along with an accompanying golden vcf file showing all of the variants inserted by NEAT. It also generates "noise" in the form of sequencing errors as it is writing out files. These features can help you hone in your alignment software to your data. 
+Welcome to `rneat`, a Rust port of NEAT (https://github.com/ncsa/neat), a genetic simulation program that creates next-gen-looking fastq files along with an accompanying golden VCF and BAM files showing all of the variants inserted by `rneat` and the ideal alignments. It also generates "noise" in the form of sequencing errors as it is writing out files. These features can help you hone in your alignment and variant calling software to your data. Training models on your data will allow `rneat` to faithfully reproduce the statistical properties of your dataset.
 
-As of now, `rneat` is still under development. We are working toward the goal of the original NEAT of being able to read user data and construct a model based on that data. We do however, have functional reads being generated, with variants tracked in a vcf file. This is our 1.2.0 version.
+The most recent version of `rneat` includes adding in the utilities to allow users to generate their own models for running `rneat`. It also now outputs a golden BAM file with ideal alignments, accepts a BED file for filtering the genome down to target regions for read creation, a more accurate coverage tool, and the ability to read in custom variants from a VCF file and insert them into the code. We swapped out the temp file writing method for a file streaming method that seems to work even faster and does not take up as much space on disk, avoiding expensive disk I/O of previous versions. We've done numerous benchmarks and tests on the data, but we look forward to user feedback on how well the output reproduces their data on a statistical level,
 
 # How to use `rneat`
 
 ## Prerequisites
-One of the packages requires cmake to use. For Debian/Ubuntu this should be a simple `sudo apt install cmake` and for RHEL/Rocky type distros this should be `sudo dnf install cmake`
+You will need to install the rust toolchain to compile `rneat`, including `cargo`. Check the cargo documentation for instructions (https://doc.rust-lang.org/cargo/getting-started/installation.html). Alternatively, you can try one of the binaries on the release page. Select the one that matches your system and let us know if you run into errors. During compilation, you may run into errors, such as cmake not found. Some of the packages `rneat` uses have these dependencies. For Debian/Ubuntu this should be a simple `sudo apt install cmake` and for RHEL/Rocky type distros this should be `sudo dnf install cmake`. There may be some other requirements. Drop a comment if you need specific help.
 
-Download the executable in the release (current version 1.4.0).
+Download the executable in the release (current version 1.4.1).
 
 ```bash
 $ rneat --help
@@ -70,7 +70,7 @@ Options:
 
 Use the help menu to see the available options and leave an issue if you find something bad happening.
 
-To compile and run `rneat` yourself, you will need the Rust environment (https://www.rust-lang.org/tools/install), with cargo. You will also need git installed for your operating system. You will then need to git clone and cd into the repo directory. From your home directory in Linux the process might look something like:
+To compile and run `rneat` yourself, besides the rust toolchain, you will need `git` installed for your operating system. You will then need to git clone and cd into the repo directory. From your home directory in Linux the process might look something like:
 
 ```bash
 ~/$ git clone git@github.com:ncsa/rusty-neat.git
@@ -78,7 +78,7 @@ To compile and run `rneat` yourself, you will need the Rust environment (https:/
 ~/rusty-neat/$
 ```
 
-For Windows users, you're probably going to want to use WSL, but go ahead and test it if there's a Rust for windows. (Post help requests in the Issues tab if you need assistance or have suggestions).
+For Windows and Mac users, try the binary packaged with the latest version of `rneat`.
 
 Once in the repo, you can build the program either in debug (default) or release mode. The main difference is how much info it gives you if there is an error. Release mode also has some optimizations to run it faster.
 
@@ -88,7 +88,7 @@ Once in the repo, you can build the program either in debug (default) or release
 
 If you prefer to run the package directly without using the binary, you can also use
 ```bash
-~/rusty-neat/$ cargo run
+~/rusty-neat/$ cargo run -- gen-reads -c my_config.yml
 ```
 
 Rust will download any required packages. Compiling Rust code is the slowest part of the process. The final binary will be built and the program run immediately after in the second case. To run the program manually, from the repo main dir, run
@@ -97,29 +97,29 @@ Rust will download any required packages. Compiling Rust code is the slowest par
 ~/rusty-neat/$ ./target/release/rneat -h
 ```
 
-`rneat` uses a configuration file to read values it needs for the run. Most of these features should be active, but there is currently no way to generate your own data, so stick with default models for now. A command line execution might look like this:
+`rneat` uses a configuration file to read values it needs for the run. A command line execution might look like this:
 
 ```bash
-~/rusty-neat/$ ./target/release/rneat -C /path/to/filled/in/config.yml
+~/rusty-neat/$ ./target/release/rneat -c /path/to/filled/in/config.yml
 ```
-If you record the output in the logs of Seed string to regenerate these exact results: XXXXXXX, you should be able to use that string as input with rng_seed and reproduce your results (untested as of yet).
+If you record the output in the logs of Seed string to regenerate these exact results: XXXXXXX, you should be able to use that string as input with rng_seed and reproduce your results.
 
 Fastq Output
 ============
-the fastq output will have a key name that identifies the block where teh read was drawn from. This should allow you to asseses how well the aligner funcution. The name will have the format `<contig short name>_<fragment_start>_<fragment_end>`
+The fastq output will have a key name that identifies the block where the read was drawn from, for quick comparisons in alignments. The output BAM file will contain the original sequence and cigar string. The name will have the format `RNEAT_generated_<contig short name>_<fragment_start>_<fragment_end>/1` (or `/2` for the second read in a pair), where start and end are zero-padded to 10 digits.
 
 ```bash
-@neat_generated_Chromosome_0000000000_0000353_1:1
+@RNEAT_generated_Chromosome_0000000000_0000000353/1
 CTTTTCATTCTGACTGCAACGGGCAATATGTCTCTGTGTGGATTAAAAAAAGAGTGTCTGATAGCAGCTTCTTAACTGGTTACCTGCCGTGAGTAAATTAAAATTTTATTGACTTAGGTCACTAAATACTTTAACCAATATAGGCATAGC
 +
 >AC7<GDEGGGGEFGA<GFCGG;GGGGGF>GEGGEGGGFGFEFGCEGGGGGGCG:AEFGFFGG>FG;GDGA9$GGAGF=GFG=EFFCGGGFGGGGGC$BFGEFFAGGG9F7E@>?GFGGGG>EBFGFDG)DGC6DEDFA2EG:EGG%FFB
 ```
-For example, comes from the chromosome in the reference (which was simply named "Chromosome") between 0 and 353, which is the size 
+The above example comes from the chromosome in the reference (which was simply named "Chromosome") between 0 and 353, which is the size
 of a fragment in the simulated DNA. If there is a pair with this read, it will have the same coordinates, though it started at index 352 instead.
 
 BAM Output
 ==========
-`rneat` can write a golden BAM file alongside the FASTQ output. The BAM contains the same reads as the FASTQ — same sequences, same quality scores, same variants and sequencing errors applied — with alignment information included. To enable it, set `produce_bam: true` in your `gen-reads` config. The output path is derived automatically from `output_filename` (e.g. `output_filename: my_run` → `my_run.bam`).
+`rneat` can write a golden BAM file alongside the FASTQ output. The BAM contains the same reads as the FASTQ — same sequences, same quality scores, same variants and sequencing errors applied — with alignment information included. To enable it, set `produce_bam: true` in your `gen-reads` config. The output path is derived automatically from `output_filename` (e.g. `output_filename: my_run` → `my_run.bam`). Please note that the BAM has a higher overhead than the fastq, and may take longer to produce.
 
 ```yaml
 produce_bam: true
@@ -145,9 +145,9 @@ For exome, targeted-panel, or any run where you only want reads over specific re
 target_bed: /path/to/targets.bed
 ```
 
-When `target_bed` is set, `gen-reads` skips contigs absent from the BED entirely — no blocks are read, no variants are placed, and no temp files are written for those contigs. Within covered contigs, reads and variants are generated only over the intersecting non-N regions. This is the recommended approach for targeted runs on large genomes; it is far more efficient than generating genome-wide reads and post-filtering with `filter-reads`.
+When `target_bed` is set, `gen-reads` skips contigs absent from the BED entirely — no blocks are read, no variants are placed, and no reads are generated for those contigs. Within covered contigs, reads and variants are generated only over the intersecting non-N regions. This is the recommended approach for targeted runs on large genomes; it is far more efficient than generating genome-wide reads and post-filtering with `filter-reads`.
 
-The BED contig names must match the short names derived from the reference FASTA (the text after `>` up to the first space or `|`). Both `.bed` and `.bed.gz` inputs are accepted.
+The BED contig names must match the short names derived from the reference FASTA (the text after `>` up to the first whitespace character). Both `.bed` and `.bed.gz` inputs are accepted.
 
 Input Variants VCF
 ==================
@@ -163,7 +163,7 @@ input_vcf: /path/to/variants.vcf.gz
 
 - The VCF must be single-sample (one sample column).
 - Every record must include `GT` in the FORMAT field. `rneat` uses the genotype to determine whether to apply the variant to all reads covering the position (homozygous, e.g. `1/1`) or only a probabilistic subset (heterozygous, e.g. `0/1`). Records without `GT` are rejected.
-- Contig names must match the short names derived from the reference FASTA (text after `>` up to the first space or `|`). Variants on unrecognised contigs are skipped with a warning.
+- Contig names must match the short names derived from the reference FASTA (text after `>` up to the first whitespace character). Variants on unrecognised contigs are skipped with a warning.
 - Both `.vcf` and `.vcf.gz` files are accepted.
 
 **Supported variant types**
@@ -209,16 +209,18 @@ By default `rneat` uses all available logical cores. You can cap the thread coun
 ```yaml
 # use 4 threads instead of all available cores
 num_threads: 4
-
+```
+or disable parallelism entirely (useful for debugging or reproducibility testing)
+```yaml
 # disable parallelism entirely (useful for debugging or reproducibility testing)
 num_threads: 1
 ```
 
 Omit `num_threads` (or set it to `.`) to restore the default all-cores behaviour.
 
-**BAM output is now fully parallel:**
+**BAM output is fully parallel:**
 
-`rneat` uses a per-contig temp-file strategy: each contig worker writes its alignment records to a private temporary BAM body file, then a single concatenation pass assembles them in reference order into the final coordinate-sorted BAM. This means `produce_bam: true` no longer disables parallelism — all contigs are processed concurrently regardless of whether BAM output is requested.
+`rneat` uses a per-contig temp-file strategy: each contig worker writes its alignment records to a private temporary BAM body file, then a single concatenation pass assembles them in reference order into the final coordinate-sorted BAM.
 
 **Reproducibility:**
 
@@ -226,7 +228,7 @@ Each contig's random number generator is derived deterministically from the pare
 
 Reading Bed Data
 ================
-`rneat` can now read bed data and filter the reads based on regions specified. This comes with some caveats. First is that rust can't handle any header lines or non-header rows in the bed file. Second, the names must match what is in the fasta. Third, `rneat` can only filter, and does not use the rest of the bed. If this is an issue please raise an issue and we will see about adding more features.
+`rneat` can now read bed data and filter the reads based on regions specified. This comes with some caveats. First is that rust can't handle any header lines or non-header rows in the bed file, because of potential range of possibilities. Second, the names must match what is in the fasta. Third, `rneat` can only filter, and does not use the rest of the bed information. It treats each record as a region of interest only.
 
 Bed data will have some challenges. For example, if the contig names in the bed file don't match the assumed contig name from the fasta file, how will rust be able to know which is what? To make things work, we are going to assume, for now, that the bed file contig names match the names as derived by `rneat`. To determine this:
 
@@ -239,7 +241,7 @@ $ grep "^>" input.fasta
 >NC_001135.5 Saccharomyces cerevisiae S288C chromosome III, complete sequence
 >etc
 ```
-This will give you the fill fasta name. `rneat` determines the short name of the input fasta by skipping the initial '>' character, then taking the string up to the first delimiter (space or '|'). In the above example, the short names are "NC_001133.9", "NC_001134.8", etc. 
+This will give you the full fasta name. `rneat` determines the short name of the input fasta by skipping the initial '>' character, then taking the string up to the first whitespace delimiter. In the above example, the short names are "NC_001133.9", "NC_001134.8", etc. 
 
 Next, we check the bed. This example awk command will look for unique values in the first column of your bed file and print out what it finds. 
 
@@ -250,20 +252,20 @@ $ awk '!seen[$1]++ {print $1}' file.bed
 3
 etc
 ```
-In this case, the bed file uses a simple numbering scheme to number the chromosomes. We can see a mapping with the roman numeral chromosomes in the name, but it's tricky to program. So, the following command will allow you, the user, to map these chromosomes and thus instruct NEAT. Yours will vary based on the inputs.
+In this case, the bed file uses a simple numbering scheme to number the chromosomes. We can see a mapping with the roman numeral chromosomes in the name, but it's tricky to handle consistently. So, the following command will allow you, the user, to map these chromosomes and thus instruct `rneat`. Yours will vary based on the inputs.
 
 ```bash
 awk -F'\t' '{$1=($1=="1"?"NC_001133.9":$1); $1=($1=="2"?"NC_001134.8":$1); print}' OFS='\t' file.bed > file_renamed.bed
 ```
-You will have to tailor this command to your dataset, but this will allow you to map the names from the bed to the fasta in a way `rneat` will understand.
+You will have to tailor this command to your dataset, but this is one way to map the names from the bed to the fasta in a way `rneat` will understand.
 
 Filtering Your Data
 ====================
 
-To run filter-reads, you must first copy the filter_reads_template.yml file from rusty-neat/template_config/ to a directory of your choosing. Then you can edit the  file in your favorite editor. The configuration only has three fields:
+To run filter-reads, you must first copy the filter_reads_template.yml file from rusty-neat/template_config/ to a directory of your choosing. Then you can edit the file in your favorite editor. The configuration has four fields:
 
 ```bash
-bed-file: /path/to/my.bed # required
+bed_file: /path/to/my.bed # required
 ```
 A filename (full path is best) for a bed file with regions to target for filtering. It should be tab-separated in standard bed format.
 
@@ -287,7 +289,12 @@ Note the full extension is important, but filter-reads should be able to handle 
 ```bash
 filter_key: .
 ```
-This is the key appended to the filename, before extensions. For example, if your filename is "miscanthus_r1.fast.gz", and you set the key as "_only_genes", the output file would be "miscanthus_r1_only_genes.fastq.gz. The default is "_filtered".
+This is the key appended to the filename, before extensions. For example, if your filename is "miscanthus_r1.fastq.gz", and you set the key as "_only_genes", the output file would be "miscanthus_r1_only_genes.fastq.gz". The default is "_filter".
+
+```bash
+overwrite_output: false # optional, default false
+```
+Set to `true` to allow filter-reads to overwrite existing output files. When `false`, the run will error if the output file already exists.
 
 Once your files are entered and your config is saved, you can run rneat:
 
@@ -306,7 +313,7 @@ Generating a Mutation Model
 $ rneat gen-mut-model -c gen_mut_model_config.yml
 ```
 
-The inputs are a single-sample VCF and the reference FASTA the VCF was called against. `rneat` computes statistics for indels and SNPs and builds the trinucleotide model of SNP generation, as in the original NEAT. The output is a gzipped JSON model file that can be passed directly to `gen-reads` via its `mutation_model` config key.
+The inputs are a single-sample VCF and the reference FASTA the VCF was called against. `rneat` computes statistics for indels and SNPs and builds the trinucleotide model of SNP generation, as in the original `rneat`. The output is a gzipped JSON model file that can be passed directly to `gen-reads` via its `mutation_model` config key.
 
 Copy `template_config/gen_mut_model_template.yml` to a directory of your choosing and fill in the fields:
 
@@ -340,7 +347,7 @@ transition_matrix_file: /path/to/matrix.tsv
 - Each variant record must have `GT` in the `FORMAT` column; `rneat` hard-errors if GT is missing
 - `QUAL=.` is accepted and treated as quality score 0
 
-Caveats: Only one sample can be read at this point. Currently, high-mutation regions and common variants features from NEAT are not yet implemented. Please submit or comment on a feature request if you desire this feature.
+Caveats: Only one sample can be read at this point. Currently, high-mutation regions and common variants features from Python NEAT are not yet implemented.
 
 Try it out and let us know if you run into any issues!
 
@@ -389,7 +396,7 @@ transition_matrix_file: /path/to/matrix.tsv
 **SNP transition matrix priority:**
 1. `transition_matrix_file` (explicit TSV) — highest priority
 2. `bam_file` (inferred from MD-tagged BAM mismatches)
-3. Default matrix from Python NEAT — used when neither is provided
+3. Default matrix from Python `rneat` — used when neither is provided
 
 **BAM MD tag requirement:**
 The BAM path requires MD tags to identify reference bases at mismatch positions. Most aligners (BWA-MEM, STAR with `--outSAMattributes MD`) add them automatically. If yours does not, generate them with:
@@ -399,7 +406,7 @@ samtools index aligned_with_md.bam
 ```
 
 **TSV format:**
-The transition matrix TSV has 4 data rows (one per reference base: A, C, G, T) and 4 whitespace-separated columns (one per read base: A, C, G, T). An optional header row (non-numeric first token) is skipped. Diagonal values are zeroed automatically. Rows are re-normalized to sum to 1.
+The transition matrix TSV has 4 data rows (one per reference base: A, C, G, T) and 4 whitespace-separated columns (one per read base: A, C, G, T). The first row is skipped if it is non-numeric (treated as a header). Diagonal values are zeroed automatically. Rows are re-normalized to sum to 1.
 
 ```
 A    C    G    T
@@ -408,8 +415,6 @@ A    C    G    T
 0.4  0.3  0.0  0.3
 0.3  0.3  0.4  0.0
 ```
-
-That's it so far! Test out the features and let us know what you think!
 
 Generating a GC Bias Model
 ====================
@@ -560,3 +565,7 @@ Only reads that satisfy all of the following are used:
 
 **Outlier filtering:**  
 Fragment lengths that exceed `median + 10 × MAD` (median absolute deviation) are removed before fitting. This mirrors the filtering in Python NEAT's fragment length modeler. If no lengths survive the filter, lower `min_reads` or set it to `0`.
+
+**Zenodo release**
+
+[![DOI](https://zenodo.org/badge/765847780.svg)](https://doi.org/10.5281/zenodo.20100558)

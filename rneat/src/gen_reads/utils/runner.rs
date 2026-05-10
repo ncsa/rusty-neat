@@ -494,6 +494,8 @@ fn process_contig(
         None
     };
 
+    let read_name_prefix = format!("RNEAT_generated_{}", current_block.contig);
+
     if ctx.config.produce_fastq {
         let mut file_to_write_1 = PathBuf::from(ctx.working_dir);
         file_to_write_1.push(format!(
@@ -505,7 +507,6 @@ fn process_contig(
         let file1 = append_to_file(&file_to_write_1)?;
         let writer1 = BufWriter::new(&file1);
         let mut buffer1 = GzEncoder::new(writer1, Compression::default());
-        let read_name_prefix = format!("RNEAT_generated_{}", current_block.contig);
         let bam_stager: Option<&mut dyn BamRecordStager> =
             bam_body_writer.as_mut().map(|w| w as &mut dyn BamRecordStager);
         if ctx.config.paired_ended {
@@ -558,6 +559,31 @@ fn process_contig(
             )?;
             contig_files_r1.push(file_to_write_1);
         }
+    } else if ctx.config.produce_bam {
+        // BAM-only: generate reads and stage them into the BAM body writer.
+        // The FASTQ buffers drain into null sinks and are discarded.
+        let bam_stager: Option<&mut dyn BamRecordStager> =
+            bam_body_writer.as_mut().map(|w| w as &mut dyn BamRecordStager);
+        let null1: VectorBuffer = VectorBuffer::new();
+        let null2: VectorBuffer = VectorBuffer::new();
+        let mut buf1 = GzEncoder::new(null1, Compression::default());
+        let mut buf2 = GzEncoder::new(null2, Compression::default());
+        debug!("BAM-only: generating reads for {}", contig_name);
+        write_block_fastq(
+            block_fragments,
+            &mutated_map,
+            &current_block,
+            ctx.config.paired_ended,
+            &mut buf1,
+            &mut buf2,
+            ctx.config.read_len,
+            ctx.config.long_reads,
+            &read_name_prefix,
+            ctx.quality_score_model,
+            ctx.seq_error_model,
+            &mut rng,
+            bam_stager,
+        )?;
     }
 
     // Flush and finalize the BAM body file; the bgzf EOF is written on drop.

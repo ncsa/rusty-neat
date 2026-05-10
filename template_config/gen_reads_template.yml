@@ -137,6 +137,24 @@ gc_bias_model: .
 # correct this undersampling. If you prefer to accept lower coverage, then set this to false
 gc_bias_normalize_coverage: true
 
+# --------------- long reads ---------------
+
+# Set to true when simulating long-read platforms (PacBio HiFi, Oxford Nanopore).
+# When true, fragments sampled from the fragment model that are shorter than read_len are
+# kept rather than discarded, and the resulting read is truncated to the actual fragment
+# length. This reproduces the realistic read-length distribution seen in real long-read
+# datasets, where size selection is imperfect and a tail of shorter reads is always present.
+#
+# When false (the default, appropriate for Illumina short reads), fragments shorter than
+# read_len are rejected. For Illumina, the correct physical behavior for short fragments
+# is adapter read-through (full-length reads padded with adapter sequence), which is a
+# separate concern outside the scope of this simulator; discarding them is the standard
+# approach used by short-read simulators.
+#
+# long_reads requires paired_ended: true and a configured fragment_mean / fragment_model.
+# (default: false)
+long_reads: false
+
 # --------------- performance ---------------
 
 # Maximum number of threads to use for parallel contig processing.

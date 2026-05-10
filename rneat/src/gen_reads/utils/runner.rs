@@ -453,6 +453,7 @@ fn process_contig(
                     frag_start,
                     ctx.config.coverage,
                     ctx.config.paired_ended,
+                    ctx.config.long_reads,
                     ctx.fragment_length_model,
                     &mut rng,
                 )?
@@ -467,6 +468,7 @@ fn process_contig(
                     ctx.gc_bias_model,
                     ctx.fragment_length_model,
                     ctx.config.gc_bias_normalize_coverage,
+                    ctx.config.long_reads,
                     &mut rng,
                 )?
             };
@@ -526,6 +528,7 @@ fn process_contig(
                 &mut buffer1,
                 &mut buffer2,
                 ctx.config.read_len,
+                ctx.config.long_reads,
                 &read_name_prefix,
                 ctx.quality_score_model,
                 ctx.seq_error_model,
@@ -546,6 +549,7 @@ fn process_contig(
                 &mut buffer1,
                 &mut buffer2,
                 ctx.config.read_len,
+                ctx.config.long_reads,
                 &read_name_prefix,
                 ctx.quality_score_model,
                 ctx.seq_error_model,

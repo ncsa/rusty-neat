@@ -55,6 +55,7 @@ use crate::{
 struct ContigContext<'a> {
     config: &'a RunConfiguration,
     target_bed: &'a Option<HashMap<String, Vec<BedRecord>>>,
+    mutation_regions: &'a Option<HashMap<String, Vec<BedRecord>>>,
     input_variants: &'a Option<HashMap<String, Vec<Variant>>>,
     nuc_sub_model: &'a NucleotideSelector,
     mutation_model: &'a MutationModel,
@@ -145,7 +146,15 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
 
     let target_bed = match &config.target_bed {
         Some(path) => {
-            info!("Loading target BED: {}", path.display());
+            info!("Loading target BED: {:?}", path);
+            Some(read_bed(path)?)
+        },
+        None => None,
+    };
+
+    let mutation_regions = match &config.mutation_regions {
+        Some(path) => {
+            info!("Loading mutation regions BED: {:?}", path);
             Some(read_bed(path)?)
         },
         None => None,
@@ -171,6 +180,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
     let ctx = ContigContext {
         config,
         target_bed: &target_bed,
+        mutation_regions: &mutation_regions,
         input_variants: &input_variants,
         nuc_sub_model: &nuc_sub_model,
         mutation_model: &mutation_model,

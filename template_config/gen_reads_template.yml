@@ -31,6 +31,11 @@ ploidy: 2
 # Useful for short contigs where random sampling may produce zero variants. (default: 0)
 minimum_mutations: 0
 
+# To define custom mutation regions, create a bed file with the regions defined and add
+# a column with the text "mut_rate=0.XXXX" where XXXX is the desired mutation rate for that
+# region. All other regions will use the default mutation rate.
+mutation_regions: .
+
 # --------------- paired-end parameters ---------------
 
 # Set to true to produce paired-end reads. (default: false)

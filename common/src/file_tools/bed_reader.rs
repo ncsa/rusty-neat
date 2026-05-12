@@ -62,15 +62,15 @@ fn read_open_bed<P: Read> (reader: Lines<BufReader<P>>) -> Result<HashMap<String
             warn!("Not sure what to do with negative coordinates yet: {:?}", rec_str);
             continue
         }
-        let mut other = Vec::new();
+        let mut other = String::new();
         for remainder in &mut fields[3..] {
-            other.push(remainder.to_string());
+            other = other + remainder + "\t";
         }
         let record = BedRecord::new(
             contig.clone(), 
             start as usize, 
             end as usize, 
-            other,
+            &other,
         )?;
         if !file_records.contains_key(&contig) {
             file_records.insert(contig.clone(), Vec::new());

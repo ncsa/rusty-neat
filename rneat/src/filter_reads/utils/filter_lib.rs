@@ -250,7 +250,7 @@ mod tests {
 
         let bed_table = HashMap::from([(
             "chr1".to_string(),
-            vec![BedRecord::new("chr1".to_string(), 0, 2000, vec![]).unwrap()],
+            vec![BedRecord::new("chr1".to_string(), 0, 2000, "").unwrap()],
         )]);
 
         let output = temp_dir.path().join("output.fastq.gz");
@@ -280,7 +280,7 @@ mod tests {
 
         let bed_table = HashMap::from([(
             "chr1".to_string(),
-            vec![BedRecord::new("chr1".to_string(), 0, 2000, vec![]).unwrap()],
+            vec![BedRecord::new("chr1".to_string(), 0, 2000, "").unwrap()],
         )]);
 
         let output = temp_dir.path().join("output.vcf.gz");

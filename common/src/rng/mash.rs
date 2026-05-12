@@ -17,12 +17,12 @@ pub struct Mash {
 }
 
 impl Mash {
-    /// Construct a new masher.
+    // Construct a new masher.
     pub fn new() -> Mash {
         Mash { n: 0xefc8249d }
     }
 
-    /// Create a seed for a PRNG.
+    // Create a seed for a PRNG.
 
     // In case the site we're referring to will go offline, here's a verbatim copy from the source:
     //

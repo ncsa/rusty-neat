@@ -5,7 +5,7 @@ use crate::{
     file_tools::file_io::{is_gzipped_file, read_gzip_lines, read_lines},
     rng::{NeatRng, NeatRngError},
     structs::{
-        nucleotides::{Nucleotide, Nucleotide::{N, X, Maskeda, Maskedc, Maskedg, Maskedt}, NucleotideSelector},
+        nucleotides::{Nucleotide, Nucleotide::{N, X}, NucleotideSelector},
         sequence_block::{RegionType, SequenceMap},
     },
 };

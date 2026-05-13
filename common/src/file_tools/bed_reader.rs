@@ -59,7 +59,7 @@ fn read_open_bed<P: Read> (reader: Lines<BufReader<P>>) -> Result<HashMap<String
         let end: isize = fields[2].parse()?;
         if start < 0 || end < 0{
             // Skip this record
-            warn!("Not sure what to do with negative coordinates yet: {:?}", rec_str);
+            warn!("Skipped bed region with negative coordinates: {:?}", rec_str);
             continue
         }
         let mut other = String::new();

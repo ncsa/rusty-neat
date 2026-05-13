@@ -20,8 +20,9 @@ coverage: 10
 
 # --------------- mutation parameters ---------------
 
-# Average per-base mutation rate applied when generating variants. (default: 0.001)
-mutation_rate: 0.001
+# Average per-base mutation rate applied when generating variants, overrides the model input.
+# (default: is set by the mutation model and is ~0.0011 for the default model)
+mutation_rate: .
 
 # Number of chromosome copies in the simulated organism.
 # Heterozygous variants are distributed across the copies. (default: 2)

@@ -98,7 +98,7 @@ impl RunConfiguration {
                     format!("Invalid BED file {:?}", bed_file)
                 ));
             }
-            read_bed(&bed_file)?
+            read_bed(&bed_file, false)?
         };
 
         let overwrite_output = scrape_config

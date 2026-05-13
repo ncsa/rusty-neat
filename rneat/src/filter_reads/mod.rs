@@ -21,7 +21,7 @@ pub fn main(config: &PathBuf) -> Result<(), FilterReadsError> {
     // is_gzip: whether the input file is gzipped or not
     // is_fastq: wether the
     // output_file: will be gzipped.
-    let bed_table = bed_reader::read_bed(&run_config.bed_file)?;
+    let bed_table = bed_reader::read_bed(&run_config.bed_file, false)?;
     info!("Running filter-reads on input file.");
     for input_file in run_config.file_map.keys() {
         let (output_file, is_gzip, is_fastq) = run_config.file_map[input_file].clone();

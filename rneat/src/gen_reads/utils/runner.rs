@@ -720,3 +720,81 @@ fn intersect_with_bed(
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::common::structs::sequence_block::{RegionType, SequenceMap};
+    use crate::common::structs::bed_record::BedRecord;
+
+    #[test]
+    fn test_intersect_with_bed() {
+        let r1 = SequenceMap::from(RegionType::NonNRegion, 100, 200);
+        let r2 = SequenceMap::from(RegionType::NonNRegion, 300, 400);
+        let regions = vec![&r1, &r2];
+
+        let b1 = BedRecord::new_bed_record("chr1".to_string(), 150, 350).unwrap();
+        let bed_records = vec![b1];
+
+        // block_offset = 0
+        let result = intersect_with_bed(&regions, &bed_records, 0);
+        assert_eq!(result.len(), 2);
+        // Intersection with r1 [100, 200] and b1 [150, 350] -> [150, 200]
+        assert_eq!(result[0].start, 150);
+        assert_eq!(result[0].end, 200);
+        // Intersection with r2 [300, 400] and b1 [150, 350] -> [300, 350]
+        assert_eq!(result[1].start, 300);
+        assert_eq!(result[1].end, 350);
+
+        // block_offset = 1000
+        // r1 global [1100, 1200], r2 global [1300, 1400]
+        let b2 = BedRecord::new_bed_record("chr1".to_string(), 1150, 1350).unwrap();
+        let result2 = intersect_with_bed(&regions, &vec![b2], 1000);
+        assert_eq!(result2.len(), 2);
+        assert_eq!(result2[0].start, 150); // global 1150 - 1000
+        assert_eq!(result2[0].end, 200);   // global 1200 - 1000
+        assert_eq!(result2[1].start, 300); // global 1300 - 1000
+        assert_eq!(result2[1].end, 350);   // global 1350 - 1000
+    }
+
+    #[test]
+    fn test_filter_input_vcf() {
+        use crate::common::structs::variants::{VariantType, Genotype};
+        use common::structs::nucleotides::Nucleotide;
+        let mut raw = HashMap::new();
+        let v1 = Variant {
+            location: 100,
+            reference: vec![Nucleotide::A],
+            alternate: vec![Nucleotide::T],
+            variant_type: VariantType::SNP,
+            genotype: Genotype::Homozygous,
+            genotype_str: "1/1".to_string(),
+            id: None,
+            quality_score: None,
+            filter: None,
+            info: None,
+            format: vec![],
+            sample: vec![],
+        };
+        let v2 = Variant {
+            location: 200,
+            reference: vec![Nucleotide::A, Nucleotide::T],
+            alternate: vec![Nucleotide::C, Nucleotide::G],
+            variant_type: VariantType::Complex,
+            genotype: Genotype::Homozygous,
+            genotype_str: "1/1".to_string(),
+            id: None,
+            quality_score: None,
+            filter: None,
+            info: None,
+            format: vec![],
+            sample: vec![],
+        };
+        raw.insert("chr1".to_string(), vec![v1.clone(), v2]);
+
+        let filtered = filter_input_vcf(raw);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered["chr1"].len(), 1);
+        assert_eq!(filtered["chr1"][0].location, 100);
+    }
+}

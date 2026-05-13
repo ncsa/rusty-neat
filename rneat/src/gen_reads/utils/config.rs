@@ -725,4 +725,39 @@ mod tests {
         assert_eq!(config.reference, PathBuf::from(ref_path));
         assert_eq!(config.read_len, RunConfiguration::default().read_len);
     }
+
+    #[test]
+    fn test_config_invalid_types() {
+        let ref_path = "test_data/references/H1N1.fa";
+        let mut scrape_config = HashMap::new();
+        scrape_config.insert("reference".to_string(), Value::String(ref_path.to_string()));
+        
+        // Invalid integer
+        let mut sc1 = scrape_config.clone();
+        sc1.insert("read_len".to_string(), Value::String("not_an_int".to_string()));
+        assert!(RunConfiguration::from_scrape_config(sc1).is_err());
+
+        // Invalid boolean
+        let mut sc2 = scrape_config.clone();
+        sc2.insert("paired_ended".to_string(), Value::String("not_a_bool".to_string()));
+        assert!(RunConfiguration::from_scrape_config(sc2).is_err());
+
+        // Invalid float
+        let mut sc3 = scrape_config.clone();
+        sc3.insert("mutation_rate".to_string(), Value::String("not_a_float".to_string()));
+        assert!(RunConfiguration::from_scrape_config(sc3).is_err());
+    }
+
+    #[test]
+    fn test_config_missing_reference() {
+        let scrape_config = HashMap::new();
+        assert!(RunConfiguration::from_scrape_config(scrape_config).is_err());
+    }
+
+    #[test]
+    fn test_config_file_not_found() {
+        let mut scrape_config = HashMap::new();
+        scrape_config.insert("reference".to_string(), Value::String("non_existent_file.fasta".to_string()));
+        assert!(RunConfiguration::from_scrape_config(scrape_config).is_err());
+    }
 }

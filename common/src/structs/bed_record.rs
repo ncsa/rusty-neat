@@ -62,11 +62,12 @@ impl BedRecord {
     }
 
     pub fn overlaps(&self, contig: &str, start: usize, end: usize) -> bool {
-        // This if says if either start or end are in range, then it is an overlap.
-        if self.contains(contig, start) || self.contains(contig, end) {
-            return true
+        if self.contig != contig {
+            return false;
         }
-        false
+        // Intervals overlap if they are not strictly one after another.
+        // self: [self.start, self.end), other: [start, end)
+        self.start < end && start < self.end
     }
 
     pub fn parse_other_for_mut(other: &str) -> Result<Option<f64>, BedErrors> {
@@ -110,17 +111,15 @@ mod test {
     }
 
     #[test]
-    #[should_panic]
     fn test_mut_rate_parser_fails() {
         let other = "no_rate_here";
-        BedRecord::parse_other_for_mut(&other).unwrap();
+        assert!(BedRecord::parse_other_for_mut(other).is_err());
     }
 
     #[test]
-    #[should_panic]
-    fn test_not_a_number_panic() {
+    fn test_not_a_number_error() {
         let other = "mut_rate=not_a_number";
-        BedRecord::parse_other_for_mut(&other).unwrap();
+        assert!(BedRecord::parse_other_for_mut(other).is_err());
     }
 
     #[test]
@@ -136,13 +135,12 @@ mod test {
     }
 
     #[test]
-    #[should_panic]
     fn test_new_mut_region_record_bad_rate() {
         let contig = "chr1".to_string();
         let start = 100;
         let end = 200;
         let other = "mut_rate=not_a_number";
-        BedRecord::new_mut_region_record(contig, start, end, other).unwrap();
+        assert!(BedRecord::new_mut_region_record(contig, start, end, other).is_err());
     }
 
     #[test]
@@ -152,10 +150,12 @@ mod test {
             100,
             200
         ).unwrap();
-        assert!(record.overlaps("chr1", 150, 250));  // start inside
-        assert!(record.overlaps("chr1", 50, 100));   // end == start of record (contains(50)=false, contains(100)=true)
+        assert!(record.overlaps("chr1", 150, 250));  // end inside
+        assert!(record.overlaps("chr1", 50, 150));   // start inside
+        assert!(record.overlaps("chr1", 150, 160));  // fully inside
+        assert!(record.overlaps("chr1", 50, 250));   // fully contains record
         assert!(!record.overlaps("chr1", 200, 300)); // fully after (end is exclusive)
-        assert!(!record.overlaps("chr1", 0, 50));    // fully before
+        assert!(!record.overlaps("chr1", 0, 100));   // fully before
         assert!(!record.overlaps("chr2", 150, 250)); // wrong contig
     }
 
@@ -184,11 +184,51 @@ mod test {
     }
 
     #[test]
-    #[should_panic]
-    fn test_bad_record() {
-        let contig = "chr1".to_string();
-        let start = 900;
-        let end = 0;
-        BedRecord::new_bed_record(contig, start, end).unwrap();
+    fn test_new_bed_record_edge_cases() {
+        // Zero length region should fail
+        assert!(BedRecord::new_bed_record("chr1".to_string(), 100, 100).is_err());
+        // Negative length (start > end) should fail
+        assert!(BedRecord::new_bed_record("chr1".to_string(), 200, 100).is_err());
+        
+        // Large coordinates
+        let rec = BedRecord::new_bed_record("chr1".to_string(), 0, usize::MAX).unwrap();
+        assert_eq!(rec.len(), usize::MAX);
+    }
+
+    #[test]
+    fn test_get_contig() {
+        let rec = BedRecord::new_bed_record("chrX".to_string(), 10, 20).unwrap();
+        assert_eq!(rec.get_contig(), "chrX");
+    }
+
+    #[test]
+    fn test_parse_other_case_insensitivity() {
+        let other = "MUT_RATE=0.01";
+        assert_eq!(BedRecord::parse_other_for_mut(other).unwrap(), Some(0.01));
+    }
+
+    #[test]
+    fn test_parse_other_delimiters() {
+        assert_eq!(BedRecord::parse_other_for_mut("mut_rate=0.1,other=1").unwrap(), Some(0.1));
+        assert_eq!(BedRecord::parse_other_for_mut("mut_rate=0.2|other=1").unwrap(), Some(0.2));
+    }
+
+    #[test]
+    fn test_parse_other_missing_rate() {
+        let result = BedRecord::parse_other_for_mut("no_rate_here");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_overlaps_more() {
+        let record = BedRecord::new_bed_record("chr1".to_string(), 100, 200).unwrap();
+        // Fully contains the record
+        assert!(record.overlaps("chr1", 50, 250));
+        // Exactly matches the record
+        assert!(record.overlaps("chr1", 100, 200));
+        // Touches end (non-overlapping because end is exclusive)
+        assert!(!record.overlaps("chr1", 200, 250));
+        // Touches start (non-overlapping because start is inclusive and we check [50, 100) and [100, 200))
+        assert!(!record.overlaps("chr1", 50, 100));
     }
 }

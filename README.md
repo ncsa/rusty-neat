@@ -149,6 +149,21 @@ When `target_bed` is set, `gen-reads` skips contigs absent from the BED entirely
 
 The BED contig names must match the short names derived from the reference FASTA (the text after `>` up to the first whitespace character). Both `.bed` and `.bed.gz` inputs are accepted.
 
+Custom Mutation Rate Regions with a BED File
+============================================
+In addition to targeting certain regions, you can use a BED file with a custom field entered in any column after the third. 
+
+```yaml
+mutation_regions: /path/to/mutation_regions.bed
+```
+
+The text pattern is "mut_rate=0.0001" followed by a delimiter (end of line, space, semicolon, comma, bar) where the number after the equal sign is any float, and will be the mutation rate for the region defined in columns 1-3. 
+```text
+chr1    39930   39957   Bed_info    mut_rate=0.002
+chr2    0   111199  Other_bed_info  mut_rate=0.02
+```
+Any region outside of the regions defined in the mutation regions BED will be assigned the default mutation rate, set by the mutation model, which can be overridden a custom default defined in the config file. For example, if you only want to have mutations in exomes, but you want reads from the full genome, you could set the `mutation_rate` to 0.0 and use a bed file defining all exomes, with a column appende `mut_rate=0.0011` or whatever mutation rate you desire. This BED works in conjunction with the `target_bed`, and any region outside the target bed will be excluded from reads anyway, and thus will have no variants. 
+
 Input Variants VCF
 ==================
 You can supply a VCF of variants to force into the simulation:
@@ -157,7 +172,7 @@ You can supply a VCF of variants to force into the simulation:
 input_vcf: /path/to/variants.vcf.gz
 ```
 
-`rneat` will place every variant from the VCF into the corresponding position in the simulated reads and the output VCF. Random variants are still generated at `mutation_rate` for all positions not covered by the input VCF; set `mutation_rate: 0` to disable random variants entirely and simulate only the provided set.
+`rneat` will place every variant from the VCF into the corresponding position in the simulated reads and the output VCF. Random variants are still generated at `mutation_rate` for all positions not covered by the input VCF; set `mutation_rate: 0.0` to disable random variants entirely and output only the provided set of variants.
 
 **Requirements**
 
@@ -196,7 +211,7 @@ seqkit shuffle -2 sample_R1.fastq.gz sample_R2.fastq.gz \
     -o sample_R1_shuffled.fastq.gz -o sample_R2_shuffled.fastq.gz
 ```
 
-`seqkit` uses reservoir sampling and streams from disk, so its memory use is bounded regardless of file size. `rneat` will emit a warning at runtime when the reference genome exceeds 500 Mbp as a reminder that post-processing may be preferable.
+`seqkit` uses reservoir sampling and streams from disk, so its memory use is bounded regardless of file size. `rneat` will emit a warning at runtime when the reference genome exceeds 500 Mbp as a reminder that post-processing may be preferable (`seqkit` is an open source toolkit for fastqs: https://github.com/shenwei356/seqkit).
 
 Parallel Processing
 ===================
@@ -565,6 +580,50 @@ Only reads that satisfy all of the following are used:
 
 **Outlier filtering:**  
 Fragment lengths that exceed `median + 10 × MAD` (median absolute deviation) are removed before fitting. This mirrors the filtering in Python NEAT's fragment length modeler. If no lengths survive the filter, lower `min_reads` or set it to `0`.
+
+**Current Benchmarks**
+We ran some benchmarks on `rneat` on my home desktop, a very basic Linux desktop, using data pulled from public resources on the internet (mostly ncbi). The "yeast" is brewer's yeast. These are the results:
+
+[16:26:39] Build complete.
+rneat Benchmark Report
+Run:        20260510_162639
+Machine:    pop-os  |  8 logical CPUs
+Coverage:   10x    |  Read length: 151 bp
+Binary:     /home/joshfactorial/code/rusty-neat/target/release/rneat
+──────────────────────────────────────────────────────────────────────
+SECTION 1: Single-ended read generation
+Genome          Size(MB)   Wall time  Peak RSS(MB)      CPU%
+──────────────────────────────────────────────────────────────────────
+[16:26:40] Single-ended: ecoli  (4.6 MB)
+ecoli                4.6     0:14.83         416.9       99%
+[16:26:54]   Done: wall=0:14.83  peak_rss=416.9 MB  cpu=99%
+[16:26:54] Single-ended: pneumonia  (2.1 MB)
+pneumonia            2.1     0:05.39         197.0       99%
+[16:27:00]   Done: wall=0:05.39  peak_rss=197.0 MB  cpu=99%
+[16:27:00] Single-ended: yeast  (12 MB)
+yeast                 12     0:10.94         981.7      352%
+[16:27:11]   Done: wall=0:10.94  peak_rss=981.7 MB  cpu=352%
+[16:27:11] Single-ended: c_elegans  (97 MB)
+c_elegans             97     7:35.23        8591.2      387%
+[16:34:46]   Done: wall=7:35.23  peak_rss=8591.2 MB  cpu=387%
+──────────────────────────────────────────────────────────────────────
+Section 1 — Passed: 4 / 4  |  Failed: 0
+──────────────────────────────────────────────────────────────────────
+SECTION 2: Paired vs single comparison  (genome: yeast, 10x)
+  Paired-end uses fragment_mean=400, fragment_st_dev=50
+  Same reference, same coverage, same seed — only the read-generation mode differs.
+Mode               Wall time  Peak RSS(MB)      CPU%
+──────────────────────────────────────────────────────────────────────
+[16:34:46] Paired comparison — single-ended pass
+single-ended         0:10.48         970.4      365%
+[16:34:57]   Single done: wall=0:10.48  peak_rss=970.4 MB  cpu=365%
+[16:34:57] Paired comparison — paired-ended pass
+paired-ended         0:13.30        1126.8      354%
+[16:35:10]   Paired done: wall=0:13.30  peak_rss=1126.8 MB  cpu=354%
+──────────────────────────────────────────────────────────────────────
+  Paired/single wall-time ratio: 1.27x  (10.48s → 13.30s)
+  Paired/single peak-RSS ratio:  1.16x  (970.4 MB → 1126.8 MB)
+──────────────────────────────────────────────────────────────────────
 
 **Zenodo release**
 

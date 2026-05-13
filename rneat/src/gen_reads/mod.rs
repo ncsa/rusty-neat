@@ -129,6 +129,88 @@ mod tests {
     /// 1. Reads are generated (the covered contig produces output).
     /// 2. Fewer reads are produced than the no-BED run (7 of 8 segments are excluded).
     #[test]
+    fn test_mutation_regions_custom_and_default_rates() {
+        use std::fs::File;
+        let out = tempdir().unwrap();
+        let ref_path = h1n1_reference();
+        
+        // Create a mutation BED file
+        // H1N1 has 8 segments. We'll set rates for all of them to be safe,
+        // or just check the contig name in the VCF.
+        let mut_bed_path = out.path().join("mut.bed");
+        {
+            let mut f = File::create(&mut_bed_path).unwrap();
+            let segments = [
+                "H1N1_segment_1", "H1N1_HA", "H1N1_MP", "H1N1_NA", 
+                "H1N1_NP", "H1N1_NS", "H1N1_PA", "H1N1_PB1", "H1N1_PB2"
+            ];
+            for seg in segments {
+                // High rate in 100-200
+                writeln!(f, "{}\t100\t200\tmut_rate=1.0", seg).unwrap();
+                // Zero rate in 300-400
+                writeln!(f, "{}\t300\t400\tmut_rate=0.0", seg).unwrap();
+            }
+        }
+
+        let mut yaml = NamedTempFile::new().unwrap();
+        write!(yaml,
+            "reference: {ref}\nread_len: 50\ncoverage: 0\n\
+             produce_fastq: false\nproduce_bam: false\nproduce_vcf: true\n\
+             output_dir: {out}\noutput_filename: mut_test\noverwrite_output: true\n\
+             mutation_regions: {mut_bed}\n\
+             mutation_rate: 0.1\n\
+             rng_seed: mut test",
+            ref = ref_path.display(),
+            out = out.path().display(),
+            mut_bed = mut_bed_path.display(),
+        ).unwrap();
+        
+        let config = RunConfiguration::from_yaml_file(&yaml.path().to_path_buf()).unwrap();
+        run(config.clone());
+
+        let vcf_path = config.output_vcf.unwrap();
+        assert!(vcf_path.exists());
+
+        // Check variants in VCF - it is gzipped
+        let mut reader = BufReader::new(MultiGzDecoder::new(File::open(vcf_path).unwrap()));
+        let mut line = String::new();
+        let mut variants_in_high_rate = 0;
+        let mut variants_in_zero_rate = 0;
+        let mut variants_elsewhere = 0;
+
+        while reader.read_line(&mut line).unwrap() > 0 {
+            if line.starts_with('#') {
+                line.clear();
+                continue;
+            }
+            let fields: Vec<&str> = line.split('\t').collect();
+            let pos: usize = fields[1].parse().unwrap(); // 1-based
+            let pos0 = pos - 1;
+
+            if pos0 >= 100 && pos0 < 200 {
+                variants_in_high_rate += 1;
+            } else if pos0 >= 300 && pos0 < 400 {
+                // The variant's location is actually the start position of the mutation.
+                // For a SNP it is exactly pos0.
+                variants_in_zero_rate += 1;
+            } else {
+                variants_elsewhere += 1;
+            }
+            line.clear();
+        }
+
+        // With rate 1.0 over 100bp, we expect ~100 mutations in the high rate region.
+        // With rate 0.0 over 100bp, we expect 0 mutations.
+        // With rate 0.1 over the rest of the contig (segment 1 is 2341 bp), 
+        // area = 2341 - 100 (high) - 100 (zero) = 2141 bp.
+        // Expected mutations elsewhere = 2141 * 0.1 = 214.1 -> 214.
+        
+        assert!(variants_in_high_rate > 50, "Should have many mutations in high rate region, got {}", variants_in_high_rate);
+        assert_eq!(variants_in_zero_rate, 0, "Should have NO mutations in zero rate region, got {}", variants_in_zero_rate);
+        assert!(variants_elsewhere > 100, "Should have mutations in default rate regions, got {}", variants_elsewhere);
+    }
+
+    #[test]
     fn test_target_bed_limits_reads() {
         let out = tempdir().unwrap();
 

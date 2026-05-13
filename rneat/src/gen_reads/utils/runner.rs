@@ -59,7 +59,7 @@ struct ContigContext<'a> {
     input_variants: &'a Option<HashMap<String, Vec<Variant>>>,
     nuc_sub_model: &'a NucleotideSelector,
     mutation_model: &'a MutationModel,
-    run_mutation_rate: f64,
+    default_run_mutation_rate: f64,
     fragment_length_model: &'a FragmentLengthModel,
     gc_bias_model: &'a GcBiasModel,
     quality_score_model: &'a QualityScoreModel,
@@ -94,7 +94,14 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
             None => MutationModel::default()?,
         }
     };
-    let run_mutation_rate = match config.mutation_rate {
+    let mutation_regions = match &config.mutation_regions {
+        Some(path) => {
+            info!("Loading mutation regions BED: {:?}", path);
+            Some(read_bed(path, true)?)
+        },
+        None => None,
+    };
+    let default_run_mutation_rate = match config.mutation_rate {
         Some(rate) => rate,
         None => mutation_model.mutation_rate
     };
@@ -147,15 +154,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
     let target_bed = match &config.target_bed {
         Some(path) => {
             info!("Loading target BED: {:?}", path);
-            Some(read_bed(path)?)
-        },
-        None => None,
-    };
-
-    let mutation_regions = match &config.mutation_regions {
-        Some(path) => {
-            info!("Loading mutation regions BED: {:?}", path);
-            Some(read_bed(path)?)
+            Some(read_bed(path, false)?)
         },
         None => None,
     };
@@ -184,7 +183,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
         input_variants: &input_variants,
         nuc_sub_model: &nuc_sub_model,
         mutation_model: &mutation_model,
-        run_mutation_rate,
+        default_run_mutation_rate,
         fragment_length_model: &fragment_length_model,
         gc_bias_model: &gc_bias_model,
         quality_score_model: &quality_score_model,
@@ -374,24 +373,53 @@ fn process_contig(
 
     debug!("    > Generating bias map.");
     let raw_regions = current_block.get_non_n_regions();
-    let regions_of_interest: Vec<SequenceMap> = if let Some(bed) = ctx.target_bed {
-        let contig_beds = bed.get(&contig_name).map(|v| v.as_slice()).unwrap_or(&[]);
-        intersect_with_bed(&raw_regions, contig_beds, 0)
-    } else {
-        raw_regions.into_iter().cloned().collect()
-    };
+    let regions_of_interest: Vec<SequenceMap> =
+        if let Some(bed) = ctx.target_bed {
+            let contig_beds = bed
+                .get(&contig_name)
+                .map(|v| v.as_slice())
+                .unwrap_or(&[]);
+            intersect_with_bed(&raw_regions, contig_beds, 0)
+        } else {
+            raw_regions.into_iter().cloned().collect()
+        };
     if regions_of_interest.is_empty() {
         return Ok(ContigResult { idx, name: contig_name, len: contig_len, data: None });
     }
 
+    // Generate mutation rate table based on the regions of interest
+
     let mut bias_map: Vec<f64> = vec![0.0; current_block.get_len()];
-    let mut num_mutable_area = 0.0_f64;
+
+    // First initialize all regions of interest with the default mutation rate
     for region in &regions_of_interest {
         for j in region.start..region.end {
-            bias_map[j] = 1.0;
-            num_mutable_area += 1.0;
+            bias_map[j] = ctx.default_run_mutation_rate;
         }
     }
+
+    // Then override with custom rates from BED if provided
+    if let Some(mut_beds) = ctx.mutation_regions {
+        if let Some(records) = mut_beds.get(&contig_name) {
+            for rec in records {
+                if let Some(custom_rate) = rec.mut_rate {
+                    // Intersect BED record with regions of interest to avoid setting rates in N-regions
+                    for region in &regions_of_interest {
+                        let isect_start = region.start.max(rec.start);
+                        let isect_end = region.end.min(rec.end);
+                        if isect_start < isect_end {
+                            for j in isect_start..isect_end {
+                                bias_map[j] = custom_rate;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Calculate total expected mutations
+    let mut num_mutations_sum: f64 = bias_map.iter().sum();
 
     let block_end = contig_len;
     let mut block_variants: Vec<Variant> = if let Some(iv) = ctx.input_variants {
@@ -408,8 +436,8 @@ fn process_contig(
                             return None;
                         }
                         if bias_map[local_pos] > 0.0 {
+                            num_mutations_sum -= bias_map[local_pos];
                             bias_map[local_pos] = 0.0;
-                            num_mutable_area -= 1.0;
                         }
                         let mut v2 = v.clone();
                         v2.location = local_pos;
@@ -422,8 +450,7 @@ fn process_contig(
         Vec::new()
     };
     debug!("Seeded {} user variant(s) into contig {}", block_variants.len(), contig_name);
-
-    let num_mutations = (num_mutable_area * ctx.run_mutation_rate).trunc() as usize;
+    let num_mutations = num_mutations_sum.trunc() as usize;
     debug!("Adding {} mutations to contig {}", num_mutations, contig_name);
     let mut max_del_len = 0;
     for v in &block_variants {
@@ -617,6 +644,7 @@ fn process_contig(
         }),
     })
 }
+
 
 fn collect_contig_result(
     cr: ContigResult,

@@ -118,6 +118,21 @@ mod tests {
     }
 
     #[test]
+    fn test_process_mut_bed() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let bed_path = temp_dir.path().join("test_mut.bed");
+        let mut f = std::fs::File::create(&bed_path).unwrap();
+        writeln!(f, "chr1\t100\t200\tmut_rate=0.01").unwrap();
+        writeln!(f, "chr2\t300\t400\tname=region2;mut_rate=0.005").unwrap();
+        drop(f);
+
+        let result = read_bed(&bed_path, true).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result["chr1"][0].mut_rate, Some(0.01));
+        assert_eq!(result["chr2"][0].mut_rate, Some(0.005));
+    }
+
+    #[test]
     fn test_process_bed_no_extension_succeeds() {
         let temp_dir = tempfile::tempdir().unwrap();
         let bad_path = temp_dir.path().join("no_extension");

@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use crate::file_tools::bed_reader::BedReaderError;
 
 #[derive(Debug, Error)]
 pub enum BedErrors {
@@ -18,8 +17,8 @@ pub struct BedRecord {
 
 impl BedRecord {
     pub fn new_bed_record(
-        contig: String, 
-        start: usize, 
+        contig: String,
+        start: usize,
         end: usize
     ) -> Result<Self, BedErrors> {
         if start >= end {
@@ -28,11 +27,11 @@ impl BedRecord {
         // skip string parsing if we know this is a regular target bed
         Ok(BedRecord { contig, start, end, mut_rate: None})
     }
-    
+
     pub fn new_mut_region_record(
-        contig: String, 
-        start: usize, 
-        end: usize, 
+        contig: String,
+        start: usize,
+        end: usize,
         other: &str
     ) -> Result<Self, BedErrors> {
         if start >= end {
@@ -82,7 +81,7 @@ impl BedRecord {
             let maybe_num = value_str.parse::<f64>();
             match maybe_num {
                 Ok(value) => Ok(Some(value)),
-                Err(e) => Err(BedErrors::BedRecordError(
+                Err(_) => Err(BedErrors::BedRecordError(
                     format!("Error parsing text after 'mut_rate': {}", value_str)
                 ))
             }
@@ -108,12 +107,42 @@ mod test {
         
         let other = "some_other_field mut_rate=0.001\tmore_fields";
         assert_eq!(BedRecord::parse_other_for_mut(&other).unwrap(), Some(0.001));
-        
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_mut_rate_parser_fails() {
         let other = "no_rate_here";
-        assert_eq!(BedRecord::parse_other_for_mut(&other).unwrap(), None);
-        
+        BedRecord::parse_other_for_mut(&other).unwrap();
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_not_a_number_panic() {
         let other = "mut_rate=not_a_number";
-        assert_eq!(BedRecord::parse_other_for_mut(&other).unwrap(), None);
+        BedRecord::parse_other_for_mut(&other).unwrap();
+    }
+
+    #[test]
+    fn test_new_mut_region_record() {
+        let contig = "chr1".to_string();
+        let start = 100;
+        let end = 200;
+        let other = "name=gene1;mut_rate=0.005;score=100";
+        let result = BedRecord::new_mut_region_record(contig, start, end, other).unwrap();
+        assert_eq!(result.start, 100);
+        assert_eq!(result.end, 200);
+        assert_eq!(result.mut_rate, Some(0.005));
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_new_mut_region_record_bad_rate() {
+        let contig = "chr1".to_string();
+        let start = 100;
+        let end = 200;
+        let other = "mut_rate=not_a_number";
+        BedRecord::new_mut_region_record(contig, start, end, other).unwrap();
     }
 
     #[test]

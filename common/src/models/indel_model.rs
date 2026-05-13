@@ -212,4 +212,37 @@ mod tests {
         let loaded = IndelModel::from(&path).unwrap();
         assert!((loaded.insertion_probability - model.insertion_probability).abs() < 1e-10);
     }
+
+    #[test]
+    fn test_indel_model_from_raw_data() {
+        let ins_lens = vec![1, 2, 3];
+        let ins_weights = vec![0.5, 0.3, 0.2];
+        let del_lens = vec![1, 5];
+        let del_weights = vec![0.9, 0.1];
+        let model = IndelModel::from_raw_data(0.4, ins_lens, ins_weights, del_lens, del_weights).unwrap();
+        assert_eq!(model.insertion_probability, 0.4);
+        assert_eq!(model.new_insert_length(0.0).unwrap(), 1);
+        assert_eq!(model.new_delete_length(0.0).unwrap(), 1);
+        assert_eq!(model.new_delete_length(0.95).unwrap(), 5);
+    }
+
+    #[test]
+    fn test_generate_random_insertion_empty() {
+        let mut rng = NeatRng::new_from_seed(&vec!["test".to_string()]).unwrap();
+        let model = IndelModel::default().unwrap();
+        let insertion = model.generate_random_insertion(0, &mut rng).unwrap();
+        assert!(insertion.is_empty());
+    }
+
+    #[test]
+    fn test_generate_random_insertion_content() {
+        let mut rng = NeatRng::new_from_seed(&vec!["test".to_string()]).unwrap();
+        let model = IndelModel::default().unwrap();
+        let insertion = model.generate_random_insertion(100, &mut rng).unwrap();
+        // Check that only valid nucleotides are generated
+        let allowed = allowed_vec();
+        for nuc in insertion {
+            assert!(allowed.contains(&nuc));
+        }
+    }
 }

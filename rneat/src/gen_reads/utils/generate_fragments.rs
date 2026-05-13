@@ -307,23 +307,36 @@ fn cover_dataset(
     // Places exactly target_count fragments so that mean depth equals the requested
     // coverage. Stopping on fragment count rather than sweep count means the wildcard
     // gap can be proportional to read_length without reducing mean coverage.
+    // Alternates sweep direction (3' to 5' then 5' to 3') for better realism.
 
     rng.shuffle_in_place(&mut fragment_pool)?;
     let mut cover_fragment_pool = VecDeque::from(fragment_pool);
 
     let pool_size = cover_fragment_pool.len();
     let mut fragment_set: Vec<(usize, usize)> = Vec::with_capacity(target_count);
-    let mut start = (rng.rand_int()? as usize) % (read_length / 4).max(1);
+    let mut pos = (rng.rand_int()? as usize) % (read_length / 4).max(1);
+    let mut forward = true;
     let mut non_placing_streak = 0usize;
 
     while fragment_set.len() < target_count {
         let fragment_length = cover_fragment_pool.pop_front().unwrap();
         cover_fragment_pool.push_back(fragment_length);
 
-        let temp_end = start + fragment_length;
-        if temp_end > span_length {
-            // Restart from the beginning of the contig for the next sweep.
-            start = 0;
+        let (start, end) = if forward {
+            (pos, pos + fragment_length)
+        } else {
+            (pos.saturating_sub(fragment_length), pos)
+        };
+
+        if (forward && end > span_length) || (!forward && start == 0 && pos < fragment_length) {
+            // Sweep complete, reverse direction and pick a random starting offset.
+            forward = !forward;
+            pos = if forward {
+                (rng.rand_u32()? as usize) % (read_length / 4).max(1)
+            } else {
+                span_length - (rng.rand_u32()? as usize) % (read_length / 4).max(1)
+            };
+
             // Only count fragments that can NEVER fit (length > span), not fragments
             // that merely overshot from a high start position and will fit after restart.
             if fragment_length > span_length {
@@ -344,11 +357,21 @@ fn cover_dataset(
         }
         non_placing_streak = 0;
 
-        fragment_set.push((start + read_start, temp_end + read_start));
+        fragment_set.push((start + read_start, end + read_start));
         let wildcard = (rng.rand_u32()? % (read_length as u32 / 4).max(1)) as usize;
-        start = temp_end + wildcard;
-        if start >= span_length {
-            start = 0;
+        
+        if forward {
+            pos = end + wildcard;
+            if pos >= span_length {
+                forward = false;
+                pos = span_length - (rng.rand_u32()? as usize) % (read_length / 4).max(1);
+            }
+        } else {
+            pos = start.saturating_sub(wildcard);
+            if pos == 0 {
+                forward = true;
+                pos = (rng.rand_u32()? as usize) % (read_length / 4).max(1);
+            }
         }
     }
 
@@ -406,7 +429,9 @@ mod tests {
             fragment_pool,
             &mut rng
         ).unwrap();
-        assert_eq!(cover[0], (0, 10))
+        assert_eq!(cover.len(), target_count);
+        // All fragments must fit within the span.
+        assert!(cover.iter().all(|&(_s, e)| e <= span_length));
     }
 
     #[test]
@@ -430,8 +455,6 @@ mod tests {
             &mut rng
         ).unwrap();
         assert_eq!(cover.len(), target_count);
-        // After a wrap the cursor resets to 0, so the sorted first fragment starts there.
-        assert_eq!(cover[0], (0, 300));
         // All fragments must fit within the span and have the pool fragment length.
         assert!(cover.iter().all(|&(s, e)| e <= span_length && e - s == 300));
     }

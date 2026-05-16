@@ -52,11 +52,10 @@ pub fn generate_fragments(
 
     // Each paired-end fragment produces two reads (R1 + R2), so halve the fragment count
     // so that mean per-base read depth matches the requested coverage value.
-    let num_frags = if paired_ended {
-        sequence_length.saturating_mul(coverage) / (2 * read_length).max(1)
-    } else {
-        sequence_length.saturating_mul(coverage) / read_length
-    };
+    // Use ceiling division (matching NEAT Python's ceil()) so fractional fragments are
+    // rounded up rather than truncated — truncation compounds across many small regions.
+    let denom = if paired_ended { (2 * read_length).max(1) } else { read_length };
+    let num_frags = (sequence_length.saturating_mul(coverage) + denom - 1) / denom;
     if paired_ended {
         // For paired-end reads the physical fragment length (insert size) determines spacing.
         // Keep sampling until num_frags valid fragments are collected so that the pool has
@@ -66,9 +65,10 @@ pub fn generate_fragments(
         fragment_pool.reserve(num_frags);
         while fragment_pool.len() < num_frags && attempts < max_attempts {
             let frag = fragment_model.generate_fragment(rng.random()?)?;
-            // In long-read mode accept all fragments; in short-read mode discard those
-            // shorter than read_length (adapter read-through is out of scope here).
-            if long_reads || frag >= read_length {
+            // In long-read mode accept all fragments; in short-read paired-end mode require
+            // frag >= read_length + 10 so that R1 and R2 don't fully overlap (matching
+            // NEAT Python's min_frag = read_len + 10 for paired-end).
+            if long_reads || frag >= read_length + 10 {
                 fragment_pool.push(frag);
             }
             attempts += 1;
@@ -238,11 +238,9 @@ pub fn generate_weighted_fragments(
 
     // Same paired-end correction as generate_fragments: each fragment yields two reads,
     // so halve the count so that mean per-base read depth matches requested coverage.
-    let num_frags_base = if paired_ended {
-        region_len.saturating_mul(coverage) / (2 * read_length).max(1)
-    } else {
-        region_len.saturating_mul(coverage) / read_length
-    };
+    // Use ceiling division so fractional fragments are rounded up, not truncated.
+    let denom = if paired_ended { (2 * read_length).max(1) } else { read_length };
+    let num_frags_base = (region_len.saturating_mul(coverage) + denom - 1) / denom;
     let num_frags = if normalize {
         let inflated = (num_frags_base as f64 / mean_weight).round() as usize;
         let cap = num_frags_base.saturating_mul(MAX_COVERAGE_MULTIPLIER);
@@ -358,7 +356,9 @@ fn cover_dataset(
         non_placing_streak = 0;
 
         fragment_set.push((start + read_start, end + read_start));
-        let wildcard = (rng.rand_u32()? % (read_length as u32 / 4).max(1)) as usize;
+        // Halved from read_length/4 to read_length/8 to tighten spacing between consecutive
+        // fragment placements, reducing systematic coverage gaps between sweep passes.
+        let wildcard = (rng.rand_u32()? % (read_length as u32 / 8).max(1)) as usize;
         
         if forward {
             pos = end + wildcard;
@@ -556,7 +556,8 @@ mod tests {
         ).unwrap();
         // Paired-end produces 2 reads per fragment, so fragment count is halved to keep
         // per-base read depth equal to the requested coverage.
-        let expected = seq_len * coverage / (2 * read_length);
+        // Use ceiling division to match generate_fragments behavior.
+        let expected = (seq_len * coverage + 2 * read_length - 1) / (2 * read_length);
         assert!(!reads.is_empty());
         assert_eq!(reads.len(), expected, "Paired reads: expected {expected} fragments, got {}", reads.len());
         assert!(reads.iter().all(|&(s, e)| e <= seq_len && e > s),
@@ -570,7 +571,7 @@ mod tests {
         let seq_len = 50_000_usize;
         let read_length = 100;
         let coverage = 2;
-        let num_frags = seq_len * coverage / (2 * read_length);
+        let num_frags = (seq_len * coverage + 2 * read_length - 1) / (2 * read_length);
         let mut rng = NeatRng::new_from_seed(&vec!["pool-fill-test".to_string()]).unwrap();
         let fragment_model = FragmentLengthModel::new_normal(600.0, 30.0).unwrap();
         let reads = generate_fragments(
@@ -745,7 +746,8 @@ mod tests {
         );
         let (region_start, region_end) = (0, sequence_block.sequence.len());
         let coverage = 5;
-        let num_frags_expected = (region_end - region_start) * coverage / read_length;
+        let region_len = region_end - region_start;
+        let num_frags_expected = (region_len * coverage + read_length - 1) / read_length;
         // mean=220 with st_dev=40 → P(frag < 200) ≈ 31% rejection rate
         let fragment_model = FragmentLengthModel::new_normal(220.0, 40.0).unwrap();
         let mut rng = make_rng();

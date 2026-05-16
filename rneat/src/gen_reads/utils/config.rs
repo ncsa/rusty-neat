@@ -59,7 +59,6 @@ pub struct RunConfiguration {
     pub output_fastq_2: Option<PathBuf>,
     pub output_vcf: Option<PathBuf>,
     pub output_bam: Option<PathBuf>, 
-    pub shuffle_fastq: bool,
     // model input
     pub quality_score_model: Option<PathBuf>,
     pub mutation_model: Option<PathBuf>,
@@ -108,7 +107,6 @@ impl Default for RunConfiguration {
             output_fastq_2: None,
             output_vcf: None,
             output_bam: None,
-            shuffle_fastq: true,
             quality_score_model: None,
             mutation_model: None,
             fragment_model: None,
@@ -217,10 +215,6 @@ impl RunConfiguration {
                     "produce_bam" => {
                         config.produce_bam = value.as_bool()
                             .ok_or_else(|| GenerateReadsError::ConfigReadError("produce_bam".to_string(), "boolean".to_string()))?;
-                    },
-                    "shuffle_fastq" => {
-                        config.shuffle_fastq = value.as_bool()
-                            .ok_or_else(|| GenerateReadsError::ConfigReadError("shuffle_fastq".to_string(), "boolean".to_string()))?;
                     },
                     "rng_seed" => {
                         config.rng_seed = Some(value.as_str()
@@ -456,10 +450,6 @@ impl RunConfiguration {
         }
 
 
-        if config.produce_fastq {
-            info!("\t>shuffle FASTQ output: {}", config.shuffle_fastq);
-        }
-
         if !config.produce_bam {
             match config.num_threads {
                 Some(n) => {
@@ -525,7 +515,6 @@ mod tests {
             output_fastq_2: None,
             output_vcf: None,
             output_bam: None, 
-            shuffle_fastq: true,
             quality_score_model: None,
             mutation_model: None,
             fragment_model: None,
@@ -551,7 +540,6 @@ mod tests {
         assert_eq!(test_configuration.produce_fastq, false);
         assert_eq!(test_configuration.produce_vcf, true);
         assert_eq!(test_configuration.produce_bam, true);
-        assert_eq!(test_configuration.shuffle_fastq, true);
         assert_eq!(test_configuration.rng_seed, None);
         assert_eq!(test_configuration.overwrite_output, true);
         assert_eq!(test_configuration.output_dir, PathBuf::from("/my/my"));

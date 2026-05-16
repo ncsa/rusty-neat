@@ -90,8 +90,16 @@ pub fn write_block_fastq<T: Write, W: Write> (
     mut bam_writer: Option<&mut dyn BamRecordStager>,
 ) -> Result<(), FastqToolsError> {
     debug!("writing reads for {}", sequence_block.contig);
+    // For SE reads, fragment_length == read_length exactly.  Sequencing-error deletions advance
+    // seq_index without writing bases, so the generation loop can exhaust the fragment before
+    // writing read_length bases, causing a TruncatedRead.  Fetching a small pad beyond `end`
+    // gives the loop extra reference bases to consume.  For PE, fragments are large relative to
+    // read_length so no padding is needed (and it would shift R2 coordinates).
+    let seq_len = sequence_block.sequence.len();
+    let se_pad = if paired_ended { 0 } else { 32 };
     for (start, end) in block_fragments {
-        let fragment = sequence_block.get_subseq(start, end)?;
+        let padded_end = (end + se_pad).min(seq_len);
+        let fragment = sequence_block.get_subseq(start, padded_end)?;
         // In long-read mode a fragment may be shorter than read_length; truncate the read
         // to the actual fragment length rather than discarding it.
         let effective_read_len = if long_reads {
@@ -201,8 +209,6 @@ pub fn combine_temp_fastqs(
     files_r2: Vec<PathBuf>,
     final_filename_r1: &PathBuf,
     final_filename_r2: Option<&PathBuf>,
-    shuffle: bool,
-    rng: &mut NeatRng,
 ) -> Result<(), FastqToolsError> {
     let mut r1_lines: Vec<String> = Vec::new();
     for file in &files_r1 {
@@ -214,55 +220,32 @@ pub fn combine_temp_fastqs(
             }
         }
     }
-    let mut records_r1: Vec<Vec<String>> = r1_lines
-        .chunks(4)
-        .filter(|c| c.len() == 4)
-        .map(|c| c.to_vec())
-        .collect();
+    let num_records = r1_lines.len() / 4;
 
     let paired = !files_r2.is_empty();
-    let mut records_r2: Vec<Vec<String>> = if paired {
-        let mut r2_lines: Vec<String> = Vec::new();
+    let r2_lines: Vec<String> = if paired {
+        let mut lines: Vec<String> = Vec::new();
         for file in &files_r2 {
             let reader = read_gzip_lines(file)?;
             for line_result in reader {
                 match line_result {
-                    Ok(l) => r2_lines.push(l),
+                    Ok(l) => lines.push(l),
                     Err(e) => return Err(FastqToolsError::FastqReadError(e.to_string())),
                 }
             }
         }
-        r2_lines
-            .chunks(4)
-            .filter(|c| c.len() == 4)
-            .map(|c| c.to_vec())
-            .collect()
+        lines
     } else {
         Vec::new()
     };
-
-    if shuffle {
-        if paired && !records_r2.is_empty() {
-            let mut pairs: Vec<(Vec<String>, Vec<String>)> = records_r1
-                .into_iter()
-                .zip(records_r2.into_iter())
-                .collect();
-            rng.shuffle_in_place(&mut pairs)?;
-            let (new_r1, new_r2): (Vec<Vec<String>>, Vec<Vec<String>>) =
-                pairs.into_iter().unzip();
-            records_r1 = new_r1;
-            records_r2 = new_r2;
-        } else {
-            rng.shuffle_in_place(&mut records_r1)?;
-        }
-    }
 
     {
         let final_file = append_to_file(final_filename_r1)?;
         let enc = GzEncoder::new(final_file, Compression::default());
         let mut writer = BufWriter::new(enc);
-        for record in &records_r1 {
-            for line in record {
+        for idx in 0..num_records {
+            let base = idx * 4;
+            for line in &r1_lines[base..base + 4] {
                 writer.write_fmt(format_args!("{}\n", line))?;
             }
         }
@@ -272,8 +255,9 @@ pub fn combine_temp_fastqs(
         let final_file = append_to_file(filename_r2)?;
         let enc = GzEncoder::new(final_file, Compression::default());
         let mut writer = BufWriter::new(enc);
-        for record in &records_r2 {
-            for line in record {
+        for idx in 0..num_records {
+            let base = idx * 4;
+            for line in &r2_lines[base..base + 4] {
                 writer.write_fmt(format_args!("{}\n", line))?;
             }
         }
@@ -448,8 +432,7 @@ mod tests {
         let file2 = write_fastq_gz("r2.fastq.gz", b"@read2\nTTTT\n+\nIIII\n");
         let output = temp_dir.path().join("combined.fastq.gz");
 
-        let mut rng = NeatRng::new_from_seed(&vec!["test".to_string()]).unwrap();
-        combine_temp_fastqs(vec![file1, file2], vec![], &output, None, false, &mut rng).unwrap();
+        combine_temp_fastqs(vec![file1, file2], vec![], &output, None).unwrap();
 
         let lines: Vec<String> = read_gzip_lines(&output)
             .unwrap()

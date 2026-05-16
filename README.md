@@ -198,9 +198,7 @@ input_vcf: /path/to/variants.vcf.gz
 
 FASTQ Shuffling
 ===============
-`rneat` globally shuffles all generated reads before writing the final FASTQ by default, so no chromosome ordering is visible in the output — matching real sequencer output. Set `shuffle_fastq: false` in `gen-reads` config to preserve the generated ordering and avoid the in-memory global shuffle.
-
-**Large genome note:** The global shuffle loads every read record into RAM at once. This is fine for small to moderate genomes (viral, bacterial, small eukaryotes), but becomes impractical for mammalian-scale genomes at typical coverage depths (e.g. human 30× ≈ 900 M reads ≈ hundreds of GB). For those cases, run the post-processing shuffle instead:
+`rneat` writes reads in contig order. To shuffle the output, use `seqkit shuffle` as a post-processing step:
 
 ```bash
 # single-ended
@@ -211,7 +209,7 @@ seqkit shuffle -2 sample_R1.fastq.gz sample_R2.fastq.gz \
     -o sample_R1_shuffled.fastq.gz -o sample_R2_shuffled.fastq.gz
 ```
 
-`seqkit` uses reservoir sampling and streams from disk, so its memory use is bounded regardless of file size. `rneat` will emit a warning at runtime when the reference genome exceeds 500 Mbp as a reminder that post-processing may be preferable (`seqkit` is an open source toolkit for fastqs: https://github.com/shenwei356/seqkit).
+`seqkit` uses reservoir sampling and streams from disk, keeping memory use bounded regardless of file size (`seqkit` is an open source toolkit for FASTQ files: https://github.com/shenwei356/seqkit).
 
 Parallel Processing
 ===================

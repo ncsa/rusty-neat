@@ -4,11 +4,10 @@ use crate::{
     common::{
         models::mutation_model::MutationModel,
         structs::{
-            distributions::DiscreteDistribution, 
             sequence_block::SequenceBlock,
             variants::Variant
         }
-    }, 
+    },
     gen_reads::errors::GenerateReadsError
 };
 
@@ -19,28 +18,56 @@ pub fn generate_variants(
     num_mutations: usize,
     ploidy: usize,
     rng: &mut NeatRng,
-) -> Result<Option<Vec<Variant>>, GenerateReadsError>{
-    // Variants for this contig, organized by location. Each location may have only one variant.
-    // And we may need to implement a further check that there aren't other types of overlaps.
-    // This will simply overwrite any existing value, so we just capture the last variant at each
-    // location.
-    // We take as input the number of mutations to add to this block. The number to add will be
-    // calculated on the contig level.
-    // Region weights are calculated from the contig map (they essentially just mask N-regions for
-    // now, but we'll add more machine bias and trinuc bias nuance in future releases)
+) -> Result<Option<Vec<Variant>>, GenerateReadsError> {
     let block_len = sequence_block.get_len();
     if region_weights.len() != block_len {
         error!("Region weights did not match block length");
-        return Err(GenerateReadsError::GenerateVariantsError)
+        return Err(GenerateReadsError::GenerateVariantsError);
     }
-    // The keys are the position of each variant added.
+
     let mut block_variants: Vec<Variant> = Vec::new();
-    let sequence_dist = DiscreteDistribution::new(
-        &region_weights[0..block_len].to_vec(),
-        &(0..block_len).collect()
-    )?;
+
+    // Build compact segments of consecutive equal non-zero weights.
+    // Avoids the 5-copy overhead of constructing a DiscreteDistribution over
+    // the full chromosome-length weights vector.
+    let mut segments: Vec<(usize, usize, f64)> = Vec::new();
+    let mut i = 0;
+    while i < block_len {
+        let rate = region_weights[i];
+        if rate > 0.0 {
+            let start = i;
+            while i < block_len && (region_weights[i] - rate).abs() < f64::EPSILON {
+                i += 1;
+            }
+            segments.push((start, i, rate));
+        } else {
+            i += 1;
+        }
+    }
+
+    if segments.is_empty() {
+        return Ok(Some(block_variants));
+    }
+
+    // Cumulative weights for weighted segment selection via bisect.
+    let mut cumulative: Vec<f64> = Vec::with_capacity(segments.len());
+    let mut acc = 0.0_f64;
+    for &(start, end, rate) in &segments {
+        acc += (end - start) as f64 * rate;
+        cumulative.push(acc);
+    }
+    let total_weight = acc;
+
     for _ in 0..num_mutations {
-        let location: usize = sequence_dist.sample(rng.random()?)?;
+        let target = rng.random()? * total_weight;
+        let seg_idx = cumulative.partition_point(|&c| c <= target)
+            .min(segments.len() - 1);
+        let (seg_start, seg_end, seg_rate) = segments[seg_idx];
+        let weight_before = if seg_idx > 0 { cumulative[seg_idx - 1] } else { 0.0 };
+        let weight_in_seg = (target - weight_before).max(0.0);
+        let pos_in_seg = (weight_in_seg / seg_rate) as usize;
+        let location = (seg_start + pos_in_seg).min(seg_end - 1);
+
         debug!("location: {}", location);
         block_variants.push(
             mutation_model.generate_mutation(
@@ -51,6 +78,7 @@ pub fn generate_variants(
             )?
         );
     }
+
     Ok(Some(block_variants))
 }
 

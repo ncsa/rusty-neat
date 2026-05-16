@@ -231,15 +231,6 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
     if config.produce_fastq {
         info!("Producing final fastq(s) file(s)");
 
-        let total_genome_bp: usize = fasta_lengths.values().sum();
-        if total_genome_bp > 500_000_000 {
-            warn!(
-                "Genome is {:.1} Gbp. The global FASTQ shuffle loads all reads into memory. \
-                 For large genomes, consider running `seqkit shuffle` on the output instead.",
-                total_genome_bp as f64 / 1e9
-            );
-        }
-
         let mut all_r1: Vec<PathBuf> = Vec::new();
         let mut all_r2: Vec<PathBuf> = Vec::new();
         for (r1_files, r2_files) in all_fastq_files.into_values() {
@@ -259,8 +250,6 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
                                 all_r2,
                                 filename1,
                                 Some(filename2),
-                                config.shuffle_fastq,
-                                rng,
                             )?;
                         },
                         None => {
@@ -274,8 +263,6 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
                         vec![],
                         filename1,
                         None,
-                        config.shuffle_fastq,
-                        rng,
                     )?;
                 }
             },

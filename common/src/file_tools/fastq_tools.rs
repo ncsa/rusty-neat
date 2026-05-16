@@ -3,12 +3,14 @@
 //! this function is generic enough to work with the fragmented method we are implementing
 //! This one needs a major overhaul, it is autogenerating quality scores etc.
 //! Will wait to get other things set up first
-use std::io::{BufWriter, Write};
+use std::fs::File;
+use std::io::{BufReader, BufWriter, Write};
 use log::debug;
 use std::path::PathBuf;
 use std::collections::HashMap;
 use crate::rng::{NeatRng, NeatRngError};
 use flate2::Compression;
+use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use thiserror::Error;
 
@@ -16,7 +18,7 @@ use crate::structs::mutated_map::{MutatedMap, MutatedMapError};
 use crate::structs::sequence_block::{SequenceBlock, SequenceBlockError};
 use crate::structs::nucleotides::Nucleotide;
 use crate::structs::read_record::ReadRecord;
-use crate::file_tools::file_io::{append_to_file, read_gzip_lines};
+use crate::file_tools::file_io::append_to_file;
 use crate::file_tools::bam_writer::BamRecordStager;
 use crate::models::quality_scores::QualityScoreModel;
 use crate::models::sequencing_error_model::{SeqModelError, SequencingErrorModel, SequencingErrorType};
@@ -200,6 +202,13 @@ pub fn write_block_fastq<T: Write, W: Write> (
                     .map_err(|e| FastqToolsError::BamError(e.to_string()))?;
             }
         }
+
+        // Flush all carry records that start strictly before abs_start — safe because
+        // block_fragments is sorted, so no future record can land earlier than abs_start.
+        if let Some(ref mut bam) = bam_writer {
+            bam.flush_up_to(abs_start)
+                .map_err(|e| FastqToolsError::BamError(e.to_string()))?;
+        }
     }
     Ok(())
 }
@@ -210,59 +219,26 @@ pub fn combine_temp_fastqs(
     final_filename_r1: &PathBuf,
     final_filename_r2: Option<&PathBuf>,
 ) -> Result<(), FastqToolsError> {
-    let mut r1_lines: Vec<String> = Vec::new();
-    for file in &files_r1 {
-        let reader = read_gzip_lines(file)?;
-        for line_result in reader {
-            match line_result {
-                Ok(l) => r1_lines.push(l),
-                Err(e) => return Err(FastqToolsError::FastqReadError(e.to_string())),
-            }
-        }
-    }
-    let num_records = r1_lines.len() / 4;
-
-    let paired = !files_r2.is_empty();
-    let r2_lines: Vec<String> = if paired {
-        let mut lines: Vec<String> = Vec::new();
-        for file in &files_r2 {
-            let reader = read_gzip_lines(file)?;
-            for line_result in reader {
-                match line_result {
-                    Ok(l) => lines.push(l),
-                    Err(e) => return Err(FastqToolsError::FastqReadError(e.to_string())),
-                }
-            }
-        }
-        lines
-    } else {
-        Vec::new()
-    };
-
-    {
-        let final_file = append_to_file(final_filename_r1)?;
-        let enc = GzEncoder::new(final_file, Compression::default());
-        let mut writer = BufWriter::new(enc);
-        for idx in 0..num_records {
-            let base = idx * 4;
-            for line in &r1_lines[base..base + 4] {
-                writer.write_fmt(format_args!("{}\n", line))?;
-            }
-        }
-    }
-
+    stream_gzip_files(&files_r1, final_filename_r1)?;
     if let Some(filename_r2) = final_filename_r2 {
-        let final_file = append_to_file(filename_r2)?;
-        let enc = GzEncoder::new(final_file, Compression::default());
-        let mut writer = BufWriter::new(enc);
-        for idx in 0..num_records {
-            let base = idx * 4;
-            for line in &r2_lines[base..base + 4] {
-                writer.write_fmt(format_args!("{}\n", line))?;
-            }
+        if !files_r2.is_empty() {
+            stream_gzip_files(&files_r2, filename_r2)?;
         }
     }
+    Ok(())
+}
 
+fn stream_gzip_files(files: &[PathBuf], output: &PathBuf) -> Result<(), FastqToolsError> {
+    let out_file = append_to_file(output)?;
+    let enc = GzEncoder::new(out_file, Compression::default());
+    let mut writer = BufWriter::new(enc);
+    for file in files {
+        let f = File::open(file)
+            .map_err(|e| FastqToolsError::FastqReadError(e.to_string()))?;
+        let mut decoder = GzDecoder::new(BufReader::new(f));
+        std::io::copy(&mut decoder, &mut writer)
+            .map_err(|e| FastqToolsError::FastqWriteError(e.to_string()))?;
+    }
     Ok(())
 }
 
@@ -410,8 +386,10 @@ pub fn quality_scores_to_char_vec(array: &[usize]) -> Result<Vec<u8>, FastqTools
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::file_tools::file_io::{create_output_file, read_gzip_lines};
+    use crate::file_tools::file_io::{create_output_file, read_gzip_lines, VectorBuffer};
+    use crate::file_tools::bam_writer::{BamWriter, BamRecordStager};
     use crate::structs::variants::{Variant, VariantType};
+    use crate::structs::sequence_block::{RegionType, SequenceMap};
     use crate::structs::nucleotides::Nucleotide::*;
     use std::io::Write;
 
@@ -768,6 +746,104 @@ mod tests {
             false,
         );
         assert!(result.is_ok());
+    }
+
+    // ── incremental BAM flush tests ──────────────────────────────────────────
+
+    fn make_block(seq_len: usize) -> SequenceBlock {
+        let sequence: Vec<Nucleotide> = (0..seq_len)
+            .map(|i| match i % 4 { 0 => A, 1 => C, 2 => G, _ => T })
+            .collect();
+        SequenceBlock {
+            contig: "chr1".to_string(),
+            ref_start: 0,
+            ref_end: seq_len,
+            sequence,
+            sequence_map: vec![SequenceMap::from(RegionType::NonNRegion, 0, seq_len)],
+        }
+    }
+
+    fn run_write_block(
+        bam_writer: &mut BamWriter,
+        fragments: Vec<(usize, usize)>,
+        block: &SequenceBlock,
+        paired_ended: bool,
+        read_len: usize,
+    ) {
+        let mutated_map = MutatedMap::from_interval(0, block.sequence.len(), vec![]).unwrap();
+        let seq_err_model = SequencingErrorModel::default().unwrap();
+        let quality_model = QualityScoreModel::default().unwrap();
+        let mut rng = NeatRng::new_from_seed(&vec!["flush-test".to_string()]).unwrap();
+        let mut buf1 = GzEncoder::new(VectorBuffer::new(), Compression::default());
+        let mut buf2 = GzEncoder::new(VectorBuffer::new(), Compression::default());
+        let stager: Option<&mut dyn BamRecordStager> = Some(bam_writer);
+        write_block_fastq(
+            fragments, &mutated_map, block, paired_ended,
+            &mut buf1, &mut buf2,
+            read_len, false, "chr1",
+            &quality_model, &seq_err_model, &mut rng,
+            stager,
+        ).unwrap();
+    }
+
+    #[test]
+    fn test_write_block_fastq_carry_bounded_se() {
+        // With 5 SE fragments at strictly increasing positions, flush_up_to(abs_start)
+        // fires after each fragment so the carry never exceeds 1 record.
+        let temp = tempfile::tempdir().unwrap();
+        let bam_path = temp.path().join("out.bam");
+        let block = make_block(500);
+        let mut bw = BamWriter::new(&bam_path, &vec![("chr1".to_string(), 500usize)]).unwrap();
+
+        let fragments = vec![(0usize, 10), (50, 60), (100, 110), (150, 160), (200, 210)];
+        run_write_block(&mut bw, fragments, &block, false, 10);
+
+        assert_eq!(bw.carry_len(), 1,
+            "SE: carry should hold only the last fragment's read, got {}", bw.carry_len());
+    }
+
+    #[test]
+    fn test_write_block_fastq_carry_bounded_pe() {
+        // With 5 PE fragments at strictly increasing positions, flush_up_to fires after
+        // each fragment so carry never exceeds 2 records (one R1 + one R2).
+        let temp = tempfile::tempdir().unwrap();
+        let bam_path = temp.path().join("out.bam");
+        let block = make_block(5000);
+        let mut bw = BamWriter::new(&bam_path, &vec![("chr1".to_string(), 5000usize)]).unwrap();
+
+        // Fragments 400 bp wide, spaced 100 bp apart so positions are strictly increasing.
+        let fragments = vec![(0usize,400), (500,900), (1000,1400), (1500,1900), (2000,2400)];
+        run_write_block(&mut bw, fragments, &block, true, 150);
+
+        assert_eq!(bw.carry_len(), 2,
+            "PE: carry should hold only the last fragment's read pair, got {}", bw.carry_len());
+    }
+
+    #[test]
+    fn test_write_block_fastq_bam_sorted_with_incremental_flush() {
+        // End-to-end: write_block_fastq with incremental flush then flush_all must
+        // produce a coordinate-sorted BAM, identical to bulk flushing.
+        use noodles::bam;
+
+        let temp = tempfile::tempdir().unwrap();
+        let bam_path = temp.path().join("sorted.bam");
+        let block = make_block(500);
+        let contigs = vec![("chr1".to_string(), 500usize)];
+        let mut bw = BamWriter::new(&bam_path, &contigs).unwrap();
+
+        let fragments = vec![(0usize, 10), (50, 60), (100, 110), (150, 160), (200, 210)];
+        run_write_block(&mut bw, fragments, &block, false, 10);
+        bw.flush_all().unwrap();
+        drop(bw); // BGZF EOF written on drop
+
+        let file = std::fs::File::open(&bam_path).unwrap();
+        let mut reader = bam::io::Reader::new(file);
+        reader.read_header().unwrap();
+        let positions: Vec<usize> = reader.records()
+            .map(|r| r.unwrap().alignment_start().unwrap().unwrap().get() - 1)
+            .collect();
+        assert_eq!(positions, vec![0, 50, 100, 150, 200],
+            "BAM must be coordinate-sorted; got: {:?}", positions);
     }
 
 }

@@ -92,11 +92,20 @@ pub fn runner(
                         debug!("Skipping edge variant at position {} (out of contig bounds)", variant.location);
                         continue;
                     }
-                    let n0 = sequence[loc - 1];
-                    let n1 = sequence[loc];
-                    let n2 = sequence[loc + 1];
+                    let canon = |n: Nucleotide| match n {
+                        Nucleotide::Maskeda => Nucleotide::A,
+                        Nucleotide::Maskedc => Nucleotide::C,
+                        Nucleotide::Maskedg => Nucleotide::G,
+                        Nucleotide::Maskedt => Nucleotide::T,
+                        other => other,
+                    };
+                    let n0 = canon(sequence[loc - 1]);
+                    let n1 = canon(sequence[loc]);
+                    let n2 = canon(sequence[loc + 1]);
                     if n1 != variant.reference[0] {
-                        return Err(GenMutationModelError::BaseMismatch(format!("{:?}", variant)));
+                        warn!("Reference mismatch at position {}: VCF ref {:?}, FASTA base {:?}; skipping",
+                              variant.location, variant.reference[0], n1);
+                        continue;
                     }
                     let ref_frame = TrinucFrame::from((n0, n1, n2));
                     let alt_frame = TrinucFrame::from((n0, variant.alternate[0], n2));

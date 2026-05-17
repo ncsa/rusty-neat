@@ -1,4 +1,4 @@
-use log::{error, debug};
+use log::debug;
 use common::rng::NeatRng;
 use crate::{
     common::{
@@ -11,48 +11,30 @@ use crate::{
     gen_reads::errors::GenerateReadsError
 };
 
+/// Generates random variants for a contig.
+///
+/// `rate_segments` is a sorted, non-overlapping list of `(start, end, rate)` triples
+/// covering the mutable positions of the contig. N-regions and excluded positions
+/// (e.g. positions already occupied by input variants) must be absent from the list —
+/// the caller is responsible for building a compact segment representation.
 pub fn generate_variants(
     sequence_block: &SequenceBlock,
-    region_weights: &Vec<f64>,
+    rate_segments: &[(usize, usize, f64)],
     mutation_model: &MutationModel,
     num_mutations: usize,
     ploidy: usize,
     rng: &mut NeatRng,
 ) -> Result<Option<Vec<Variant>>, GenerateReadsError> {
-    let block_len = sequence_block.get_len();
-    if region_weights.len() != block_len {
-        error!("Region weights did not match block length");
-        return Err(GenerateReadsError::GenerateVariantsError);
-    }
-
     let mut block_variants: Vec<Variant> = Vec::new();
 
-    // Build compact segments of consecutive equal non-zero weights.
-    // Avoids the 5-copy overhead of constructing a DiscreteDistribution over
-    // the full chromosome-length weights vector.
-    let mut segments: Vec<(usize, usize, f64)> = Vec::new();
-    let mut i = 0;
-    while i < block_len {
-        let rate = region_weights[i];
-        if rate > 0.0 {
-            let start = i;
-            while i < block_len && (region_weights[i] - rate).abs() < f64::EPSILON {
-                i += 1;
-            }
-            segments.push((start, i, rate));
-        } else {
-            i += 1;
-        }
-    }
-
-    if segments.is_empty() {
+    if rate_segments.is_empty() {
         return Ok(Some(block_variants));
     }
 
     // Cumulative weights for weighted segment selection via bisect.
-    let mut cumulative: Vec<f64> = Vec::with_capacity(segments.len());
+    let mut cumulative: Vec<f64> = Vec::with_capacity(rate_segments.len());
     let mut acc = 0.0_f64;
-    for &(start, end, rate) in &segments {
+    for &(start, end, rate) in rate_segments {
         acc += (end - start) as f64 * rate;
         cumulative.push(acc);
     }
@@ -61,8 +43,8 @@ pub fn generate_variants(
     for _ in 0..num_mutations {
         let target = rng.random()? * total_weight;
         let seg_idx = cumulative.partition_point(|&c| c <= target)
-            .min(segments.len() - 1);
-        let (seg_start, seg_end, seg_rate) = segments[seg_idx];
+            .min(rate_segments.len() - 1);
+        let (seg_start, seg_end, seg_rate) = rate_segments[seg_idx];
         let weight_before = if seg_idx > 0 { cumulative[seg_idx - 1] } else { 0.0 };
         let weight_in_seg = (target - weight_before).max(0.0);
         let pos_in_seg = (weight_in_seg / seg_rate) as usize;
@@ -122,10 +104,10 @@ mod tests {
     #[test]
     fn test_generate_variants_count() {
         let block = make_block(200);
-        let weights = vec![1.0f64; block.get_len()];
+        let segments = vec![(0usize, 200usize, 1.0f64)];
         let model = MutationModel::default().unwrap();
         let mut rng = make_rng();
-        let result = generate_variants(&block, &weights, &model, 5, 2, &mut rng)
+        let result = generate_variants(&block, &segments, &model, 5, 2, &mut rng)
             .unwrap()
             .unwrap();
         assert_eq!(result.len(), 5);
@@ -134,10 +116,10 @@ mod tests {
     #[test]
     fn test_generate_variants_positions_in_range() {
         let block = make_block(200);
-        let weights = vec![1.0f64; block.get_len()];
+        let segments = vec![(0usize, 200usize, 1.0f64)];
         let model = MutationModel::default().unwrap();
         let mut rng = make_rng();
-        let variants = generate_variants(&block, &weights, &model, 10, 2, &mut rng)
+        let variants = generate_variants(&block, &segments, &model, 10, 2, &mut rng)
             .unwrap()
             .unwrap();
         for v in variants {
@@ -146,22 +128,25 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_variants_weight_mismatch_errors() {
+    fn test_generate_variants_empty_segments_returns_empty() {
         let block = make_block(200);
-        let weights = vec![1.0f64; 100]; // wrong length
+        let segments: Vec<(usize, usize, f64)> = vec![];
         let model = MutationModel::default().unwrap();
         let mut rng = make_rng();
-        assert!(generate_variants(&block, &weights, &model, 5, 2, &mut rng).is_err());
+        let result = generate_variants(&block, &segments, &model, 5, 2, &mut rng)
+            .unwrap()
+            .unwrap();
+        assert!(result.is_empty(), "Empty segments should produce no variants");
     }
 
     #[test]
     fn test_generate_variants_deterministic() {
         let block = make_block(200);
-        let weights = vec![1.0f64; block.get_len()];
+        let segments = vec![(0usize, 200usize, 1.0f64)];
         let model = MutationModel::default().unwrap();
-        let result1 = generate_variants(&block, &weights, &model, 5, 2, &mut make_rng())
+        let result1 = generate_variants(&block, &segments, &model, 5, 2, &mut make_rng())
             .unwrap().unwrap();
-        let result2 = generate_variants(&block, &weights, &model, 5, 2, &mut make_rng())
+        let result2 = generate_variants(&block, &segments, &model, 5, 2, &mut make_rng())
             .unwrap().unwrap();
         for (v1, v2) in result1.iter().zip(result2.iter()) {
             assert_eq!(v1.location, v2.location);

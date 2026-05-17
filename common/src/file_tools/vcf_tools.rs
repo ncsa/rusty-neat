@@ -149,6 +149,10 @@ fn read_open_vcf<P: Read> (reader: Lines<BufReader<P>>) -> Result<HashMap<String
                     let id = split_line[2];
                     let vcf_reference = split_line[3];
                     let vcf_alternate = split_line[4];
+                    if vcf_alternate.contains(',') {
+                        debug!("Skipping multi-allelic site at {}:{}", chrom, location);
+                        continue;
+                    }
                     // QUAL may be "." in real-world VCFs
                     let quality_score: usize = split_line[5].parse().unwrap_or(0);
                     let filter = split_line[6];
@@ -179,7 +183,7 @@ fn read_open_vcf<P: Read> (reader: Lines<BufReader<P>>) -> Result<HashMap<String
                     if split_line.len() > 10 {
                         warn!("Currently rneat can only read one sample per record")
                     }
-                    let variant = Variant::from_file(
+                    let variant = match Variant::from_file(
                         location,
                         id,
                         filter,
@@ -189,7 +193,13 @@ fn read_open_vcf<P: Read> (reader: Lines<BufReader<P>>) -> Result<HashMap<String
                         quality_score,
                         format,
                         sample,
-                    )?;
+                    ) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            warn!("Skipping variant at {}:{} — {}", chrom, location, e);
+                            continue;
+                        }
+                    };
                     // Standard hashmap safety check
                     if !file_records.contains_key(chrom) {
                         file_records.insert(chrom.to_string(), Vec::new());
@@ -342,7 +352,9 @@ chr1\t100\t.\tA\tT\t.\tPASS\t.\tGT\t0/1\n";
     }
 
     #[test]
-    fn test_read_vcf_missing_gt_hard_errors() {
+    fn test_read_vcf_missing_gt_skips_variant() {
+        // Variants without GT in FORMAT are skipped with a warning (not a hard error)
+        // so that real-world VCFs with mixed FORMAT fields can still be processed.
         let vcf_content = "\
 ##fileformat=VCFv4.1\n\
 #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n\
@@ -350,6 +362,7 @@ chr1\t100\t.\tA\tT\t60\tPASS\t.\tDP:GQ\t30:99\n";
         let mut tmp = tempfile::Builder::new().suffix(".vcf").tempfile().unwrap();
         write!(tmp, "{}", vcf_content).unwrap();
         let result = read_vcf(tmp.path().to_path_buf());
-        assert!(result.is_err(), "Expected Err for missing GT, got Ok");
+        assert!(result.is_ok(), "Expected Ok (skip), got {:?}", result);
+        assert!(result.unwrap().is_empty(), "Expected no variants parsed");
     }
 }

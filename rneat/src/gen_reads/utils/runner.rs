@@ -4,7 +4,7 @@ use common::structs::variants::VariantType;
 use tempfile;
 use log::{info, debug, warn, error};
 use common::rng::NeatRng;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::io::BufWriter;
 use std::sync::Arc;
@@ -374,68 +374,60 @@ fn process_contig(
         return Ok(ContigResult { idx, name: contig_name, len: contig_len, data: None });
     }
 
-    // Generate mutation rate table based on the regions of interest
+    // Build a compact segment list instead of a per-position Vec<f64>.
+    // Each segment is (start, end, rate); N-regions and gaps are simply absent.
+    // This replaces an O(chromosome_length) allocation with O(regions + BED_records).
+    let mut rate_segments: Vec<(usize, usize, f64)> = regions_of_interest
+        .iter()
+        .map(|r| (r.start, r.end, ctx.default_run_mutation_rate))
+        .collect();
 
-    let mut bias_map: Vec<f64> = vec![0.0; current_block.get_len()];
-
-    // First initialize all regions of interest with the default mutation rate
-    for region in &regions_of_interest {
-        for j in region.start..region.end {
-            bias_map[j] = ctx.default_run_mutation_rate;
-        }
-    }
-
-    // Then override with custom rates from BED if provided
     if let Some(mut_beds) = ctx.mutation_regions {
         if let Some(records) = mut_beds.get(&contig_name) {
             for rec in records {
                 if let Some(custom_rate) = rec.mut_rate {
-                    // Intersect BED record with regions of interest to avoid setting rates in N-regions
-                    for region in &regions_of_interest {
-                        let isect_start = region.start.max(rec.start);
-                        let isect_end = region.end.min(rec.end);
-                        if isect_start < isect_end {
-                            for j in isect_start..isect_end {
-                                bias_map[j] = custom_rate;
-                            }
-                        }
-                    }
+                    rate_segments = apply_rate_override(
+                        rate_segments, rec.start, rec.end, custom_rate,
+                    );
                 }
             }
         }
     }
 
-    // Calculate total expected mutations
-    let mut num_mutations_sum: f64 = bias_map.iter().sum();
+    let mut num_mutations_sum: f64 = rate_segments
+        .iter()
+        .map(|&(s, e, r)| (e - s) as f64 * r)
+        .sum();
 
     let block_end = contig_len;
-    let mut block_variants: Vec<Variant> = if let Some(iv) = ctx.input_variants {
-        iv.get(&contig_name)
-            .map(|vs| {
-                vs.iter()
-                    .filter(|v| {
-                        let pos0 = v.location.saturating_sub(1);
-                        pos0 < block_end
-                    })
-                    .filter_map(|v| {
-                        let local_pos = v.location - 1;
-                        if local_pos >= bias_map.len() {
-                            return None;
-                        }
-                        if bias_map[local_pos] > 0.0 {
-                            num_mutations_sum -= bias_map[local_pos];
-                            bias_map[local_pos] = 0.0;
-                        }
-                        let mut v2 = v.clone();
-                        v2.location = local_pos;
-                        Some(v2)
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
-    } else {
-        Vec::new()
-    };
+    let mut block_variants: Vec<Variant> = Vec::new();
+    if let Some(iv) = ctx.input_variants {
+        if let Some(vs) = iv.get(&contig_name) {
+            let mut excluded: Vec<usize> = Vec::new();
+            let mut seen: HashSet<usize> = HashSet::new();
+            for v in vs {
+                let pos0 = v.location.saturating_sub(1);
+                if pos0 >= block_end {
+                    continue;
+                }
+                let local_pos = v.location - 1;
+                if seen.insert(local_pos) {
+                    let rate = rate_at(&rate_segments, local_pos);
+                    if rate > 0.0 {
+                        num_mutations_sum -= rate;
+                        excluded.push(local_pos);
+                    }
+                }
+                let mut v2 = v.clone();
+                v2.location = local_pos;
+                block_variants.push(v2);
+            }
+            if !excluded.is_empty() {
+                excluded.sort_unstable();
+                rate_segments = exclude_positions(rate_segments, &excluded);
+            }
+        }
+    }
     debug!("Seeded {} user variant(s) into contig {}", block_variants.len(), contig_name);
     let num_mutations = num_mutations_sum.trunc() as usize;
     debug!("Adding {} mutations to contig {}", num_mutations, contig_name);
@@ -448,7 +440,7 @@ fn process_contig(
     if num_mutations > 0 {
         let result: Option<Vec<Variant>> = generate_variants(
             &current_block,
-            &bias_map,
+            &rate_segments,
             ctx.mutation_model,
             num_mutations,
             ctx.config.ploidy,
@@ -676,6 +668,62 @@ fn filter_input_vcf(
         }
     }
     out
+}
+
+/// Overrides the mutation rate in [ovr_start, ovr_end) within existing segments,
+/// splitting segment boundaries where needed. Positions outside existing segments
+/// (N-regions, gaps) are not affected.
+fn apply_rate_override(
+    segments: Vec<(usize, usize, f64)>,
+    ovr_start: usize,
+    ovr_end: usize,
+    ovr_rate: f64,
+) -> Vec<(usize, usize, f64)> {
+    let mut result = Vec::with_capacity(segments.len() + 2);
+    for (s, e, rate) in segments {
+        if ovr_end <= s || ovr_start >= e {
+            result.push((s, e, rate));
+            continue;
+        }
+        let isect_s = s.max(ovr_start);
+        let isect_e = e.min(ovr_end);
+        if s < isect_s { result.push((s, isect_s, rate)); }
+        result.push((isect_s, isect_e, ovr_rate));
+        if isect_e < e { result.push((isect_e, e, rate)); }
+    }
+    result
+}
+
+/// Returns the mutation rate at `pos`, or 0.0 if the position falls in an N-region
+/// or gap. Segments must be sorted by start and non-overlapping.
+fn rate_at(segments: &[(usize, usize, f64)], pos: usize) -> f64 {
+    let idx = segments.partition_point(|&(s, _, _)| s <= pos);
+    if idx == 0 { return 0.0; }
+    let (_, e, rate) = segments[idx - 1];
+    if pos < e { rate } else { 0.0 }
+}
+
+/// Splits segments to remove individual excluded positions (e.g. positions already
+/// occupied by input variants). `excluded` must be sorted.
+fn exclude_positions(
+    segments: Vec<(usize, usize, f64)>,
+    excluded: &[usize],
+) -> Vec<(usize, usize, f64)> {
+    if excluded.is_empty() { return segments; }
+    let mut result = Vec::with_capacity(segments.len() + excluded.len());
+    let mut ei = 0;
+    for (s, e, rate) in segments {
+        let mut cur = s;
+        while ei < excluded.len() && excluded[ei] < e {
+            let pos = excluded[ei];
+            ei += 1;
+            if pos < cur { continue; }
+            if cur < pos { result.push((cur, pos, rate)); }
+            cur = pos + 1;
+        }
+        if cur < e { result.push((cur, e, rate)); }
+    }
+    result
 }
 
 /// Intersects a set of non-N regions (block-local coordinates) with BED records

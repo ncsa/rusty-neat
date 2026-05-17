@@ -60,7 +60,7 @@ impl RunConfiguration {
         if !vcf_file.is_file() {
             panic!("Invalid bed file {:?}", vcf_file)
         }
-        let bed_file_raw = scrape_config["bed_file"].as_str().unwrap_or(".");
+        let bed_file_raw = scrape_config.get("bed_file").and_then(|v| v.as_str()).unwrap_or(".");
         let bed_table = if bed_file_raw == "." {
             HashMap::new()
         } else {

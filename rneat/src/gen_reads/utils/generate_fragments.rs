@@ -9,7 +9,6 @@ use crate::{
     gen_reads::errors::GenerateReadsError
 };
 use log::*;
-use std::collections::VecDeque;
 use common::models::gc_bias_model::GcBiasModel;
 use common::rng::NeatRng;
 use common::structs::sequence_block::SequenceBlock;
@@ -83,7 +82,7 @@ pub fn generate_fragments(
     } else {
         // For single-end reads the fragment is exactly one read long; the fragment model
         // is irrelevant for spacing and would cause under-coverage if its mean >> read_length.
-        fragment_pool = vec![read_length; num_frags];
+        fragment_pool = vec![read_length; 1];
     }
     if fragment_pool.is_empty() {
         debug!("Fragment pool is empty.");
@@ -308,17 +307,17 @@ fn cover_dataset(
     // Alternates sweep direction (3' to 5' then 5' to 3') for better realism.
 
     rng.shuffle_in_place(&mut fragment_pool)?;
-    let mut cover_fragment_pool = VecDeque::from(fragment_pool);
-
-    let pool_size = cover_fragment_pool.len();
+    let pool_size = fragment_pool.len();
+    let mut pool_idx = 0usize;
     let mut fragment_set: Vec<(usize, usize)> = Vec::with_capacity(target_count);
     let mut pos = (rng.rand_int()? as usize) % (read_length / 4).max(1);
     let mut forward = true;
     let mut non_placing_streak = 0usize;
 
     while fragment_set.len() < target_count {
-        let fragment_length = cover_fragment_pool.pop_front().unwrap();
-        cover_fragment_pool.push_back(fragment_length);
+        let fragment_length = fragment_pool[pool_idx];
+        pool_idx += 1;
+        if pool_idx == pool_size { pool_idx = 0; }
 
         let (start, end) = if forward {
             (pos, pos + fragment_length)

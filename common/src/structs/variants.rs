@@ -35,7 +35,8 @@ fn gt_from_str(input: &str) -> Genotype {
     }
     let mut found_zero = false;
     for item in result {
-        if item.parse::<u64>().unwrap() == 0 {
+        if item == "." { continue; }
+        if item.parse::<u64>().unwrap_or(1) == 0 {
             found_zero = true;
             break
         }
@@ -121,7 +122,7 @@ impl Variant {
 
         let genotype_str = {
             if format.contains(&String::from("GT")) {
-                info!("Found genotype in vcf file");
+                debug!("Found genotype in vcf file");
                 let gt_pos = format
                     .clone()
                     .into_iter()

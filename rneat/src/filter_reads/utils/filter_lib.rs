@@ -294,4 +294,47 @@ mod tests {
         assert_eq!(variant_lines.len(), 1, "Only the in-range variant should appear");
         assert!(variant_lines[0].contains("1500"));
     }
+
+    #[test]
+    fn test_filter_fastq_boundary() {
+        // Verifies that the corrected overlaps() semantics (half-open intervals,
+        // adjacent intervals do NOT overlap) are respected end-to-end through filter_fastq.
+        let temp_dir: TempDir = tempfile::tempdir().unwrap();
+
+        // BED region: [1000, 2000)
+        // Read A [800,  1000) — ends exactly at BED start  → excluded
+        // Read B [2000, 2200) — starts exactly at BED end  → excluded
+        // Read C [999,  1001) — straddles BED start        → included
+        let fastq_content = concat!(
+            "@RNEAT_generated_chr1_0000000800_0000001000/1\n",
+            "ACGTACGT\n",
+            "+\n",
+            "IIIIIIII\n",
+            "@RNEAT_generated_chr1_0000002000_0000002200/1\n",
+            "TTTTTTTT\n",
+            "+\n",
+            "IIIIIIII\n",
+            "@RNEAT_generated_chr1_0000000999_0000001001/1\n",
+            "GGGGGGGG\n",
+            "+\n",
+            "IIIIIIII\n",
+        );
+        let input = temp_dir.path().join("boundary.fastq");
+        std::fs::write(&input, fastq_content).unwrap();
+
+        let bed_table = HashMap::from([(
+            "chr1".to_string(),
+            vec![BedRecord::new_bed_record("chr1".to_string(), 1000, 2000).unwrap()],
+        )]);
+
+        let output = temp_dir.path().join("boundary_out.fastq.gz");
+        filter_fastq(&bed_table, &input, false, &output).unwrap();
+
+        let lines: Vec<String> = read_gzip_lines(&output)
+            .unwrap()
+            .map(|l| l.unwrap())
+            .collect();
+        assert_eq!(lines.len(), 4, "Only read C (straddles boundary) should be included");
+        assert!(lines[0].contains("0000000999"), "Expected read C in output, got: {}", lines[0]);
+    }
 }

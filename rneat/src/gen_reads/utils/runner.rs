@@ -759,8 +759,8 @@ fn intersect_with_bed(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::structs::sequence_block::{RegionType, SequenceMap};
-    use crate::common::structs::bed_record::BedRecord;
+    use common::structs::sequence_block::{RegionType, SequenceMap};
+    use common::structs::bed_record::BedRecord;
 
     #[test]
     fn test_intersect_with_bed() {
@@ -831,5 +831,85 @@ mod tests {
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered["chr1"].len(), 1);
         assert_eq!(filtered["chr1"][0].location, 100);
+    }
+
+    #[test]
+    fn test_apply_rate_override() {
+        let segs = vec![(0usize, 100usize, 0.001f64), (200, 400, 0.001)];
+
+        // No overlap: override entirely before first segment
+        let result = apply_rate_override(segs.clone(), 0, 0, 0.01);
+        assert_eq!(result, segs);
+
+        // No overlap: override entirely after last segment
+        let result = apply_rate_override(segs.clone(), 500, 600, 0.01);
+        assert_eq!(result, segs);
+
+        // Partial overlap at start of first segment: [0,50) gets new rate, [50,100) keeps old
+        let result = apply_rate_override(segs.clone(), 0, 50, 0.01);
+        assert_eq!(result, vec![(0, 50, 0.01), (50, 100, 0.001), (200, 400, 0.001)]);
+
+        // Partial overlap at end of first segment: [0,80) keeps old, [80,100) gets new rate
+        let result = apply_rate_override(segs.clone(), 80, 150, 0.01);
+        assert_eq!(result, vec![(0, 80, 0.001), (80, 100, 0.01), (200, 400, 0.001)]);
+
+        // Full containment of first segment: entire [0,100) replaced
+        let result = apply_rate_override(segs.clone(), 0, 100, 0.02);
+        assert_eq!(result, vec![(0, 100, 0.02), (200, 400, 0.001)]);
+
+        // Override spanning both segments (gap between them is unaffected)
+        let result = apply_rate_override(segs.clone(), 50, 300, 0.05);
+        assert_eq!(result, vec![(0, 50, 0.001), (50, 100, 0.05), (200, 300, 0.05), (300, 400, 0.001)]);
+    }
+
+    #[test]
+    fn test_rate_at() {
+        let segs = vec![(10usize, 50usize, 0.001f64), (100, 200, 0.005)];
+
+        // Inside first segment
+        assert_eq!(rate_at(&segs, 25), 0.001);
+        // At start of first segment (inclusive)
+        assert_eq!(rate_at(&segs, 10), 0.001);
+        // At end of first segment (exclusive — gap)
+        assert_eq!(rate_at(&segs, 50), 0.0);
+        // In gap between segments
+        assert_eq!(rate_at(&segs, 75), 0.0);
+        // Before all segments
+        assert_eq!(rate_at(&segs, 0), 0.0);
+        // Inside second segment
+        assert_eq!(rate_at(&segs, 150), 0.005);
+        // At end of second segment (exclusive)
+        assert_eq!(rate_at(&segs, 200), 0.0);
+    }
+
+    #[test]
+    fn test_exclude_positions() {
+        let segs = vec![(0usize, 100usize, 0.001f64), (200, 400, 0.001)];
+
+        // Empty excluded list — segments unchanged
+        assert_eq!(exclude_positions(segs.clone(), &[]), segs);
+
+        // Exclude middle of first segment — splits into two
+        let result = exclude_positions(segs.clone(), &[50]);
+        assert_eq!(result, vec![(0, 50, 0.001), (51, 100, 0.001), (200, 400, 0.001)]);
+
+        // Exclude start of segment — trims left boundary
+        let result = exclude_positions(segs.clone(), &[0]);
+        assert_eq!(result, vec![(1, 100, 0.001), (200, 400, 0.001)]);
+
+        // Exclude last position of segment — trims right boundary
+        let result = exclude_positions(segs.clone(), &[99]);
+        assert_eq!(result, vec![(0, 99, 0.001), (200, 400, 0.001)]);
+
+        // Exclude position in gap — no change to segments
+        let result = exclude_positions(segs.clone(), &[150]);
+        assert_eq!(result, segs);
+
+        // Exclude multiple positions across both segments
+        let result = exclude_positions(segs.clone(), &[50, 250]);
+        assert_eq!(result, vec![
+            (0, 50, 0.001), (51, 100, 0.001),
+            (200, 250, 0.001), (251, 400, 0.001),
+        ]);
     }
 }

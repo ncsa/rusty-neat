@@ -37,7 +37,7 @@ impl BedRecord {
         if start >= end {
             return Err(BedErrors::BedRecordError("Region with start pos >= end_pos".to_string()))
         }
-        let mut_rate = Self::parse_other_for_mut(other)?;
+        let mut_rate = Some(Self::parse_other_for_mut(other)?);
         Ok(BedRecord { contig, start, end, mut_rate})
     }
 
@@ -70,7 +70,7 @@ impl BedRecord {
         self.start < end && start < self.end
     }
 
-    pub fn parse_other_for_mut(other: &str) -> Result<Option<f64>, BedErrors> {
+    pub fn parse_other_for_mut(other: &str) -> Result<f64, BedErrors> {
         if let Some(index) = other.to_lowercase().find("mut_rate=") {
             let start_index = index + "mut_rate=".len();
             let remainder = &other[start_index..];
@@ -79,13 +79,9 @@ impl BedRecord {
                 |c: char| c.is_whitespace() || c == ';' || c == ',' || c == '|'
             ).unwrap_or(remainder.len());
             let value_str = &remainder[..end_index];
-            let maybe_num = value_str.parse::<f64>();
-            match maybe_num {
-                Ok(value) => Ok(Some(value)),
-                Err(_) => Err(BedErrors::BedRecordError(
-                    format!("Error parsing text after 'mut_rate': {}", value_str)
-                ))
-            }
+            value_str.parse::<f64>().map_err(|_| BedErrors::BedRecordError(
+                format!("Error parsing text after 'mut_rate': {}", value_str)
+            ))
         } else {
             Err(BedErrors::BedRecordError(
                 format!("Failed to locate 'mut_rate' text after column 3: {}", other)
@@ -101,13 +97,13 @@ mod test {
     #[test]
     fn test_parse_other_finds_mut_rate() {
         let other = "mut_rate=0.003";
-        assert_eq!(BedRecord::parse_other_for_mut(&other).unwrap(), Some(0.003));
-        
+        assert_eq!(BedRecord::parse_other_for_mut(&other).unwrap(), 0.003);
+
         let other = "name=gene1;mut_rate=0.005;score=100";
-        assert_eq!(BedRecord::parse_other_for_mut(&other).unwrap(), Some(0.005));
-        
+        assert_eq!(BedRecord::parse_other_for_mut(&other).unwrap(), 0.005);
+
         let other = "some_other_field mut_rate=0.001\tmore_fields";
-        assert_eq!(BedRecord::parse_other_for_mut(&other).unwrap(), Some(0.001));
+        assert_eq!(BedRecord::parse_other_for_mut(&other).unwrap(), 0.001);
     }
 
     #[test]
@@ -204,13 +200,13 @@ mod test {
     #[test]
     fn test_parse_other_case_insensitivity() {
         let other = "MUT_RATE=0.01";
-        assert_eq!(BedRecord::parse_other_for_mut(other).unwrap(), Some(0.01));
+        assert_eq!(BedRecord::parse_other_for_mut(other).unwrap(), 0.01);
     }
 
     #[test]
     fn test_parse_other_delimiters() {
-        assert_eq!(BedRecord::parse_other_for_mut("mut_rate=0.1,other=1").unwrap(), Some(0.1));
-        assert_eq!(BedRecord::parse_other_for_mut("mut_rate=0.2|other=1").unwrap(), Some(0.2));
+        assert_eq!(BedRecord::parse_other_for_mut("mut_rate=0.1,other=1").unwrap(), 0.1);
+        assert_eq!(BedRecord::parse_other_for_mut("mut_rate=0.2|other=1").unwrap(), 0.2);
     }
 
     #[test]

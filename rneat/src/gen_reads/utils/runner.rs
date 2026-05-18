@@ -4,7 +4,7 @@ use common::structs::variants::VariantType;
 use tempfile;
 use log::{info, debug, warn, error};
 use common::rng::NeatRng;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::io::BufWriter;
 use std::sync::Arc;
@@ -55,10 +55,11 @@ use crate::{
 struct ContigContext<'a> {
     config: &'a RunConfiguration,
     target_bed: &'a Option<HashMap<String, Vec<BedRecord>>>,
+    mutation_regions: &'a Option<HashMap<String, Vec<BedRecord>>>,
     input_variants: &'a Option<HashMap<String, Vec<Variant>>>,
     nuc_sub_model: &'a NucleotideSelector,
     mutation_model: &'a MutationModel,
-    run_mutation_rate: f64,
+    default_run_mutation_rate: f64,
     fragment_length_model: &'a FragmentLengthModel,
     gc_bias_model: &'a GcBiasModel,
     quality_score_model: &'a QualityScoreModel,
@@ -93,7 +94,14 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
             None => MutationModel::default()?,
         }
     };
-    let run_mutation_rate = match config.mutation_rate {
+    let mutation_regions = match &config.mutation_regions {
+        Some(path) => {
+            info!("Loading mutation regions BED: {:?}", path);
+            Some(read_bed(path, true)?)
+        },
+        None => None,
+    };
+    let default_run_mutation_rate = match config.mutation_rate {
         Some(rate) => rate,
         None => mutation_model.mutation_rate
     };
@@ -145,8 +153,8 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
 
     let target_bed = match &config.target_bed {
         Some(path) => {
-            info!("Loading target BED: {}", path.display());
-            Some(read_bed(path)?)
+            info!("Loading target BED: {:?}", path);
+            Some(read_bed(path, false)?)
         },
         None => None,
     };
@@ -171,10 +179,11 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
     let ctx = ContigContext {
         config,
         target_bed: &target_bed,
+        mutation_regions: &mutation_regions,
         input_variants: &input_variants,
         nuc_sub_model: &nuc_sub_model,
         mutation_model: &mutation_model,
-        run_mutation_rate,
+        default_run_mutation_rate,
         fragment_length_model: &fragment_length_model,
         gc_bias_model: &gc_bias_model,
         quality_score_model: &quality_score_model,
@@ -222,15 +231,6 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
     if config.produce_fastq {
         info!("Producing final fastq(s) file(s)");
 
-        let total_genome_bp: usize = fasta_lengths.values().sum();
-        if total_genome_bp > 500_000_000 {
-            warn!(
-                "Genome is {:.1} Gbp. The global FASTQ shuffle loads all reads into memory. \
-                 For large genomes, consider running `seqkit shuffle` on the output instead.",
-                total_genome_bp as f64 / 1e9
-            );
-        }
-
         let mut all_r1: Vec<PathBuf> = Vec::new();
         let mut all_r2: Vec<PathBuf> = Vec::new();
         for (r1_files, r2_files) in all_fastq_files.into_values() {
@@ -250,8 +250,6 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
                                 all_r2,
                                 filename1,
                                 Some(filename2),
-                                config.shuffle_fastq,
-                                rng,
                             )?;
                         },
                         None => {
@@ -265,8 +263,6 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
                         vec![],
                         filename1,
                         None,
-                        config.shuffle_fastq,
-                        rng,
                     )?;
                 }
             },
@@ -364,56 +360,76 @@ fn process_contig(
 
     debug!("    > Generating bias map.");
     let raw_regions = current_block.get_non_n_regions();
-    let regions_of_interest: Vec<SequenceMap> = if let Some(bed) = ctx.target_bed {
-        let contig_beds = bed.get(&contig_name).map(|v| v.as_slice()).unwrap_or(&[]);
-        intersect_with_bed(&raw_regions, contig_beds, 0)
-    } else {
-        raw_regions.into_iter().cloned().collect()
-    };
+    let regions_of_interest: Vec<SequenceMap> =
+        if let Some(bed) = ctx.target_bed {
+            let contig_beds = bed
+                .get(&contig_name)
+                .map(|v| v.as_slice())
+                .unwrap_or(&[]);
+            intersect_with_bed(&raw_regions, contig_beds, 0)
+        } else {
+            raw_regions.into_iter().cloned().collect()
+        };
     if regions_of_interest.is_empty() {
         return Ok(ContigResult { idx, name: contig_name, len: contig_len, data: None });
     }
 
-    let mut bias_map: Vec<f64> = vec![0.0; current_block.get_len()];
-    let mut num_mutable_area = 0.0_f64;
-    for region in &regions_of_interest {
-        for j in region.start..region.end {
-            bias_map[j] = 1.0;
-            num_mutable_area += 1.0;
+    // Build a compact segment list instead of a per-position Vec<f64>.
+    // Each segment is (start, end, rate); N-regions and gaps are simply absent.
+    // This replaces an O(chromosome_length) allocation with O(regions + BED_records).
+    let mut rate_segments: Vec<(usize, usize, f64)> = regions_of_interest
+        .iter()
+        .map(|r| (r.start, r.end, ctx.default_run_mutation_rate))
+        .collect();
+
+    if let Some(mut_beds) = ctx.mutation_regions {
+        if let Some(records) = mut_beds.get(&contig_name) {
+            for rec in records {
+                if let Some(custom_rate) = rec.mut_rate {
+                    rate_segments = apply_rate_override(
+                        rate_segments, rec.start, rec.end, custom_rate,
+                    );
+                }
+            }
         }
     }
 
-    let block_end = contig_len;
-    let mut block_variants: Vec<Variant> = if let Some(iv) = ctx.input_variants {
-        iv.get(&contig_name)
-            .map(|vs| {
-                vs.iter()
-                    .filter(|v| {
-                        let pos0 = v.location.saturating_sub(1);
-                        pos0 < block_end
-                    })
-                    .filter_map(|v| {
-                        let local_pos = v.location - 1;
-                        if local_pos >= bias_map.len() {
-                            return None;
-                        }
-                        if bias_map[local_pos] > 0.0 {
-                            bias_map[local_pos] = 0.0;
-                            num_mutable_area -= 1.0;
-                        }
-                        let mut v2 = v.clone();
-                        v2.location = local_pos;
-                        Some(v2)
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
-    } else {
-        Vec::new()
-    };
-    debug!("Seeded {} user variant(s) into contig {}", block_variants.len(), contig_name);
+    let mut num_mutations_sum: f64 = rate_segments
+        .iter()
+        .map(|&(s, e, r)| (e - s) as f64 * r)
+        .sum();
 
-    let num_mutations = (num_mutable_area * ctx.run_mutation_rate).trunc() as usize;
+    let block_end = contig_len;
+    let mut block_variants: Vec<Variant> = Vec::new();
+    if let Some(iv) = ctx.input_variants {
+        if let Some(vs) = iv.get(&contig_name) {
+            let mut excluded: Vec<usize> = Vec::new();
+            let mut seen: HashSet<usize> = HashSet::new();
+            for v in vs {
+                let pos0 = v.location.saturating_sub(1);
+                if pos0 >= block_end {
+                    continue;
+                }
+                let local_pos = v.location - 1;
+                if seen.insert(local_pos) {
+                    let rate = rate_at(&rate_segments, local_pos);
+                    if rate > 0.0 {
+                        num_mutations_sum -= rate;
+                        excluded.push(local_pos);
+                    }
+                }
+                let mut v2 = v.clone();
+                v2.location = local_pos;
+                block_variants.push(v2);
+            }
+            if !excluded.is_empty() {
+                excluded.sort_unstable();
+                rate_segments = exclude_positions(rate_segments, &excluded);
+            }
+        }
+    }
+    debug!("Seeded {} user variant(s) into contig {}", block_variants.len(), contig_name);
+    let num_mutations = num_mutations_sum.trunc() as usize;
     debug!("Adding {} mutations to contig {}", num_mutations, contig_name);
     let mut max_del_len = 0;
     for v in &block_variants {
@@ -424,7 +440,7 @@ fn process_contig(
     if num_mutations > 0 {
         let result: Option<Vec<Variant>> = generate_variants(
             &current_block,
-            &bias_map,
+            &rate_segments,
             ctx.mutation_model,
             num_mutations,
             ctx.config.ploidy,
@@ -608,6 +624,7 @@ fn process_contig(
     })
 }
 
+
 fn collect_contig_result(
     cr: ContigResult,
     contig_order: &mut Vec<String>,
@@ -653,6 +670,62 @@ fn filter_input_vcf(
     out
 }
 
+/// Overrides the mutation rate in [ovr_start, ovr_end) within existing segments,
+/// splitting segment boundaries where needed. Positions outside existing segments
+/// (N-regions, gaps) are not affected.
+fn apply_rate_override(
+    segments: Vec<(usize, usize, f64)>,
+    ovr_start: usize,
+    ovr_end: usize,
+    ovr_rate: f64,
+) -> Vec<(usize, usize, f64)> {
+    let mut result = Vec::with_capacity(segments.len() + 2);
+    for (s, e, rate) in segments {
+        if ovr_end <= s || ovr_start >= e {
+            result.push((s, e, rate));
+            continue;
+        }
+        let isect_s = s.max(ovr_start);
+        let isect_e = e.min(ovr_end);
+        if s < isect_s { result.push((s, isect_s, rate)); }
+        result.push((isect_s, isect_e, ovr_rate));
+        if isect_e < e { result.push((isect_e, e, rate)); }
+    }
+    result
+}
+
+/// Returns the mutation rate at `pos`, or 0.0 if the position falls in an N-region
+/// or gap. Segments must be sorted by start and non-overlapping.
+fn rate_at(segments: &[(usize, usize, f64)], pos: usize) -> f64 {
+    let idx = segments.partition_point(|&(s, _, _)| s <= pos);
+    if idx == 0 { return 0.0; }
+    let (_, e, rate) = segments[idx - 1];
+    if pos < e { rate } else { 0.0 }
+}
+
+/// Splits segments to remove individual excluded positions (e.g. positions already
+/// occupied by input variants). `excluded` must be sorted.
+fn exclude_positions(
+    segments: Vec<(usize, usize, f64)>,
+    excluded: &[usize],
+) -> Vec<(usize, usize, f64)> {
+    if excluded.is_empty() { return segments; }
+    let mut result = Vec::with_capacity(segments.len() + excluded.len());
+    let mut ei = 0;
+    for (s, e, rate) in segments {
+        let mut cur = s;
+        while ei < excluded.len() && excluded[ei] < e {
+            let pos = excluded[ei];
+            ei += 1;
+            if pos < cur { continue; }
+            if cur < pos { result.push((cur, pos, rate)); }
+            cur = pos + 1;
+        }
+        if cur < e { result.push((cur, e, rate)); }
+    }
+    result
+}
+
 /// Intersects a set of non-N regions (block-local coordinates) with BED records
 /// (global contig coordinates) and returns only the overlapping sub-intervals,
 /// still expressed in block-local coordinates.
@@ -681,4 +754,162 @@ fn intersect_with_bed(
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use common::structs::sequence_block::{RegionType, SequenceMap};
+    use common::structs::bed_record::BedRecord;
+
+    #[test]
+    fn test_intersect_with_bed() {
+        let r1 = SequenceMap::from(RegionType::NonNRegion, 100, 200);
+        let r2 = SequenceMap::from(RegionType::NonNRegion, 300, 400);
+        let regions = vec![&r1, &r2];
+
+        let b1 = BedRecord::new_bed_record("chr1".to_string(), 150, 350).unwrap();
+        let bed_records = vec![b1];
+
+        // block_offset = 0
+        let result = intersect_with_bed(&regions, &bed_records, 0);
+        assert_eq!(result.len(), 2);
+        // Intersection with r1 [100, 200] and b1 [150, 350] -> [150, 200]
+        assert_eq!(result[0].start, 150);
+        assert_eq!(result[0].end, 200);
+        // Intersection with r2 [300, 400] and b1 [150, 350] -> [300, 350]
+        assert_eq!(result[1].start, 300);
+        assert_eq!(result[1].end, 350);
+
+        // block_offset = 1000
+        // r1 global [1100, 1200], r2 global [1300, 1400]
+        let b2 = BedRecord::new_bed_record("chr1".to_string(), 1150, 1350).unwrap();
+        let result2 = intersect_with_bed(&regions, &vec![b2], 1000);
+        assert_eq!(result2.len(), 2);
+        assert_eq!(result2[0].start, 150); // global 1150 - 1000
+        assert_eq!(result2[0].end, 200);   // global 1200 - 1000
+        assert_eq!(result2[1].start, 300); // global 1300 - 1000
+        assert_eq!(result2[1].end, 350);   // global 1350 - 1000
+    }
+
+    #[test]
+    fn test_filter_input_vcf() {
+        use crate::common::structs::variants::{VariantType, Genotype};
+        use common::structs::nucleotides::Nucleotide;
+        let mut raw = HashMap::new();
+        let v1 = Variant {
+            location: 100,
+            reference: vec![Nucleotide::A],
+            alternate: vec![Nucleotide::T],
+            variant_type: VariantType::SNP,
+            genotype: Genotype::Homozygous,
+            genotype_str: "1/1".to_string(),
+            id: None,
+            quality_score: None,
+            filter: None,
+            info: None,
+            format: vec![],
+            sample: vec![],
+        };
+        let v2 = Variant {
+            location: 200,
+            reference: vec![Nucleotide::A, Nucleotide::T],
+            alternate: vec![Nucleotide::C, Nucleotide::G],
+            variant_type: VariantType::Complex,
+            genotype: Genotype::Homozygous,
+            genotype_str: "1/1".to_string(),
+            id: None,
+            quality_score: None,
+            filter: None,
+            info: None,
+            format: vec![],
+            sample: vec![],
+        };
+        raw.insert("chr1".to_string(), vec![v1.clone(), v2]);
+
+        let filtered = filter_input_vcf(raw);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered["chr1"].len(), 1);
+        assert_eq!(filtered["chr1"][0].location, 100);
+    }
+
+    #[test]
+    fn test_apply_rate_override() {
+        let segs = vec![(0usize, 100usize, 0.001f64), (200, 400, 0.001)];
+
+        // No overlap: override entirely before first segment
+        let result = apply_rate_override(segs.clone(), 0, 0, 0.01);
+        assert_eq!(result, segs);
+
+        // No overlap: override entirely after last segment
+        let result = apply_rate_override(segs.clone(), 500, 600, 0.01);
+        assert_eq!(result, segs);
+
+        // Partial overlap at start of first segment: [0,50) gets new rate, [50,100) keeps old
+        let result = apply_rate_override(segs.clone(), 0, 50, 0.01);
+        assert_eq!(result, vec![(0, 50, 0.01), (50, 100, 0.001), (200, 400, 0.001)]);
+
+        // Partial overlap at end of first segment: [0,80) keeps old, [80,100) gets new rate
+        let result = apply_rate_override(segs.clone(), 80, 150, 0.01);
+        assert_eq!(result, vec![(0, 80, 0.001), (80, 100, 0.01), (200, 400, 0.001)]);
+
+        // Full containment of first segment: entire [0,100) replaced
+        let result = apply_rate_override(segs.clone(), 0, 100, 0.02);
+        assert_eq!(result, vec![(0, 100, 0.02), (200, 400, 0.001)]);
+
+        // Override spanning both segments (gap between them is unaffected)
+        let result = apply_rate_override(segs.clone(), 50, 300, 0.05);
+        assert_eq!(result, vec![(0, 50, 0.001), (50, 100, 0.05), (200, 300, 0.05), (300, 400, 0.001)]);
+    }
+
+    #[test]
+    fn test_rate_at() {
+        let segs = vec![(10usize, 50usize, 0.001f64), (100, 200, 0.005)];
+
+        // Inside first segment
+        assert_eq!(rate_at(&segs, 25), 0.001);
+        // At start of first segment (inclusive)
+        assert_eq!(rate_at(&segs, 10), 0.001);
+        // At end of first segment (exclusive — gap)
+        assert_eq!(rate_at(&segs, 50), 0.0);
+        // In gap between segments
+        assert_eq!(rate_at(&segs, 75), 0.0);
+        // Before all segments
+        assert_eq!(rate_at(&segs, 0), 0.0);
+        // Inside second segment
+        assert_eq!(rate_at(&segs, 150), 0.005);
+        // At end of second segment (exclusive)
+        assert_eq!(rate_at(&segs, 200), 0.0);
+    }
+
+    #[test]
+    fn test_exclude_positions() {
+        let segs = vec![(0usize, 100usize, 0.001f64), (200, 400, 0.001)];
+
+        // Empty excluded list — segments unchanged
+        assert_eq!(exclude_positions(segs.clone(), &[]), segs);
+
+        // Exclude middle of first segment — splits into two
+        let result = exclude_positions(segs.clone(), &[50]);
+        assert_eq!(result, vec![(0, 50, 0.001), (51, 100, 0.001), (200, 400, 0.001)]);
+
+        // Exclude start of segment — trims left boundary
+        let result = exclude_positions(segs.clone(), &[0]);
+        assert_eq!(result, vec![(1, 100, 0.001), (200, 400, 0.001)]);
+
+        // Exclude last position of segment — trims right boundary
+        let result = exclude_positions(segs.clone(), &[99]);
+        assert_eq!(result, vec![(0, 99, 0.001), (200, 400, 0.001)]);
+
+        // Exclude position in gap — no change to segments
+        let result = exclude_positions(segs.clone(), &[150]);
+        assert_eq!(result, segs);
+
+        // Exclude multiple positions across both segments
+        let result = exclude_positions(segs.clone(), &[50, 250]);
+        assert_eq!(result, vec![
+            (0, 50, 0.001), (51, 100, 0.001),
+            (200, 250, 0.001), (251, 400, 0.001),
+        ]);
+    }
 }

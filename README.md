@@ -8,7 +8,7 @@ The most recent version of `rneat` includes adding in the utilities to allow use
 ## Prerequisites
 You will need to install the rust toolchain to compile `rneat`, including `cargo`. Check the cargo documentation for instructions (https://doc.rust-lang.org/cargo/getting-started/installation.html). Alternatively, you can try one of the binaries on the release page. Select the one that matches your system and let us know if you run into errors. During compilation, you may run into errors, such as cmake not found. Some of the packages `rneat` uses have these dependencies. For Debian/Ubuntu this should be a simple `sudo apt install cmake` and for RHEL/Rocky type distros this should be `sudo dnf install cmake`. There may be some other requirements. Drop a comment if you need specific help.
 
-Download the executable in the release (current version 1.4.1).
+Download the executable in the release (current version 1.5.0).
 
 ```bash
 $ rneat --help
@@ -149,6 +149,21 @@ When `target_bed` is set, `gen-reads` skips contigs absent from the BED entirely
 
 The BED contig names must match the short names derived from the reference FASTA (the text after `>` up to the first whitespace character). Both `.bed` and `.bed.gz` inputs are accepted.
 
+Custom Mutation Rate Regions with a BED File
+============================================
+In addition to targeting certain regions, you can use a BED file with a custom field entered in any column after the third. 
+
+```yaml
+mutation_regions: /path/to/mutation_regions.bed
+```
+
+The text pattern is "mut_rate=0.0001" followed by a delimiter (end of line, space, semicolon, comma, bar) where the number after the equal sign is any float, and will be the mutation rate for the region defined in columns 1-3. 
+```text
+chr1    39930   39957   Bed_info    mut_rate=0.002
+chr2    0   111199  Other_bed_info  mut_rate=0.02
+```
+Any region outside of the regions defined in the mutation regions BED will be assigned the default mutation rate, set by the mutation model, which can be overridden a custom default defined in the config file. For example, if you only want to have mutations in exomes, but you want reads from the full genome, you could set the `mutation_rate` to 0.0 and use a bed file defining all exomes, with a column appende `mut_rate=0.0011` or whatever mutation rate you desire. This BED works in conjunction with the `target_bed`, and any region outside the target bed will be excluded from reads anyway, and thus will have no variants. 
+
 Input Variants VCF
 ==================
 You can supply a VCF of variants to force into the simulation:
@@ -157,7 +172,7 @@ You can supply a VCF of variants to force into the simulation:
 input_vcf: /path/to/variants.vcf.gz
 ```
 
-`rneat` will place every variant from the VCF into the corresponding position in the simulated reads and the output VCF. Random variants are still generated at `mutation_rate` for all positions not covered by the input VCF; set `mutation_rate: 0` to disable random variants entirely and simulate only the provided set.
+`rneat` will place every variant from the VCF into the corresponding position in the simulated reads and the output VCF. Random variants are still generated at `mutation_rate` for all positions not covered by the input VCF; set `mutation_rate: 0.0` to disable random variants entirely and output only the provided set of variants.
 
 **Requirements**
 
@@ -183,9 +198,7 @@ input_vcf: /path/to/variants.vcf.gz
 
 FASTQ Shuffling
 ===============
-`rneat` globally shuffles all generated reads before writing the final FASTQ by default, so no chromosome ordering is visible in the output — matching real sequencer output. Set `shuffle_fastq: false` in `gen-reads` config to preserve the generated ordering and avoid the in-memory global shuffle.
-
-**Large genome note:** The global shuffle loads every read record into RAM at once. This is fine for small to moderate genomes (viral, bacterial, small eukaryotes), but becomes impractical for mammalian-scale genomes at typical coverage depths (e.g. human 30× ≈ 900 M reads ≈ hundreds of GB). For those cases, run the post-processing shuffle instead:
+`rneat` writes reads in contig order. To shuffle the output, use `seqkit shuffle` as a post-processing step:
 
 ```bash
 # single-ended
@@ -196,7 +209,7 @@ seqkit shuffle -2 sample_R1.fastq.gz sample_R2.fastq.gz \
     -o sample_R1_shuffled.fastq.gz -o sample_R2_shuffled.fastq.gz
 ```
 
-`seqkit` uses reservoir sampling and streams from disk, so its memory use is bounded regardless of file size. `rneat` will emit a warning at runtime when the reference genome exceeds 500 Mbp as a reminder that post-processing may be preferable.
+`seqkit` uses reservoir sampling and streams from disk, keeping memory use bounded regardless of file size (`seqkit` is an open source toolkit for FASTQ files: https://github.com/shenwei356/seqkit).
 
 Parallel Processing
 ===================
@@ -503,13 +516,9 @@ bedtools genomecov -dz -ibam filtered.bam > coverage.txt
 
 Set `coverage_format` in your config to match whichever command you used.
 
-**Coverage file must be plain text.** Gzipped coverage files are not supported. If yours is compressed, decompress it first:
+**Coverage file format:** Both plain-text and gzip-compressed (`.gz`) coverage files are accepted. Plain text is recommended for whole-genome runs on memory-constrained machines (see the HPC section below for details).
 
-```bash
-gunzip coverage.txt.gz
-```
-
-**Large genomes:** The tool is designed to handle human-scale genomes without excessive memory use. It indexes the coverage file once, then loads each contig's data separately rather than holding the entire genome in RAM. Peak memory use is proportional to the longest contig, not total genome size.
+**Large genomes:** The tool is designed to handle human-scale genomes without excessive memory use. With a plain-text coverage file it indexes the file once and loads each contig's data on demand via byte-offset seeking, so peak memory is proportional to the longest contig, not total genome size. With a gzip coverage file, all contigs are decompressed into RAM simultaneously — manageable for a few chromosomes but significant for a full genome (~12–15 GB for hg38 at 30×).
 
 **Long reads:** Set `window_size` to approximately your typical read length (e.g. 5000–50000 for ONT or PacBio). Larger windows mean fewer windows per contig and faster model building. Non-overlapping windows (`window_stride: window_size`) are recommended so each observation is independent.
 
@@ -565,6 +574,110 @@ Only reads that satisfy all of the following are used:
 
 **Outlier filtering:**  
 Fragment lengths that exceed `median + 10 × MAD` (median absolute deviation) are removed before fitting. This mirrors the filtering in Python NEAT's fragment length modeler. If no lengths survive the filter, lower `min_reads` or set it to `0`.
+
+Running on HPC
+==============
+
+`rneat` runs as a single process and fits naturally onto a single HPC compute node. No MPI, distributed computing, or special environment setup is required. The notes below cover resource budgets for whole-genome human-scale runs.
+
+### gen-reads
+
+`gen-reads` is already multi-threaded via rayon (see [Parallel Processing](#parallel-processing) above). Set `num_threads` in your config to match your CPU allocation:
+
+```yaml
+num_threads: 16
+```
+
+Memory scales with `num_threads × largest_contig_size`, not total genome size — each thread processes one contig at a time. For hg38, chr1 is ~249 Mbp, so 16 simultaneous threads need roughly 16 GB for sequence data plus overhead. Budget additional scratch space for per-contig temp files before the final assembly: roughly 3× the expected output size.
+
+| Genome | Threads | Recommended RAM | Scratch space | Typical wall time |
+|--------|---------|-----------------|---------------|-------------------|
+| Bacterial (~5 Mbp) | 4 | 4 GB | 5 GB | < 1 min |
+| Human hg38, 10× SE | 16 | 32 GB | 100 GB | ~20 min |
+| Human hg38, 30× PE | 16 | 48 GB | 300 GB | ~60 min |
+
+Example SLURM header:
+
+```bash
+#!/bin/bash
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=48G
+#SBATCH --time=2:00:00
+#SBATCH --tmp=300G
+```
+
+### gen-gc-bias-model
+
+With a **plain-text** coverage file, the tool indexes the file once and loads only one contig at a time — memory is proportional to the largest contig (~1–2 GB for chr1 at 30×), not total genome size. This is the recommended format for full-genome HPC runs.
+
+With a **gzip** coverage file, all contigs are held in RAM simultaneously. For a full human genome this is roughly 12–15 GB. If you need gzip, use per-chromosome files rather than one monolithic archive to keep the footprint manageable.
+
+To generate a whole-genome plain-text depth file from a remote or local BAM:
+
+```bash
+samtools depth -a -q 20 -F 1796 aligned.bam > coverage.txt
+```
+
+If disk space is a concern and you choose gzip, consider splitting by chromosome:
+
+```bash
+for chr in chr1 chr2 ... chrX chrY; do
+    samtools depth -a -q 20 -F 1796 -r ${chr} aligned.bam | gzip -1 > ${chr}_coverage.txt.gz
+done
+```
+
+Then run `gen-gc-bias-model` once per chromosome and combine the models, or run on a representative subset of chromosomes that span your GC range of interest.
+
+Recommended SLURM header (plain-text coverage):
+
+```bash
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=8G
+#SBATCH --time=1:00:00
+```
+
+### gen-mut-model
+
+Single-threaded; processes the VCF one chromosome at a time. A full human genome WGS VCF (~10 GB) typically completes in 30–60 minutes with peak RSS under 4 GB.
+
+```bash
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=8G
+#SBATCH --time=1:30:00
+```
+
+### gen-seq-error-model
+
+Single-threaded; streams through the FASTQ. For a full genome FASTQ (~600 M reads), expect 30–60 minutes. For most purposes, training on a representative subset produces a statistically equivalent model in a fraction of the time:
+
+```yaml
+max_reads: 5000000   # 5 M reads is sufficient; set to 0 for unlimited
+```
+
+```bash
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=4G
+#SBATCH --time=0:30:00   # with max_reads=5M; scale up for unlimited
+```
+
+### gen-frag-length-model
+
+Single-threaded; streams TLEN fields from the BAM. A full human genome BAM at 30× typically completes in under 15 minutes with peak RSS under 2 GB.
+
+```bash
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=4G
+#SBATCH --time=0:30:00
+```
+
+### Environment notes
+
+The `rneat` binary has no runtime dependencies beyond a standard C library (glibc), which is present on all Linux HPC systems. No module loads or conda environments are required — copy the release binary to your scratch or project directory and run it directly. If you compile from source on the cluster, ensure `cmake` is available (`module load cmake` on most systems) before running `cargo build --release`.
 
 **Current Benchmarks**
 We ran some benchmarks on `rneat` on my home desktop, a very basic Linux desktop, using data pulled from public resources on the internet (mostly ncbi). The "yeast" is brewer's yeast. These are the results:

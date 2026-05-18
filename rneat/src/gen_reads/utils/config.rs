@@ -59,7 +59,6 @@ pub struct RunConfiguration {
     pub output_fastq_2: Option<PathBuf>,
     pub output_vcf: Option<PathBuf>,
     pub output_bam: Option<PathBuf>, 
-    pub shuffle_fastq: bool,
     // model input
     pub quality_score_model: Option<PathBuf>,
     pub mutation_model: Option<PathBuf>,
@@ -67,6 +66,10 @@ pub struct RunConfiguration {
     pub sequence_error_model: Option<PathBuf>,
     // optional BED filter applied during generation (not post-processing)
     pub target_bed: Option<PathBuf>,
+    // Option BED-style file with columns: contig, start, end, other
+    // where "other" contains the key "mut_rate=X.XXXX" where X.XXXX represents any arbitrary
+    // float. That will become the mutation rate for that particular region
+    pub mutation_regions: Option<PathBuf>,
     // optional VCF of variants to force into the simulation
     pub input_vcf: Option<PathBuf>,
     // optional gc-bias model
@@ -80,80 +83,46 @@ pub struct RunConfiguration {
     pub long_reads: bool,
 }
 
-// The config builder allows us to construct a config in multiple different ways, depending
-// on the input.
-pub struct ConfigBuilder {
-    // The point of this is so we don't have to check for the reference to exist in the rest of the code
-    // We set it as an option in this, then run some checks, for yaml v command line inputs, then when
-    // we have the reference, we build the real config object, which requires a reference. Any other arguments
-    // can be made required this way. It gives us some flexibility in the CLI v config. Probably this was more
-    // ambitious than it needed to be, though.
-    pub(crate) reference: Option<String>,
-}
-
-impl ConfigBuilder {
-    pub fn new() -> ConfigBuilder {
-        ConfigBuilder {
-            reference: None,
-        }
-    }
-
-    // Function to build the actual configuration.
-    pub fn build(self) -> RunConfiguration {
-        match self.reference {
-            Some(reference) => {
-                info!("Running rusty-neat to generate reads on {:?} with...", &reference);
-                let ref_buf = PathBuf::from(reference);
-                RunConfiguration {
-                    reference: ref_buf,
-                    read_len: 151, 
-                    coverage: 10, 
-                    mutation_rate: None,
-                    ploidy: 2, 
-                    paired_ended: false, 
-                    fragment_mean: None, 
-                    fragment_st_dev: None, 
-                    produce_fastq: true, 
-                    produce_vcf: false, 
-                    produce_bam: false, 
-                    rng_seed: None,
-                    seed_vec: Vec::new(),
-                    overwrite_output: false, 
-                    minimum_mutations: 0,
-                    output_dir: env::current_dir().unwrap(), 
-                    output_filename: "neat_out".to_string(),
-                    output_fastq_1: None,
-                    output_fastq_2: None,
-                    output_vcf: None,
-                    output_bam: None, 
-                    shuffle_fastq: true,
-                    quality_score_model: None,
-                    mutation_model: None,
-                    fragment_model: None,
-                    sequence_error_model: None,
-                    target_bed: None,
-                    input_vcf: None,
-                    gc_bias_model: None,
-                    gc_bias_normalize_coverage: true,
-                    num_threads: None,
-                    long_reads: false,
-                }
-            },
-            None => {
-                panic!("Must specify a reference with -r or -c with a valid config file")
-            },
+impl Default for RunConfiguration {
+    fn default() -> Self {
+        RunConfiguration {
+            reference: PathBuf::new(),
+            read_len: 151,
+            coverage: 10,
+            mutation_rate: None,
+            ploidy: 2,
+            paired_ended: false,
+            fragment_mean: None,
+            fragment_st_dev: None,
+            produce_fastq: true,
+            produce_vcf: false,
+            produce_bam: false,
+            rng_seed: None,
+            seed_vec: Vec::new(),
+            overwrite_output: false,
+            minimum_mutations: 0,
+            output_dir: env::current_dir().unwrap_or_default(),
+            output_filename: "neat_out".to_string(),
+            output_fastq_1: None,
+            output_fastq_2: None,
+            output_vcf: None,
+            output_bam: None,
+            quality_score_model: None,
+            mutation_model: None,
+            fragment_model: None,
+            sequence_error_model: None,
+            target_bed: None,
+            mutation_regions: None,
+            input_vcf: None,
+            gc_bias_model: None,
+            gc_bias_normalize_coverage: true,
+            num_threads: None,
+            long_reads: false,
         }
     }
 }
 
 impl RunConfiguration {
-
-    #[allow(dead_code)]
-    // The purpose of this function is to redirect you to the ConfigBuilder
-    pub fn build() -> ConfigBuilder {
-        ConfigBuilder::new()
-    }
-
     pub fn from_yaml_file(yaml_file: &PathBuf) -> Result<RunConfiguration, GenerateReadsError> {
         // Reads an input configuration file from yaml using the serde package. Then sets the
         // parameters based on the inputs. A "." value means to use the default value.
@@ -170,486 +139,335 @@ impl RunConfiguration {
         };
         // Uses serde_yml to read the file into a HashMap
         let scrape_config: HashMap<String, Value> = serde_yml::from_reader(file)?;
-        // create a default and update it
-        let mut config_builder = ConfigBuilder::new();
+        Self::from_scrape_config(scrape_config)
+    }
+
+    pub fn from_scrape_config(scrape_config: HashMap<String, Value>) -> Result<RunConfiguration, GenerateReadsError> {
         // Fill in the reference first, all hinges on that
-        let reference = scrape_config["reference"].clone();
+        let reference = scrape_config.get("reference")
+            .ok_or(GenerateReadsError::MissingReferenceError)?;
+        
         let ref_str = reference.as_str();
-        match ref_str {
+        let ref_buf = match ref_str {
             Some(str) => {
-                let ref_buf = PathBuf::from(&str);
-                if ref_buf.is_file() {
-                    config_builder.reference = Some(str.to_string());
-                } else {
+                let path = PathBuf::from(&str);
+                if !path.is_file() {
                     return Err(GenerateReadsError::FileNotFound(str.to_owned()))
                 }
+                path
             },
             None => {
                 return Err(GenerateReadsError::MissingReferenceError)
             }
-        }
-        // Creates a default configuration with the reference value, which we can then update.
-        let mut configuration = config_builder.build();
+        };
+
+        let mut config = RunConfiguration {
+            reference: ref_buf,
+            ..Default::default()
+        };
+
+        info!(
+            "Running rusty-neat to generate reads on {:?} with...",
+            &config.reference
+        );
+
         for (key, value) in scrape_config {
             match &value.as_str() {
                 // Any item with a . for a value we keep the default
                 Some(".") => continue,
                 _ => match key.as_str() {
                     "read_len" => {
-                        let rl_option = value.as_u64();
-                        match rl_option {
-                            Some(rl_opt) => {
-                                configuration.read_len = rl_opt as usize;
-                            },
-                            None => {
-                                return Err(GenerateReadsError::ConfigReadError("read_len".to_string(), "integer".to_string()))
-                            }
-                        }
+                        config.read_len = value.as_u64()
+                            .ok_or_else(|| GenerateReadsError::ConfigReadError("read_len".to_string(), "integer".to_string()))? as usize;
                     },
                     "coverage" => {
-                        let cov_option = value.as_u64();
-                        match cov_option {
-                            Some(cov_opt) => {
-                                configuration.coverage = cov_opt as usize;
-                            },
-                            None => {
-                                return Err(GenerateReadsError::ConfigReadError("coverage".to_string(), "integer".to_string()))
-                            }
-                        }
+                        config.coverage = value.as_u64()
+                            .ok_or_else(|| GenerateReadsError::ConfigReadError("coverage".to_string(), "integer".to_string()))? as usize;
                     },
                     "mutation_rate" => {
-                        let mr_option = value.as_f64();
-                        match mr_option {
-                            Some(_data) => {
-                                configuration.mutation_rate = mr_option;
-                            },
-                            None => {
-                                return Err(GenerateReadsError::ConfigReadError("mutation_rate".to_string(), "float".to_string()))
-                            }
-                        }
+                        config.mutation_rate = Some(value.as_f64()
+                            .ok_or_else(|| GenerateReadsError::ConfigReadError("mutation_rate".to_string(), "float".to_string()))?);
                     },
                     "ploidy" => {
-                        let pl_option = value.as_u64();
-                        match pl_option {
-                            Some(pl_opt) => {
-                                configuration.ploidy = pl_opt as usize;
-                            },
-                            None => {
-                                return Err(GenerateReadsError::ConfigReadError("ploidy".to_string(), "integer".to_string()))
-                            }
-                        }
+                        config.ploidy = value.as_u64()
+                            .ok_or_else(|| GenerateReadsError::ConfigReadError("ploidy".to_string(), "integer".to_string()))? as usize;
                     },
                     "paired_ended" => {
-                        let pe_option = value.as_bool();
-                        match pe_option {
-                            Some(pe_opt) => {
-                                configuration.paired_ended = pe_opt;
-                            },
-                            None => {
-                                return Err(GenerateReadsError::ConfigReadError("paired_ended".to_string(), "boolean".to_string()))
-                            }
-                        }
+                        config.paired_ended = value.as_bool()
+                            .ok_or_else(|| GenerateReadsError::ConfigReadError("paired_ended".to_string(), "boolean".to_string()))?;
                     },
                     "fragment_mean" => {
-                        let fm_option = value.as_f64();
-                        match fm_option {
-                            Some(fm_opt) => {
-                                configuration.fragment_mean = Some(fm_opt);
-                            },
-                            None => {
-                                return Err(GenerateReadsError::ConfigReadError("fragment_mean".to_string(), "float".to_string()))
-                            }
-                        }
+                        config.fragment_mean = Some(value.as_f64()
+                            .ok_or_else(|| GenerateReadsError::ConfigReadError("fragment_mean".to_string(), "float".to_string()))?);
                     },
                     "fragment_st_dev" => {
-                        let fsd_option = value.as_f64();
-                        match fsd_option {
-                            Some(fsd_opt) => {
-                                configuration.fragment_st_dev = Some(fsd_opt);
-                            },
-                            None => {
-                                return Err(GenerateReadsError::ConfigReadError("frament_st_dev".to_string(), "float".to_string()))
-                            }
-                        }
+                        config.fragment_st_dev = Some(value.as_f64()
+                            .ok_or_else(|| GenerateReadsError::ConfigReadError("frament_st_dev".to_string(), "float".to_string()))?);
                     },
                     "produce_fastq" => {
-                        let pfq_option = value.as_bool();
-                        match pfq_option {
-                            Some(pfq_opt) => {
-                                configuration.produce_fastq = pfq_opt;
-                            },
-                            None => {
-                                return Err(GenerateReadsError::ConfigReadError("produce_fastq".to_string(), "boolean".to_string()))
-                            }
-                        }
+                        config.produce_fastq = value.as_bool()
+                            .ok_or_else(|| GenerateReadsError::ConfigReadError("produce_fastq".to_string(), "boolean".to_string()))?;
                     },
                     "produce_vcf" => {
-                        let pvc_option = value.as_bool();
-                        match pvc_option {
-                            Some(pvc_opt) => {
-                                configuration.produce_vcf = pvc_opt;
-                            },
-                            None => {
-                                return Err(GenerateReadsError::ConfigReadError("produce_vcf".to_string(), "boolean".to_string()))
-                            }
-                        }
+                        config.produce_vcf = value.as_bool()
+                            .ok_or_else(|| GenerateReadsError::ConfigReadError("produce_vcf".to_string(), "boolean".to_string()))?;
                     },
                     "produce_bam" => {
-                        let pb_option = value.as_bool();
-                        match pb_option {
-                            Some(pb_opt) => {
-                                configuration.produce_bam = pb_opt;
-                            },
-                            None => {
-                                return Err(GenerateReadsError::ConfigReadError("produce_bam".to_string(), "boolean".to_string()))
-                            }
-                        }
-                    },
-                    "shuffle_fastq" => {
-                        let sf_option = value.as_bool();
-                        match sf_option {
-                            Some(sf_opt) => {
-                                configuration.shuffle_fastq = sf_opt;
-                            },
-                            None => {
-                                return Err(GenerateReadsError::ConfigReadError("shuffle_fastq".to_string(), "boolean".to_string()))
-                            }
-                        }
+                        config.produce_bam = value.as_bool()
+                            .ok_or_else(|| GenerateReadsError::ConfigReadError("produce_bam".to_string(), "boolean".to_string()))?;
                     },
                     "rng_seed" => {
-                        let rs_option = value.as_str();
-                        match rs_option {
-                            Some(rs_opt) => {
-                                configuration.rng_seed = Some(rs_opt.to_string());
-                            },
-                            None => {
-                                return Err(GenerateReadsError::ConfigReadError("rng_seed".to_string(), "String".to_string()))
-                            }
-                        }
+                        config.rng_seed = Some(value.as_str()
+                            .ok_or_else(|| GenerateReadsError::ConfigReadError("rng_seed".to_string(), "String".to_string()))?.to_string());
                     },
                     "overwrite_output" => {
-                        let ow_option = value.as_bool();
-                        match ow_option {
-                            Some(ow_opt) => {
-                                configuration.overwrite_output = ow_opt;
-                            },
-                            None => {
-                                return Err(GenerateReadsError::ConfigReadError("overwrite_output".to_string(), "boolean".to_string()))
-                            }
-                        }
+                        config.overwrite_output = value.as_bool()
+                            .ok_or_else(|| GenerateReadsError::ConfigReadError("overwrite_output".to_string(), "boolean".to_string()))?;
                     },
                     "minimum_mutations" => {
-                        let mm_option = value.as_u64();
-                        match mm_option {
-                            Some(mm_opt) => {
-                                configuration.minimum_mutations = mm_opt as usize;
-                            },
-                            None => {
-                                return Err(GenerateReadsError::ConfigReadError("minimum_mutations".to_string(), "Integer".to_string()))
-                            }
-                        }
+                        config.minimum_mutations = value.as_u64()
+                            .ok_or_else(|| GenerateReadsError::ConfigReadError("minimum_mutations".to_string(), "Integer".to_string()))? as usize;
                     },
                     "output_dir" => {
-                        let output_option = value.as_str();
-                        match output_option {
-                            Some(output_path) => {
-                                let path = PathBuf::from(output_path);
-                                configuration.output_dir = path;
-                            },
-                            None => {
-                                return Err(GenerateReadsError::ConfigReadError("output_dir".to_string(), "String".to_string()))
-                            }
+                        let output_path = value.as_str()
+                            .ok_or_else(|| GenerateReadsError::ConfigReadError("output_dir".to_string(), "String".to_string()))?;
+                        config.output_dir = PathBuf::from(output_path);
+                        if !config.output_dir.is_dir() {
+                            info!("Creating output directory: {:?}", config.output_dir);
+                            check_create_dir(&config.output_dir);
                         }
                     },
                     // output_prefix is for backward compatability
                     "output_filename" | "output_prefix" => {
-                        let pref_val = value.as_str();
-                        match pref_val {
-                            Some(name) => {
-                                configuration.output_filename = name.to_string();
-                            },
-                            None => {
-                                return Err(GenerateReadsError::ConfigReadError("output_filename".to_string(), "String".to_string()))
-                            }
-                        }
+                        config.output_filename = value.as_str()
+                            .ok_or_else(|| GenerateReadsError::ConfigReadError("output_filename".to_string(), "String".to_string()))?.to_string();
                     },
                     "quality_score_model" => {
-                        let qs_val = value.as_str();
-                        match qs_val {
-                            Some(name) => {
-                                let filename = PathBuf::from(name);
-                                if filename.is_file() {
-                                    configuration.quality_score_model = Some(filename);
-                                } else {
-                                    return Err(GenerateReadsError::FileNotFound(name.to_string()))
-                                }
-                            },
-                            None => {
-                                return Err(GenerateReadsError::ConfigReadError("quality_score_model".to_string(), "path to file".to_string()))
-                            }
+                        let name = value.as_str()
+                            .ok_or_else(|| GenerateReadsError::ConfigReadError("quality_score_model".to_string(), "path to file".to_string()))?;
+                        let filename = PathBuf::from(name);
+                        if filename.is_file() {
+                            config.quality_score_model = Some(filename);
+                        } else {
+                            return Err(GenerateReadsError::FileNotFound(name.to_string()))
                         }
                     },
                     "mutation_model" => {
-                        let mm_val = value.as_str();
-                        match mm_val {
-                            Some(name) => {
-                                let filename = PathBuf::from(name);
-                                if filename.is_file() {
-                                    configuration.mutation_model = Some(filename);
-                                } else {
-                                    return Err(GenerateReadsError::FileNotFound(name.to_string()))
-                                }
-                            },
-                            None => {
-                                return Err(GenerateReadsError::ConfigReadError("mutation_model".to_string(), "path to file".to_string()))
-                            }
+                        let name = value.as_str()
+                            .ok_or_else(|| GenerateReadsError::ConfigReadError("mutation_model".to_string(), "path to file".to_string()))?;
+                        let filename = PathBuf::from(name);
+                        if filename.is_file() {
+                            config.mutation_model = Some(filename);
+                        } else {
+                            return Err(GenerateReadsError::FileNotFound(name.to_string()))
                         }
                     },
                     "fragment_model" => {
-                        let fr_val = value.as_str();
-                        match fr_val {
-                            Some(name) => {
-                                let filename = PathBuf::from(name);
-                                if filename.is_file() {
-                                    configuration.fragment_model = Some(filename);
-                                } else {
-                                    return Err(GenerateReadsError::FileNotFound(name.to_string()))
-                                }
-                            },
-                            None => {
-                                return Err(GenerateReadsError::ConfigReadError("fragment_model".to_string(), "path to file".to_string()))
-                            }
+                        let name = value.as_str()
+                            .ok_or_else(|| GenerateReadsError::ConfigReadError("fragment_model".to_string(), "path to file".to_string()))?;
+                        let filename = PathBuf::from(name);
+                        if filename.is_file() {
+                            config.fragment_model = Some(filename);
+                        } else {
+                            return Err(GenerateReadsError::FileNotFound(name.to_string()))
                         }
                     },
                     "sequence_error_model" => {
-                        let se_val = value.as_str();
-                        match se_val {
-                            Some(name) => {
-                                let filename = PathBuf::from(name);
-                                if filename.is_file() {
-                                    configuration.sequence_error_model = Some(filename);
-                                } else {
-                                    return Err(GenerateReadsError::FileNotFound(name.to_string()))
-                                }
-                            },
-                            None => {
-                                return Err(GenerateReadsError::ConfigReadError("sequence_error_model".to_string(), "path to file".to_string()))
-                            }
+                        let name = value.as_str()
+                            .ok_or_else(|| GenerateReadsError::ConfigReadError("sequence_error_model".to_string(), "path to file".to_string()))?;
+                        let filename = PathBuf::from(name);
+                        if filename.is_file() {
+                            config.sequence_error_model = Some(filename);
+                        } else {
+                            return Err(GenerateReadsError::FileNotFound(name.to_string()))
                         }
                     },
                     "target_bed" => {
-                        let tb_val = value.as_str();
-                        match tb_val {
-                            Some(name) => {
-                                let filename = PathBuf::from(name);
-                                if filename.is_file() {
-                                    configuration.target_bed = Some(filename);
-                                } else {
-                                    return Err(GenerateReadsError::FileNotFound(name.to_string()))
-                                }
-                            },
-                            None => {
-                                return Err(GenerateReadsError::ConfigReadError("target_bed".to_string(), "path to file".to_string()))
-                            }
+                        let name = value.as_str()
+                            .ok_or_else(|| GenerateReadsError::ConfigReadError("target_bed".to_string(), "path to file".to_string()))?;
+                        let filename = PathBuf::from(name);
+                        if filename.is_file() {
+                            config.target_bed = Some(filename);
+                        } else {
+                            return Err(GenerateReadsError::FileNotFound(name.to_string()))
                         }
                     },
+                    "mutation_regions" => {
+                        let name = value.as_str()
+                            .ok_or_else(|| GenerateReadsError::ConfigReadError("mutation_regions".to_string(), "path to file".to_string()))?;
+                        let filename = PathBuf::from(name);
+                        if filename.is_file() {
+                            config.mutation_regions = Some(filename)
+                        } else {
+                            return Err(GenerateReadsError::FileNotFound(name.to_string()))
+                        }
+                    }
                     "input_vcf" => {
-                        let iv_val = value.as_str();
-                        match iv_val {
-                            Some(name) => {
-                                let filename = PathBuf::from(name);
-                                if filename.is_file() {
-                                    configuration.input_vcf = Some(filename);
-                                } else {
-                                    return Err(GenerateReadsError::FileNotFound(name.to_string()))
-                                }
-                            },
-                            None => {
-                                return Err(GenerateReadsError::ConfigReadError("input_vcf".to_string(), "path to file".to_string()))
-                            }
+                        let name = value.as_str()
+                            .ok_or_else(|| GenerateReadsError::ConfigReadError("input_vcf".to_string(), "path to file".to_string()))?;
+                        let filename = PathBuf::from(name);
+                        if filename.is_file() {
+                            config.input_vcf = Some(filename);
+                        } else {
+                            return Err(GenerateReadsError::FileNotFound(name.to_string()))
                         }
                     },
                     "gc_bias_model" => {
-                        let gc_val = value.as_str();
-                        match gc_val {
-                            Some(name) => {
-                                let filename = PathBuf::from(name);
-                                if filename.is_file() {
-                                    configuration.gc_bias_model = Some(filename)
-                                } else {
-                                    return Err(GenerateReadsError::FileNotFound(name.to_string()))
-                                }
-                            },
-                            None => {
-                                return Err(GenerateReadsError::ConfigReadError(
-                                    "gc_bias_model".to_string(), "path to file".to_string()
-                                ))
-                            }
+                        let name = value.as_str()
+                            .ok_or_else(|| GenerateReadsError::ConfigReadError("gc_bias_model".to_string(), "path to file".to_string()))?;
+                        let filename = PathBuf::from(name);
+                        if filename.is_file() {
+                            config.gc_bias_model = Some(filename)
+                        } else {
+                            return Err(GenerateReadsError::FileNotFound(name.to_string()))
                         }
                     },
                     "gc_bias_normalize_coverage" => {
-                        match value.as_bool() {
-                            Some(v) => configuration.gc_bias_normalize_coverage = v,
-                            None => {
-                                return Err(GenerateReadsError::ConfigReadError(
-                                    "gc_bias_normalize_coverage".to_string(), "boolean".to_string()
-                                ))
-                            }
-                        }
+                        config.gc_bias_normalize_coverage = value.as_bool()
+                            .ok_or_else(|| GenerateReadsError::ConfigReadError("gc_bias_normalize_coverage".to_string(), "boolean".to_string()))?;
                     },
                     "num_threads" => {
-                        match value.as_u64() {
-                            Some(n) => configuration.num_threads = Some(n as usize),
-                            None => {
-                                return Err(GenerateReadsError::ConfigReadError(
-                                    "num_threads".to_string(), "integer".to_string()
-                                ))
-                            }
-                        }
+                        config.num_threads = Some(value.as_u64()
+                            .ok_or_else(|| GenerateReadsError::ConfigReadError("num_threads".to_string(), "integer".to_string()))? as usize);
                     },
                     "long_reads" => {
-                        match value.as_bool() {
-                            Some(lr) => configuration.long_reads = lr,
-                            None => {
-                                return Err(GenerateReadsError::ConfigReadError(
-                                    "long_reads".to_string(), "boolean".to_string()
-                                ))
-                            }
-                        }
+                        config.long_reads = value.as_bool()
+                            .ok_or_else(|| GenerateReadsError::ConfigReadError("long_reads".to_string(), "boolean".to_string()))?;
                     },
                     _ => continue,
                 },
             }
         }
-        configuration.update_and_log()?;
-        Ok(configuration)
+
+        RunConfiguration::check_and_log_config(&mut config)?;
+        Ok(config)
     }
 
-    pub fn update_and_log(&mut self) -> Result<(), GenerateReadsError> {
+    pub fn check_and_log_config(config: &mut RunConfiguration) -> Result<(), GenerateReadsError> {
         // This does a final check of the configuration for valid items. It will print info
         // messages of the items, to work as a record and to assist in debugging any issues that
         // come up.
-        if !self.reference.is_file() {
-            error!("File not found: {}", &self.reference.display());
-            return Err(GenerateReadsError::MissingReferenceError)
+        info!("\t>read length: {}", config.read_len);
+        info!("\t>coverage: {}", config.coverage);
+        info!("\t>ploidy: {}", config.ploidy);
+        if let Some(rate) = &config.mutation_rate {
+            info!("\t>mutation rate: {}", rate)
         }
-        info!(
-            "Running rusty-neat to generate reads on {} with...",
-            &self.reference.display()
-        );
-        info!("  >read length: {}", &self.read_len);
-        info!("  >coverage: {}", &self.coverage);
-        match self.mutation_rate {
-            Some(rate) => info!("  >mutation rate: {}", rate),
-            None => (),
+        info!("\t>paired ended: {}", config.paired_ended);
+        if config.long_reads {
+            info!("\t>long reads mode: enabled (short fragments produce truncated reads)");
         }
-        info!("  >ploidy: {}", &self.ploidy);
-        info!("  >paired ended: {}", &self.paired_ended);
-        if self.long_reads {
-            info!("  >long reads mode: enabled (short fragments produce truncated reads)");
+        if config.overwrite_output {
+            warn!("\t>Overwriting any existing files.")
         }
-        if self.overwrite_output {
-            warn!("Overwriting any existing files.")
-        }
-        if self.minimum_mutations > 0 {
+        if config.minimum_mutations > 0 {
             info!(
-                "  >minimum mutations per contig: {}",
-                &self.minimum_mutations
+                "\t>minimum mutations per contig: {}",
+                config.minimum_mutations
             )
-        }
-        let output_path = &self.output_dir;
-        // This check may be overkill, but here it is. Let's make sure we ended up with something
-        if !output_path.as_path().is_dir() {
-            info!("Creating output directory: {:?}", self.output_dir);
-            check_create_dir(output_path);
         }
 
         // No point in running if we aren't producing files
-        if !(self.produce_fastq | self.produce_vcf | self.produce_bam) {
+        if !(config.produce_fastq || config.produce_vcf || config.produce_bam) {
             error!("All file types set to false, no files would be produced.");
             return Err(GenerateReadsError::ConfigError)
         }
 
-        if self.paired_ended {
-            if self.fragment_mean.is_none() | self.fragment_st_dev.is_none() {
-                error!(
-                    "Paired ended is set to true, but fragment mean \
-                    and standard deviation were not set."
-                );
-                return Err(GenerateReadsError::ConfigError)
-            }
-            if self.produce_fastq {
-                info!("\t> fragment mean: {}", self.fragment_mean.unwrap());
-                info!(
-                    "\t> fragment standard deviation: {}",
-                    self.fragment_st_dev.unwrap()
-                );
-                info!("Producing fastq files:");
+        if config.paired_ended {
+            match (config.fragment_mean, config.fragment_st_dev) {
+                (Some(mean), Some(st_dev)) => {
+                    if config.produce_fastq {
+                        info!("\t>fragment mean: {}", mean);
+                        info!("\t>fragment standard deviation: {}", st_dev);
+                        info!("\t>Producing fastq files:");
 
-                let mut fastq_1 = self.output_dir.clone();
-                fastq_1.push(format!("{}_r1.fastq.gz", self.output_filename));
-                info!("\t> {:?}", &fastq_1);
-                self.output_fastq_1 = Some(fastq_1);
-                let mut fastq_2 = self.output_dir.clone();
-                fastq_2.push(format!("{}_r2.fastq.gz", self.output_filename));
-                info!("\t> {:?}", fastq_2);
-                self.output_fastq_2 = Some(fastq_2);
+                        let mut fastq_1 = config.output_dir.clone();
+                        fastq_1.push(format!("{}_r1.fastq.gz", config.output_filename));
+                        info!("\t\t> {:?}", &fastq_1);
+                        config.output_fastq_1 = Some(fastq_1);
+                        let mut fastq_2 = config.output_dir.clone();
+                        fastq_2.push(format!("{}_r2.fastq.gz", config.output_filename));
+                        info!("\t\t> {:?}", fastq_2);
+                        config.output_fastq_2 = Some(fastq_2);
+                    }
+                }
+                _ => {
+                    error!(
+                        "Paired ended is set to true, but fragment mean \
+                        and standard deviation were not set."
+                    );
+                    return Err(GenerateReadsError::ConfigError)
+                }
             }
         } else {
-            info!("Producing fastq file:");
-            let mut fastq_1 = self.output_dir.clone();
-            fastq_1.push(format!("{}_r1.fastq.gz", self.output_filename));
-            info!("\t> {:?}", &fastq_1);
-            self.output_fastq_1 = Some(fastq_1);
+            // single-ended
+            let mut fastq_1 = config.output_dir.clone();
+            fastq_1.push(format!("{}_r1.fastq.gz", config.output_filename));
+            info!("\t>Producing fastq file: {:?}", &fastq_1);
+            config.output_fastq_1 = Some(fastq_1);
         }
-        if self.produce_vcf {
-            let mut vcf = self.output_dir.clone();
-            vcf.push(format!("{}.vcf.gz", self.output_filename));
-            info!("\t> {:?}", &vcf);
-            self.output_vcf = Some(vcf);
+        if config.produce_vcf {
+            let mut vcf = config.output_dir.clone();
+            vcf.push(format!("{}.vcf.gz", config.output_filename));
+            info!("\t>Producing VCF file: {:?}", &vcf);
+            config.output_vcf = Some(vcf);
         }
-        if self.produce_bam {
-            let mut bam = self.output_dir.clone();
-            bam.push(format!("{}.bam", self.output_filename));
-            info!("\t> {:?}", &bam);
-            self.output_bam = Some(bam);
-        }
-
-        if let Some(bed) = &self.target_bed {
-            info!("  >target BED (generation-time filter): {}", bed.display());
-        }
-        if let Some(vcf) = &self.input_vcf {
-            info!("  >input VCF (forced variants): {}", vcf.display());
+        if config.produce_bam {
+            let mut bam = config.output_dir.clone();
+            bam.push(format!("{}.bam", config.output_filename));
+            info!("\t>Producing BAM file: {:?}", &bam);
+            config.output_bam = Some(bam);
         }
 
-        if let Some(gc_model) = &self.gc_bias_model {
-            info!("  >GC bias model: {}", gc_model.display());
+        if let Some(bed) = &config.target_bed {
+            info!("\t>Target BED (generation-time filter): {:?}", bed);
+        }
+        if let Some(bed) = &config.mutation_regions {
+            info!("\t>Custom mutation regions: {:?}", bed);
+        }
+        if let Some(vcf) = &config.input_vcf {
+            info!("\t>Input VCF (forced variants): {:?}", vcf);
+        }
+
+        if let Some(gc_model) = &config.gc_bias_model {
+            info!("\t>GC bias model: {:?}", gc_model);
             info!(
-                "  >GC bias coverage normalization: {}",
-                self.gc_bias_normalize_coverage
+                "\t>GC bias coverage normalization: {}",
+                config.gc_bias_normalize_coverage
             );
         }
-
-        if self.produce_fastq {
-            info!("  >shuffle FASTQ output: {}", self.shuffle_fastq);
+        if let Some(qual_score_model) = &config.quality_score_model {
+            info!("\t>Quality score model: {:?}", qual_score_model)
+        }
+        if let Some(mutation_model) = &config.mutation_model {
+            info!("\t>Mutation model: {:?}", mutation_model)
+        }
+        if let Some(frament_model) = &config.fragment_model {
+            info!("\t>Mutation model: {:?}", frament_model)
+        }
+        if let Some(seq_err_model) = &config.sequence_error_model {
+            info!("\t>Mutation model: {:?}", seq_err_model)
         }
 
-        if !self.produce_bam {
-            match self.num_threads {
-                Some(n) => info!("  >parallel threads: {}", n),
-                None => info!("  >parallel threads: auto (all available cores)"),
+
+        if !config.produce_bam {
+            match config.num_threads {
+                Some(n) => {
+                    info!("\t>Maximum number of threads to use: {}", n)
+                },
+                None => info!("\t>parallel threads: auto (all available cores)"),
             }
         }
 
-        match &self.rng_seed {
+        match &config.rng_seed {
             Some(seed) => {
                 // User supplied seed
                 // Convert the string to a string vec split at the white space.
                 // Seeds can be any whitespace-separated series of strings.
                 for seed_term in seed.split_whitespace() {
-                    self.seed_vec.push(seed_term.to_string());
+                    config.seed_vec.push(seed_term.to_string());
                 }
-                info!("Seed string to regenerate these exact results: {}", &seed);
+                info!("\t>Reproducibility seed string: {}", &seed);
                 Ok(())
             },
 
@@ -660,9 +478,9 @@ impl RunConfiguration {
                 // seeds are case-sensitive
                 let raw_string = Utc::now().format("%Y %m %d %H %M %S %f").to_string();
                 for item in raw_string.split_whitespace() {
-                    self.seed_vec.push(item.to_string());
+                    config.seed_vec.push(item.to_string());
                 }
-                info!("Seed string to regenerate these exact results: {}", &raw_string);
+                info!("\t>Reproducibility seed string: {}", &raw_string);
                 Ok(())
             },
         }
@@ -697,12 +515,12 @@ mod tests {
             output_fastq_2: None,
             output_vcf: None,
             output_bam: None, 
-            shuffle_fastq: true,
             quality_score_model: None,
             mutation_model: None,
             fragment_model: None,
             sequence_error_model: None,
             target_bed: None,
+            mutation_regions: None,
             input_vcf: None,
             gc_bias_model: None,
             gc_bias_normalize_coverage: true,
@@ -722,7 +540,6 @@ mod tests {
         assert_eq!(test_configuration.produce_fastq, false);
         assert_eq!(test_configuration.produce_vcf, true);
         assert_eq!(test_configuration.produce_bam, true);
-        assert_eq!(test_configuration.shuffle_fastq, true);
         assert_eq!(test_configuration.rng_seed, None);
         assert_eq!(test_configuration.overwrite_output, true);
         assert_eq!(test_configuration.output_dir, PathBuf::from("/my/my"));
@@ -730,12 +547,58 @@ mod tests {
     }
 
     #[test]
-    fn test_build() {
-        use super::*;
-        let mut x = ConfigBuilder::new();
-        x.reference = Some("test_data/H1N1.fa".to_string());
-        let config = x.build();
-        assert_eq!(config.reference, PathBuf::from("test_data/H1N1.fa"))
+    fn test_overwrite_warn() {
+        let mut config = RunConfiguration::default();
+        config.reference = PathBuf::from("test_data/references/H1N1.fa");
+        config.overwrite_output = true;
+        RunConfiguration::check_and_log_config(&mut config).unwrap();
+    }
+
+    #[test]
+    fn test_paired_ended_fastq_paths() {
+        // Verifies that check_and_log_config sets both fastq output paths when paired_ended=true
+        let mut config = RunConfiguration::default();
+        config.reference = PathBuf::from("test_data/references/H1N1.fa");
+        config.paired_ended = true;
+        config.fragment_mean = Some(100.0);
+        config.fragment_st_dev = Some(10.0);
+        RunConfiguration::check_and_log_config(&mut config).unwrap();
+        assert!(config.output_fastq_1.is_some());
+        assert!(config.output_fastq_2.is_some());
+    }
+
+    #[test]
+    fn test_no_files() {
+        let mut config = RunConfiguration::default();
+        config.reference = PathBuf::from("test_data/references/H1N1.fa");
+        config.produce_fastq = false;
+        assert!(matches!(RunConfiguration::check_and_log_config(&mut config), Err(GenerateReadsError::ConfigError)));
+    }
+
+    #[test]
+    fn test_no_frag_mean_or_stdev() {
+        let mut config = RunConfiguration::default();
+        config.reference = PathBuf::from("test_data/references/H1N1.fa");
+        config.paired_ended = true;
+        assert!(matches!(RunConfiguration::check_and_log_config(&mut config), Err(GenerateReadsError::ConfigError)));
+    }
+
+    #[test]
+    fn test_no_frag_mean() {
+        let mut config = RunConfiguration::default();
+        config.reference = PathBuf::from("test_data/references/H1N1.fa");
+        config.paired_ended = true;
+        config.fragment_st_dev = Some(10.0);
+        assert!(matches!(RunConfiguration::check_and_log_config(&mut config), Err(GenerateReadsError::ConfigError)));
+    }
+
+    #[test]
+    fn test_no_stdev() {
+        let mut config = RunConfiguration::default();
+        config.reference = PathBuf::from("test_data/references/H1N1.fa");
+        config.paired_ended = true;
+        config.fragment_mean = Some(100.0);
+        assert!(matches!(RunConfiguration::check_and_log_config(&mut config), Err(GenerateReadsError::ConfigError)));
     }
 
     #[test]
@@ -784,69 +647,105 @@ mod tests {
     }
 
     #[test]
-    fn test_no_config_builder() {
-        let config = RunConfiguration::build();
-        assert_eq!(config.reference, None)
+    fn test_default_config() {
+        let config = RunConfiguration::default();
+        assert_eq!(config.read_len, 151);
+        assert_eq!(config.coverage, 10);
+        assert_eq!(config.paired_ended, false);
+        assert_eq!(config.produce_fastq, true);
     }
 
     #[test]
-    fn test_overwrite_warn() {
-        let mut config_builder = ConfigBuilder::new();
-        config_builder.reference = Some("test_data/references/H1N1.fa".to_string());
-        let mut config = config_builder.build();
-        config.overwrite_output = true;
-        config.update_and_log().unwrap();
-    }
-
-    #[test]
-    fn test_paired_ended_fastq_paths() {
-        // Verifies that update_and_log sets both fastq output paths when paired_ended=true
-        let mut config_builder = ConfigBuilder::new();
-        config_builder.reference = Some("test_data/references/H1N1.fa".to_string());
-        let mut config = config_builder.build();
-        config.paired_ended = true;
-        config.fragment_mean = Some(100.0);
-        config.fragment_st_dev = Some(10.0);
-        config.update_and_log().unwrap();
+    fn test_single_ended_fastq_path() {
+        let mut config = RunConfiguration::default();
+        config.reference = PathBuf::from("test_data/references/H1N1.fa");
+        config.paired_ended = false;
+        RunConfiguration::check_and_log_config(&mut config).unwrap();
         assert!(config.output_fastq_1.is_some());
-        assert!(config.output_fastq_2.is_some());
+        assert!(config.output_fastq_2.is_none());
     }
 
     #[test]
-    fn test_no_files() {
-        let mut config_builder = ConfigBuilder::new();
-        config_builder.reference = Some("test_data/references/H1N1.fa".to_string());
-        let mut config = config_builder.build();
-        config.produce_fastq = false;
-        assert!(matches!(config.update_and_log(), Err(GenerateReadsError::ConfigError)));
+    fn test_vcf_and_bam_paths() {
+        let mut config = RunConfiguration::default();
+        config.reference = PathBuf::from("test_data/references/H1N1.fa");
+        config.produce_vcf = true;
+        config.produce_bam = true;
+        RunConfiguration::check_and_log_config(&mut config).unwrap();
+        assert!(config.output_vcf.is_some());
+        assert!(config.output_bam.is_some());
     }
 
     #[test]
-    fn test_no_frag_mean_or_stdev() {
-        let mut config_builder = ConfigBuilder::new();
-        config_builder.reference = Some("test_data/references/H1N1.fa".to_string());
-        let mut config = config_builder.build();
-        config.paired_ended = true;
-        assert!(matches!(config.update_and_log(), Err(GenerateReadsError::ConfigError)));
+    fn test_from_scrape_config() {
+        // We need a real file for the reference check in from_scrape_config
+        let ref_path = "test_data/references/H1N1.fa";
+        
+        let mut scrape_config = HashMap::new();
+        scrape_config.insert("reference".to_string(), Value::String(ref_path.to_string()));
+        scrape_config.insert("read_len".to_string(), Value::Number(200.into()));
+        scrape_config.insert("coverage".to_string(), Value::Number(30.into()));
+        scrape_config.insert("paired_ended".to_string(), Value::Bool(true));
+        scrape_config.insert("fragment_mean".to_string(), Value::Number(400.into()));
+        scrape_config.insert("fragment_st_dev".to_string(), Value::Number(40.into()));
+        
+        let config = RunConfiguration::from_scrape_config(scrape_config).unwrap();
+        
+        assert_eq!(config.reference, PathBuf::from(ref_path));
+        assert_eq!(config.read_len, 200);
+        assert_eq!(config.coverage, 30);
+        assert_eq!(config.paired_ended, true);
+        assert_eq!(config.fragment_mean, Some(400.0));
+        assert_eq!(config.fragment_st_dev, Some(40.0));
     }
 
     #[test]
-    fn test_no_frag_mean() {
-        let mut config_builder = ConfigBuilder::new();
-        config_builder.reference = Some("test_data/references/H1N1.fa".to_string());
-        let mut config = config_builder.build();
-        config.paired_ended = true;
-        config.fragment_st_dev = Some(10.0);
-        assert!(matches!(config.update_and_log(), Err(GenerateReadsError::ConfigError)));
+    fn test_from_scrape_config_dot_notation() {
+        let ref_path = "test_data/references/H1N1.fa";
+        
+        let mut scrape_config = HashMap::new();
+        scrape_config.insert("reference".to_string(), Value::String(ref_path.to_string()));
+        // Use default for read_len
+        scrape_config.insert("read_len".to_string(), Value::String(".".to_string()));
+        
+        let config = RunConfiguration::from_scrape_config(scrape_config).unwrap();
+        
+        assert_eq!(config.reference, PathBuf::from(ref_path));
+        assert_eq!(config.read_len, RunConfiguration::default().read_len);
     }
 
     #[test]
-    fn test_no_stdev() {
-        let mut config_builder = ConfigBuilder::new();
-        config_builder.reference = Some("test_data/references/H1N1.fa".to_string());
-        let mut config = config_builder.build();
-        config.paired_ended = true;
-        config.fragment_mean = Some(100.0);
-        assert!(matches!(config.update_and_log(), Err(GenerateReadsError::ConfigError)));
+    fn test_config_invalid_types() {
+        let ref_path = "test_data/references/H1N1.fa";
+        let mut scrape_config = HashMap::new();
+        scrape_config.insert("reference".to_string(), Value::String(ref_path.to_string()));
+        
+        // Invalid integer
+        let mut sc1 = scrape_config.clone();
+        sc1.insert("read_len".to_string(), Value::String("not_an_int".to_string()));
+        assert!(RunConfiguration::from_scrape_config(sc1).is_err());
+
+        // Invalid boolean
+        let mut sc2 = scrape_config.clone();
+        sc2.insert("paired_ended".to_string(), Value::String("not_a_bool".to_string()));
+        assert!(RunConfiguration::from_scrape_config(sc2).is_err());
+
+        // Invalid float
+        let mut sc3 = scrape_config.clone();
+        sc3.insert("mutation_rate".to_string(), Value::String("not_a_float".to_string()));
+        assert!(RunConfiguration::from_scrape_config(sc3).is_err());
+    }
+
+    #[test]
+    fn test_config_missing_reference() {
+        let scrape_config = HashMap::new();
+        assert!(RunConfiguration::from_scrape_config(scrape_config).is_err());
+    }
+
+    #[test]
+    fn test_config_file_not_found() {
+        let mut scrape_config = HashMap::new();
+        scrape_config.insert("reference".to_string(), Value::String("non_existent_file.fasta".to_string()));
+        assert!(RunConfiguration::from_scrape_config(scrape_config).is_err());
     }
 }

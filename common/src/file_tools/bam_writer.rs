@@ -1,5 +1,6 @@
 use std::collections::HashMap;
-use std::io::{BufWriter, Write};
+use std::fs::File;
+use std::io::{BufReader, BufWriter, Read, Write};
 use std::num::NonZero;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -315,13 +316,16 @@ pub fn concat_temp_bams(
         out.write_all(&BGZF_EOF_BLOCK)?;
     } else {
         for (i, body_path) in body_files.iter().enumerate() {
-            let body_bytes = std::fs::read(body_path)?;
-            if i < body_files.len() - 1 {
-                let strip_end = body_bytes.len().saturating_sub(BGZF_EOF_LEN);
-                out.write_all(&body_bytes[..strip_end])?;
+            let f = File::open(body_path)?;
+            let file_len = f.metadata()?.len();
+            let is_last = i == body_files.len() - 1;
+            let bytes_to_copy = if is_last {
+                file_len
             } else {
-                out.write_all(&body_bytes)?;
-            }
+                file_len.saturating_sub(BGZF_EOF_LEN as u64)
+            };
+            let mut reader = BufReader::new(f).take(bytes_to_copy);
+            std::io::copy(&mut reader, &mut out)?;
         }
     }
     Ok(())

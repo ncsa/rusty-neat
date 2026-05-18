@@ -20,12 +20,8 @@ use crate::gen_mut_model::errors::GenMutationModelError;
 
 #[derive(Debug, Clone)]
 pub struct RunConfiguration {
-    // This struct holds all the parameters for this filter-reads run. It is built from user-supplied input
-    // in the form of a configuration yaml file
-    //
-    // bed_file: The path to the bed_file for the run.
-    // files_to_filter: The list of files to filter.
-    // filter_key: The key to add to the filtered file names so you know they have been filtered.
+    // This struct holds all the parameters for this gen_mut_model run. It is built from 
+    // user-supplied input, as provided by the configuration yaml file.
     pub reference: PathBuf,
     pub mutations: HashMap<String, Vec<Variant>>,
     pub bed_table: HashMap<String, Vec<BedRecord>>,
@@ -64,7 +60,7 @@ impl RunConfiguration {
         if !vcf_file.is_file() {
             panic!("Invalid bed file {:?}", vcf_file)
         }
-        let bed_file_raw = scrape_config["bed_file"].as_str().unwrap_or(".");
+        let bed_file_raw = scrape_config.get("bed_file").and_then(|v| v.as_str()).unwrap_or(".");
         let bed_table = if bed_file_raw == "." {
             HashMap::new()
         } else {
@@ -72,7 +68,7 @@ impl RunConfiguration {
             if !bed_file.is_file() {
                 panic!("Invalid bed file {:?}", bed_file)
             }
-            read_bed(&bed_file).expect("Error reading bed file!")
+            read_bed(&bed_file, false).expect("Error reading bed file!")
         };
         let overwrite_output = scrape_config["overwrite_output"].as_bool().unwrap_or(false);
         let output_file = PathBuf::from(scrape_config["output_file"].as_str().unwrap());

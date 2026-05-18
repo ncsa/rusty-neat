@@ -10,7 +10,7 @@ use crate::gen_gc_bias_model::{
     errors::GenGcBiasModelError,
     utils::{
         config::RunConfiguration,
-        coverage_reader::{CoverageData, CoverageIndex},
+        coverage_reader::{CoverageData, CoverageReader},
     },
 };
 
@@ -18,7 +18,7 @@ pub fn runner(path: &PathBuf) -> Result<(), GenGcBiasModelError> {
     let config = RunConfiguration::from(path)?;
 
     info!("Building coverage index from {:?}", config.coverage_file);
-    let cov_index = CoverageIndex::build(&config.coverage_file)?;
+    let mut cov_reader = CoverageReader::open(&config.coverage_file, config.coverage_format)?;
 
     let mut gc_weight_sum = [0.0f64; 101];
     let mut gc_window_count = [0usize; 101];
@@ -38,12 +38,7 @@ pub fn runner(path: &PathBuf) -> Result<(), GenGcBiasModelError> {
             continue;
         }
 
-        let cov = match CoverageData::load(
-            &config.coverage_file,
-            &cov_index,
-            &contig_name,
-            config.coverage_format,
-        )? {
+        let cov = match cov_reader.get(&contig_name)? {
             Some(c) => c,
             None => {
                 debug!("No coverage data for {}, skipping", contig_name);

@@ -20,8 +20,9 @@ coverage: 10
 
 # --------------- mutation parameters ---------------
 
-# Average per-base mutation rate applied when generating variants. (default: 0.001)
-mutation_rate: 0.001
+# Average per-base mutation rate applied when generating variants, overrides the model input.
+# (default: is set by the mutation model and is ~0.0011 for the default model)
+mutation_rate: .
 
 # Number of chromosome copies in the simulated organism.
 # Heterozygous variants are distributed across the copies. (default: 2)
@@ -30,6 +31,11 @@ ploidy: 2
 # Minimum number of mutations to guarantee per contig, regardless of mutation_rate.
 # Useful for short contigs where random sampling may produce zero variants. (default: 0)
 minimum_mutations: 0
+
+# To define custom mutation regions, create a bed file with the regions defined and add
+# a column with the text "mut_rate=0.XXXX" where XXXX is the desired mutation rate for that
+# region. All other regions will use the default mutation rate.
+mutation_regions: .
 
 # --------------- paired-end parameters ---------------
 
@@ -48,10 +54,6 @@ fragment_st_dev: .
 # Produce a FASTQ file (or pair of files for paired-end). (default: true)
 # At least one of produce_fastq, produce_vcf, or produce_bam must be true.
 produce_fastq: true
-
-# Shuffle FASTQ reads before writing the final output. Set to false to preserve the generated ordering.
-# For large genomes, disabling shuffle avoids loading all reads into memory at once. (default: true)
-shuffle_fastq: true
 
 # Produce a gzipped VCF file recording all inserted variants. (default: false)
 produce_vcf: false

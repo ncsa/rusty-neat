@@ -1,3 +1,21 @@
+5/16/2026
+=========
+
+## rneat v1.5.0
+
+### Memory improvements in `gen-reads`
+- Replaced the per-position `Vec<f64>` bias map (one `f64` per chromosome base) with a compact `Vec<(start, end, rate)>` segment list. Measured peak RSS for rice (373 Mbp, 12 chromosomes) dropped from 3.06 GB → 1.05 GB (~3× reduction); major page faults dropped from 109 K → 0. Genomes previously too large to run safely (miscanthus ~11.9 GB estimated) now fit comfortably (~5.2 GB estimated).
+- `cover_dataset` (single-ended path): fragment pool reduced from `num_frags` entries (`O(coverage × contig_length)`) to a single-entry pool with a cyclic index. Eliminates up to ~23 MB of VecDeque allocation per large chromosome and millions of redundant RNG shuffle calls.
+
+### `gen-mut-model` fixes for real-world VCF data
+- VCF parser no longer panics on missing allele calls (`./1`, `./.`) in the GT field. Missing alleles are skipped during genotype determination; variants with no allele data are treated as homozygous alt.
+- Multi-allelic ALT fields (comma-separated, e.g. `T,TAATGGAATGG`) are now skipped with a debug log rather than being stored as garbled Complex variants.
+- Variants whose FORMAT or SAMPLE fields are unparseable now warn-and-skip rather than aborting the model build, making the parser robust to mixed-format real-world VCFs.
+- Soft-masked FASTA bases (`Maskeda/c/g/t`) are now canonicalized to uppercase (`A/C/G/T`) before comparing against the VCF REF allele in the trinucleotide context pass. This previously caused a hard `BaseMismatch` error on any variant in a repeat-annotated region of a soft-masked reference (e.g. hg38). Genuine mismatches (different base, not just masking) now warn-and-skip instead of aborting.
+- Optional `bed_file` key in `gen-mut-model` config now handled safely; previously a missing key triggered a HashMap index panic.
+- Per-variant "Found genotype in vcf file" log message demoted from `INFO` to `DEBUG`, eliminating millions of log lines when building models from whole-genome VCFs (NA12878 WGS produced ~4 M `INFO` lines before this fix).
+- Human NA12878 whole-genome VCF (hg38) now builds successfully in ~2:15 (wall clock), peak RSS 5.6 GB, yielding `mutation_rate: 0.001457`, `homozygous_frequency: 0.390`, variant distribution 86% SNP / 6.6% INS / 7.4% DEL.
+
 5/9/2026
 =========
 

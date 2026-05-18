@@ -92,11 +92,20 @@ pub fn runner(
                         debug!("Skipping edge variant at position {} (out of contig bounds)", variant.location);
                         continue;
                     }
-                    let n0 = sequence[loc - 1];
-                    let n1 = sequence[loc];
-                    let n2 = sequence[loc + 1];
+                    let canon = |n: Nucleotide| match n {
+                        Nucleotide::Maskeda => Nucleotide::A,
+                        Nucleotide::Maskedc => Nucleotide::C,
+                        Nucleotide::Maskedg => Nucleotide::G,
+                        Nucleotide::Maskedt => Nucleotide::T,
+                        other => other,
+                    };
+                    let n0 = canon(sequence[loc - 1]);
+                    let n1 = canon(sequence[loc]);
+                    let n2 = canon(sequence[loc + 1]);
                     if n1 != variant.reference[0] {
-                        return Err(GenMutationModelError::BaseMismatch(format!("{:?}", variant)));
+                        warn!("Reference mismatch at position {}: VCF ref {:?}, FASTA base {:?}; skipping",
+                              variant.location, variant.reference[0], n1);
+                        continue;
                     }
                     let ref_frame = TrinucFrame::from((n0, n1, n2));
                     let alt_frame = TrinucFrame::from((n0, variant.alternate[0], n2));
@@ -289,7 +298,7 @@ mod tests {
         let output_file = out_dir.path().join("bed_model.json.gz");
 
         // BED region covering SNP positions 22, 25, 28 on H1N1_HA (1-based VCF coords)
-        let bed_record = BedRecord::new("H1N1_HA".to_string(), 1, 100, vec![]).unwrap();
+        let bed_record = BedRecord::new_bed_record("H1N1_HA".to_string(), 1, 100).unwrap();
         let bed_table = HashMap::from([("H1N1_HA".to_string(), vec![bed_record])]);
 
         runner(&reference, mutations, bed_table, &output_file, None).unwrap();

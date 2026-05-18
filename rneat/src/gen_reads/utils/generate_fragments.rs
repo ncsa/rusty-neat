@@ -9,7 +9,6 @@ use crate::{
     gen_reads::errors::GenerateReadsError
 };
 use log::*;
-use std::collections::VecDeque;
 use common::models::gc_bias_model::GcBiasModel;
 use common::rng::NeatRng;
 use common::structs::sequence_block::SequenceBlock;
@@ -52,11 +51,10 @@ pub fn generate_fragments(
 
     // Each paired-end fragment produces two reads (R1 + R2), so halve the fragment count
     // so that mean per-base read depth matches the requested coverage value.
-    let num_frags = if paired_ended {
-        sequence_length.saturating_mul(coverage) / (2 * read_length).max(1)
-    } else {
-        sequence_length.saturating_mul(coverage) / read_length
-    };
+    // Use ceiling division (matching NEAT Python's ceil()) so fractional fragments are
+    // rounded up rather than truncated — truncation compounds across many small regions.
+    let denom = if paired_ended { (2 * read_length).max(1) } else { read_length };
+    let num_frags = (sequence_length.saturating_mul(coverage) + denom - 1) / denom;
     if paired_ended {
         // For paired-end reads the physical fragment length (insert size) determines spacing.
         // Keep sampling until num_frags valid fragments are collected so that the pool has
@@ -66,9 +64,10 @@ pub fn generate_fragments(
         fragment_pool.reserve(num_frags);
         while fragment_pool.len() < num_frags && attempts < max_attempts {
             let frag = fragment_model.generate_fragment(rng.random()?)?;
-            // In long-read mode accept all fragments; in short-read mode discard those
-            // shorter than read_length (adapter read-through is out of scope here).
-            if long_reads || frag >= read_length {
+            // In long-read mode accept all fragments; in short-read paired-end mode require
+            // frag >= read_length + 10 so that R1 and R2 don't fully overlap (matching
+            // NEAT Python's min_frag = read_len + 10 for paired-end).
+            if long_reads || frag >= read_length + 10 {
                 fragment_pool.push(frag);
             }
             attempts += 1;
@@ -83,7 +82,7 @@ pub fn generate_fragments(
     } else {
         // For single-end reads the fragment is exactly one read long; the fragment model
         // is irrelevant for spacing and would cause under-coverage if its mean >> read_length.
-        fragment_pool = vec![read_length; num_frags];
+        fragment_pool = vec![read_length; 1];
     }
     if fragment_pool.is_empty() {
         debug!("Fragment pool is empty.");
@@ -238,11 +237,9 @@ pub fn generate_weighted_fragments(
 
     // Same paired-end correction as generate_fragments: each fragment yields two reads,
     // so halve the count so that mean per-base read depth matches requested coverage.
-    let num_frags_base = if paired_ended {
-        region_len.saturating_mul(coverage) / (2 * read_length).max(1)
-    } else {
-        region_len.saturating_mul(coverage) / read_length
-    };
+    // Use ceiling division so fractional fragments are rounded up, not truncated.
+    let denom = if paired_ended { (2 * read_length).max(1) } else { read_length };
+    let num_frags_base = (region_len.saturating_mul(coverage) + denom - 1) / denom;
     let num_frags = if normalize {
         let inflated = (num_frags_base as f64 / mean_weight).round() as usize;
         let cap = num_frags_base.saturating_mul(MAX_COVERAGE_MULTIPLIER);
@@ -307,23 +304,36 @@ fn cover_dataset(
     // Places exactly target_count fragments so that mean depth equals the requested
     // coverage. Stopping on fragment count rather than sweep count means the wildcard
     // gap can be proportional to read_length without reducing mean coverage.
+    // Alternates sweep direction (3' to 5' then 5' to 3') for better realism.
 
     rng.shuffle_in_place(&mut fragment_pool)?;
-    let mut cover_fragment_pool = VecDeque::from(fragment_pool);
-
-    let pool_size = cover_fragment_pool.len();
+    let pool_size = fragment_pool.len();
+    let mut pool_idx = 0usize;
     let mut fragment_set: Vec<(usize, usize)> = Vec::with_capacity(target_count);
-    let mut start = (rng.rand_int()? as usize) % (read_length / 4).max(1);
+    let mut pos = (rng.rand_int()? as usize) % (read_length / 4).max(1);
+    let mut forward = true;
     let mut non_placing_streak = 0usize;
 
     while fragment_set.len() < target_count {
-        let fragment_length = cover_fragment_pool.pop_front().unwrap();
-        cover_fragment_pool.push_back(fragment_length);
+        let fragment_length = fragment_pool[pool_idx];
+        pool_idx += 1;
+        if pool_idx == pool_size { pool_idx = 0; }
 
-        let temp_end = start + fragment_length;
-        if temp_end > span_length {
-            // Restart from the beginning of the contig for the next sweep.
-            start = 0;
+        let (start, end) = if forward {
+            (pos, pos + fragment_length)
+        } else {
+            (pos.saturating_sub(fragment_length), pos)
+        };
+
+        if (forward && end > span_length) || (!forward && start == 0 && pos < fragment_length) {
+            // Sweep complete, reverse direction and pick a random starting offset.
+            forward = !forward;
+            pos = if forward {
+                (rng.rand_u32()? as usize) % (read_length / 4).max(1)
+            } else {
+                span_length - (rng.rand_u32()? as usize) % (read_length / 4).max(1)
+            };
+
             // Only count fragments that can NEVER fit (length > span), not fragments
             // that merely overshot from a high start position and will fit after restart.
             if fragment_length > span_length {
@@ -344,11 +354,23 @@ fn cover_dataset(
         }
         non_placing_streak = 0;
 
-        fragment_set.push((start + read_start, temp_end + read_start));
-        let wildcard = (rng.rand_u32()? % (read_length as u32 / 4).max(1)) as usize;
-        start = temp_end + wildcard;
-        if start >= span_length {
-            start = 0;
+        fragment_set.push((start + read_start, end + read_start));
+        // Halved from read_length/4 to read_length/8 to tighten spacing between consecutive
+        // fragment placements, reducing systematic coverage gaps between sweep passes.
+        let wildcard = (rng.rand_u32()? % (read_length as u32 / 8).max(1)) as usize;
+        
+        if forward {
+            pos = end + wildcard;
+            if pos >= span_length {
+                forward = false;
+                pos = span_length - (rng.rand_u32()? as usize) % (read_length / 4).max(1);
+            }
+        } else {
+            pos = start.saturating_sub(wildcard);
+            if pos == 0 {
+                forward = true;
+                pos = (rng.rand_u32()? as usize) % (read_length / 4).max(1);
+            }
         }
     }
 
@@ -406,7 +428,9 @@ mod tests {
             fragment_pool,
             &mut rng
         ).unwrap();
-        assert_eq!(cover[0], (0, 10))
+        assert_eq!(cover.len(), target_count);
+        // All fragments must fit within the span.
+        assert!(cover.iter().all(|&(_s, e)| e <= span_length));
     }
 
     #[test]
@@ -430,8 +454,6 @@ mod tests {
             &mut rng
         ).unwrap();
         assert_eq!(cover.len(), target_count);
-        // After a wrap the cursor resets to 0, so the sorted first fragment starts there.
-        assert_eq!(cover[0], (0, 300));
         // All fragments must fit within the span and have the pool fragment length.
         assert!(cover.iter().all(|&(s, e)| e <= span_length && e - s == 300));
     }
@@ -533,7 +555,8 @@ mod tests {
         ).unwrap();
         // Paired-end produces 2 reads per fragment, so fragment count is halved to keep
         // per-base read depth equal to the requested coverage.
-        let expected = seq_len * coverage / (2 * read_length);
+        // Use ceiling division to match generate_fragments behavior.
+        let expected = (seq_len * coverage + 2 * read_length - 1) / (2 * read_length);
         assert!(!reads.is_empty());
         assert_eq!(reads.len(), expected, "Paired reads: expected {expected} fragments, got {}", reads.len());
         assert!(reads.iter().all(|&(s, e)| e <= seq_len && e > s),
@@ -547,7 +570,7 @@ mod tests {
         let seq_len = 50_000_usize;
         let read_length = 100;
         let coverage = 2;
-        let num_frags = seq_len * coverage / (2 * read_length);
+        let num_frags = (seq_len * coverage + 2 * read_length - 1) / (2 * read_length);
         let mut rng = NeatRng::new_from_seed(&vec!["pool-fill-test".to_string()]).unwrap();
         let fragment_model = FragmentLengthModel::new_normal(600.0, 30.0).unwrap();
         let reads = generate_fragments(
@@ -722,7 +745,8 @@ mod tests {
         );
         let (region_start, region_end) = (0, sequence_block.sequence.len());
         let coverage = 5;
-        let num_frags_expected = (region_end - region_start) * coverage / read_length;
+        let region_len = region_end - region_start;
+        let num_frags_expected = (region_len * coverage + read_length - 1) / read_length;
         // mean=220 with st_dev=40 → P(frag < 200) ≈ 31% rejection rate
         let fragment_model = FragmentLengthModel::new_normal(220.0, 40.0).unwrap();
         let mut rng = make_rng();
@@ -756,5 +780,208 @@ mod tests {
 
         // No fragments should be placed (none can fit), but the call must return.
         assert!(result.is_empty(), "No fragments should be placed when all exceed span");
+    }
+
+    #[test]
+    fn test_cover_dataset_depth() {
+        let span_length = 10000;
+        let read_length = 100;
+        let fragment_pool = vec![read_length; 1000];
+        let coverage = 10;
+        let target_count = span_length * coverage / read_length;
+        let mut rng = make_rng();
+
+        let fragments = cover_dataset(
+            span_length,
+            read_length,
+            target_count,
+            0,
+            fragment_pool,
+            &mut rng
+        ).unwrap();
+
+        // Calculate actual depth at each position
+        let mut depth = vec![0usize; span_length];
+        for (start, end) in fragments {
+            let s = start.saturating_sub(0); // read_start is 0
+            let e = end.saturating_sub(0);
+            for i in s..e {
+                if i < span_length {
+                    depth[i] += 1;
+                }
+            }
+        }
+
+        let avg_depth = depth.iter().sum::<usize>() as f64 / span_length as f64;
+        println!("Requested coverage: {}, Actual average depth: {}", coverage, avg_depth);
+
+        // We expect it to be close to the requested coverage.
+        assert!(avg_depth > (coverage as f64 * 0.9), "Coverage too low: {}", avg_depth);
+    }
+
+    #[test]
+    fn test_cover_dataset_depth_with_fragments() {
+        let span_length = 10000;
+        let read_length = 100;
+        let fragment_pool = vec![300, 400, 500, 600]; // much larger than read_length
+        let coverage = 10;
+        // In generate_fragments, num_frags is calculated as:
+        // span_length * coverage / (2 * read_length) for paired-ended
+        let target_count = span_length * coverage / (2 * read_length); 
+        let mut rng = make_rng();
+
+        let fragments = cover_dataset(
+            span_length,
+            read_length,
+            target_count,
+            0,
+            fragment_pool,
+            &mut rng
+        ).unwrap();
+
+        // Calculate actual depth at each position
+        let mut depth = vec![0usize; span_length];
+        for (start, end) in fragments {
+            for i in start..end {
+                if i < span_length {
+                    depth[i] += 1;
+                }
+            }
+        }
+
+        let avg_depth = depth.iter().sum::<usize>() as f64 / span_length as f64;
+        println!("Requested coverage: {}, Actual average depth: {}, target_count: {}", coverage, avg_depth, target_count);
+    }
+
+    #[test]
+    fn test_generate_fragments_depth_paired() {
+        let span_length = 10000;
+        let read_length = 100;
+        let coverage = 10;
+        let mut rng = make_rng();
+        
+        // Mock fragment model with mean 450, stdev 50
+        let fragment_model = FragmentLengthModel::new_normal(450.0, 50.0).unwrap();
+        
+        let fragments = generate_fragments(
+            span_length,
+            read_length,
+            0,
+            0,
+            coverage,
+            true, // paired_ended
+            false, // long_reads
+            &fragment_model,
+            &mut rng
+        ).unwrap();
+
+        // Calculate actual depth at each position
+        // In paired-ended mode, each fragment (start, end) produces TWO reads of read_length.
+        // One at start, one at end-read_length.
+        let mut depth = vec![0usize; span_length];
+        for (start, end) in fragments {
+            // R1
+            for i in start..start+read_length {
+                if i < span_length { depth[i] += 1; }
+            }
+            // R2
+            let r2_start = end.saturating_sub(read_length);
+            for i in r2_start..end {
+                if i < span_length { depth[i] += 1; }
+            }
+        }
+
+        let avg_depth = depth.iter().sum::<usize>() as f64 / span_length as f64;
+        println!("Requested coverage: {}, Actual average depth (paired): {}", coverage, avg_depth);
+    }
+
+    #[test]
+    fn test_generate_weighted_fragments_depth() {
+        let span_length = 10000;
+        let read_length = 100;
+        let coverage = 10;
+        let mut rng = make_rng();
+        
+        let sequence = vec![Nucleotide::A; span_length];
+        let block = make_sequence_block(sequence);
+        let fragment_model = FragmentLengthModel::new_normal(450.0, 50.0).unwrap();
+        let gc_bias_model = GcBiasModel::default(); // Uniform
+
+        let fragments = generate_weighted_fragments(
+            &block,
+            0,
+            span_length,
+            read_length,
+            0,
+            coverage,
+            &gc_bias_model,
+            &fragment_model,
+            true, // normalize
+            true, // paired_ended
+            false, // long_reads
+            &mut rng
+        ).unwrap();
+
+        let mut depth = vec![0usize; span_length];
+        for (start, end) in fragments {
+            for i in start..start+read_length {
+                if i < span_length { depth[i] += 1; }
+            }
+            let r2_start = end.saturating_sub(read_length);
+            for i in r2_start..end {
+                if i < span_length { depth[i] += 1; }
+            }
+        }
+
+        let avg_depth = depth.iter().sum::<usize>() as f64 / span_length as f64;
+        println!("Requested coverage: {}, Actual average depth (weighted uniform): {}", coverage, avg_depth);
+    }
+
+    #[test]
+    fn test_generate_weighted_fragments_depth_with_bias() {
+        let span_length = 10000;
+        let read_length = 100;
+        let coverage = 10;
+        let mut rng = make_rng();
+        
+        // High GC sequence
+        let sequence = vec![Nucleotide::G; span_length];
+        let block = make_sequence_block(sequence);
+        let fragment_model = FragmentLengthModel::new_normal(450.0, 50.0).unwrap();
+        
+        // Model that strongly prefers high GC (e.g. 1.0 at 100% GC, 0.1 at 0% GC)
+        let mut weights = vec![0.1; 101];
+        weights[100] = 1.0;
+        let gc_bias_model = GcBiasModel::from_weights(weights, read_length).unwrap();
+
+        let fragments = generate_weighted_fragments(
+            &block,
+            0,
+            span_length,
+            read_length,
+            0,
+            coverage,
+            &gc_bias_model,
+            &fragment_model,
+            true, // normalize=true should bring coverage back to 10
+            true, // paired_ended
+            false, // long_reads
+            &mut rng
+        ).unwrap();
+
+        let mut depth = vec![0usize; span_length];
+        for (start, end) in fragments {
+            for i in start..start+read_length {
+                if i < span_length { depth[i] += 1; }
+            }
+            let r2_start = end.saturating_sub(read_length);
+            for i in r2_start..end {
+                if i < span_length { depth[i] += 1; }
+            }
+        }
+
+        let avg_depth = depth.iter().sum::<usize>() as f64 / span_length as f64;
+        println!("Requested coverage: {}, Actual average depth (weighted biased + normalized): {}", coverage, avg_depth);
+        assert!(avg_depth > (coverage as f64 * 0.9), "Normalization failed to maintain coverage: {}", avg_depth);
     }
 }

@@ -16,7 +16,13 @@ pub enum FastaStreamError {
     IoError(#[from] io::Error),
 }
 
-/// Streaming FASTA reader that yields `(contig_name, sequence)` one contig at a time.
+/// Streaming FASTA reader that yields `(contig_name, raw_sequence)` one contig at a time.
+///
+/// The sequence is returned as a raw `String` (the concatenated FASTA lines) so that
+/// callers with access to an RNG can call [`resolve_iupac_bases`] to stochastically
+/// resolve IUPAC ambiguity codes before converting to [`Nucleotide`]. Callers that do
+/// not need IUPAC resolution can convert directly with
+/// `raw.chars().map(Nucleotide::from).collect()`, which maps IUPAC codes to `N`.
 ///
 /// Only one contig's sequence is held in memory at a time, making this suitable for
 /// large reference genomes without the temp-file overhead of `read_fasta`.
@@ -54,11 +60,11 @@ impl FastaStream {
 }
 
 impl Iterator for FastaStream {
-    type Item = Result<(String, Vec<Nucleotide>), FastaStreamError>;
+    type Item = Result<(String, String), FastaStreamError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let name = self.pending_name.take()?;
-        let mut sequence: Vec<Nucleotide> = Vec::new();
+        let mut sequence = String::new();
 
         loop {
             match self.lines.next() {
@@ -69,7 +75,7 @@ impl Iterator for FastaStream {
                         self.pending_name = Some(parse_contig_name(&line));
                         break;
                     }
-                    sequence.extend(line.chars().map(Nucleotide::from));
+                    sequence.push_str(&line);
                 }
             }
         }
@@ -164,6 +170,43 @@ pub fn apply_n_substitution(
     Ok(())
 }
 
+/// Converts a raw FASTA sequence string to nucleotides, stochastically resolving
+/// IUPAC ambiguity codes (R/Y/M/K/S/W/H/B/V/D) to their constituent bases via `rng`.
+/// N is preserved as-is (assembly gap, not ambiguity). Soft-masked bases (a/c/g/t) pass
+/// through unchanged. Returns the resolved sequence and the count of IUPAC bases resolved.
+pub fn resolve_iupac_bases(
+    raw: &str,
+    rng: &mut NeatRng,
+) -> Result<(Vec<Nucleotide>, usize), NeatRngError> {
+    let mut sequence = Vec::with_capacity(raw.len());
+    let mut iupac_count = 0usize;
+
+    for c in raw.chars() {
+        let resolved = match c.to_ascii_uppercase() {
+            'R' => { iupac_count += 1; iupac_pick(&['G', 'A'], rng)? }
+            'Y' => { iupac_count += 1; iupac_pick(&['C', 'T'], rng)? }
+            'M' => { iupac_count += 1; iupac_pick(&['A', 'C'], rng)? }
+            'K' => { iupac_count += 1; iupac_pick(&['G', 'T'], rng)? }
+            'S' => { iupac_count += 1; iupac_pick(&['C', 'G'], rng)? }
+            'W' => { iupac_count += 1; iupac_pick(&['A', 'T'], rng)? }
+            'H' => { iupac_count += 1; iupac_pick(&['A', 'C', 'T'], rng)? }
+            'B' => { iupac_count += 1; iupac_pick(&['C', 'G', 'T'], rng)? }
+            'V' => { iupac_count += 1; iupac_pick(&['A', 'C', 'G'], rng)? }
+            'D' => { iupac_count += 1; iupac_pick(&['A', 'G', 'T'], rng)? }
+            _ => c,
+        };
+        sequence.push(Nucleotide::from(resolved));
+    }
+
+    Ok((sequence, iupac_count))
+}
+
+fn iupac_pick(bases: &[char], rng: &mut NeatRng) -> Result<char, NeatRngError> {
+    let rand = rng.random()?;
+    let idx = (rand * bases.len() as f64) as usize;
+    Ok(bases[idx.min(bases.len() - 1)])
+}
+
 /// Returns the contiguous non-N/non-X regions of a sequence as `(start, end)` pairs.
 pub fn non_n_regions(sequence: &[Nucleotide]) -> Vec<(usize, usize)> {
     let mut regions = Vec::new();
@@ -255,7 +298,7 @@ mod tests {
             .unwrap();
         assert_eq!(contigs.len(), 1);
         assert_eq!(contigs[0].0, "chr1");
-        assert_eq!(contigs[0].1, vec![Nucleotide::A, Nucleotide::C, Nucleotide::G, Nucleotide::T]);
+        assert_eq!(contigs[0].1, "ACGT");
     }
 
     #[test]
@@ -303,13 +346,13 @@ mod tests {
     }
 
     #[test]
-    fn test_n_bases_decoded_correctly() {
+    fn test_n_bases_preserved_as_raw_char() {
         let f = write_fasta(">chr1\nACNT\n");
         let contigs: Vec<_> = FastaStream::open(&f.path().to_path_buf())
             .unwrap()
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
-        assert_eq!(contigs[0].1[2], Nucleotide::N);
+        assert_eq!(contigs[0].1.chars().nth(2).unwrap(), 'N');
     }
 
     #[test]
@@ -394,5 +437,70 @@ mod tests {
         let f = write_fasta(">chr1 some description\nACGT\n");
         let lengths = scan_fasta_lengths(&f.path().to_path_buf()).unwrap();
         assert_eq!(lengths[0].0, "chr1");
+    }
+
+    // resolve_iupac_bases tests
+
+    #[test]
+    fn test_resolve_iupac_all_codes_yield_only_acgtn() {
+        let mut rng = NeatRng::new_from_seed(&vec!["iupac_test".to_string()]).unwrap();
+        let (seq, count) = resolve_iupac_bases("RYMKSWBVDHACGTN", &mut rng).unwrap();
+        assert_eq!(count, 10);
+        assert_eq!(seq.len(), 15);
+        for nuc in &seq {
+            assert!(
+                matches!(nuc, Nucleotide::A | Nucleotide::C | Nucleotide::G | Nucleotide::T | Nucleotide::N),
+                "unexpected nucleotide {:?}", nuc
+            );
+        }
+    }
+
+    #[test]
+    fn test_resolve_iupac_preserves_acgtn_unchanged() {
+        let mut rng = NeatRng::new_from_seed(&vec!["iupac_test".to_string()]).unwrap();
+        let (seq, count) = resolve_iupac_bases("ACGTN", &mut rng).unwrap();
+        assert_eq!(count, 0);
+        assert_eq!(seq, vec![Nucleotide::A, Nucleotide::C, Nucleotide::G, Nucleotide::T, Nucleotide::N]);
+    }
+
+    #[test]
+    fn test_resolve_iupac_r_uniform_distribution() {
+        // R resolves to G or A; over many draws expect roughly 50/50
+        let mut rng = NeatRng::new_from_seed(&vec!["iupac_stat_test".to_string()]).unwrap();
+        let raw: String = "R".repeat(1000);
+        let (seq, count) = resolve_iupac_bases(&raw, &mut rng).unwrap();
+        assert_eq!(count, 1000);
+        let g_count = seq.iter().filter(|&&n| n == Nucleotide::G).count();
+        let a_count = seq.iter().filter(|&&n| n == Nucleotide::A).count();
+        assert_eq!(g_count + a_count, 1000);
+        assert!(g_count >= 400 && g_count <= 600, "G count {} outside [400, 600]", g_count);
+    }
+
+    #[test]
+    fn test_resolve_iupac_h_uniform_distribution() {
+        // H resolves to A, C, or T; over many draws expect roughly equal thirds
+        let mut rng = NeatRng::new_from_seed(&vec!["iupac_h_test".to_string()]).unwrap();
+        let raw: String = "H".repeat(3000);
+        let (seq, count) = resolve_iupac_bases(&raw, &mut rng).unwrap();
+        assert_eq!(count, 3000);
+        let a_count = seq.iter().filter(|&&n| n == Nucleotide::A).count();
+        let c_count = seq.iter().filter(|&&n| n == Nucleotide::C).count();
+        let t_count = seq.iter().filter(|&&n| n == Nucleotide::T).count();
+        assert_eq!(a_count + c_count + t_count, 3000);
+        // Each constituent should be ~1000; allow ±20% (200)
+        assert!(a_count >= 800 && a_count <= 1200, "A count {} outside [800, 1200]", a_count);
+        assert!(c_count >= 800 && c_count <= 1200, "C count {} outside [800, 1200]", c_count);
+        assert!(t_count >= 800 && t_count <= 1200, "T count {} outside [800, 1200]", t_count);
+    }
+
+    #[test]
+    fn test_resolve_iupac_masked_bases_pass_through() {
+        let mut rng = NeatRng::new_from_seed(&vec!["iupac_mask_test".to_string()]).unwrap();
+        let (seq, count) = resolve_iupac_bases("acgt", &mut rng).unwrap();
+        assert_eq!(count, 0);
+        assert_eq!(seq, vec![
+            Nucleotide::Maskeda, Nucleotide::Maskedc,
+            Nucleotide::Maskedg, Nucleotide::Maskedt,
+        ]);
     }
 }

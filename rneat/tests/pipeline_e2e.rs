@@ -7,7 +7,7 @@ mod common;
 
 use common::{
     fresh_workdir, h1n1_reference, read_gzip_fastq_lines, rneat, write_gen_seq_error_model_config,
-    write_synthetic_fastq_gz, GenReadsConfig,
+    write_synthetic_fastq_gz, write_iupac_fasta, GenReadsConfig,
 };
 use std::collections::HashSet;
 
@@ -111,4 +111,38 @@ fn train_binned_model_then_gen_reads_emits_only_bin_qualities() {
         }
     }
     assert!(total_qualities > 0, "no quality scores observed");
+}
+
+#[test]
+fn gen_reads_with_iupac_reference_produces_no_iupac_in_output() {
+    // Regression test: a reference containing IUPAC ambiguity codes (R/Y/M/K/S/W/H/B/V/D)
+    // must be processed without crashing and must not leak any IUPAC letter into output
+    // FASTQ sequence lines — every base emitted must be in [ACGTNacgtn].
+    let (_dir, work) = fresh_workdir();
+    let ref_path = work.join("iupac_ref.fa");
+    write_iupac_fasta(&ref_path);
+
+    let config = GenReadsConfig::new(ref_path, work.clone(), "iupac_run");
+    let yaml = config.write_yaml();
+
+    rneat()
+        .args(["gen-reads", "-c"])
+        .arg(yaml.path())
+        .assert()
+        .success();
+
+    let fastq = work.join("iupac_run_r1.fastq.gz");
+    assert!(fastq.exists(), "FASTQ not produced at {fastq:?}");
+
+    let lines = read_gzip_fastq_lines(&fastq);
+    assert!(!lines.is_empty(), "FASTQ has no records");
+    assert_eq!(lines.len() % 4, 0);
+
+    let iupac: HashSet<char> = "RYMKSWHBVDrymkswhbvd".chars().collect();
+    for chunk in lines.chunks(4) {
+        for c in chunk[1].chars() {
+            assert!(!iupac.contains(&c),
+                "IUPAC character {:?} leaked into read sequence: {:?}", c, chunk[1]);
+        }
+    }
 }

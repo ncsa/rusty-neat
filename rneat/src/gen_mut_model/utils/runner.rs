@@ -35,7 +35,8 @@ pub fn runner(
     let use_bed = !bed_table.is_empty();
 
     for result in FastaStream::open(reference)? {
-        let (contig_name, sequence) = result?;
+        let (contig_name, raw) = result?;
+        let sequence: Vec<Nucleotide> = raw.chars().map(Nucleotide::from).collect();
 
         let non_n = non_n_regions(&sequence);
 

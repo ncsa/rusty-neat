@@ -27,7 +27,8 @@ pub fn runner(path: &PathBuf) -> Result<(), GenGcBiasModelError> {
     let fasta = FastaStream::open(&config.reference)?;
 
     for result in fasta {
-        let (contig_name, sequence) = result?;
+        let (contig_name, raw) = result?;
+        let sequence: Vec<Nucleotide> = raw.chars().map(Nucleotide::from).collect();
         let contig_len = sequence.len();
 
         if contig_len < config.window_size {

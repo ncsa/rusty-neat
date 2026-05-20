@@ -19,7 +19,7 @@ use crate::{
         file_tools::{
             bam_writer::{BamBodyWriter, BamContext, BamRecordStager, concat_temp_bams},
             bed_reader::read_bed,
-            fasta_stream::{FastaStream, map_buffer, apply_n_substitution, scan_fasta_lengths},
+            fasta_stream::{FastaStream, map_buffer, apply_n_substitution, scan_fasta_lengths, resolve_iupac_bases},
             fastq_tools::{
                 combine_temp_fastqs,
                 write_block_fastq
@@ -136,7 +136,13 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
     let quality_score_model: QualityScoreModel = {
         match &config.quality_score_model {
             Some(filename) => QualityScoreModel::from_file(filename)?,
-            None => QualityScoreModel::default()?,
+            // Fall through to the quality model embedded in the sequencing-error model
+            // when the user hasn't supplied an explicit override. This matches the
+            // documented contract of `sequence_error_model:` and ensures binned-quality
+            // training (gen-seq-error-model with binned_quality_bins) actually drives
+            // gen-reads sampling — otherwise the binned QSM sits unused inside the
+            // SeqErrorModel while the default continuous model is used here.
+            None => seq_error_model.quality_score_model().clone(),
         }
     };
 
@@ -207,8 +213,12 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
         .enumerate()
         .par_bridge()
         .map(|(idx, result)| -> Result<ContigResult, GenerateReadsError> {
-            let (name, seq) = result?;
-            let child_rng = ctx.base_rng.derive_child(idx as u64);
+            let (name, raw) = result?;
+            let mut child_rng = ctx.base_rng.derive_child(idx as u64);
+            let (seq, iupac_count) = resolve_iupac_bases(&raw, &mut child_rng)?;
+            if iupac_count > 0 {
+                warn!("Contig {}: resolved {} IUPAC ambiguity base(s) to ACGT", name, iupac_count);
+            }
             process_contig(idx, name, seq, &ctx, child_rng)
         });
     let collected: Result<Vec<ContigResult>, _> = match config.num_threads {

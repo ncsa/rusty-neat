@@ -27,7 +27,10 @@ pub fn runner(path: &PathBuf) -> Result<(), GenGcBiasModelError> {
     let fasta = FastaStream::open(&config.reference)?;
 
     for result in fasta {
-        let (contig_name, sequence) = result?;
+        let (contig_name, raw) = result?;
+        // IUPAC codes map to N here intentionally — GC bias model training works on
+        // observed coverage and doesn't require stochastic base resolution.
+        let sequence: Vec<Nucleotide> = raw.chars().map(Nucleotide::from).collect();
         let contig_len = sequence.len();
 
         if contig_len < config.window_size {

@@ -236,6 +236,104 @@ mod test {
         }
     }
 
+    // ── Property tests ──────────────────────────────────────────────────────
+    //
+    // These exercise invariants of DiscreteDistribution that hold across the space of
+    // possible inputs, not just the hand-rolled fixtures above. The CDF binary search
+    // in sample() is hot-path code shared by every model, so blanketing it with
+    // randomized inputs is cheap insurance against off-by-one bugs.
+
+    use proptest::prelude::*;
+    use proptest::collection::vec as prop_vec;
+
+    /// Strategy: a (weights, values) pair with positive, well-formed weights. Length
+    /// 2..=10 (small enough to keep tests fast but large enough to exercise the
+    /// bisect tree depth). Weights drawn from (0.0, 10.0) — strictly positive to
+    /// ensure sum > 0 and the normalization branch is exercised. Values are indices.
+    fn positive_weights_strategy() -> impl Strategy<Value = (Vec<f64>, Vec<usize>)> {
+        prop_vec(0.001f64..10.0, 2..=10).prop_map(|weights| {
+            let values: Vec<usize> = (0..weights.len()).collect();
+            (weights, values)
+        })
+    }
+
+    proptest! {
+        /// Whatever weights and `rand` value are thrown at it, `sample` must return one of
+        /// the values from the input set — never panic, never return a value not in `values`.
+        /// `rand` covers the inclusive endpoints 0.0 and 1.0 explicitly (proptest does include
+        /// boundary values in its shrink space).
+        #[test]
+        fn proptest_sample_returns_value_from_input_set(
+            (weights, values) in positive_weights_strategy(),
+            rand in 0.0f64..=1.0,
+        ) {
+            let d = DiscreteDistribution::new(&weights, &values).unwrap();
+            let sampled = d.sample(rand).unwrap();
+            prop_assert!(
+                values.contains(&sampled),
+                "sample({rand}) returned {sampled}, which is not in input values {values:?}",
+            );
+        }
+
+        /// With many samples drawn from a deterministic RNG, the empirical frequency of
+        /// each value must approach its normalized weight. This stresses the bisect-left
+        /// implementation in `sample()` more thoroughly than the hand-rolled fixture tests
+        /// — any off-by-one in the CDF construction would show up as a systematic skew.
+        #[test]
+        fn proptest_empirical_frequency_approaches_weights(
+            (weights, values) in positive_weights_strategy(),
+        ) {
+            let d = DiscreteDistribution::new(&weights, &values).unwrap();
+            let total_weight: f64 = weights.iter().sum();
+            let mut counts = vec![0usize; values.len()];
+
+            // Use a deterministic seed so the property is reproducible.
+            let mut rng = NeatRng::new_from_seed(&vec!["proptest empirical seed".to_string()])
+                .unwrap();
+            let n_samples = 20_000usize;
+            for _ in 0..n_samples {
+                let s = d.sample(rng.random().unwrap()).unwrap();
+                counts[s] += 1;
+            }
+
+            // Tolerance: with N=20k draws and worst-case probability ~0.5, the standard
+            // deviation of a count is sqrt(N*p*(1-p)) ≈ 70 (~0.35% of N). A 3% slack on
+            // *N* (equivalent to ~9σ) is comfortable for any individual bin without being
+            // so loose that systematic bias slips through.
+            let tolerance_count = (0.03 * n_samples as f64) as usize;
+            for i in 0..values.len() {
+                let expected = (weights[i] / total_weight) * n_samples as f64;
+                let actual = counts[i] as f64;
+                prop_assert!(
+                    (actual - expected).abs() < tolerance_count as f64,
+                    "bin {i}: expected ~{expected:.1} samples, got {actual} \
+                     (weights={weights:?}, tolerance={tolerance_count})",
+                );
+            }
+        }
+
+        /// All-zero weights are treated as a degenerate case in `new()`: instead of
+        /// dividing by zero, the CDF is set to `[1.0; n]`. Locking in the resulting
+        /// behavior — bisect-left lands at index 0, so every sample returns `values[0]`.
+        /// This is *not* a uniform fallback (the uniform fallback for quality models
+        /// lives at the QualityScoreModel layer). Renaming this contract would be a
+        /// deliberate change, not a silent regression.
+        #[test]
+        fn proptest_all_zero_weights_always_returns_first_value(
+            values in prop_vec(any::<u32>(), 2..=10),
+            rand in 0.0f64..=1.0,
+        ) {
+            let weights = vec![0.0f64; values.len()];
+            let d = DiscreteDistribution::new(&weights, &values).unwrap();
+            let s = d.sample(rand).unwrap();
+            prop_assert_eq!(
+                s, values[0],
+                "all-zero weights must return values[0] regardless of rand={}",
+                rand,
+            );
+        }
+    }
+
     #[test]
     fn test_normal_distribution_inverse_cdf_symmetry() {
         // inverse_cdf(p) and inverse_cdf(1-p) should be symmetric around the mean

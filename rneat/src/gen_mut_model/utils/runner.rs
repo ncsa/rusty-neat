@@ -35,7 +35,10 @@ pub fn runner(
     let use_bed = !bed_table.is_empty();
 
     for result in FastaStream::open(reference)? {
-        let (contig_name, sequence) = result?;
+        let (contig_name, raw) = result?;
+        // IUPAC codes map to N here intentionally — model-building from real VCF data
+        // doesn't need stochastic resolution because variant callers skip ambiguous positions.
+        let sequence: Vec<Nucleotide> = raw.chars().map(Nucleotide::from).collect();
 
         let non_n = non_n_regions(&sequence);
 
@@ -286,6 +289,82 @@ mod tests {
         assert!(output_file.exists());
         let model = MutationModel::from_file(&output_file).unwrap();
         assert!(model.mutation_rate > 0.0);
+    }
+
+    #[test]
+    fn test_runner_with_indels() {
+        // VCF containing an insertion and a deletion alongside SNPs. The runner must accept
+        // non-SNP variant types without erroring and produce a writable model. Catches any
+        // regression that drops the insertion/deletion match arms.
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let reference = PathBuf::from(format!("{}/test_data/references/H1N1.fa", manifest_dir));
+        let out_dir = tempdir().unwrap();
+
+        // Position 22 of H1N1_HA is 'C' (after 19 leading Ns: T T C ...). Build a VCF with
+        // a SNP, an insertion, and a deletion at sensible coordinates.
+        let vcf_path = out_dir.path().join("indels.vcf");
+        std::fs::write(
+            &vcf_path,
+            "##fileformat=VCFv4.1\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n\
+H1N1_HA\t22\t.\tC\tT\t60\tPASS\t.\tGT\t0/1\n\
+H1N1_HA\t50\t.\tT\tTAG\t60\tPASS\t.\tGT\t0/1\n\
+H1N1_HA\t80\t.\tACG\tA\t60\tPASS\t.\tGT\t0/1\n",
+        ).unwrap();
+
+        let mutations = read_vcf(vcf_path).unwrap();
+        let output_file = out_dir.path().join("indel_model.json.gz");
+        runner(&reference, mutations, HashMap::new(), &output_file, None).unwrap();
+        assert!(output_file.exists());
+
+        let model = MutationModel::from_file(&output_file).unwrap();
+        assert!(model.mutation_rate > 0.0);
+    }
+
+    #[test]
+    fn test_runner_skips_reference_mismatch_variant() {
+        // When VCF REF doesn't agree with the FASTA base at the same position, the runner
+        // logs a warning and skips that variant. As long as at least one good variant
+        // remains, the model still builds.
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let reference = PathBuf::from(format!("{}/test_data/references/H1N1.fa", manifest_dir));
+        let out_dir = tempdir().unwrap();
+
+        // First record matches (pos 22 is C). Second record's REF=A disagrees with FASTA.
+        let vcf_path = out_dir.path().join("mismatch.vcf");
+        std::fs::write(
+            &vcf_path,
+            "##fileformat=VCFv4.1\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n\
+H1N1_HA\t22\t.\tC\tT\t60\tPASS\t.\tGT\t0/1\n\
+H1N1_HA\t25\t.\tA\tG\t60\tPASS\t.\tGT\t0/1\n",
+        ).unwrap();
+
+        let mutations = read_vcf(vcf_path).unwrap();
+        let output_file = out_dir.path().join("mismatch_model.json.gz");
+        runner(&reference, mutations, HashMap::new(), &output_file, None).unwrap();
+        assert!(output_file.exists());
+    }
+
+    #[test]
+    fn test_runner_bed_unknown_contig_succeeds_or_errors_cleanly() {
+        // BED entry references a contig that does not exist in the FASTA. The runner must
+        // not panic; it either succeeds with bed_track_len=0 (which makes mutation_rate
+        // diverge — usually surfaces as a model-construction error) or errors cleanly.
+        // Whatever the exact behavior is today, lock it in.
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let reference = PathBuf::from(format!("{}/test_data/references/H1N1.fa", manifest_dir));
+        let vcf_path = PathBuf::from(format!("{}/test_data/vcfs/small_snps.vcf", manifest_dir));
+        let mutations = read_vcf(vcf_path).unwrap();
+        let out_dir = tempdir().unwrap();
+        let output_file = out_dir.path().join("bed_unknown.json.gz");
+
+        let bed_record = BedRecord::new_bed_record("chrZ_nonexistent".to_string(), 1, 100).unwrap();
+        let bed_table = HashMap::from([("chrZ_nonexistent".to_string(), vec![bed_record])]);
+
+        // We don't enforce one outcome here — just that it terminates without panicking.
+        let result = runner(&reference, mutations, bed_table, &output_file, None);
+        let _ = result; // either Ok or Err is acceptable today
     }
 
     #[test]

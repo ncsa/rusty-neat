@@ -136,7 +136,13 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
     let quality_score_model: QualityScoreModel = {
         match &config.quality_score_model {
             Some(filename) => QualityScoreModel::from_file(filename)?,
-            None => QualityScoreModel::default()?,
+            // Fall through to the quality model embedded in the sequencing-error model
+            // when the user hasn't supplied an explicit override. This matches the
+            // documented contract of `sequence_error_model:` and ensures binned-quality
+            // training (gen-seq-error-model with binned_quality_bins) actually drives
+            // gen-reads sampling — otherwise the binned QSM sits unused inside the
+            // SeqErrorModel while the default continuous model is used here.
+            None => seq_error_model.quality_score_model().clone(),
         }
     };
 

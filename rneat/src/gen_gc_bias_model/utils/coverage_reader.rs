@@ -388,6 +388,64 @@ mod tests {
     }
 
     #[test]
+    fn test_coverage_reader_gzip_matches_plain_bedtools_d() {
+        // 1-based, every position present (bedtools genomecov -d).
+        let content = "chr1\t1\t11\nchr1\t2\t22\nchr1\t3\t33\nchr2\t1\t44\nchr2\t2\t55\n";
+        let plain_f = write_plain(content);
+        let gz_path = write_gzip(content);
+
+        let mut plain_reader = CoverageReader::open(
+            &plain_f.path().to_path_buf(), CoverageFormat::BedtoolsGenomecovD,
+        ).unwrap();
+        let mut gz_reader = CoverageReader::open(
+            &gz_path.to_path_buf(), CoverageFormat::BedtoolsGenomecovD,
+        ).unwrap();
+
+        for contig in ["chr1", "chr2"] {
+            let plain_cov = plain_reader.get(contig).unwrap().unwrap();
+            let gz_cov = gz_reader.get(contig).unwrap().unwrap();
+            for pos in 0..3 {
+                assert_eq!(
+                    plain_cov.depth_at(pos), gz_cov.depth_at(pos),
+                    "depth mismatch at {}:{} for bedtools-genomecov-d", contig, pos,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_coverage_reader_gzip_matches_plain_bedtools_dz() {
+        // 0-based, only nonzero positions (bedtools genomecov -dz). Includes a sparse gap.
+        let content = "chr1\t0\t15\nchr1\t2\t25\nchr2\t4\t60\n";
+        let plain_f = write_plain(content);
+        let gz_path = write_gzip(content);
+
+        let mut plain_reader = CoverageReader::open(
+            &plain_f.path().to_path_buf(), CoverageFormat::BedtoolsGenomecovDz,
+        ).unwrap();
+        let mut gz_reader = CoverageReader::open(
+            &gz_path.to_path_buf(), CoverageFormat::BedtoolsGenomecovDz,
+        ).unwrap();
+
+        let plain_cov1 = plain_reader.get("chr1").unwrap().unwrap();
+        let gz_cov1 = gz_reader.get("chr1").unwrap().unwrap();
+        for pos in 0..3 {
+            assert_eq!(
+                plain_cov1.depth_at(pos), gz_cov1.depth_at(pos),
+                "depth mismatch at chr1:{} for bedtools-genomecov-dz", pos,
+            );
+        }
+        let plain_cov2 = plain_reader.get("chr2").unwrap().unwrap();
+        let gz_cov2 = gz_reader.get("chr2").unwrap().unwrap();
+        for pos in 0..5 {
+            assert_eq!(
+                plain_cov2.depth_at(pos), gz_cov2.depth_at(pos),
+                "depth mismatch at chr2:{} for bedtools-genomecov-dz", pos,
+            );
+        }
+    }
+
+    #[test]
     fn test_coverage_reader_gzip_zero_based_format() {
         let gz_path = write_gzip("chr1\t0\t15\nchr1\t2\t25\n");
         let mut reader = CoverageReader::open(

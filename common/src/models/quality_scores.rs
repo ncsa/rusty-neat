@@ -485,6 +485,37 @@ mod tests {
     }
 
     #[test]
+    fn test_binned_model_serialization_round_trip() {
+        // Build a binned model, write to disk, read it back, and verify the binned flag
+        // and the bin set survive the JSON-GZ round trip. Catches future serde renames
+        // (e.g., adding #[serde(skip)] or renaming a field).
+        let bins = vec![2usize, 12, 23, 37];
+        let n = bins.len();
+        let seed_weights = vec![1.0, 2.0, 3.0, 4.0];
+        let row = vec![1.0; n];
+        let trans_weights = vec![vec![row.clone(); n]; 3];
+        let model = QualityScoreModel::from_counts(
+            bins.clone(), 4, seed_weights, trans_weights, true,
+        ).unwrap();
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut path = PathBuf::from(temp_dir.path());
+        path.push("binned_model.json.gz");
+        model.write_to_file(&path).unwrap();
+        let loaded = QualityScoreModel::from_file(&path).unwrap();
+
+        assert!(loaded.binned_scores, "binned_scores flag must survive round trip");
+        assert_eq!(loaded.quality_score_options, bins);
+        assert_eq!(loaded.assumed_read_length, model.assumed_read_length);
+        assert_eq!(
+            loaded.distros_from_one.len(),
+            model.distros_from_one.len(),
+            "transition matrix shape must survive round trip",
+        );
+        temp_dir.close().unwrap();
+    }
+
+    #[test]
     fn test_from_counts_rejects_binned_with_thirty_one() {
         let options = vec![2usize, 12, 31, 37];
         let n = options.len();

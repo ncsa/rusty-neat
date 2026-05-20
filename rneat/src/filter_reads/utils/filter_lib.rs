@@ -296,6 +296,95 @@ mod tests {
     }
 
     #[test]
+    fn test_filter_fastq_empty_input() {
+        // An empty input FASTQ must produce an empty (header-only) gzipped output,
+        // not an error or a panic.
+        let temp_dir: TempDir = tempfile::tempdir().unwrap();
+        let input = temp_dir.path().join("empty.fastq");
+        std::fs::write(&input, "").unwrap();
+
+        let bed_table = HashMap::from([(
+            "chr1".to_string(),
+            vec![BedRecord::new_bed_record("chr1".to_string(), 0, 2000).unwrap()],
+        )]);
+
+        let output = temp_dir.path().join("empty_out.fastq.gz");
+        filter_fastq(&bed_table, &input, false, &output).unwrap();
+
+        let lines: Vec<String> = read_gzip_lines(&output)
+            .unwrap()
+            .map(|l| l.unwrap())
+            .collect();
+        assert!(lines.is_empty(), "empty input should produce empty output, got: {:?}", lines);
+    }
+
+    #[test]
+    fn test_filter_fastq_all_filtered_out() {
+        // BED table doesn't overlap any reads — every record is filtered. Output has zero
+        // FASTQ records.
+        let temp_dir: TempDir = tempfile::tempdir().unwrap();
+        let fastq_content = concat!(
+            "@RNEAT_generated_chr1_0000001000_0000002000/1\n",
+            "ACGTACGT\n",
+            "+\n",
+            "IIIIIIII\n",
+            "@RNEAT_generated_chr1_0000005000_0000006000/1\n",
+            "TTTTTTTT\n",
+            "+\n",
+            "IIIIIIII\n",
+        );
+        let input = temp_dir.path().join("all_out.fastq");
+        std::fs::write(&input, fastq_content).unwrap();
+
+        // BED on a contig that's not in the FASTQ → no overlaps.
+        let bed_table = HashMap::from([(
+            "chrZ".to_string(),
+            vec![BedRecord::new_bed_record("chrZ".to_string(), 0, 1_000_000).unwrap()],
+        )]);
+
+        let output = temp_dir.path().join("all_out.fastq.gz");
+        filter_fastq(&bed_table, &input, false, &output).unwrap();
+
+        let lines: Vec<String> = read_gzip_lines(&output)
+            .unwrap()
+            .map(|l| l.unwrap())
+            .collect();
+        assert!(lines.is_empty(), "no reads should pass; got {:?}", lines);
+    }
+
+    #[test]
+    fn test_filter_vcf_no_passing_records_keeps_headers() {
+        // VCF with one variant outside the BED region. Output must keep header lines
+        // (start with '#') but emit no data lines.
+        let temp_dir: TempDir = tempfile::tempdir().unwrap();
+        let vcf_content = concat!(
+            "##fileformat=VCFv4.1\n",
+            "##source=rneat-test\n",
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n",
+            "chr1\t9999\t.\tA\tG\t37\tPASS\t.\tGT\t0/1\n",
+        );
+        let input = temp_dir.path().join("no_pass.vcf");
+        std::fs::write(&input, vcf_content).unwrap();
+
+        let bed_table = HashMap::from([(
+            "chr1".to_string(),
+            vec![BedRecord::new_bed_record("chr1".to_string(), 0, 2000).unwrap()],
+        )]);
+
+        let output = temp_dir.path().join("no_pass.vcf.gz");
+        filter_vcf(&bed_table, &input, false, &output).unwrap();
+
+        let lines: Vec<String> = read_gzip_lines(&output)
+            .unwrap()
+            .map(|l| l.unwrap())
+            .collect();
+        let headers: Vec<&String> = lines.iter().filter(|l| l.starts_with('#')).collect();
+        let data: Vec<&String> = lines.iter().filter(|l| !l.starts_with('#')).collect();
+        assert_eq!(headers.len(), 3, "all three header lines should survive");
+        assert!(data.is_empty(), "no data lines should be written: {:?}", data);
+    }
+
+    #[test]
     fn test_filter_fastq_boundary() {
         // Verifies that the corrected overlaps() semantics (half-open intervals,
         // adjacent intervals do NOT overlap) are respected end-to-end through filter_fastq.

@@ -44,6 +44,8 @@ pub enum QualityModelError {
     IoError(#[from] io::Error),
     #[error("Serde error building default model: {0}")]
     SerdeError(#[from] serde_json::Error),
+    #[error("Invalid quality model configuration: {0}")]
+    InvalidConfiguration(String),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -242,7 +244,17 @@ impl QualityScoreModel {
         read_length: usize,
         seed_weights: Vec<f64>,
         trans_weights: Vec<Vec<Vec<f64>>>,
+        is_binned: bool,
     ) -> Result<Self, QualityModelError> {
+        // Phred+33 maps score 31 to '@', which the FASTQ writer treats specially as a seed
+        // (see generate_quality_scores). A binned model that included 31 would silently break
+        // the binning invariant when the seed-`@` workaround fires, so reject it here. Config
+        // validation in gen_seq_error_model also catches this earlier with a friendlier message.
+        if is_binned && quality_score_options.iter().any(|&q| q == 31) {
+            return Err(QualityModelError::InvalidConfiguration(
+                "binned quality model cannot include score 31 ('@' under Phred+33)".to_string(),
+            ));
+        }
         // seed_dist values are actual quality scores (generate_quality_scores pushes the sampled
         // value directly); distros_from_one values are indices into quality_score_options
         // (generate_quality_scores indexes quality_score_options[sampled_index]).
@@ -267,7 +279,7 @@ impl QualityScoreModel {
         }
         Ok(QualityScoreModel {
             quality_score_options,
-            binned_scores: false,
+            binned_scores: is_binned,
             assumed_read_length: read_length,
             seed_dist,
             distros_from_one,
@@ -393,10 +405,11 @@ mod tests {
             vec![vec![1.0, 1.0], vec![1.0, 0.0]],
         ];
         let model = QualityScoreModel::from_counts(
-            options.clone(), 3, seed_weights, trans_weights,
+            options.clone(), 3, seed_weights, trans_weights, false,
         ).unwrap();
         assert_eq!(model.quality_score_options, options);
         assert_eq!(model.assumed_read_length, 3);
+        assert!(!model.binned_scores);
         assert_eq!(model.distros_from_one.len(), 2);
         assert_eq!(model.distros_from_one[0].len(), 2);
         // seed samples actual quality scores
@@ -423,7 +436,7 @@ mod tests {
             vec![vec![2.0, 1.0], vec![0.0, 0.0]],
         ];
         let model = QualityScoreModel::from_counts(
-            options.clone(), 2, seed_weights, trans_weights,
+            options.clone(), 2, seed_weights, trans_weights, false,
         ).unwrap();
         // distros_from_one[pos=0][prev_idx=1] is the formerly-zero row for Q40
         let zero_row = &model.distros_from_one[0][1];
@@ -438,6 +451,53 @@ mod tests {
     }
 
     #[test]
+    fn test_binned_model_generates_only_bins() {
+        // Build a binned model with NovaSeq-style bins and verify that every sampled score
+        // falls within the bin set across many draws and across read-length remapping.
+        let bins = vec![2usize, 12, 23, 37];
+        let n = bins.len();
+        let seed_weights = vec![1.0; n];
+        let uniform_row = vec![1.0; n];
+        let trans_weights = vec![
+            vec![uniform_row.clone(); n],
+            vec![uniform_row.clone(); n],
+            vec![uniform_row.clone(); n],
+        ];
+        let model = QualityScoreModel::from_counts(
+            bins.clone(), 4, seed_weights, trans_weights, true,
+        ).unwrap();
+        assert!(model.binned_scores);
+        assert_eq!(model.quality_score_options, bins);
+        let mut rng = NeatRng::new_from_seed(&vec!["binned".to_string()]).unwrap();
+        for _ in 0..250 {
+            let scores = model.generate_quality_scores(4, &mut rng).unwrap();
+            for &s in &scores {
+                assert!(bins.contains(&s), "binned model emitted non-bin score {s}");
+            }
+        }
+        // Also check the read-length-remap path emits only bins.
+        for _ in 0..250 {
+            let scores = model.generate_quality_scores(11, &mut rng).unwrap();
+            for &s in &scores {
+                assert!(bins.contains(&s), "binned model emitted non-bin score {s} under remap");
+            }
+        }
+    }
+
+    #[test]
+    fn test_from_counts_rejects_binned_with_thirty_one() {
+        let options = vec![2usize, 12, 31, 37];
+        let n = options.len();
+        let seed_weights = vec![1.0; n];
+        let uniform_row = vec![1.0; n];
+        let trans_weights = vec![vec![uniform_row.clone(); n]];
+        let result = QualityScoreModel::from_counts(
+            options, 2, seed_weights, trans_weights, true,
+        );
+        assert!(matches!(result, Err(QualityModelError::InvalidConfiguration(_))));
+    }
+
+    #[test]
     fn test_from_counts_generates_only_observed_scores() {
         // All scores produced by generate_quality_scores must be in quality_score_options.
         let options = vec![20usize, 30usize, 40usize];
@@ -449,7 +509,7 @@ mod tests {
             vec![uniform_row.clone(), uniform_row.clone(), uniform_row.clone()],
         ];
         let model = QualityScoreModel::from_counts(
-            options.clone(), 3, seed_weights, trans_weights,
+            options.clone(), 3, seed_weights, trans_weights, false,
         ).unwrap();
         let mut rng = NeatRng::new_from_seed(&vec!["t".to_string()]).unwrap();
         for _ in 0..50 {

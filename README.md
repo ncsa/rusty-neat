@@ -394,6 +394,12 @@ max_reads: 0
 # optional: quality score ASCII offset; 33 for Illumina 1.8+/Sanger, 64 for older Illumina (default: 33)
 qual_offset: 33
 
+# optional: list of Q-score bins to quantize the learned model to (e.g. NovaSeq 6000 uses
+# [2, 12, 23, 37]). When set, each observed Q-score is snapped to its nearest bin before
+# the model is built, and gen-reads will emit only these values. Omit for a continuous model.
+# Bins must be < 94 and cannot include 31 (encodes to '@' under Phred+33).
+# binned_quality_bins: [2, 12, 23, 37]
+
 # optional: aligned BAM file to infer the SNP transition matrix from read-vs-reference mismatches.
 # The BAM must have MD tags. If your aligner did not add them, run:
 #   samtools calmd -b aligned.bam reference.fa > aligned_with_md.bam
@@ -428,6 +434,28 @@ A    C    G    T
 0.4  0.3  0.0  0.3
 0.3  0.3  0.4  0.0
 ```
+
+**Binned quality scores:**
+Modern Illumina platforms (NovaSeq 6000, NextSeq 1000/2000, the simplified MiSeq reporting modes) no longer emit the full continuous Q0–Q40 range. Instead, they quantize each per-base quality into a small set of discrete bins — for example, NovaSeq 6000 emits only `{2, 12, 23, 37}`. Set `binned_quality_bins` in the config to mimic this behaviour:
+
+```yaml
+binned_quality_bins: [2, 12, 23, 37]
+```
+
+When this field is set, `gen-seq-error-model` snaps each observed Q-score from the input FASTQ to its nearest bin (ties round down) before learning seed, transition, and global-frequency counts. The resulting model file is flagged `binned_scores: true` and lists the bin values as its `quality_score_options`. `gen-reads` then samples only those bin values when emitting reads — no extra flag needed on the read-generation side.
+
+Validation rules:
+- Bins must be non-empty integers in `[0, 94)` (entries are sorted and deduped automatically).
+- Value `31` is rejected — under Phred+33 it encodes to `@`, which would corrupt FASTQ output. If you need a bin near Q31, pick 30 or 32.
+- Bins with no observed counts in the training FASTQ are still kept in `quality_score_options`; their transition rows fall back to a uniform distribution, and a warning is logged listing the empty bins.
+
+Some common platform bin sets (consult your sequencer's documentation for the authoritative list):
+
+| Platform                       | Suggested bins     |
+|--------------------------------|--------------------|
+| NovaSeq 6000 (4-bin)           | `[2, 12, 23, 37]`  |
+| NextSeq 1000/2000 (3-bin)      | `[2, 15, 35]`      |
+| NextSeq 1000/2000 (4-bin)      | `[2, 12, 23, 37]`  |
 
 Generating a GC Bias Model
 ====================

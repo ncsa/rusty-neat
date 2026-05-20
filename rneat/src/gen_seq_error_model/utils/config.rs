@@ -11,6 +11,11 @@ pub struct RunConfiguration {
     pub overwrite_output: bool,
     pub max_reads: usize,
     pub qual_offset: usize,
+    /// Optional list of Q-score bins (e.g. `[2, 12, 23, 37]` for NovaSeq). When set,
+    /// learned scores are snapped to the nearest bin and the resulting model only
+    /// emits these values. Sorted/deduped at parse time. Value 31 is rejected
+    /// because it encodes to `@` under Phred+33.
+    pub binned_quality_bins: Option<Vec<usize>>,
     /// Optional aligned BAM file to infer the SNP transition matrix from read-vs-reference
     /// mismatches. Requires MD tags. Ignored if transition_matrix_file is also set.
     pub bam_file: Option<PathBuf>,
@@ -81,6 +86,45 @@ impl RunConfiguration {
             .and_then(|v| v.as_u64())
             .unwrap_or(33) as usize;
 
+        let binned_quality_bins = match scrape_config.get("binned_quality_bins") {
+            None => None,
+            Some(v) => {
+                let seq = v.as_sequence().ok_or_else(|| {
+                    GenSeqErrorModelError::ConfigurationError(
+                        "binned_quality_bins must be a YAML list of integers".to_string(),
+                    )
+                })?;
+                let mut bins: Vec<usize> = Vec::with_capacity(seq.len());
+                for elem in seq {
+                    let n = elem.as_u64().ok_or_else(|| {
+                        GenSeqErrorModelError::ConfigurationError(
+                            "binned_quality_bins entries must be non-negative integers".to_string(),
+                        )
+                    })?;
+                    bins.push(n as usize);
+                }
+                if bins.is_empty() {
+                    return Err(GenSeqErrorModelError::ConfigurationError(
+                        "binned_quality_bins must contain at least one value".to_string(),
+                    ));
+                }
+                if bins.iter().any(|&b| b >= 94) {
+                    return Err(GenSeqErrorModelError::ConfigurationError(
+                        "binned_quality_bins entries must be < 94".to_string(),
+                    ));
+                }
+                if bins.iter().any(|&b| b == 31) {
+                    return Err(GenSeqErrorModelError::ConfigurationError(
+                        "binned_quality_bins cannot include 31 (encodes to '@' under \
+                         Phred+33 and would corrupt FASTQ output)".to_string(),
+                    ));
+                }
+                bins.sort_unstable();
+                bins.dedup();
+                Some(bins)
+            }
+        };
+
         let bam_file = scrape_config
             .get("bam_file")
             .and_then(|v| v.as_str())
@@ -119,6 +163,7 @@ impl RunConfiguration {
             overwrite_output,
             max_reads,
             qual_offset,
+            binned_quality_bins,
             bam_file,
             transition_matrix_file,
         })
@@ -243,6 +288,86 @@ mod tests {
 
         let tmp = write_config(&format!(
             "fastq_file: {}\noutput_file: {}\noverwrite_output: true\nbam_file: /nonexistent/reads.bam\n",
+            fastq.display(), output.display()
+        ));
+        assert!(RunConfiguration::from(&tmp.path().to_path_buf()).is_err());
+    }
+
+    #[test]
+    fn test_binned_quality_bins_parsed_sorted_deduped() {
+        let dir = tempfile::tempdir().unwrap();
+        let fastq = make_fastq(&dir);
+        let output = dir.path().join("model.json.gz");
+
+        let tmp = write_config(&format!(
+            "fastq_file: {}\noutput_file: {}\noverwrite_output: true\nbinned_quality_bins: [37, 2, 23, 12, 12]\n",
+            fastq.display(), output.display()
+        ));
+        let config = RunConfiguration::from(&tmp.path().to_path_buf()).unwrap();
+        assert_eq!(config.binned_quality_bins, Some(vec![2, 12, 23, 37]));
+    }
+
+    #[test]
+    fn test_binned_quality_bins_absent_is_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let fastq = make_fastq(&dir);
+        let output = dir.path().join("model.json.gz");
+
+        let tmp = write_config(&format!(
+            "fastq_file: {}\noutput_file: {}\noverwrite_output: true\n",
+            fastq.display(), output.display()
+        ));
+        let config = RunConfiguration::from(&tmp.path().to_path_buf()).unwrap();
+        assert!(config.binned_quality_bins.is_none());
+    }
+
+    #[test]
+    fn test_binned_quality_bins_empty_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let fastq = make_fastq(&dir);
+        let output = dir.path().join("model.json.gz");
+
+        let tmp = write_config(&format!(
+            "fastq_file: {}\noutput_file: {}\noverwrite_output: true\nbinned_quality_bins: []\n",
+            fastq.display(), output.display()
+        ));
+        assert!(RunConfiguration::from(&tmp.path().to_path_buf()).is_err());
+    }
+
+    #[test]
+    fn test_binned_quality_bins_out_of_range_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let fastq = make_fastq(&dir);
+        let output = dir.path().join("model.json.gz");
+
+        let tmp = write_config(&format!(
+            "fastq_file: {}\noutput_file: {}\noverwrite_output: true\nbinned_quality_bins: [2, 12, 94]\n",
+            fastq.display(), output.display()
+        ));
+        assert!(RunConfiguration::from(&tmp.path().to_path_buf()).is_err());
+    }
+
+    #[test]
+    fn test_binned_quality_bins_thirty_one_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let fastq = make_fastq(&dir);
+        let output = dir.path().join("model.json.gz");
+
+        let tmp = write_config(&format!(
+            "fastq_file: {}\noutput_file: {}\noverwrite_output: true\nbinned_quality_bins: [2, 12, 31, 37]\n",
+            fastq.display(), output.display()
+        ));
+        assert!(RunConfiguration::from(&tmp.path().to_path_buf()).is_err());
+    }
+
+    #[test]
+    fn test_binned_quality_bins_non_list_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let fastq = make_fastq(&dir);
+        let output = dir.path().join("model.json.gz");
+
+        let tmp = write_config(&format!(
+            "fastq_file: {}\noutput_file: {}\noverwrite_output: true\nbinned_quality_bins: \"2,12,23,37\"\n",
             fastq.display(), output.display()
         ));
         assert!(RunConfiguration::from(&tmp.path().to_path_buf()).is_err());

@@ -36,6 +36,8 @@ pub fn runner(
 
     for result in FastaStream::open(reference)? {
         let (contig_name, raw) = result?;
+        // IUPAC codes map to N here intentionally — model-building from real VCF data
+        // doesn't need stochastic resolution because variant callers skip ambiguous positions.
         let sequence: Vec<Nucleotide> = raw.chars().map(Nucleotide::from).collect();
 
         let non_n = non_n_regions(&sequence);

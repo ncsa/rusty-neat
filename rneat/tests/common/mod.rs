@@ -153,6 +153,22 @@ impl GenReadsConfig {
     }
 }
 
+/// Write a synthetic FASTA containing every IUPAC ambiguity code (R/Y/M/K/S/W/H/B/V/D)
+/// embedded in an otherwise valid sequence. Long enough to generate 50-bp reads.
+/// Used to verify that gen-reads handles IUPAC references without crashing and does not
+/// leak IUPAC characters into output FASTQ sequences.
+pub fn write_iupac_fasta(path: &Path) {
+    use std::io::Write as _;
+    // Each IUPAC code appears at least once; padded to ~120 bp so read_len=50 fits.
+    let seq = concat!(
+        "ACGTRACGTYMKSWACGTHBVDACGTACGTACGT",
+        "ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT",
+        "ACGTACGTACGTACGTACGTACGTACGTACGTACGT",
+    );
+    let mut f = std::fs::File::create(path).unwrap();
+    writeln!(f, ">chr1\n{}", seq).unwrap();
+}
+
 /// Build a `gen-seq-error-model` config YAML with a training FASTQ and (optionally)
 /// a bin set. Output model is written into `output_file`.
 pub fn write_gen_seq_error_model_config(

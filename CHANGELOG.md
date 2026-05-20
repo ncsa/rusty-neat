@@ -1,6 +1,6 @@
 5/20/2026
 =========
-## rneat v1.5.2
+## rneat v1.5.1
 - `gen-reads` now correctly handles reference genomes that contain IUPAC ambiguity codes (R/Y/M/K/S/W/H/B/V/D). Previously these bases were silently mapped to N, producing excess-N reads indistinguishable from assembly gaps. Each IUPAC code is now stochastically resolved to one of its constituent bases at reference-load time using the per-contig simulation RNG, so results are fully reproducible given the same seed. N in the reference retains its existing gap semantics and is unaffected. A single `WARN` line is emitted per contig listing the count of resolved bases. `gen-mut-model` and `gen-gc-bias-model` continue to treat IUPAC codes as N (appropriate since they analyze existing VCF/coverage data where variant callers typically skip ambiguous positions).
 - Added `resolve_iupac_bases(raw, rng)` to `common::file_tools::fasta_stream`, available to any future consumer that needs RNG-seeded IUPAC resolution.
 - `FastaStream` now yields raw sequence strings rather than `Vec<Nucleotide>`, allowing each caller to choose its own conversion strategy.

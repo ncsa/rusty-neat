@@ -20,6 +20,24 @@ use crate::gen_seq_error_model::{
 
 const MAX_SCORE: usize = 94;
 
+/// Snap a raw quality score to the nearest value in a sorted bin list.
+/// Ties round toward the lower bin (deterministic; matches Illumina behavior on some platforms).
+/// `bins` must be non-empty and sorted ascending.
+fn snap_to_bin(score: usize, bins: &[usize]) -> usize {
+    debug_assert!(!bins.is_empty(), "snap_to_bin called with empty bin list");
+    // Find the first bin >= score. The nearest bin is either that one or the previous one.
+    match bins.iter().position(|&b| b >= score) {
+        None => *bins.last().unwrap(),
+        Some(0) => bins[0],
+        Some(i) => {
+            let hi = bins[i];
+            let lo = bins[i - 1];
+            // Tie → lower bin.
+            if hi - score < score - lo { hi } else { lo }
+        }
+    }
+}
+
 
 /// Normalizes a raw 4×4 mismatch count matrix into a `TransitionMatrix`.
 ///
@@ -91,6 +109,7 @@ pub fn runner(config: &RunConfiguration) -> Result<(), GenSeqErrorModelError> {
         qual_line: &str,
         qual_offset: usize,
         read_length: usize,
+        bins: Option<&[usize]>,
         seed_counts: &mut [usize],
         transition_counts: &mut [Vec<Vec<usize>>],
         global_counts: &mut [usize],
@@ -98,7 +117,13 @@ pub fn runner(config: &RunConfiguration) -> Result<(), GenSeqErrorModelError> {
     ) -> bool {
         let scores: Vec<usize> = qual_line
             .bytes()
-            .map(|b| (b as usize).saturating_sub(qual_offset).min(MAX_SCORE - 1))
+            .map(|b| {
+                let raw = (b as usize).saturating_sub(qual_offset).min(MAX_SCORE - 1);
+                match bins {
+                    Some(bins) => snap_to_bin(raw, bins),
+                    None => raw,
+                }
+            })
             .collect();
         if scores.is_empty() {
             return false;
@@ -114,8 +139,10 @@ pub fn runner(config: &RunConfiguration) -> Result<(), GenSeqErrorModelError> {
         true
     }
 
+    let bins_slice: Option<&[usize]> = config.binned_quality_bins.as_deref();
+
     if accumulate_qual(
-        &first_qual, qual_offset, read_length,
+        &first_qual, qual_offset, read_length, bins_slice,
         &mut seed_counts, &mut transition_counts, &mut global_counts, &mut total_bases,
     ) {
         reads_processed += 1;
@@ -138,7 +165,7 @@ pub fn runner(config: &RunConfiguration) -> Result<(), GenSeqErrorModelError> {
             Some(Err(e)) => return Err(e.into()),
         };
         if accumulate_qual(
-            &qual, qual_offset, read_length,
+            &qual, qual_offset, read_length, bins_slice,
             &mut seed_counts, &mut transition_counts, &mut global_counts, &mut total_bases,
         ) {
             reads_processed += 1;
@@ -161,10 +188,27 @@ pub fn runner(config: &RunConfiguration) -> Result<(), GenSeqErrorModelError> {
 
     info!("Computed error_rate: {:.6}", error_rate);
 
-    // Collect observed quality scores
-    let quality_score_options: Vec<usize> = (0..MAX_SCORE)
-        .filter(|&q| global_counts[q] > 0)
-        .collect();
+    // Collect quality_score_options. When binning is enabled, use the configured bin list
+    // verbatim — even bins that received zero observed counts stay in the option set so
+    // that from_counts' uniform fallback can produce a sane transition row for them.
+    let (quality_score_options, is_binned): (Vec<usize>, bool) = match &config.binned_quality_bins {
+        Some(bins) => {
+            let zero_count_bins: Vec<usize> =
+                bins.iter().copied().filter(|&b| global_counts[b] == 0).collect();
+            if !zero_count_bins.is_empty() {
+                warn!(
+                    "Binned quality model has {} bin(s) with no observed counts: {:?}; \
+                     transition rows for these will use a uniform fallback",
+                    zero_count_bins.len(), zero_count_bins,
+                );
+            }
+            (bins.clone(), true)
+        }
+        None => {
+            let opts: Vec<usize> = (0..MAX_SCORE).filter(|&q| global_counts[q] > 0).collect();
+            (opts, false)
+        }
+    };
 
     let n_scores = quality_score_options.len();
 
@@ -196,6 +240,7 @@ pub fn runner(config: &RunConfiguration) -> Result<(), GenSeqErrorModelError> {
         read_length,
         seed_weights,
         trans_weights,
+        is_binned,
     )?;
 
     // Determine transition matrix: TSV > BAM inference > defaults from original Python NEAT
@@ -317,6 +362,7 @@ mod tests {
             overwrite_output: true,
             max_reads: 0,
             qual_offset: 33,
+            binned_quality_bins: None,
             bam_file: None,
             transition_matrix_file: None,
         }
@@ -531,6 +577,7 @@ mod tests {
             overwrite_output: true,
             max_reads: 0,
             qual_offset: 33,
+            binned_quality_bins: None,
             bam_file: None,
             transition_matrix_file: Some(tsv_path),
         };
@@ -555,6 +602,7 @@ mod tests {
             overwrite_output: true,
             max_reads: 0,
             qual_offset: 33,
+            binned_quality_bins: None,
             bam_file: Some(bam_path),
             transition_matrix_file: None,
         };
@@ -579,6 +627,7 @@ mod tests {
             overwrite_output: true,
             max_reads: 0,
             qual_offset: 33,
+            binned_quality_bins: None,
             bam_file: Some(bam_path),
             transition_matrix_file: None,
         };
@@ -615,6 +664,7 @@ mod tests {
             overwrite_output: true,
             max_reads: 0,
             qual_offset: 33,
+            binned_quality_bins: None,
             bam_file: Some(bam_path),
             transition_matrix_file: Some(tsv_path),
         };
@@ -645,5 +695,82 @@ mod tests {
             seen.insert(result as usize);
         }
         assert_eq!(seen.len(), 3, "all three off-diagonal bases should be reachable");
+    }
+
+    #[test]
+    fn test_snap_to_bin_basic() {
+        let bins = [2usize, 12, 23, 37];
+        // Below smallest bin
+        assert_eq!(snap_to_bin(0, &bins), 2);
+        assert_eq!(snap_to_bin(2, &bins), 2);
+        // Above largest bin
+        assert_eq!(snap_to_bin(40, &bins), 37);
+        assert_eq!(snap_to_bin(93, &bins), 37);
+        // Interior — nearest bin
+        assert_eq!(snap_to_bin(11, &bins), 12);
+        assert_eq!(snap_to_bin(13, &bins), 12);
+        assert_eq!(snap_to_bin(20, &bins), 23);
+        // Tie: midpoint between 2 and 12 is 7 — rounds to lower (2).
+        assert_eq!(snap_to_bin(7, &bins), 2);
+        // Midpoint between 23 and 37 is 30 — rounds to lower (23).
+        assert_eq!(snap_to_bin(30, &bins), 23);
+    }
+
+    #[test]
+    fn test_snap_to_bin_singleton() {
+        let bins = [12usize];
+        assert_eq!(snap_to_bin(0, &bins), 12);
+        assert_eq!(snap_to_bin(12, &bins), 12);
+        assert_eq!(snap_to_bin(50, &bins), 12);
+    }
+
+    #[test]
+    fn test_runner_binned_quality_scores() {
+        // Synthetic FASTQ has scores in range 33..=42 (see make_test_fastq). With bins
+        // [2, 12, 23, 37], every observed score should snap to 37, so the only quality
+        // option used is 37 — but the model must keep all four bins in
+        // quality_score_options and flag binned_scores = true.
+        let temp = tempfile::tempdir().unwrap();
+        let fastq_path = temp.path().join("test.fastq");
+        make_test_fastq(&fastq_path, 30, 50);
+        let output_path = temp.path().join("model.json.gz");
+
+        let mut config = make_config(fastq_path, output_path.clone());
+        config.binned_quality_bins = Some(vec![2, 12, 23, 37]);
+
+        runner(&config).unwrap();
+        assert!(output_path.exists());
+
+        let model = SequencingErrorModel::from_file(&output_path).unwrap();
+        let qsm = model.quality_score_model();
+        assert!(qsm.binned_scores, "model should be marked binned");
+        assert_eq!(qsm.quality_score_options, vec![2, 12, 23, 37]);
+    }
+
+    #[test]
+    fn test_runner_binned_emits_only_bin_values() {
+        // End-to-end: train a binned model, sample many quality vectors, and verify
+        // every emitted score is in the bin set.
+        use common::rng::NeatRng;
+        let temp = tempfile::tempdir().unwrap();
+        let fastq_path = temp.path().join("test.fastq");
+        make_test_fastq(&fastq_path, 30, 50);
+        let output_path = temp.path().join("model.json.gz");
+
+        let mut config = make_config(fastq_path, output_path.clone());
+        config.binned_quality_bins = Some(vec![2, 12, 23, 37]);
+        runner(&config).unwrap();
+
+        let model = SequencingErrorModel::from_file(&output_path).unwrap();
+        let qsm = model.quality_score_model();
+        let bins: std::collections::HashSet<usize> = qsm.quality_score_options.iter().copied().collect();
+
+        let mut rng = NeatRng::new_from_seed(&vec!["binned-runner".to_string()]).unwrap();
+        for _ in 0..200 {
+            let scores = qsm.generate_quality_scores(50, &mut rng).unwrap();
+            for &s in &scores {
+                assert!(bins.contains(&s), "sampled non-bin score {s}");
+            }
+        }
     }
 }

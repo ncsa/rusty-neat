@@ -182,11 +182,17 @@ impl SequencingErrorModel {
     }
 
     pub fn generate_quality_scores(
-        &self, 
-        read_length: usize, 
+        &self,
+        read_length: usize,
         rng: &mut NeatRng
     ) -> Result<Vec<usize>, SeqModelError> {
         self.quality_score_model.generate_quality_scores(read_length, rng)
+    }
+
+    /// Borrow the inner quality-score model. Useful for tests and for callers that need
+    /// to inspect model metadata (e.g., `binned_scores`, `quality_score_options`).
+    pub fn quality_score_model(&self) -> &QualityScoreModel {
+        &self.quality_score_model
     }
 }
 

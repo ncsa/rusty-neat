@@ -21,7 +21,7 @@ use crate::gen_seq_error_model::{
 const MAX_SCORE: usize = 94;
 
 /// Snap a raw quality score to the nearest value in a sorted bin list.
-/// Ties round toward the lower bin (deterministic; matches Illumina behavior on some platforms).
+/// Ties round toward the lower bin (deterministic).
 /// `bins` must be non-empty and sorted ascending.
 fn snap_to_bin(score: usize, bins: &[usize]) -> usize {
     debug_assert!(!bins.is_empty(), "snap_to_bin called with empty bin list");

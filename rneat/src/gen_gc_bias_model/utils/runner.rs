@@ -28,6 +28,8 @@ pub fn runner(path: &PathBuf) -> Result<(), GenGcBiasModelError> {
 
     for result in fasta {
         let (contig_name, raw) = result?;
+        // IUPAC codes map to N here intentionally — GC bias model training works on
+        // observed coverage and doesn't require stochastic base resolution.
         let sequence: Vec<Nucleotide> = raw.chars().map(Nucleotide::from).collect();
         let contig_len = sequence.len();
 

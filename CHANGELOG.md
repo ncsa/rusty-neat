@@ -6,8 +6,6 @@
 - `FastaStream` now yields raw sequence strings rather than `Vec<Nucleotide>`, allowing each caller to choose its own conversion strategy.
 - Unit tests: all-code round-trip (output contains only ACGTN), ACGTN passthrough, masked-base passthrough, R two-way uniform distribution (1 000 draws), H three-way uniform distribution (3 000 draws).
 - Integration test: `gen_reads_with_iupac_reference_produces_no_iupac_in_output` — runs the full pipeline against a synthetic FASTA with every IUPAC code and asserts no IUPAC letter appears in the output FASTQ.
-
-## rneat v1.5.1
 - Added a binned scoring feature. Activated by user input when forming the quality score model, this will force rneat to bin the quality scores of the input data (if they are already binned, this is trivial) to user-defined bins. When this model is used in gen_reads, it creates a binned output.
 - Added a number of unit tests and integration tests.
 

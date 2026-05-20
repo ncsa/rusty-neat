@@ -227,6 +227,147 @@ mod tests {
     }
 
     #[test]
+    fn test_runner_zero_tlen_filtered_to_empty_data() {
+        // Records with TLEN=0 must be filtered out by the BAM reader (it requires tlen > 0).
+        // With every record at TLEN=0 the runner sees zero usable fragments and returns
+        // EmptyData — same error variant as a literally empty BAM.
+        let temp = tempfile::tempdir().unwrap();
+        let bam_path = temp.path().join("zero_tlen.bam");
+        write_test_frag_bam(&bam_path, &[0usize; 8]);
+        let output = temp.path().join("model.json.gz");
+        let config = RunConfiguration {
+            input_file: bam_path,
+            output_file: output,
+            overwrite_output: true,
+            min_reads: 2,
+        };
+        let err = runner(&config).unwrap_err();
+        assert!(
+            matches!(err, GenFragLengthModelError::EmptyData),
+            "expected EmptyData for all-zero-TLEN BAM, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn test_runner_single_ended_bam_filtered_to_empty_data() {
+        // A BAM where reads are not segmented (single-ended sequencing) yields no fragment
+        // lengths — the reader's flag filter drops every record. Lock in EmptyData.
+        let temp = tempfile::tempdir().unwrap();
+        let bam_path = temp.path().join("single_ended.bam");
+        write_single_ended_frag_bam(&bam_path, &[150usize, 200, 250]);
+        let output = temp.path().join("model.json.gz");
+        let config = RunConfiguration {
+            input_file: bam_path,
+            output_file: output,
+            overwrite_output: true,
+            min_reads: 2,
+        };
+        let err = runner(&config).unwrap_err();
+        assert!(
+            matches!(err, GenFragLengthModelError::EmptyData),
+            "expected EmptyData for single-ended BAM, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn test_runner_low_mapq_filtered_to_empty_data() {
+        // Reads with MAPQ <= FRAG_FILTER_MAPQUAL (10) are dropped. With every record at
+        // MAPQ=5 we expect EmptyData.
+        let temp = tempfile::tempdir().unwrap();
+        let bam_path = temp.path().join("low_mapq.bam");
+        write_frag_bam_with_mapq(&bam_path, &[150usize, 200, 250], 5);
+        let output = temp.path().join("model.json.gz");
+        let config = RunConfiguration {
+            input_file: bam_path,
+            output_file: output,
+            overwrite_output: true,
+            min_reads: 2,
+        };
+        let err = runner(&config).unwrap_err();
+        assert!(
+            matches!(err, GenFragLengthModelError::EmptyData),
+            "expected EmptyData for low-MAPQ BAM, got {err:?}",
+        );
+    }
+
+    /// Single-ended variant of `write_test_frag_bam`: no SEGMENTED/FIRST_SEGMENT flags set,
+    /// otherwise identical. Used to verify the read filter rejects single-ended BAMs.
+    #[cfg(test)]
+    fn write_single_ended_frag_bam(path: &std::path::PathBuf, tlens: &[usize]) {
+        use noodles::bam;
+        use noodles::sam::{
+            self as sam,
+            alignment::{
+                RecordBuf,
+                io::Write as _,
+                record::{cigar::{op::Kind, Op}, Flags, MappingQuality},
+                record_buf::{Cigar, Sequence},
+            },
+            header::record::value::{Map, map::ReferenceSequence},
+        };
+        let header = sam::Header::builder()
+            .add_reference_sequence(
+                b"chr1".to_vec(),
+                Map::<ReferenceSequence>::new(std::num::NonZero::<usize>::new(1_000_000).unwrap()),
+            )
+            .build();
+        let file = std::fs::File::create(path).unwrap();
+        let mut writer = bam::io::Writer::new(file);
+        writer.write_header(&header).unwrap();
+        let seq = b"ACGT";
+        for &tlen in tlens {
+            let cigar: Cigar = [Op::new(Kind::Match, 4)].into_iter().collect();
+            let mut record = RecordBuf::default();
+            *record.flags_mut() = Flags::empty(); // single-ended: no SEGMENTED bit
+            *record.cigar_mut() = cigar;
+            *record.sequence_mut() = Sequence::from(seq.as_ref());
+            *record.mapping_quality_mut() = Some(MappingQuality::try_from(30u8).unwrap());
+            *record.reference_sequence_id_mut() = Some(0);
+            *record.template_length_mut() = tlen as i32;
+            writer.write_alignment_record(&header, &record).unwrap();
+        }
+    }
+
+    /// Variant of `write_test_frag_bam` that lets the test choose MAPQ. Used to verify the
+    /// MAPQ filter in read_fragment_lengths drops low-confidence alignments.
+    #[cfg(test)]
+    fn write_frag_bam_with_mapq(path: &std::path::PathBuf, tlens: &[usize], mapq: u8) {
+        use noodles::bam;
+        use noodles::sam::{
+            self as sam,
+            alignment::{
+                RecordBuf,
+                io::Write as _,
+                record::{cigar::{op::Kind, Op}, Flags, MappingQuality},
+                record_buf::{Cigar, Sequence},
+            },
+            header::record::value::{Map, map::ReferenceSequence},
+        };
+        let header = sam::Header::builder()
+            .add_reference_sequence(
+                b"chr1".to_vec(),
+                Map::<ReferenceSequence>::new(std::num::NonZero::<usize>::new(1_000_000).unwrap()),
+            )
+            .build();
+        let file = std::fs::File::create(path).unwrap();
+        let mut writer = bam::io::Writer::new(file);
+        writer.write_header(&header).unwrap();
+        let seq = b"ACGT";
+        for &tlen in tlens {
+            let cigar: Cigar = [Op::new(Kind::Match, 4)].into_iter().collect();
+            let mut record = RecordBuf::default();
+            *record.flags_mut() = Flags::SEGMENTED | Flags::FIRST_SEGMENT;
+            *record.cigar_mut() = cigar;
+            *record.sequence_mut() = Sequence::from(seq.as_ref());
+            *record.mapping_quality_mut() = Some(MappingQuality::try_from(mapq).unwrap());
+            *record.reference_sequence_id_mut() = Some(0);
+            *record.mate_reference_sequence_id_mut() = Some(0);
+            *record.template_length_mut() = tlen as i32;
+            writer.write_alignment_record(&header, &record).unwrap();
+        }
+    }
+
+    #[test]
     fn test_runner_empty_bam_errors() {
         let temp = tempfile::tempdir().unwrap();
         let bam_path = temp.path().join("empty.bam");

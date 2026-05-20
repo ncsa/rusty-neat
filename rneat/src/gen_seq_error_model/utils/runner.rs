@@ -397,6 +397,38 @@ mod tests {
     }
 
     #[test]
+    fn test_runner_truncated_fastq_errors() {
+        // FASTQ with only 3 lines (no quality line) must yield MalformedFastq, not a panic
+        // or an Ok with garbage data.
+        let temp = tempfile::tempdir().unwrap();
+        let fastq_path = temp.path().join("trunc.fastq");
+        std::fs::write(&fastq_path, "@h\nACGT\n+\n").unwrap();
+        let output_path = temp.path().join("model.json.gz");
+        let config = make_config(fastq_path, output_path);
+        let err = runner(&config).unwrap_err();
+        assert!(
+            matches!(err, GenSeqErrorModelError::MalformedFastq(_)),
+            "expected MalformedFastq for truncated FASTQ, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn test_runner_empty_first_qual_line_errors() {
+        // A FASTQ where the first record's quality line is empty (length 0) must surface as
+        // MalformedFastq — the code computes read_length from that line.
+        let temp = tempfile::tempdir().unwrap();
+        let fastq_path = temp.path().join("empty_qual.fastq");
+        std::fs::write(&fastq_path, "@h\nA\n+\n\n").unwrap();
+        let output_path = temp.path().join("model.json.gz");
+        let config = make_config(fastq_path, output_path);
+        let err = runner(&config).unwrap_err();
+        assert!(
+            matches!(err, GenSeqErrorModelError::MalformedFastq(_)),
+            "expected MalformedFastq for empty-qual FASTQ, got {err:?}",
+        );
+    }
+
+    #[test]
     fn test_runner_empty_fastq_errors() {
         let temp = tempfile::tempdir().unwrap();
         let fastq_path = temp.path().join("empty.fastq");
@@ -772,5 +804,45 @@ mod tests {
                 assert!(bins.contains(&s), "sampled non-bin score {s}");
             }
         }
+    }
+
+    #[test]
+    fn test_runner_binned_error_rate_differs_from_unbinned() {
+        // Same FASTQ, same everything except the binning. Quality scores in the synthetic
+        // FASTQ span 33..=42 (see make_test_fastq); binning to [2, 12, 23, 37] snaps every
+        // observed score to Q37, which has a smaller per-base error probability than the
+        // average of 33..=42. The serialized error_rate must reflect that — if it doesn't,
+        // we've forgotten to use the snapped counts somewhere in the pipeline.
+        let temp = tempfile::tempdir().unwrap();
+        let fastq_path = temp.path().join("test.fastq");
+        make_test_fastq(&fastq_path, 60, 80);
+
+        // Run 1: unbinned.
+        let out_unbinned = temp.path().join("unbinned.json.gz");
+        let config = make_config(fastq_path.clone(), out_unbinned.clone());
+        runner(&config).unwrap();
+        let er_unbinned = SequencingErrorModel::from_file(&out_unbinned).unwrap().error_rate();
+
+        // Run 2: binned.
+        let out_binned = temp.path().join("binned.json.gz");
+        let mut binned_config = make_config(fastq_path, out_binned.clone());
+        binned_config.binned_quality_bins = Some(vec![2, 12, 23, 37]);
+        runner(&binned_config).unwrap();
+        let er_binned = SequencingErrorModel::from_file(&out_binned).unwrap().error_rate();
+
+        assert!(er_unbinned > 0.0, "unbinned error_rate should be positive");
+        assert!(er_binned > 0.0, "binned error_rate should be positive");
+        // Q37 → 10^-3.7 ≈ 2.00e-4. Average of Q33..=Q42 → ~2.2e-4. They must differ.
+        assert!(
+            (er_unbinned - er_binned).abs() > 1e-6,
+            "binning must change error_rate (unbinned={er_unbinned}, binned={er_binned})",
+        );
+        // Expect binned < unbinned in this specific synthetic case (all snaps go up to Q37,
+        // which is on the lower-error end of the 33..=42 range).
+        assert!(
+            er_binned < er_unbinned,
+            "binning to Q37 in this fixture should reduce error_rate \
+             (unbinned={er_unbinned}, binned={er_binned})",
+        );
     }
 }

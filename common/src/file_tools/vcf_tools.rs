@@ -352,6 +352,123 @@ chr1\t100\t.\tA\tT\t.\tPASS\t.\tGT\t0/1\n";
     }
 
     #[test]
+    fn test_read_vcf_multi_allelic_alt_skipped() {
+        // Multi-allelic records (ALT field containing ',') are explicitly skipped
+        // by the parser. This test locks in that contract.
+        let vcf_content = "\
+##fileformat=VCFv4.1\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n\
+chr1\t100\t.\tA\tT,C\t60\tPASS\t.\tGT\t1|2\n\
+chr1\t200\t.\tG\tC\t60\tPASS\t.\tGT\t0/1\n";
+        let mut tmp = tempfile::Builder::new().suffix(".vcf").tempfile().unwrap();
+        write!(tmp, "{}", vcf_content).unwrap();
+        let records = read_vcf(tmp.path().to_path_buf()).unwrap();
+        let variants = records.get("chr1").expect("chr1 not found");
+        assert_eq!(
+            variants.len(), 1,
+            "multi-allelic record should be skipped; only the simple SNP at 200 should remain",
+        );
+        assert_eq!(variants[0].location, 200);
+    }
+
+    #[test]
+    fn test_read_vcf_structural_variant_alt_parses_without_panic() {
+        // `<DEL>`-style ALT strings aren't bcf-style SVs we know how to simulate; today the
+        // parser doesn't filter them, so each `<`/`D`/`E`/`L`/`>` char becomes Nucleotide::N
+        // and the record is stored as an Insertion-typed variant. We don't endorse that — but
+        // we lock in "doesn't panic" so future stricter handling is an explicit choice, not a
+        // silent regression.
+        let vcf_content = "\
+##fileformat=VCFv4.1\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n\
+chr1\t100\t.\tA\t<DEL>\t60\tPASS\tSVTYPE=DEL;END=200\tGT\t0/1\n";
+        let mut tmp = tempfile::Builder::new().suffix(".vcf").tempfile().unwrap();
+        write!(tmp, "{}", vcf_content).unwrap();
+        let result = read_vcf(tmp.path().to_path_buf());
+        assert!(result.is_ok(), "SV ALT must not error the whole parse: {:?}", result);
+    }
+
+    #[test]
+    fn test_read_vcf_info_with_embedded_semicolons_preserved() {
+        // INFO is split only on \t, so embedded ';' in the INFO column should not corrupt
+        // downstream fields (FORMAT and SAMPLE). Lock in the round-trip.
+        let info = "DESC=\"contains;semis\";END=300;NS=1";
+        let vcf_content = format!(
+            "##fileformat=VCFv4.1\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n\
+chr1\t100\t.\tA\tT\t60\tPASS\t{}\tGT\t0/1\n",
+            info,
+        );
+        let mut tmp = tempfile::Builder::new().suffix(".vcf").tempfile().unwrap();
+        write!(tmp, "{}", vcf_content).unwrap();
+        let records = read_vcf(tmp.path().to_path_buf()).unwrap();
+        let variants = records.get("chr1").unwrap();
+        assert_eq!(variants.len(), 1);
+        // The INFO column survives intact; GT (in SAMPLE column) is unaffected.
+        assert_eq!(variants[0].info.as_deref(), Some(info));
+    }
+
+    #[test]
+    fn test_read_vcf_gzipped_input() {
+        // A gzipped VCF (.vcf.gz) should be parsed identically to the plain version.
+        let vcf_content = "\
+##fileformat=VCFv4.1\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n\
+chr1\t100\t.\tA\tT\t60\tPASS\t.\tGT\t0/1\n\
+chr2\t250\t.\tG\tC\t60\tPASS\t.\tGT\t1|1\n";
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("input.vcf.gz");
+        let f = std::fs::File::create(&path).unwrap();
+        let mut encoder = GzEncoder::new(f, Compression::default());
+        encoder.write_all(vcf_content.as_bytes()).unwrap();
+        encoder.finish().unwrap();
+
+        let records = read_vcf(path).unwrap();
+        assert_eq!(records.get("chr1").unwrap().len(), 1);
+        assert_eq!(records.get("chr2").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_read_vcf_all_dot_genotype_treated_as_homozygous() {
+        // Today `gt_from_str` returns Homozygous when no allele parses as zero — `./.` falls
+        // into that bucket. This is arguably a bug (missing GT is not homozygous), but the
+        // test pins the current behavior so any future fix is a deliberate, reviewed change.
+        use crate::structs::variants::Genotype;
+        let vcf_content = "\
+##fileformat=VCFv4.1\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n\
+chr1\t100\t.\tA\tT\t60\tPASS\t.\tGT\t./.\n";
+        let mut tmp = tempfile::Builder::new().suffix(".vcf").tempfile().unwrap();
+        write!(tmp, "{}", vcf_content).unwrap();
+        let records = read_vcf(tmp.path().to_path_buf()).unwrap();
+        let variants = records.get("chr1").unwrap();
+        assert_eq!(variants.len(), 1);
+        assert!(matches!(variants[0].genotype, Genotype::Homozygous));
+    }
+
+    #[test]
+    fn test_read_vcf_mixed_phased_unphased_gt_both_supported() {
+        // Both `0|1` (phased) and `0/1` (unphased) must parse and yield the same genotype.
+        let vcf_content = "\
+##fileformat=VCFv4.1\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n\
+chr1\t100\t.\tA\tT\t60\tPASS\t.\tGT\t0/1\n\
+chr1\t200\t.\tG\tC\t60\tPASS\t.\tGT\t0|1\n";
+        let mut tmp = tempfile::Builder::new().suffix(".vcf").tempfile().unwrap();
+        write!(tmp, "{}", vcf_content).unwrap();
+        use crate::structs::variants::Genotype;
+        let records = read_vcf(tmp.path().to_path_buf()).unwrap();
+        let variants = records.get("chr1").unwrap();
+        assert_eq!(variants.len(), 2);
+        assert!(matches!(variants[0].genotype, Genotype::Heterozygous));
+        assert!(matches!(variants[1].genotype, Genotype::Heterozygous));
+        // Both genotype strings are stored verbatim (not normalized).
+        assert_eq!(variants[0].genotype_str, "0/1");
+        assert_eq!(variants[1].genotype_str, "0|1");
+    }
+
+    #[test]
     fn test_read_vcf_missing_gt_skips_variant() {
         // Variants without GT in FORMAT are skipped with a warning (not a hard error)
         // so that real-world VCFs with mixed FORMAT fields can still be processed.

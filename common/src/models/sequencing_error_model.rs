@@ -342,4 +342,40 @@ mod tests {
         let loaded = SequencingErrorModel::from_file(&path).unwrap();
         assert!((loaded.error_rate() - 0.00555).abs() < 1e-10);
     }
+
+    #[test]
+    fn test_sequencing_error_model_binned_emits_only_bins() {
+        // Wrap a binned QualityScoreModel in SequencingErrorModel, round-trip through disk,
+        // and sample via the wrapper (not the inner model directly). Catches regressions in
+        // the wrapper's delegation path and confirms the binned flag survives the
+        // SequencingErrorModel serialization layer too.
+        use crate::models::quality_scores::QualityScoreModel;
+        use std::collections::HashSet;
+        use tempfile::tempdir;
+
+        let bins = vec![2usize, 12, 23, 37];
+        let n = bins.len();
+        let row = vec![1.0; n];
+        let trans_weights = vec![vec![row.clone(); n]; 3];
+        let qsm = QualityScoreModel::from_counts(
+            bins.clone(), 4, vec![1.0; n], trans_weights, true,
+        ).unwrap();
+        let model = SequencingErrorModel::from_raw_data(0.001, qsm, None).unwrap();
+
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("binned_seq_err.json.gz");
+        model.write_model(&path).unwrap();
+        let loaded = SequencingErrorModel::from_file(&path).unwrap();
+        assert!(loaded.quality_score_model().binned_scores);
+
+        let bin_set: HashSet<usize> = bins.iter().copied().collect();
+        let mut rng = make_rng();
+        for _ in 0..200 {
+            let scores = loaded.generate_quality_scores(50, &mut rng).unwrap();
+            for &s in &scores {
+                assert!(bin_set.contains(&s),
+                    "wrapper emitted non-bin score {s}; bins={bins:?}");
+            }
+        }
+    }
 }

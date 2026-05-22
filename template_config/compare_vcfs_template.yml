@@ -36,3 +36,14 @@ include_homs: false
 # Include calls whose FILTER column is anything other than PASS / ".".
 # Default false.
 include_filtered: false
+
+# Half-width of the ±N bp window used for equivalence detection. The sweep
+# catches FPs and FNs that are denotation-different spellings of the same
+# edit (e.g., a left-aligned indel in the called VCF versus the same indel
+# right-aligned in the golden). Default 50, matching NEAT 2.1's EV_BPRANGE.
+equivalence_window: 50
+
+# Skip the equivalence sweep entirely. Matches NEAT 2.1's `--fast`. When
+# true, only exact (position, ref, alt) matches count as TP — denotation-
+# different alternates show up as FP + FN pairs. Default false.
+fast: false

@@ -1,4 +1,4 @@
-//! Phase 1 driver for `compare-vcfs`: exact-match classification.
+//! Driver for `compare-vcfs`.
 //!
 //! Algorithm:
 //!   1. Read golden + called VCFs via `common::file_tools::vcf_tools::read_vcf`.
@@ -8,15 +8,19 @@
 //!   3. Per contig, key surviving variants by `(position, ref, alt)` into a
 //!      `HashSet<VariantKey>`. TP = golden ∩ called; FN = golden \ called;
 //!      FP = called \ golden.
-//!   4. Aggregate per-contig and total counts, compute precision/recall/F1,
+//!   4. (Phase 2) Unless `fast: true`, stream the reference FASTA and for
+//!      each contig with FPs, run [`equivalence::sweep`] to catch
+//!      denotation-different alternates. FNs consumed by the sweep are
+//!      promoted to TP; FPs consumed are removed from FP.
+//!   5. Aggregate per-contig and total counts, compute precision/recall/F1,
 //!      write `comparison_summary.{json,txt}`.
 //!
-//! Equivalence detection (denotation-different indels) and NEAT-aware FN
-//! attribution are out of scope; see issue #127.
+//! NEAT-aware FN attribution is Phase 3; see issue #127.
 use crate::compare_vcfs::{
     errors::CompareVcfsError,
     utils::{
         config::RunConfiguration,
+        equivalence,
         report::{
             ComparisonSummary, ContigCounts, Metrics, SCHEMA_VERSION, SkipCounts, SummaryInputs,
             write_json, write_txt,
@@ -24,7 +28,7 @@ use crate::compare_vcfs::{
     },
 };
 use common::{
-    file_tools::{bed_reader::read_bed, vcf_tools::read_vcf},
+    file_tools::{bed_reader::read_bed, fasta_stream::FastaStream, vcf_tools::read_vcf},
     structs::{bed_record::BedRecord, nucleotides::Nucleotide, variants::Variant},
 };
 use log::*;
@@ -49,6 +53,15 @@ impl From<&Variant> for VariantKey {
             alternate: v.alternate.clone(),
         }
     }
+}
+
+/// Per-contig comparison buckets retained between exact-match classification
+/// and the optional equivalence sweep. TP records are not retained — only
+/// the count, since the sweep cannot promote to or out of TP.
+struct ContigBuckets {
+    tp_count: usize,
+    fns: Vec<Variant>,
+    fps: Vec<Variant>,
 }
 
 pub fn runner(config: &RunConfiguration) -> Result<(), CompareVcfsError> {
@@ -83,11 +96,25 @@ pub fn runner(config: &RunConfiguration) -> Result<(), CompareVcfsError> {
         config.include_filtered,
     );
 
-    let (per_contig, totals) = classify(&golden_by_contig, &called_by_contig);
+    let mut buckets = classify(&golden_by_contig, &called_by_contig);
+    let raw_tp: usize = buckets.values().map(|b| b.tp_count).sum();
+    let raw_fn: usize = buckets.values().map(|b| b.fns.len()).sum();
+    let raw_fp: usize = buckets.values().map(|b| b.fps.len()).sum();
+    info!("Exact-match classification: TP={raw_tp} FN={raw_fn} FP={raw_fp}");
+
+    let promoted_total = if !config.fast {
+        run_equivalence_sweep(&mut buckets, &config.reference, config.equivalence_window)?
+    } else {
+        info!("Skipping equivalence sweep (fast mode)");
+        0
+    };
+
+    let (per_contig, mut totals) = aggregate(&buckets);
+    totals.equivalents_promoted = promoted_total;
     let metrics = Metrics::from_counts(totals.tp, totals.fn_, totals.fp);
     info!(
-        "Classification: TP={} FN={} FP={}",
-        totals.tp, totals.fn_, totals.fp
+        "Final classification: TP={} (promoted={}) FN={} FP={}",
+        totals.tp, totals.equivalents_promoted, totals.fn_, totals.fp
     );
 
     let summary = ComparisonSummary {
@@ -100,6 +127,8 @@ pub fn runner(config: &RunConfiguration) -> Result<(), CompareVcfsError> {
             contigs_simulated: config.contigs_simulated.clone(),
             include_homs: config.include_homs,
             include_filtered: config.include_filtered,
+            equivalence_window: config.equivalence_window,
+            fast: config.fast,
         },
         totals,
         metrics,
@@ -113,6 +142,56 @@ pub fn runner(config: &RunConfiguration) -> Result<(), CompareVcfsError> {
     info!("Wrote {}", json_path.display());
     info!("Wrote {}", txt_path.display());
     Ok(())
+}
+
+/// Stream the reference FASTA and run the equivalence sweep on each contig
+/// with at least one FP. Mutates `buckets` in place: consumed FNs are
+/// removed from the bucket's `fns` list (and tracked separately as a count
+/// of promoted equivalents); consumed FPs are removed from `fps`.
+fn run_equivalence_sweep(
+    buckets: &mut BTreeMap<String, ContigBuckets>,
+    reference_path: &std::path::Path,
+    window_bp: usize,
+) -> Result<usize, CompareVcfsError> {
+    let need_reference = buckets.values().any(|b| !b.fps.is_empty());
+    if !need_reference {
+        return Ok(0);
+    }
+
+    let stream = FastaStream::open(&reference_path.to_path_buf())
+        .map_err(|e| CompareVcfsError::ConfigurationError(format!("reference: {e}")))?;
+    let mut total_promoted = 0usize;
+    for result in stream {
+        let (contig, sequence) =
+            result.map_err(|e| CompareVcfsError::ConfigurationError(format!("FASTA: {e}")))?;
+        let Some(bucket) = buckets.get_mut(&contig) else {
+            continue;
+        };
+        if bucket.fps.is_empty() {
+            continue;
+        }
+        let ref_bytes = sequence.as_bytes();
+        let sweep = equivalence::sweep(&bucket.fps, &bucket.fns, ref_bytes, window_bp);
+        if sweep.equivalents_promoted == 0 {
+            continue;
+        }
+        let promoted = sweep.equivalents_promoted;
+        // Sort indices descending so each `swap_remove` doesn't disturb the next.
+        let mut fp_idx = sweep.fp_consumed;
+        fp_idx.sort_unstable_by(|a, b| b.cmp(a));
+        for i in fp_idx {
+            bucket.fps.swap_remove(i);
+        }
+        let mut fn_idx = sweep.fn_consumed;
+        fn_idx.sort_unstable_by(|a, b| b.cmp(a));
+        for i in fn_idx {
+            bucket.fns.swap_remove(i);
+        }
+        bucket.tp_count += promoted;
+        total_promoted += promoted;
+        debug!("{contig}: {promoted} equivalents promoted by sweep");
+    }
+    Ok(total_promoted)
 }
 
 /// Drops disqualified variants and tallies the reasons. The returned map keeps
@@ -166,17 +245,14 @@ fn filter_is_pass(v: &Variant) -> bool {
     }
 }
 
+/// Exact-match classification. Splits each contig's variants into
+/// TP (count only), FN (kept as `Variant` so equivalence sweep can apply
+/// them), and FP (same).
 fn classify(
     golden: &HashMap<String, Vec<Variant>>,
     called: &HashMap<String, Vec<Variant>>,
-) -> (BTreeMap<String, ContigCounts>, ContigCounts) {
-    let mut per_contig: BTreeMap<String, ContigCounts> = BTreeMap::new();
-    let mut totals = ContigCounts {
-        tp: 0,
-        fn_: 0,
-        fp: 0,
-    };
-
+) -> BTreeMap<String, ContigBuckets> {
+    let mut out: BTreeMap<String, ContigBuckets> = BTreeMap::new();
     let all_contigs: HashSet<&String> = golden.keys().chain(called.keys()).collect();
     for chrom in all_contigs {
         let g_keys: HashSet<VariantKey> = golden
@@ -188,13 +264,63 @@ fn classify(
             .map(|vs| vs.iter().map(VariantKey::from).collect())
             .unwrap_or_default();
         let tp = g_keys.intersection(&c_keys).count();
-        let fn_ = g_keys.len() - tp;
-        let fp = c_keys.len() - tp;
-        totals.tp += tp;
-        totals.fn_ += fn_;
-        totals.fp += fp;
-        per_contig.insert(chrom.clone(), ContigCounts { tp, fn_, fp });
+        let fns: Vec<Variant> = golden
+            .get(chrom)
+            .into_iter()
+            .flatten()
+            .filter(|v| !c_keys.contains(&VariantKey::from(*v)))
+            .cloned()
+            .collect();
+        let fps: Vec<Variant> = called
+            .get(chrom)
+            .into_iter()
+            .flatten()
+            .filter(|v| !g_keys.contains(&VariantKey::from(*v)))
+            .cloned()
+            .collect();
+        out.insert(
+            chrom.clone(),
+            ContigBuckets {
+                tp_count: tp,
+                fns,
+                fps,
+            },
+        );
     }
+    out
+}
+
+/// Roll `ContigBuckets` (post-sweep) into the report's `ContigCounts` shape.
+fn aggregate(
+    buckets: &BTreeMap<String, ContigBuckets>,
+) -> (BTreeMap<String, ContigCounts>, ContigCounts) {
+    let mut per_contig: BTreeMap<String, ContigCounts> = BTreeMap::new();
+    let mut totals = ContigCounts {
+        tp: 0,
+        fn_: 0,
+        fp: 0,
+        equivalents_promoted: 0,
+    };
+    for (chrom, b) in buckets {
+        let cc = ContigCounts {
+            tp: b.tp_count,
+            fn_: b.fns.len(),
+            fp: b.fps.len(),
+            // We don't currently track per-contig equivalents_promoted as a
+            // standalone counter; surface it at the rollup level via the
+            // difference between final TP and raw TP if needed in future.
+            equivalents_promoted: 0,
+        };
+        totals.tp += cc.tp;
+        totals.fn_ += cc.fn_;
+        totals.fp += cc.fp;
+        per_contig.insert(chrom.clone(), cc);
+    }
+    // totals.equivalents_promoted is computed in the runner from the sweep
+    // results — we'd lose it here. Instead, keep it as 0 in aggregate and
+    // let the caller patch it in. (Actually we don't need that: the runner
+    // already tracks per-bucket TP, which already includes promoted FNs;
+    // we just don't separately attribute. Set this at the caller.)
     (per_contig, totals)
 }
 
@@ -227,11 +353,12 @@ mod tests {
         g.insert("chr1".into(), vec![v.clone()]);
         let mut c = HashMap::new();
         c.insert("chr1".into(), vec![v]);
-        let (per, tot) = classify(&g, &c);
+        let buckets = classify(&g, &c);
+        let (_per, tot) = aggregate(&buckets);
         assert_eq!(tot.tp, 1);
         assert_eq!(tot.fn_, 0);
         assert_eq!(tot.fp, 0);
-        assert_eq!(per["chr1"].tp, 1);
+        assert_eq!(buckets["chr1"].tp_count, 1);
     }
 
     #[test]
@@ -254,10 +381,13 @@ mod tests {
                 snp(30, Nucleotide::T, Nucleotide::A, Some("PASS")),
             ],
         );
-        let (_per, tot) = classify(&g, &c);
+        let buckets = classify(&g, &c);
+        let (_per, tot) = aggregate(&buckets);
         assert_eq!(tot.tp, 1);
         assert_eq!(tot.fn_, 1);
         assert_eq!(tot.fp, 1);
+        assert_eq!(buckets["chr1"].fns.len(), 1);
+        assert_eq!(buckets["chr1"].fps.len(), 1);
     }
 
     #[test]
@@ -274,7 +404,8 @@ mod tests {
             "chr2".into(),
             vec![snp(50, Nucleotide::G, Nucleotide::A, Some("PASS"))],
         );
-        let (per, tot) = classify(&g, &c);
+        let buckets = classify(&g, &c);
+        let (per, tot) = aggregate(&buckets);
         assert_eq!(tot.tp, 0);
         assert_eq!(tot.fn_, 1);
         assert_eq!(tot.fp, 1);

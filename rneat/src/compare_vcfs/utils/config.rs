@@ -19,6 +19,11 @@ pub struct RunConfiguration {
     pub contigs_simulated: Option<Vec<String>>,
     pub include_homs: bool,
     pub include_filtered: bool,
+    /// Half-width of the ±N bp window used for equivalence detection.
+    /// Default 50 (matches NEAT 2.1's `EV_BPRANGE`).
+    pub equivalence_window: usize,
+    /// Skip the equivalence sweep entirely. Matches NEAT 2.1's `--fast`.
+    pub fast: bool,
 }
 
 impl RunConfiguration {
@@ -60,6 +65,14 @@ impl RunConfiguration {
             .get("include_filtered")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+        let equivalence_window = scrape
+            .get("equivalence_window")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(50) as usize;
+        let fast = scrape
+            .get("fast")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         Ok(RunConfiguration {
             golden_vcf,
@@ -71,6 +84,8 @@ impl RunConfiguration {
             contigs_simulated,
             include_homs,
             include_filtered,
+            equivalence_window,
+            fast,
         })
     }
 }

@@ -17,6 +17,11 @@ pub struct ContigCounts {
     pub tp: usize,
     pub fn_: usize,
     pub fp: usize,
+    /// FNs promoted to TP by the equivalence sweep. Already included in `tp`
+    /// and excluded from `fn_`; surfaced separately so users can see how many
+    /// matches were rescued by denotation-aware comparison.
+    #[serde(default)]
+    pub equivalents_promoted: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -85,6 +90,8 @@ pub struct SummaryInputs {
     pub contigs_simulated: Option<Vec<String>>,
     pub include_homs: bool,
     pub include_filtered: bool,
+    pub equivalence_window: usize,
+    pub fast: bool,
 }
 
 pub fn write_json(
@@ -146,10 +153,22 @@ fn render_txt(s: &ComparisonSummary) -> String {
         "  Include filtered:  {}\n",
         s.inputs.include_filtered
     ));
+    if s.inputs.fast {
+        out.push_str("  Equivalence sweep: SKIPPED (fast mode)\n");
+    } else {
+        out.push_str(&format!(
+            "  Equivalence window: ±{} bp\n",
+            s.inputs.equivalence_window
+        ));
+    }
     out.push('\n');
 
     out.push_str("Totals\n------\n");
     out.push_str(&format!("  True positives  (TP): {}\n", s.totals.tp));
+    out.push_str(&format!(
+        "    ↳ promoted by equivalence sweep: {}\n",
+        s.totals.equivalents_promoted
+    ));
     out.push_str(&format!("  False negatives (FN): {}\n", s.totals.fn_));
     out.push_str(&format!("  False positives (FP): {}\n\n", s.totals.fp));
 
@@ -257,11 +276,14 @@ mod tests {
                 contigs_simulated: None,
                 include_homs: false,
                 include_filtered: false,
+                equivalence_window: 50,
+                fast: false,
             },
             totals: ContigCounts {
                 tp: 7,
                 fn_: 1,
                 fp: 2,
+                equivalents_promoted: 0,
             },
             metrics: Metrics::from_counts(7, 1, 2),
             per_contig: BTreeMap::new(),
@@ -287,11 +309,14 @@ mod tests {
                 contigs_simulated: None,
                 include_homs: false,
                 include_filtered: false,
+                equivalence_window: 50,
+                fast: false,
             },
             totals: ContigCounts {
                 tp: 3,
                 fn_: 0,
                 fp: 0,
+                equivalents_promoted: 0,
             },
             metrics: Metrics::from_counts(3, 0, 0),
             per_contig: BTreeMap::new(),
@@ -320,11 +345,14 @@ mod tests {
                 contigs_simulated: None,
                 include_homs: false,
                 include_filtered: false,
+                equivalence_window: 50,
+                fast: false,
             },
             totals: ContigCounts {
                 tp: 0,
                 fn_: 0,
                 fp: 0,
+                equivalents_promoted: 0,
             },
             metrics: Metrics::from_counts(0, 0, 0),
             per_contig: BTreeMap::new(),

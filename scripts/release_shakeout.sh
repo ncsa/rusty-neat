@@ -107,15 +107,32 @@ EOF
 grep -E '(Maximum resident set|Elapsed)' "$WORK/gc.time"
 
 # ── Step 3d: gen-bam-models parity at scale ─────────────────────────────────
+#
+# Two unified runs, one per output. The standalone `gen-frag-length-model`
+# uses `BamWalkFilter::for_frag_length()` which hard-codes `min_mapq = 10`,
+# while the standalone `gen-gc-bias-model` uses `for_coverage()` with the
+# configured `min_mapq` (20 in Step 3c). The unified runner exposes a single
+# walker `min_mapq` that gates BOTH observers, so a single unified config
+# cannot match both standalone filter policies simultaneously. Run twice:
+# once at min_mapq=10 to compare against frag-length, once at min_mapq=20
+# to compare against gc-bias.
 
-log "Step 3d: gen-bam-models (unified) on the same BAM — parity vs standalone"
-cat > "$WORK/unified.yml" <<EOF
+log "Step 3d.1: gen-bam-models (frag-length parity) — min_mapq=10"
+cat > "$WORK/unified_frag.yml" <<EOF
 bam_file: $BAM
-min_mapq: 20
+min_mapq: 10
 frag_length:
   output_file: $WORK/unified_frag.json.gz
   overwrite_output: true
   min_reads: 100
+EOF
+/usr/bin/time -v "$RNEAT" gen-bam-models -c "$WORK/unified_frag.yml" 2> "$WORK/unified_frag.time"
+grep -E '(Maximum resident set|Elapsed)' "$WORK/unified_frag.time"
+
+log "Step 3d.2: gen-bam-models (gc-bias parity) — min_mapq=20"
+cat > "$WORK/unified_gc.yml" <<EOF
+bam_file: $BAM
+min_mapq: 20
 gc_bias:
   reference: $REF
   output_file: $WORK/unified_gc.json.gz
@@ -124,12 +141,12 @@ gc_bias:
   window_stride: 100
   min_windows_per_bin: 10
 EOF
-/usr/bin/time -v "$RNEAT" gen-bam-models -c "$WORK/unified.yml" 2> "$WORK/unified.time"
-grep -E '(Maximum resident set|Elapsed)' "$WORK/unified.time"
+/usr/bin/time -v "$RNEAT" gen-bam-models -c "$WORK/unified_gc.yml" 2> "$WORK/unified_gc.time"
+grep -E '(Maximum resident set|Elapsed)' "$WORK/unified_gc.time"
 
-# Parity check: gzip-decompress and md5 the inner JSON. HashMap iteration noise
-# means raw md5s won't match across processes for HashMap-containing models;
-# fragment-length and GC bias are HashMap-free so direct comparison is valid.
+# Parity: fragment_length and gc_bias models are HashMap-free, so the
+# gzipped JSON deserialises identically regardless of HashMap iteration
+# order — direct `diff` of the decompressed bytes works.
 log "  parity: frag_length unified vs standalone"
 diff <(zcat "$WORK/unified_frag.json.gz") <(zcat "$WORK/frag_model.json.gz") \
     || fail "unified frag-length model diverged from standalone"

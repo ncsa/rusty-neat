@@ -270,8 +270,14 @@ pub fn walk_bam(
 
 // ── Observers ────────────────────────────────────────────────────────────────
 
-/// Collects absolute template lengths (TLEN > 0). Pair with
-/// `BamWalkFilter::for_frag_length()`.
+/// Collects absolute template lengths (TLEN > 0) for paired, first-in-pair,
+/// confidently-mapped reads whose mate is mapped to the same reference.
+///
+/// Self-filtering: rejects records that don't meet its criteria internally, so
+/// it stays correct under any `BamWalkFilter`. Calling with
+/// `BamWalkFilter::for_frag_length()` makes the internal checks redundant
+/// no-ops; calling with a looser filter (e.g. `for_coverage()` from the
+/// unified `gen-bam-models` walker) still produces the same TLEN set.
 #[derive(Debug, Default)]
 pub struct FragLengthObserver {
     pub tlens: Vec<usize>,
@@ -279,6 +285,22 @@ pub struct FragLengthObserver {
 
 impl RecordObserver for FragLengthObserver {
     fn observe(&mut self, record: &bam::Record) -> Result<(), BamReaderError> {
+        let flags = record.flags();
+        if !flags.is_segmented() || !flags.is_first_segment() || flags.is_mate_unmapped() {
+            return Ok(());
+        }
+        let mq = match record.mapping_quality() {
+            Some(mq) => u8::from(mq),
+            None => return Ok(()),
+        };
+        if mq <= FRAG_FILTER_MAPQUAL {
+            return Ok(());
+        }
+        let ref_id = record.reference_sequence_id().transpose()?;
+        let mate_ref_id = record.mate_reference_sequence_id().transpose()?;
+        if ref_id != mate_ref_id {
+            return Ok(());
+        }
         let tlen = record.template_length().unsigned_abs() as usize;
         if tlen > 0 {
             self.tlens.push(tlen);

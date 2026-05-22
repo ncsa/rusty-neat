@@ -8,6 +8,7 @@ extern crate simplelog;
 pub mod filter_reads;
 pub mod gen_frag_length_model;
 pub mod gen_gc_bias_model;
+pub mod gen_bam_models;
 pub mod gen_mut_model;
 pub mod gen_reads;
 pub mod gen_seq_error_model;
@@ -24,7 +25,8 @@ use std::path::PathBuf;
 use thiserror::Error;
 
 use crate::{
-    filter_reads::errors::FilterReadsError, gen_frag_length_model::errors::GenFragLengthModelError,
+    filter_reads::errors::FilterReadsError, gen_bam_models::errors::GenBamModelsError,
+    gen_frag_length_model::errors::GenFragLengthModelError,
     gen_gc_bias_model::errors::GenGcBiasModelError, gen_mut_model::errors::GenMutationModelError,
     gen_reads::errors::GenerateReadsError, gen_seq_error_model::errors::GenSeqErrorModelError,
 };
@@ -46,9 +48,11 @@ pub enum NeatErrors {
     GenFragLengthModel(#[from] GenFragLengthModelError),
     #[error("Error while generating GC bias model {0}")]
     GenGcBiasModel(#[from] GenGcBiasModelError),
+    #[error("Error while generating BAM-derived models {0}")]
+    GenBamModels(#[from] GenBamModelsError),
 }
 
-fn neat_commands() -> [Command; 6] {
+fn neat_commands() -> [Command; 7] {
     // These are the submodule commands. Any new commands added should go here.
     let configuration_arg = Arg::new("configuration_yaml")
         .long("configuration-yaml")
@@ -82,6 +86,10 @@ fn neat_commands() -> [Command; 6] {
             .arg(&configuration_arg),
         Command::new("gen-gc-bias-model")
             .about("Generate a GC bias model from a reference FASTA and aligned BAM")
+            .arg_required_else_help(true)
+            .arg(&configuration_arg),
+        Command::new("gen-bam-models")
+            .about("Build multiple models (frag-length, GC bias) from one BAM in a single pass")
             .arg_required_else_help(true)
             .arg(&configuration_arg),
     ]
@@ -315,6 +323,30 @@ fn main() -> Result<(), NeatErrors> {
                 match result {
                     Err(error) => return Err(NeatErrors::GenGcBiasModel(error)),
                     Ok(()) => info!("rneat gen-gc-bias-model completed successfully"),
+                }
+            }
+        }
+        Some(("gen-bam-models", _)) => {
+            if let Some(("gen-bam-models", cmd)) = subcommand
+                && cmd.contains_id("configuration_yaml")
+            {
+                info!("Running rneat gen-bam-models");
+                let file = cmd
+                    .get_one::<PathBuf>("configuration_yaml")
+                    .expect("Must provide a path with configuration-yaml")
+                    .to_path_buf();
+
+                if !file.is_file() {
+                    return Err(NeatErrors::GenBamModels(GenBamModelsError::ConfigError(
+                        "Must supply a valid configuration file to run gen-bam-models!"
+                            .to_string(),
+                    )));
+                }
+                info!("Running gen-bam-models to build multiple BAM-derived models in one pass.");
+                let result = gen_bam_models::main(&file);
+                match result {
+                    Err(error) => return Err(NeatErrors::GenBamModels(error)),
+                    Ok(()) => info!("rneat gen-bam-models completed successfully"),
                 }
             }
         }

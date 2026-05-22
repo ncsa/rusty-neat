@@ -14,13 +14,25 @@ const FILTER_MEDDEV_M: f64 = 10.0;
 pub fn runner(config: &RunConfiguration) -> Result<(), GenFragLengthModelError> {
     info!("Reading fragment lengths from {:?}", config.input_file);
     let tlens = read_fragment_lengths(&config.input_file)?;
+    run_from_tlens(tlens, config.min_reads, &config.output_file)
+}
 
+/// Builds and writes a fragment length model from a pre-collected list of
+/// template lengths (e.g. produced by `FragLengthObserver` during a shared
+/// BAM walk in the unified `gen-bam-models` runner). Applies MAD-based
+/// outlier filtering and rare-length pruning, fits a normal distribution,
+/// and writes the gzipped JSON model.
+pub fn run_from_tlens(
+    tlens: Vec<usize>,
+    min_reads: usize,
+    output_file: &std::path::PathBuf,
+) -> Result<(), GenFragLengthModelError> {
     if tlens.is_empty() {
         return Err(GenFragLengthModelError::EmptyData);
     }
     info!("Collected {} raw fragment lengths", tlens.len());
 
-    let filtered = filter_lengths(tlens, config.min_reads);
+    let filtered = filter_lengths(tlens, min_reads);
 
     if filtered.is_empty() {
         return Err(GenFragLengthModelError::FilteredToEmpty);
@@ -38,8 +50,8 @@ pub fn runner(config: &RunConfiguration) -> Result<(), GenFragLengthModelError> 
     );
 
     let model = FragmentLengthModel::new_normal(mean, std_dev)?;
-    model.write_file(&config.output_file)?;
-    info!("Wrote fragment length model to {:?}", config.output_file);
+    model.write_file(output_file)?;
+    info!("Wrote fragment length model to {:?}", output_file);
     Ok(())
 }
 

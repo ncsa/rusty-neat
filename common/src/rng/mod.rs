@@ -106,11 +106,11 @@ impl NeatRng {
         Ok(())
     }
 
-    pub fn range_i64(&mut self, min:i64, max:i64) -> Result<i64, String> {
-        if max > i64::MAX {
-            return Err("Max value out of range for i64".to_string())
+    pub fn range_i64(&mut self, min: i64, max: i64) -> Result<i64, String> {
+        if min > max {
+            return Err(format!("Invalid range: min ({min}) > max ({max})"));
         }
-        Ok(((min.clone() as f64) + (self.random().unwrap() * ((max - min) as f64).round())) as i64)
+        Ok((min as f64 + self.random().unwrap() * ((max - min) as f64).round()) as i64)
     }
 
     pub fn rand_int(&mut self) -> Result<u64, NeatRngError> {

@@ -217,8 +217,22 @@ impl RunConfiguration {
                             .ok_or_else(|| GenerateReadsError::ConfigReadError("produce_bam".to_string(), "boolean".to_string()))?;
                     },
                     "rng_seed" => {
-                        config.rng_seed = Some(value.as_str()
-                            .ok_or_else(|| GenerateReadsError::ConfigReadError("rng_seed".to_string(), "String".to_string()))?.to_string());
+                        // Accept either a quoted string (whitespace-separated multi-term seeds)
+                        // or a bare integer literal; integers are coerced to their string form
+                        // since the downstream seeder consumes whitespace-split string tokens.
+                        let seed_string = if let Some(s) = value.as_str() {
+                            s.to_string()
+                        } else if let Some(n) = value.as_u64() {
+                            n.to_string()
+                        } else if let Some(n) = value.as_i64() {
+                            n.to_string()
+                        } else {
+                            return Err(GenerateReadsError::ConfigReadError(
+                                "rng_seed".to_string(),
+                                "String or integer".to_string(),
+                            ));
+                        };
+                        config.rng_seed = Some(seed_string);
                     },
                     "overwrite_output" => {
                         config.overwrite_output = value.as_bool()
@@ -747,5 +761,32 @@ mod tests {
         let mut scrape_config = HashMap::new();
         scrape_config.insert("reference".to_string(), Value::String("non_existent_file.fasta".to_string()));
         assert!(RunConfiguration::from_scrape_config(scrape_config).is_err());
+    }
+
+    #[test]
+    fn test_rng_seed_accepts_integer() {
+        // YAML `rng_seed: 42` (bare integer) used to panic with
+        // ConfigReadError("rng_seed", "String"). It now coerces to "42" so the
+        // downstream whitespace-tokenized seeder sees a single seed term.
+        let ref_path = "test_data/references/H1N1.fa";
+        let mut scrape_config = HashMap::new();
+        scrape_config.insert("reference".to_string(), Value::String(ref_path.to_string()));
+        scrape_config.insert("rng_seed".to_string(), Value::Number(42.into()));
+        let config = RunConfiguration::from_scrape_config(scrape_config).unwrap();
+        assert_eq!(config.rng_seed.as_deref(), Some("42"));
+    }
+
+    #[test]
+    fn test_rng_seed_accepts_quoted_string() {
+        // Multi-term seeds remain available via a quoted string.
+        let ref_path = "test_data/references/H1N1.fa";
+        let mut scrape_config = HashMap::new();
+        scrape_config.insert("reference".to_string(), Value::String(ref_path.to_string()));
+        scrape_config.insert(
+            "rng_seed".to_string(),
+            Value::String("42 hello world".to_string()),
+        );
+        let config = RunConfiguration::from_scrape_config(scrape_config).unwrap();
+        assert_eq!(config.rng_seed.as_deref(), Some("42 hello world"));
     }
 }

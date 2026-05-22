@@ -207,7 +207,7 @@ mod tests {
         let mut temp_file: PathBuf = PathBuf::from(temp_dir.path());
         temp_file.push("Test_data.txt\n");
         let mut file_obj = create_output_file(&temp_file, true).unwrap();
-        file_obj.write("Test data!\nThis is only a test\nPlease disregard all information within\nthe end".as_bytes()).unwrap();
+        file_obj.write_all("Test data!\nThis is only a test\nPlease disregard all information within\nthe end".as_bytes()).unwrap();
         file_obj.flush().unwrap();
         let mut outfile = PathBuf::from(temp_dir.path());
         outfile.push("test_data_filtered.txt");

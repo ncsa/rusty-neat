@@ -516,6 +516,14 @@ pub fn read_bam_transitions(path: &PathBuf) -> Result<[[usize; 4]; 4], BamReader
 #[cfg(test)]
 mod tests {
     use super::*;
+    use noodles::sam::alignment::record::cigar::op::Kind as CigarOpKind;
+
+    // (flags, mapq, tlen, reference_sequence_id, mate_reference_sequence_id)
+    type TestBamRecord = (Flags, Option<u8>, i32, Option<usize>, Option<usize>);
+    // (cigar_kind, cigar_op_length)
+    type TestCigarOp = (CigarOpKind, usize);
+    // (reference_sequence_id, alignment_start_1based, cigar_ops)
+    type TestCoverageRecord<'a> = (usize, usize, &'a [TestCigarOp]);
 
     #[test]
     fn test_parse_md_simple() {
@@ -574,7 +582,7 @@ mod tests {
     /// scenarios are expressible.
     fn write_test_bam(
         path: &std::path::PathBuf,
-        records: &[(Flags, Option<u8>, i32, Option<usize>, Option<usize>)],
+        records: &[TestBamRecord],
     ) {
         use noodles::sam::{
             self as sam,
@@ -729,7 +737,7 @@ mod tests {
     fn write_coverage_test_bam(
         path: &std::path::PathBuf,
         contigs: &[(&[u8], usize)],
-        records: &[(usize, usize, &[(noodles::sam::alignment::record::cigar::op::Kind, usize)])],
+        records: &[TestCoverageRecord<'_>],
     ) {
         use noodles::core::Position;
         use noodles::sam::{

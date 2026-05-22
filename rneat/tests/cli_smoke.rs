@@ -19,6 +19,8 @@ const EXPECTED_SUBCOMMANDS: &[&str] = &[
     "gen-seq-error-model",
     "gen-frag-length-model",
     "gen-gc-bias-model",
+    "gen-bam-models",
+    "compare-vcfs",
 ];
 
 #[test]

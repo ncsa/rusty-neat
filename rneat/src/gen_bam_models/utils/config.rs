@@ -7,10 +7,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
-use common::{
-    file_tools::bed_reader::read_bed,
-    structs::bed_record::BedRecord,
-};
+use common::{file_tools::bed_reader::read_bed, structs::bed_record::BedRecord};
 
 use crate::gen_bam_models::errors::GenBamModelsError;
 
@@ -62,10 +59,7 @@ impl RunConfiguration {
             )));
         }
 
-        let min_mapq = scrape
-            .get("min_mapq")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0) as u8;
+        let min_mapq = scrape.get("min_mapq").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
 
         let frag_length = scrape
             .get("frag_length")
@@ -97,9 +91,18 @@ fn parse_frag_length_section(v: &Value) -> Result<FragLengthSection, GenBamModel
         GenBamModelsError::ConfigError("frag_length section must be a mapping".to_string())
     })?;
 
-    let get_str = |k: &str| map.get(Value::String(k.to_string())).and_then(|v| v.as_str());
-    let get_u64 = |k: &str| map.get(Value::String(k.to_string())).and_then(|v| v.as_u64());
-    let get_bool = |k: &str| map.get(Value::String(k.to_string())).and_then(|v| v.as_bool());
+    let get_str = |k: &str| {
+        map.get(Value::String(k.to_string()))
+            .and_then(|v| v.as_str())
+    };
+    let get_u64 = |k: &str| {
+        map.get(Value::String(k.to_string()))
+            .and_then(|v| v.as_u64())
+    };
+    let get_bool = |k: &str| {
+        map.get(Value::String(k.to_string()))
+            .and_then(|v| v.as_bool())
+    };
 
     let output_file = PathBuf::from(get_str("output_file").ok_or_else(|| {
         GenBamModelsError::ConfigError("frag_length.output_file is required".to_string())
@@ -125,9 +128,18 @@ fn parse_gc_bias_section(v: &Value) -> Result<GcBiasSection, GenBamModelsError> 
         GenBamModelsError::ConfigError("gc_bias section must be a mapping".to_string())
     })?;
 
-    let get_str = |k: &str| map.get(Value::String(k.to_string())).and_then(|v| v.as_str());
-    let get_u64 = |k: &str| map.get(Value::String(k.to_string())).and_then(|v| v.as_u64());
-    let get_bool = |k: &str| map.get(Value::String(k.to_string())).and_then(|v| v.as_bool());
+    let get_str = |k: &str| {
+        map.get(Value::String(k.to_string()))
+            .and_then(|v| v.as_str())
+    };
+    let get_u64 = |k: &str| {
+        map.get(Value::String(k.to_string()))
+            .and_then(|v| v.as_u64())
+    };
+    let get_bool = |k: &str| {
+        map.get(Value::String(k.to_string()))
+            .and_then(|v| v.as_bool())
+    };
 
     let reference = PathBuf::from(get_str("reference").ok_or_else(|| {
         GenBamModelsError::ConfigError("gc_bias.reference is required".to_string())

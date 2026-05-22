@@ -62,7 +62,7 @@ impl Mash {
             h -= n as f64;
             n += (h * NORM) as u64;
         }
-        self.n = n as u64;
+        self.n = n;
         self.n as f64 / NORM
     }
 }

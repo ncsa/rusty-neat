@@ -1,12 +1,9 @@
-use thiserror::Error;
 use common::{
     file_tools::bam_reader::BamReaderError,
-    models::{
-        quality_scores::QualityModelError,
-        sequencing_error_model::SeqModelError,
-    },
+    models::{quality_scores::QualityModelError, sequencing_error_model::SeqModelError},
     structs::transition_matrix::TransitionMatrixError,
 };
+use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum GenSeqErrorModelError {

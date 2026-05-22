@@ -7,10 +7,7 @@ pub fn check_parent(filename: &PathBuf, create: bool) -> io::Result<&PathBuf> {
     // checks that the parent dir exists and then if so creates the Path object open
     // and ready to write
     let file_path = filename;
-    let parent = file_path
-        .parent()
-        .unwrap()
-        .to_path_buf();
+    let parent = file_path.parent().unwrap().to_path_buf();
     if !parent.exists() && create {
         check_create_dir(&parent);
     } else if !parent.exists() {

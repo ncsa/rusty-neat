@@ -1,11 +1,8 @@
 pub mod errors;
 pub mod utils;
 
+use crate::gen_seq_error_model::{errors::GenSeqErrorModelError, utils::config::RunConfiguration};
 use std::path::PathBuf;
-use crate::gen_seq_error_model::{
-    errors::GenSeqErrorModelError,
-    utils::config::RunConfiguration,
-};
 
 pub fn main(config_file: &PathBuf) -> Result<(), GenSeqErrorModelError> {
     let config = RunConfiguration::from(config_file)?;
@@ -33,6 +30,9 @@ mod tests {
         let mut tmp = NamedTempFile::new().unwrap();
         write!(tmp, "{}", yaml).unwrap();
         main(&tmp.path().to_path_buf()).unwrap();
-        assert!(output.exists(), "output model file should have been written");
+        assert!(
+            output.exists(),
+            "output model file should have been written"
+        );
     }
 }

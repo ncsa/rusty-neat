@@ -1,56 +1,50 @@
-use rayon::prelude::*;
 use common::file_tools::file_io::create_output_file;
-use common::structs::variants::VariantType;
-use tempfile;
-use log::{info, debug, warn, error};
 use common::rng::NeatRng;
+use common::structs::variants::VariantType;
+use log::{debug, error, info, warn};
+use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
 use std::io::BufWriter;
+use std::path::PathBuf;
 use std::sync::Arc;
+use tempfile;
 
-use flate2::{
-    Compression,
-    write::GzEncoder
-};
-use common::models::gc_bias_model::GcBiasModel;
 use crate::{
     common::{
         file_tools::{
             bam_writer::{BamBodyWriter, BamContext, BamRecordStager, concat_temp_bams},
             bed_reader::read_bed,
-            fasta_stream::{FastaStream, map_buffer, apply_n_substitution, scan_fasta_lengths, resolve_iupac_bases},
-            fastq_tools::{
-                combine_temp_fastqs,
-                write_block_fastq
+            fasta_stream::{
+                FastaStream, apply_n_substitution, map_buffer, resolve_iupac_bases,
+                scan_fasta_lengths,
             },
-            file_io::{append_to_file, VectorBuffer},
-            vcf_tools::{read_vcf, write_vcf}
-        }, models::{
-            fragment_length::FragmentLengthModel,
-            mutation_model::MutationModel,
-            quality_scores::QualityScoreModel,
-            sequencing_error_model::SequencingErrorModel
-        }, structs::{
+            fastq_tools::{combine_temp_fastqs, write_block_fastq},
+            file_io::{VectorBuffer, append_to_file},
+            vcf_tools::{read_vcf, write_vcf},
+        },
+        models::{
+            fragment_length::FragmentLengthModel, mutation_model::MutationModel,
+            quality_scores::QualityScoreModel, sequencing_error_model::SequencingErrorModel,
+        },
+        structs::{
             bed_record::BedRecord,
-            sequence_block::{SequenceBlock, SequenceMap, RegionType},
             mutated_map::MutatedMap,
-            nucleotides::{NucleotideSelector, Nucleotide},
-            variants::Variant
-        }
+            nucleotides::{Nucleotide, NucleotideSelector},
+            sequence_block::{RegionType, SequenceBlock, SequenceMap},
+            variants::Variant,
+        },
     },
     gen_reads::{
         errors::GenerateReadsError,
         utils::{
             config::RunConfiguration,
+            generate_fragments::{generate_fragments, generate_weighted_fragments},
             generate_variants::generate_variants,
-            generate_fragments::{
-                generate_fragments,
-                generate_weighted_fragments,
-            },
-        }
-    }
+        },
+    },
 };
+use common::models::gc_bias_model::GcBiasModel;
+use flate2::{Compression, write::GzEncoder};
 
 struct ContigContext<'a> {
     config: &'a RunConfiguration,
@@ -83,14 +77,17 @@ struct ProcessedContigData {
     bam_body_file: Option<PathBuf>,
 }
 
-pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec<PathBuf>, GenerateReadsError> {
+pub fn run_neat(
+    config: &RunConfiguration,
+    rng: &mut NeatRng,
+) -> Result<Vec<PathBuf>, GenerateReadsError> {
     let working_dir = tempfile::tempdir().unwrap();
     info!("Created temp dir at {:?}", working_dir);
 
     info!("Generate mutation model");
     let mutation_model = {
         match &config.mutation_model {
-            Some(filename) => MutationModel::from_file(&filename)?,
+            Some(filename) => MutationModel::from_file(filename)?,
             None => MutationModel::default()?,
         }
     };
@@ -98,36 +95,31 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
         Some(path) => {
             info!("Loading mutation regions BED: {:?}", path);
             Some(read_bed(path, true)?)
-        },
+        }
         None => None,
     };
     let default_run_mutation_rate = match config.mutation_rate {
         Some(rate) => rate,
-        None => mutation_model.mutation_rate
+        None => mutation_model.mutation_rate,
     };
 
     info!("Generate fragment length model");
     let fragment_length_model: FragmentLengthModel = {
         match &config.fragment_model {
-            Some(filename) => FragmentLengthModel::discrete_from_file(&filename)?.into(),
-            None => {
-                match config.fragment_mean {
-                    Some(mean) => {
-                        FragmentLengthModel::new_normal(
-                            mean,
-                            config.fragment_st_dev.unwrap()
-                        )?.into()
-                    },
-                    None => FragmentLengthModel::default()?.into(),
+            Some(filename) => FragmentLengthModel::discrete_from_file(filename)?,
+            None => match config.fragment_mean {
+                Some(mean) => {
+                    FragmentLengthModel::new_normal(mean, config.fragment_st_dev.unwrap())?
                 }
-            }
+                None => FragmentLengthModel::default()?,
+            },
         }
     };
 
     info!("Generate sequencing error model");
     let seq_error_model: SequencingErrorModel = {
         match &config.sequence_error_model {
-            Some(filename) => SequencingErrorModel::from_file(&filename)?,
+            Some(filename) => SequencingErrorModel::from_file(filename)?,
             None => SequencingErrorModel::default()?,
         }
     };
@@ -150,7 +142,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
         Some(path) => {
             info!("Loading GC Bias model: {}", path.display());
             GcBiasModel::from_file(path)?
-        },
+        }
         None => GcBiasModel::default(),
     };
 
@@ -161,7 +153,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
         Some(path) => {
             info!("Loading target BED: {:?}", path);
             Some(read_bed(path, false)?)
-        },
+        }
         None => None,
     };
 
@@ -170,7 +162,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
             info!("Loading input VCF: {}", path.display());
             let raw = read_vcf(path.to_path_buf())?;
             Some(filter_input_vcf(raw))
-        },
+        }
         None => None,
     };
 
@@ -209,23 +201,27 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
 
     // All contigs processed in parallel; BAM workers each write a temp body file.
     let fasta = FastaStream::open(&config.reference)?;
-    let parallel_iter = fasta
-        .enumerate()
-        .par_bridge()
-        .map(|(idx, result)| -> Result<ContigResult, GenerateReadsError> {
+    let parallel_iter = fasta.enumerate().par_bridge().map(
+        |(idx, result)| -> Result<ContigResult, GenerateReadsError> {
             let (name, raw) = result?;
             let mut child_rng = ctx.base_rng.derive_child(idx as u64);
             let (seq, iupac_count) = resolve_iupac_bases(&raw, &mut child_rng)?;
             if iupac_count > 0 {
-                warn!("Contig {}: resolved {} IUPAC ambiguity base(s) to ACGT", name, iupac_count);
+                warn!(
+                    "Contig {}: resolved {} IUPAC ambiguity base(s) to ACGT",
+                    name, iupac_count
+                );
             }
             process_contig(idx, name, seq, &ctx, child_rng)
-        });
+        },
+    );
     let collected: Result<Vec<ContigResult>, _> = match config.num_threads {
         Some(n) => rayon::ThreadPoolBuilder::new()
             .num_threads(n)
             .build()
-            .map_err(|e| GenerateReadsError::CliError(format!("Failed to build thread pool: {}", e)))?
+            .map_err(|e| {
+                GenerateReadsError::CliError(format!("Failed to build thread pool: {}", e))
+            })?
             .install(|| parallel_iter.collect()),
         None => parallel_iter.collect(),
     };
@@ -233,7 +229,14 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
     let mut results = collected?;
     results.sort_unstable_by_key(|r| r.idx);
     for cr in results {
-        collect_contig_result(cr, &mut contig_order, &mut fasta_lengths, &mut mutated_maps, &mut all_fastq_files, &mut bam_body_files);
+        collect_contig_result(
+            cr,
+            &mut contig_order,
+            &mut fasta_lengths,
+            &mut mutated_maps,
+            &mut all_fastq_files,
+            &mut bam_body_files,
+        );
     }
 
     info!("Read generation complete, producing output files");
@@ -255,31 +258,23 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
                     match &config.output_fastq_2 {
                         Some(filename2) => {
                             create_output_file(filename2, config.overwrite_output)?;
-                            combine_temp_fastqs(
-                                all_r1,
-                                all_r2,
-                                filename1,
-                                Some(filename2),
-                            )?;
-                        },
+                            combine_temp_fastqs(all_r1, all_r2, filename1, Some(filename2))?;
+                        }
                         None => {
-                            error!("Produce fastq true and paired-ended true, but output_fastq_2 was missing.");
-                            return Err(GenerateReadsError::ConfigError)
+                            error!(
+                                "Produce fastq true and paired-ended true, but output_fastq_2 was missing."
+                            );
+                            return Err(GenerateReadsError::ConfigError);
                         }
                     }
                 } else {
-                    combine_temp_fastqs(
-                        all_r1,
-                        vec![],
-                        filename1,
-                        None,
-                    )?;
+                    combine_temp_fastqs(all_r1, vec![], filename1, None)?;
                 }
-            },
+            }
             None => {
                 error!("Produce fastq true but output_fastq_1 was missing.");
-                return Err(GenerateReadsError::ConfigError)
-            },
+                return Err(GenerateReadsError::ConfigError);
+            }
         }
     }
 
@@ -300,16 +295,20 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
         }
     }
 
-    if config.produce_bam {
-        if let (Some(bam_ctx), Some(bam_path)) = (ctx.bam_context.as_ref(), &config.output_bam) {
-            info!("Assembling BAM from {} temp body file(s)", bam_body_files.len());
-            let ordered_bodies: Vec<PathBuf> = contig_order.iter()
-                .filter_map(|name| bam_body_files.remove(name))
-                .collect();
-            concat_temp_bams(bam_ctx, &ordered_bodies, bam_path)?;
-            info!("Successfully wrote BAM file: {:?}", bam_path);
-            files_written.push(bam_path.clone());
-        }
+    if config.produce_bam
+        && let (Some(bam_ctx), Some(bam_path)) = (ctx.bam_context.as_ref(), &config.output_bam)
+    {
+        info!(
+            "Assembling BAM from {} temp body file(s)",
+            bam_body_files.len()
+        );
+        let ordered_bodies: Vec<PathBuf> = contig_order
+            .iter()
+            .filter_map(|name| bam_body_files.remove(name))
+            .collect();
+        concat_temp_bams(bam_ctx, &ordered_bodies, bam_path)?;
+        info!("Successfully wrote BAM file: {:?}", bam_path);
+        files_written.push(bam_path.clone());
     }
 
     if let Some(filename) = &config.output_vcf {
@@ -320,17 +319,17 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
             &fasta_lengths,
             &config.reference,
             config.overwrite_output,
-            &filename,
+            filename,
         );
         match result {
             Ok(()) => {
                 info!("Successfully wrote vcf file: {:?}", filename);
                 files_written.push(filename.clone());
-            },
+            }
             Err(error) => {
                 error!("Error writing vcf file!");
-                return Err(GenerateReadsError::IoError(error))
-            },
+                return Err(GenerateReadsError::IoError(error));
+            }
         }
     }
     Ok(files_written.clone())
@@ -346,16 +345,26 @@ fn process_contig(
     let contig_len = sequence.len();
     debug!("Processing {}", contig_name);
 
-    if let Some(bed) = ctx.target_bed {
-        if !bed.contains_key(&contig_name) {
-            debug!("Skipping {} — not in target BED", contig_name);
-            return Ok(ContigResult { idx, name: contig_name, len: contig_len, data: None });
-        }
+    if let Some(bed) = ctx.target_bed
+        && !bed.contains_key(&contig_name)
+    {
+        debug!("Skipping {} — not in target BED", contig_name);
+        return Ok(ContigResult {
+            idx,
+            name: contig_name,
+            len: contig_len,
+            data: None,
+        });
     }
 
     if sequence.is_empty() {
         warn!("Contig {} has empty sequence, skipping", contig_name);
-        return Ok(ContigResult { idx, name: contig_name, len: contig_len, data: None });
+        return Ok(ContigResult {
+            idx,
+            name: contig_name,
+            len: contig_len,
+            data: None,
+        });
     }
 
     apply_n_substitution(&mut sequence, ctx.nuc_sub_model, &mut rng)?;
@@ -370,18 +379,19 @@ fn process_contig(
 
     debug!("    > Generating bias map.");
     let raw_regions = current_block.get_non_n_regions();
-    let regions_of_interest: Vec<SequenceMap> =
-        if let Some(bed) = ctx.target_bed {
-            let contig_beds = bed
-                .get(&contig_name)
-                .map(|v| v.as_slice())
-                .unwrap_or(&[]);
-            intersect_with_bed(&raw_regions, contig_beds, 0)
-        } else {
-            raw_regions.into_iter().cloned().collect()
-        };
+    let regions_of_interest: Vec<SequenceMap> = if let Some(bed) = ctx.target_bed {
+        let contig_beds = bed.get(&contig_name).map(|v| v.as_slice()).unwrap_or(&[]);
+        intersect_with_bed(&raw_regions, contig_beds, 0)
+    } else {
+        raw_regions.into_iter().cloned().collect()
+    };
     if regions_of_interest.is_empty() {
-        return Ok(ContigResult { idx, name: contig_name, len: contig_len, data: None });
+        return Ok(ContigResult {
+            idx,
+            name: contig_name,
+            len: contig_len,
+            data: None,
+        });
     }
 
     // Build a compact segment list instead of a per-position Vec<f64>.
@@ -392,14 +402,12 @@ fn process_contig(
         .map(|r| (r.start, r.end, ctx.default_run_mutation_rate))
         .collect();
 
-    if let Some(mut_beds) = ctx.mutation_regions {
-        if let Some(records) = mut_beds.get(&contig_name) {
-            for rec in records {
-                if let Some(custom_rate) = rec.mut_rate {
-                    rate_segments = apply_rate_override(
-                        rate_segments, rec.start, rec.end, custom_rate,
-                    );
-                }
+    if let Some(mut_beds) = ctx.mutation_regions
+        && let Some(records) = mut_beds.get(&contig_name)
+    {
+        for rec in records {
+            if let Some(custom_rate) = rec.mut_rate {
+                rate_segments = apply_rate_override(rate_segments, rec.start, rec.end, custom_rate);
             }
         }
     }
@@ -411,36 +419,43 @@ fn process_contig(
 
     let block_end = contig_len;
     let mut block_variants: Vec<Variant> = Vec::new();
-    if let Some(iv) = ctx.input_variants {
-        if let Some(vs) = iv.get(&contig_name) {
-            let mut excluded: Vec<usize> = Vec::new();
-            let mut seen: HashSet<usize> = HashSet::new();
-            for v in vs {
-                let pos0 = v.location.saturating_sub(1);
-                if pos0 >= block_end {
-                    continue;
-                }
-                let local_pos = v.location - 1;
-                if seen.insert(local_pos) {
-                    let rate = rate_at(&rate_segments, local_pos);
-                    if rate > 0.0 {
-                        num_mutations_sum -= rate;
-                        excluded.push(local_pos);
-                    }
-                }
-                let mut v2 = v.clone();
-                v2.location = local_pos;
-                block_variants.push(v2);
+    if let Some(iv) = ctx.input_variants
+        && let Some(vs) = iv.get(&contig_name)
+    {
+        let mut excluded: Vec<usize> = Vec::new();
+        let mut seen: HashSet<usize> = HashSet::new();
+        for v in vs {
+            let pos0 = v.location.saturating_sub(1);
+            if pos0 >= block_end {
+                continue;
             }
-            if !excluded.is_empty() {
-                excluded.sort_unstable();
-                rate_segments = exclude_positions(rate_segments, &excluded);
+            let local_pos = v.location - 1;
+            if seen.insert(local_pos) {
+                let rate = rate_at(&rate_segments, local_pos);
+                if rate > 0.0 {
+                    num_mutations_sum -= rate;
+                    excluded.push(local_pos);
+                }
             }
+            let mut v2 = v.clone();
+            v2.location = local_pos;
+            block_variants.push(v2);
+        }
+        if !excluded.is_empty() {
+            excluded.sort_unstable();
+            rate_segments = exclude_positions(rate_segments, &excluded);
         }
     }
-    debug!("Seeded {} user variant(s) into contig {}", block_variants.len(), contig_name);
+    debug!(
+        "Seeded {} user variant(s) into contig {}",
+        block_variants.len(),
+        contig_name
+    );
     let num_mutations = num_mutations_sum.trunc() as usize;
-    debug!("Adding {} mutations to contig {}", num_mutations, contig_name);
+    debug!(
+        "Adding {} mutations to contig {}",
+        num_mutations, contig_name
+    );
     let mut max_del_len = 0;
     for v in &block_variants {
         if v.variant_type == VariantType::Deletion && v.reference.len() > 1 {
@@ -458,10 +473,10 @@ fn process_contig(
         )?;
         if let Some(vec) = result {
             for variant in vec {
-                if variant.variant_type == VariantType::Deletion {
-                    if variant.reference.len() - 1 > max_del_len {
-                        max_del_len = variant.reference.len() - 1;
-                    }
+                if variant.variant_type == VariantType::Deletion
+                    && variant.reference.len() - 1 > max_del_len
+                {
+                    max_del_len = variant.reference.len() - 1;
                 }
                 block_variants.push(variant);
             }
@@ -513,9 +528,8 @@ fn process_contig(
 
     // Create a per-contig BAM body writer if BAM output is requested.
     let mut bam_body_writer: Option<BamBodyWriter> = if let Some(bam_ctx) = &ctx.bam_context {
-        let bam_temp_path = PathBuf::from(ctx.working_dir).join(format!(
-            "temp_bam_{:06}_{}.bam", idx, contig_name
-        ));
+        let bam_temp_path =
+            PathBuf::from(ctx.working_dir).join(format!("temp_bam_{:06}_{}.bam", idx, contig_name));
         Some(BamBodyWriter::new(bam_temp_path, Arc::clone(bam_ctx))?)
     } else {
         None
@@ -527,22 +541,19 @@ fn process_contig(
         let mut file_to_write_1 = PathBuf::from(ctx.working_dir);
         file_to_write_1.push(format!(
             "temp_{}_{:010}_{:010}_r1_tmp.fastq.gz",
-            contig_name,
-            current_block.ref_start,
-            current_block.ref_end,
+            contig_name, current_block.ref_start, current_block.ref_end,
         ));
         let file1 = append_to_file(&file_to_write_1)?;
         let writer1 = BufWriter::new(&file1);
         let mut buffer1 = GzEncoder::new(writer1, Compression::default());
-        let bam_stager: Option<&mut dyn BamRecordStager> =
-            bam_body_writer.as_mut().map(|w| w as &mut dyn BamRecordStager);
+        let bam_stager: Option<&mut dyn BamRecordStager> = bam_body_writer
+            .as_mut()
+            .map(|w| w as &mut dyn BamRecordStager);
         if ctx.config.paired_ended {
             let mut file_to_write_2 = PathBuf::from(ctx.working_dir);
             file_to_write_2.push(format!(
                 "temp_{}_{:010}_{:010}_r2_tmp.fastq.gz",
-                contig_name,
-                current_block.ref_start,
-                current_block.ref_end,
+                contig_name, current_block.ref_start, current_block.ref_end,
             ));
             let file2 = append_to_file(&file_to_write_2)?;
             let writer2 = BufWriter::new(&file2);
@@ -589,8 +600,9 @@ fn process_contig(
     } else if ctx.config.produce_bam {
         // BAM-only: generate reads and stage them into the BAM body writer.
         // The FASTQ buffers drain into null sinks and are discarded.
-        let bam_stager: Option<&mut dyn BamRecordStager> =
-            bam_body_writer.as_mut().map(|w| w as &mut dyn BamRecordStager);
+        let bam_stager: Option<&mut dyn BamRecordStager> = bam_body_writer
+            .as_mut()
+            .map(|w| w as &mut dyn BamRecordStager);
         let null1: VectorBuffer = VectorBuffer::new();
         let null2: VectorBuffer = VectorBuffer::new();
         let mut buf1 = GzEncoder::new(null1, Compression::default());
@@ -634,7 +646,6 @@ fn process_contig(
     })
 }
 
-
 fn collect_contig_result(
     cr: ContigResult,
     contig_order: &mut Vec<String>,
@@ -656,9 +667,7 @@ fn collect_contig_result(
 
 /// Removes Complex variants from the input map, emitting a warning for each one.
 /// SNPs, insertions, and deletions are kept as-is.
-fn filter_input_vcf(
-    raw: HashMap<String, Vec<Variant>>,
-) -> HashMap<String, Vec<Variant>> {
+fn filter_input_vcf(raw: HashMap<String, Vec<Variant>>) -> HashMap<String, Vec<Variant>> {
     let mut out: HashMap<String, Vec<Variant>> = HashMap::new();
     for (contig, variants) in raw {
         let mut kept = Vec::new();
@@ -697,9 +706,13 @@ fn apply_rate_override(
         }
         let isect_s = s.max(ovr_start);
         let isect_e = e.min(ovr_end);
-        if s < isect_s { result.push((s, isect_s, rate)); }
+        if s < isect_s {
+            result.push((s, isect_s, rate));
+        }
         result.push((isect_s, isect_e, ovr_rate));
-        if isect_e < e { result.push((isect_e, e, rate)); }
+        if isect_e < e {
+            result.push((isect_e, e, rate));
+        }
     }
     result
 }
@@ -708,7 +721,9 @@ fn apply_rate_override(
 /// or gap. Segments must be sorted by start and non-overlapping.
 fn rate_at(segments: &[(usize, usize, f64)], pos: usize) -> f64 {
     let idx = segments.partition_point(|&(s, _, _)| s <= pos);
-    if idx == 0 { return 0.0; }
+    if idx == 0 {
+        return 0.0;
+    }
     let (_, e, rate) = segments[idx - 1];
     if pos < e { rate } else { 0.0 }
 }
@@ -719,7 +734,9 @@ fn exclude_positions(
     segments: Vec<(usize, usize, f64)>,
     excluded: &[usize],
 ) -> Vec<(usize, usize, f64)> {
-    if excluded.is_empty() { return segments; }
+    if excluded.is_empty() {
+        return segments;
+    }
     let mut result = Vec::with_capacity(segments.len() + excluded.len());
     let mut ei = 0;
     for (s, e, rate) in segments {
@@ -727,11 +744,17 @@ fn exclude_positions(
         while ei < excluded.len() && excluded[ei] < e {
             let pos = excluded[ei];
             ei += 1;
-            if pos < cur { continue; }
-            if cur < pos { result.push((cur, pos, rate)); }
+            if pos < cur {
+                continue;
+            }
+            if cur < pos {
+                result.push((cur, pos, rate));
+            }
             cur = pos + 1;
         }
-        if cur < e { result.push((cur, e, rate)); }
+        if cur < e {
+            result.push((cur, e, rate));
+        }
     }
     result
 }
@@ -769,8 +792,8 @@ fn intersect_with_bed(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use common::structs::sequence_block::{RegionType, SequenceMap};
     use common::structs::bed_record::BedRecord;
+    use common::structs::sequence_block::{RegionType, SequenceMap};
 
     #[test]
     fn test_intersect_with_bed() {
@@ -794,17 +817,17 @@ mod tests {
         // block_offset = 1000
         // r1 global [1100, 1200], r2 global [1300, 1400]
         let b2 = BedRecord::new_bed_record("chr1".to_string(), 1150, 1350).unwrap();
-        let result2 = intersect_with_bed(&regions, &vec![b2], 1000);
+        let result2 = intersect_with_bed(&regions, &[b2], 1000);
         assert_eq!(result2.len(), 2);
         assert_eq!(result2[0].start, 150); // global 1150 - 1000
-        assert_eq!(result2[0].end, 200);   // global 1200 - 1000
+        assert_eq!(result2[0].end, 200); // global 1200 - 1000
         assert_eq!(result2[1].start, 300); // global 1300 - 1000
-        assert_eq!(result2[1].end, 350);   // global 1350 - 1000
+        assert_eq!(result2[1].end, 350); // global 1350 - 1000
     }
 
     #[test]
     fn test_filter_input_vcf() {
-        use crate::common::structs::variants::{VariantType, Genotype};
+        use crate::common::structs::variants::{Genotype, VariantType};
         use common::structs::nucleotides::Nucleotide;
         let mut raw = HashMap::new();
         let v1 = Variant {
@@ -857,11 +880,17 @@ mod tests {
 
         // Partial overlap at start of first segment: [0,50) gets new rate, [50,100) keeps old
         let result = apply_rate_override(segs.clone(), 0, 50, 0.01);
-        assert_eq!(result, vec![(0, 50, 0.01), (50, 100, 0.001), (200, 400, 0.001)]);
+        assert_eq!(
+            result,
+            vec![(0, 50, 0.01), (50, 100, 0.001), (200, 400, 0.001)]
+        );
 
         // Partial overlap at end of first segment: [0,80) keeps old, [80,100) gets new rate
         let result = apply_rate_override(segs.clone(), 80, 150, 0.01);
-        assert_eq!(result, vec![(0, 80, 0.001), (80, 100, 0.01), (200, 400, 0.001)]);
+        assert_eq!(
+            result,
+            vec![(0, 80, 0.001), (80, 100, 0.01), (200, 400, 0.001)]
+        );
 
         // Full containment of first segment: entire [0,100) replaced
         let result = apply_rate_override(segs.clone(), 0, 100, 0.02);
@@ -869,7 +898,15 @@ mod tests {
 
         // Override spanning both segments (gap between them is unaffected)
         let result = apply_rate_override(segs.clone(), 50, 300, 0.05);
-        assert_eq!(result, vec![(0, 50, 0.001), (50, 100, 0.05), (200, 300, 0.05), (300, 400, 0.001)]);
+        assert_eq!(
+            result,
+            vec![
+                (0, 50, 0.001),
+                (50, 100, 0.05),
+                (200, 300, 0.05),
+                (300, 400, 0.001)
+            ]
+        );
     }
 
     #[test]
@@ -901,7 +938,10 @@ mod tests {
 
         // Exclude middle of first segment — splits into two
         let result = exclude_positions(segs.clone(), &[50]);
-        assert_eq!(result, vec![(0, 50, 0.001), (51, 100, 0.001), (200, 400, 0.001)]);
+        assert_eq!(
+            result,
+            vec![(0, 50, 0.001), (51, 100, 0.001), (200, 400, 0.001)]
+        );
 
         // Exclude start of segment — trims left boundary
         let result = exclude_positions(segs.clone(), &[0]);
@@ -917,9 +957,14 @@ mod tests {
 
         // Exclude multiple positions across both segments
         let result = exclude_positions(segs.clone(), &[50, 250]);
-        assert_eq!(result, vec![
-            (0, 50, 0.001), (51, 100, 0.001),
-            (200, 250, 0.001), (251, 400, 0.001),
-        ]);
+        assert_eq!(
+            result,
+            vec![
+                (0, 50, 0.001),
+                (51, 100, 0.001),
+                (200, 250, 0.001),
+                (251, 400, 0.001),
+            ]
+        );
     }
 }

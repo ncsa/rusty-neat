@@ -1,13 +1,15 @@
-use std::path::PathBuf;
-use serde_derive::{Serialize, Deserialize};
-use thiserror::Error;
 use crate::models::lib::{model_reader, model_writer};
 use crate::structs::nucleotides::Nucleotide;
+use serde_derive::{Deserialize, Serialize};
+use std::path::PathBuf;
+use thiserror::Error;
 
 // Used as the serde default for legacy model files that pre-date the window_size field.
 // The Default impl also uses this, but the default model is always uniform (is_uniform=true),
 // so the value is never read during simulation.
-fn default_window_size() -> usize { 100 }
+fn default_window_size() -> usize {
+    100
+}
 
 #[derive(Error, Debug)]
 pub enum GcBiasModelError {
@@ -65,27 +67,30 @@ impl GcBiasModel {
         Ok(())
     }
 
-    pub fn from_weights(weights_by_percent_gc: Vec<f64>, window_size: usize) -> Result<Self, GcBiasModelError> {
+    pub fn from_weights(
+        weights_by_percent_gc: Vec<f64>,
+        window_size: usize,
+    ) -> Result<Self, GcBiasModelError> {
         if window_size == 0 {
             return Err(GcBiasModelError::InvalidWindowSize);
         }
         if weights_by_percent_gc.len() != 101 {
-            return Err(GcBiasModelError::InvalidBinCount)
+            return Err(GcBiasModelError::InvalidBinCount);
         }
         let first_item = weights_by_percent_gc[0];
         if first_item.is_infinite() || first_item.is_nan() || first_item < 0.0 {
-            return Err(GcBiasModelError::InvalidWeight)
+            return Err(GcBiasModelError::InvalidWeight);
         }
         let mut is_uniform = true;
         for item in &weights_by_percent_gc[1..] {
             if item.is_nan() || (*item < 0.0) || item.is_infinite() {
-                return Err(GcBiasModelError::InvalidWeight)
+                return Err(GcBiasModelError::InvalidWeight);
             } else if *item != first_item && is_uniform {
                 is_uniform = false;
             }
         }
         if is_uniform && first_item == 0.0 {
-            return Err(GcBiasModelError::EmptyModel)
+            return Err(GcBiasModelError::EmptyModel);
         }
         Ok(Self {
             weights_by_percent_gc,
@@ -126,14 +131,18 @@ impl GcBiasModel {
             .filter(|&base| *base != Nucleotide::N)
             .count() as f64;
         if sequence_count == 0.0 {
-            return 1.0
+            return 1.0;
         }
         let gc_fraction = gc_count / sequence_count;
         self.weight_for_gc_fraction(gc_fraction)
     }
 
     pub fn max_weight(&self) -> f64 {
-        *self.weights_by_percent_gc.iter().max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap()
+        *self
+            .weights_by_percent_gc
+            .iter()
+            .max_by(|a, b| a.partial_cmp(b).unwrap())
+            .unwrap()
     }
 
     pub fn mean_weight(&self) -> f64 {
@@ -400,7 +409,8 @@ mod tests {
         for pct in 0..=100 {
             let gc = pct as f64 / 100.0;
             assert!(
-                (original.weight_for_gc_fraction(gc) - loaded.weight_for_gc_fraction(gc)).abs() < 1e-12,
+                (original.weight_for_gc_fraction(gc) - loaded.weight_for_gc_fraction(gc)).abs()
+                    < 1e-12,
                 "Mismatch at {}% GC after roundtrip",
                 pct
             );
@@ -433,8 +443,8 @@ mod tests {
     fn test_legacy_file_without_window_size_gets_default() {
         // A model file written before window_size was added should deserialize
         // with window_size == default_window_size() == 150.
-        use std::io::Write;
         use flate2::{Compression, write::GzEncoder};
+        use std::io::Write;
 
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let path = PathBuf::from(tmp.path());
@@ -447,6 +457,10 @@ mod tests {
         encoder.finish().unwrap();
 
         let loaded = GcBiasModel::from_file(&path).unwrap();
-        assert_eq!(loaded.window_size(), 100, "Legacy file missing window_size should default to 100");
+        assert_eq!(
+            loaded.window_size(),
+            100,
+            "Legacy file missing window_size should default to 100"
+        );
     }
 }

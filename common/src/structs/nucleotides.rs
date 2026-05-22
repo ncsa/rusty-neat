@@ -8,11 +8,12 @@
 //! with N tacked on at the end.
 use core::fmt;
 
-use serde::{Deserialize, Serialize};
 use crate::structs::distributions::DiscreteDistribution;
+use serde::{Deserialize, Serialize};
 
 // The following are equivalent
-pub const ALLOWED_NUCS: [Nucleotide; 4] = [Nucleotide::A, Nucleotide::C, Nucleotide::G, Nucleotide::T];
+pub const ALLOWED_NUCS: [Nucleotide; 4] =
+    [Nucleotide::A, Nucleotide::C, Nucleotide::G, Nucleotide::T];
 pub const ALLOWED_USIZE: [usize; 4] = [0, 1, 2, 3];
 
 pub fn allowed_vec() -> Vec<Nucleotide> {
@@ -30,21 +31,26 @@ pub struct NucleotideSelector {
     distribution: DiscreteDistribution<Nucleotide>,
 }
 
+impl Default for NucleotideSelector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl NucleotideSelector {
     pub fn new() -> Self {
         let allowed_nucs: Vec<Nucleotide> = allowed_vec();
         let weights: Vec<f64> = vec![0.25, 0.25, 0.25, 0.25];
         NucleotideSelector {
-            distribution: DiscreteDistribution::new(&weights, &allowed_nucs).expect(
-                "Error creating distribution",
-            )
+            distribution: DiscreteDistribution::new(&weights, &allowed_nucs)
+                .expect("Error creating distribution"),
         }
     }
 
     pub fn sample_bases(&self, rand: f64) -> Nucleotide {
-        self.distribution.sample(rand).expect(
-            "Error sampling bases",
-        ).into()
+        self.distribution
+            .sample(rand)
+            .expect("Error sampling bases")
     }
 }
 
@@ -65,7 +71,7 @@ pub enum Nucleotide {
 impl fmt::Display for Nucleotide {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let name: char = self.to_owned().into();
-        write!(f, "{}", name.to_string())
+        write!(f, "{}", name)
     }
 }
 
@@ -101,33 +107,33 @@ impl From<usize> for Nucleotide {
     }
 }
 
-impl Into<usize> for Nucleotide {
-    fn into(self) -> usize {
-        match self {
-            Self::A => 0,
-            Self::C => 1,
-            Self::G => 2,
-            Self::T => 3,
-            Self::Maskeda => 5,
-            Self::Maskedc => 6,
-            Self::Maskedg => 7,
-            Self::Maskedt => 8,
+impl From<Nucleotide> for usize {
+    fn from(val: Nucleotide) -> Self {
+        match val {
+            Nucleotide::A => 0,
+            Nucleotide::C => 1,
+            Nucleotide::G => 2,
+            Nucleotide::T => 3,
+            Nucleotide::Maskeda => 5,
+            Nucleotide::Maskedc => 6,
+            Nucleotide::Maskedg => 7,
+            Nucleotide::Maskedt => 8,
             _ => 4,
         }
     }
 }
 
-impl Into<char> for Nucleotide {
-    fn into(self) -> char {
-        match self {
-            Self::A => 'A',
-            Self::C => 'C',
-            Self::G => 'G',
-            Self::T => 'T',
-            Self::Maskeda => 'a',
-            Self::Maskedc => 'c',
-            Self::Maskedg => 'g',
-            Self::Maskedt => 't',
+impl From<Nucleotide> for char {
+    fn from(val: Nucleotide) -> Self {
+        match val {
+            Nucleotide::A => 'A',
+            Nucleotide::C => 'C',
+            Nucleotide::G => 'G',
+            Nucleotide::T => 'T',
+            Nucleotide::Maskeda => 'a',
+            Nucleotide::Maskedc => 'c',
+            Nucleotide::Maskedg => 'g',
+            Nucleotide::Maskedt => 't',
             _ => 'N',
         }
     }
@@ -145,7 +151,7 @@ impl Nucleotide {
             Self::Maskedc => Self::Maskedg,
             Self::Maskedg => Self::Maskedc,
             Self::Maskedt => Self::Maskeda,
-            _ => self.clone(),
+            _ => *self,
         }
     }
 
@@ -156,20 +162,15 @@ impl Nucleotide {
             Self::Maskedg => Nucleotide::G,
             Self::Maskedt => Nucleotide::T,
             Self::X => Self::N,
-            _ => return self.clone()
+            _ => *self,
         }
     }
 
     pub fn is_masked(&self) -> bool {
-        match self {
-            Self::Maskeda | 
-                Self::Maskedc | 
-                Self::Maskedg | 
-                Self::Maskedt | 
-                Self::X 
-              => true,
-            _ => return false,
-        }
+        matches!(
+            self,
+            Self::Maskeda | Self::Maskedc | Self::Maskedg | Self::Maskedt | Self::X
+        )
     }
 
     pub fn get_masked(&self) -> Nucleotide {
@@ -179,7 +180,7 @@ impl Nucleotide {
             Self::G => Self::Maskedg,
             Self::T => Self::Maskedt,
             Self::N => Self::X,
-            _ => return self.clone()
+            _ => *self,
         }
     }
 }
@@ -213,31 +214,30 @@ impl From<&str> for AminoAcid {
     fn from(name: &str) -> AminoAcid {
         // Translates string representations of the amino acids into char
         match name.to_lowercase().as_str() {
-            "alanine"       | "ala" => Self::A,
-            "arginine"      | "arg" => Self::R,
-            "asparagine"    | "asn" => Self::N,
+            "alanine" | "ala" => Self::A,
+            "arginine" | "arg" => Self::R,
+            "asparagine" | "asn" => Self::N,
             "aspartic acid" | "asp" => Self::D,
-            "cysteine"      | "cys" => Self::C,
+            "cysteine" | "cys" => Self::C,
             "glutamic acid" | "glu" => Self::E,
-            "glutamine"     | "gln" => Self::Q,
-            "glycine"       | "gly" => Self::G,
-            "histidine"     | "his" => Self::H,        
-            "isoleucine"    | "ile" => Self::I,
-            "leucine"       | "leu" => Self::L,
-            "lysine"        | "lys" => Self::K,
-            "methionine"    | "met" => Self::M,
-            "phenylaline"   | "phe" => Self::F,
-            "proline"       | "pro" => Self::P,
-            "serine"        | "ser" => Self::S,
-            "threonine"     | "thr" => Self::T,
-            "tryptophan"    | "trp" => Self::W,
-            "tyrosine"      | "tyr" => Self::Y,
-            "valine"        | "val" => Self::V,
+            "glutamine" | "gln" => Self::Q,
+            "glycine" | "gly" => Self::G,
+            "histidine" | "his" => Self::H,
+            "isoleucine" | "ile" => Self::I,
+            "leucine" | "leu" => Self::L,
+            "lysine" | "lys" => Self::K,
+            "methionine" | "met" => Self::M,
+            "phenylaline" | "phe" => Self::F,
+            "proline" | "pro" => Self::P,
+            "serine" | "ser" => Self::S,
+            "threonine" | "thr" => Self::T,
+            "tryptophan" | "trp" => Self::W,
+            "tyrosine" | "tyr" => Self::Y,
+            "valine" | "val" => Self::V,
             _ => panic!("Unknown amino acid: {}", name),
         }
     }
 }
-
 
 pub fn sequence_array_to_string(input_array: &Vec<Nucleotide>) -> String {
     // Converts a sequence vector into a string representing the DNA sequence

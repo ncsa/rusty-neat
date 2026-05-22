@@ -6,44 +6,36 @@ extern crate serde_json;
 extern crate simplelog;
 
 pub mod filter_reads;
-pub mod gen_reads;
-pub mod gen_mut_model;
-pub mod gen_seq_error_model;
+pub mod gen_bam_models;
 pub mod gen_frag_length_model;
 pub mod gen_gc_bias_model;
+pub mod gen_mut_model;
+pub mod gen_reads;
+pub mod gen_seq_error_model;
 
+use common::{self, file_tools::file_io::create_output_file};
 use std::env;
 use std::time;
-use common::{self, file_tools::file_io::create_output_file};
 
+use clap::{Arg, ArgAction, Command, value_parser};
 use common::file_tools::folder_tools::check_parent;
-use simplelog::{
-    ColorChoice, 
-    CombinedLogger, 
-    Config, 
-    TermLogger, 
-    TerminalMode, 
-    WriteLogger
-};
-use thiserror::Error;
 use log::*;
-use clap::{value_parser, Arg, ArgAction, Command};
+use simplelog::{ColorChoice, CombinedLogger, Config, TermLogger, TerminalMode, WriteLogger};
 use std::path::PathBuf;
+use thiserror::Error;
 
 use crate::{
-    gen_mut_model::errors::GenMutationModelError,
-    gen_seq_error_model::errors::GenSeqErrorModelError,
+    filter_reads::errors::FilterReadsError, gen_bam_models::errors::GenBamModelsError,
     gen_frag_length_model::errors::GenFragLengthModelError,
-    filter_reads::errors::FilterReadsError,
-    gen_reads::errors::GenerateReadsError,
-    gen_gc_bias_model::errors::GenGcBiasModelError,
+    gen_gc_bias_model::errors::GenGcBiasModelError, gen_mut_model::errors::GenMutationModelError,
+    gen_reads::errors::GenerateReadsError, gen_seq_error_model::errors::GenSeqErrorModelError,
 };
-/// This script parses arguments and checks them before submitting to the submodules, which currently 
+/// This script parses arguments and checks them before submitting to the submodules, which currently
 /// include `gen-reads` and `filter-files`. As more are added, this can be expanded or refactored
 /// argument parsing, timing, and other concerns will occur here.
 #[derive(Error, Debug)]
 pub enum NeatErrors {
-	// Errors specific to each submodule
+    // Errors specific to each submodule
     #[error("Error while generating read dataset {0}")]
     GenerateReadsError(#[from] GenerateReadsError),
     #[error("Error while filtering reads with bed file {0}")]
@@ -56,10 +48,12 @@ pub enum NeatErrors {
     GenFragLengthModel(#[from] GenFragLengthModelError),
     #[error("Error while generating GC bias model {0}")]
     GenGcBiasModel(#[from] GenGcBiasModelError),
+    #[error("Error while generating BAM-derived models {0}")]
+    GenBamModels(#[from] GenBamModelsError),
 }
 
-fn neat_commands() -> [Command; 6] {
-	// These are the submodule commands. Any new commands added should go here.
+fn neat_commands() -> [Command; 7] {
+    // These are the submodule commands. Any new commands added should go here.
     let configuration_arg = Arg::new("configuration_yaml")
         .long("configuration-yaml")
         .short('c')
@@ -73,39 +67,31 @@ fn neat_commands() -> [Command; 6] {
         Command::new("gen-reads")
             .about("Generates reads for an input dataset")
             .arg_required_else_help(true)
-            .arg(
-                &configuration_arg
-            ),
+            .arg(&configuration_arg),
         Command::new("filter-reads")
             .about("Filters the output of gen-reads")
             .arg_required_else_help(true)
-            .arg(
-                &configuration_arg
-            ),
+            .arg(&configuration_arg),
         Command::new("gen-mut-model")
             .about("Generate a mutation model based on an input mutations file")
             .arg_required_else_help(true)
-            .arg(
-                &configuration_arg
-            ),
+            .arg(&configuration_arg),
         Command::new("gen-seq-error-model")
             .about("Generate a sequencing error model from a FASTQ file")
             .arg_required_else_help(true)
-            .arg(
-                &configuration_arg
-            ),
+            .arg(&configuration_arg),
         Command::new("gen-frag-length-model")
             .about("Generate a fragment length model from a BAM or SAM file")
             .arg_required_else_help(true)
-            .arg(
-                &configuration_arg
-            ),
+            .arg(&configuration_arg),
         Command::new("gen-gc-bias-model")
             .about("Generate a GC bias model from a reference FASTA and aligned BAM")
             .arg_required_else_help(true)
-            .arg(
-                &configuration_arg
-            )
+            .arg(&configuration_arg),
+        Command::new("gen-bam-models")
+            .about("Build multiple models (frag-length, GC bias) from one BAM in a single pass")
+            .arg_required_else_help(true)
+            .arg(&configuration_arg),
     ]
 }
 
@@ -141,8 +127,8 @@ fn main() -> Result<(), NeatErrors> {
                 .subcommands(neat_commands())
         )
         .subcommands(neat_commands());
-        
-	// This parses the command arguments
+
+    // This parses the command arguments
     let matches = cmd.get_matches();
     let mut subcommand = matches.subcommand();
     let mut level_filter = "trace".to_string();
@@ -154,7 +140,7 @@ fn main() -> Result<(), NeatErrors> {
                 .get_one::<String>("log_level")
                 .expect("Must enter value for log-level")
                 .to_string();
-        } 
+        }
         if cmd.contains_id("log_dest") {
             log_dest = cmd
                 .get_one::<PathBuf>("log_dest")
@@ -173,16 +159,15 @@ fn main() -> Result<(), NeatErrors> {
             "warn" => LevelFilter::Warn,
             "error" => LevelFilter::Error,
             "off" => LevelFilter::Off,
-            _ => unreachable!(
-                "Parser should only allow one of the above values."
-            ), 
+            _ => unreachable!("Parser should only allow one of the above values."),
         }
     };
-    
+
     // Check that the parent dir exists
-    let log_destination = check_parent(&log_dest, true).expect("Log destination parent path doesn't exist");
+    let log_destination =
+        check_parent(&log_dest, true).expect("Log destination parent path doesn't exist");
     let log_file = create_output_file(log_destination, true)
-        .expect(&format!("Error creating log file: {:?}", log_destination));
+        .unwrap_or_else(|_| panic!("Error creating log file: {:?}", log_destination));
     // Set up the logger for the run
     CombinedLogger::init(vec![
         TermLogger::new(
@@ -191,178 +176,193 @@ fn main() -> Result<(), NeatErrors> {
             TerminalMode::Mixed,
             ColorChoice::Auto,
         ),
-        WriteLogger::new(
-            lev_filter_choice,
-            Config::default(),
-            log_file,
-        ),
-    ]).expect("Error creating log file!");
+        WriteLogger::new(lev_filter_choice, Config::default(), log_file),
+    ])
+    .expect("Error creating log file!");
     info!("////////////// Welcome to rneat! \\\\\\\\\\\\\\\\\\\\\\\\\\\\");
     let start = time::Instant::now();
     match subcommand {
         Some(("gen-reads", _)) => {
-            if let Some(("gen-reads", cmd)) = subcommand {
-                if cmd.contains_id("configuration_yaml") {
-                    let file = cmd.get_one::<PathBuf>("configuration_yaml")
-                            .expect("Must provide a path with configuration-yaml")
-                            .to_path_buf();
+            if let Some(("gen-reads", cmd)) = subcommand
+                && cmd.contains_id("configuration_yaml")
+            {
+                let file = cmd
+                    .get_one::<PathBuf>("configuration_yaml")
+                    .expect("Must provide a path with configuration-yaml")
+                    .to_path_buf();
 
-                    if !file.is_file() {
-                        return Err(
-                            NeatErrors::FilterReadsError(
-                                FilterReadsError::CliError(
-                                    "Must supply either a configuration file or a reference file to run NEAT!".to_string()
-                                )
-                            )
-                        )
-                    }
-                    info!("Running gen-reads to generate read data.");
-                    let result = gen_reads::main(&file);
-                    match result {
-                        Err(error) => return Err(NeatErrors::GenerateReadsError(error)),
-                        Ok(()) => info!("rneat gen-reads completed successfully"),
-                    }
-                } 
+                if !file.is_file() {
+                    return Err(NeatErrors::FilterReadsError(FilterReadsError::CliError(
+                        "Must supply either a configuration file or a reference file to run NEAT!"
+                            .to_string(),
+                    )));
+                }
+                info!("Running gen-reads to generate read data.");
+                let result = gen_reads::main(&file);
+                match result {
+                    Err(error) => return Err(NeatErrors::GenerateReadsError(error)),
+                    Ok(()) => info!("rneat gen-reads completed successfully"),
+                }
             }
-        },
+        }
         Some(("filter-reads", _)) => {
-            if let Some(("filter-reads", cmd)) = subcommand {
-				info!("Running rneat filter-reads");
-                // extract the flags and values
-                if cmd.contains_id("configuration_yaml") {
-                    let file = cmd.get_one::<PathBuf>("configuration_yaml")
-                            .expect("Must provide a path with configuration-yaml")
-                            .to_path_buf();
+            if let Some(("filter-reads", cmd)) = subcommand
+                && cmd.contains_id("configuration_yaml")
+            {
+                info!("Running rneat filter-reads");
+                let file = cmd
+                    .get_one::<PathBuf>("configuration_yaml")
+                    .expect("Must provide a path with configuration-yaml")
+                    .to_path_buf();
 
-                    if !file.is_file() {
-                        return Err(
-                            NeatErrors::FilterReadsError(
-                                FilterReadsError::CliError(
-                                    "Must supply either a configuration file or a reference file to run NEAT!".to_string()
-                                )
-                            )
-                        )
-                    }
-                    info!("Running filter-reads to filter rneat-generated read data.");
-                    let result = filter_reads::main(&file);
-                    match result {
-                        Err(error) => return Err(NeatErrors::FilterReadsError(error)),
-                        Ok(()) => info!("rneat filter-reads completed succesfully"),
-                    }
+                if !file.is_file() {
+                    return Err(NeatErrors::FilterReadsError(FilterReadsError::CliError(
+                        "Must supply either a configuration file or a reference file to run NEAT!"
+                            .to_string(),
+                    )));
+                }
+                info!("Running filter-reads to filter rneat-generated read data.");
+                let result = filter_reads::main(&file);
+                match result {
+                    Err(error) => return Err(NeatErrors::FilterReadsError(error)),
+                    Ok(()) => info!("rneat filter-reads completed succesfully"),
                 }
             }
-        },
+        }
         Some(("gen-mut-model", _)) => {
-            if let Some(("gen-mut-model", cmd)) = subcommand {
-				info!("Running rneat filter-reads");
-                // extract the flags and values
-                if cmd.contains_id("configuration_yaml") {
-                    let file = cmd.get_one::<PathBuf>("configuration_yaml")
-                            .expect("Must provide a path with configuration-yaml")
-                            .to_path_buf();
+            if let Some(("gen-mut-model", cmd)) = subcommand
+                && cmd.contains_id("configuration_yaml")
+            {
+                info!("Running rneat gen-mut-model");
+                let file = cmd
+                    .get_one::<PathBuf>("configuration_yaml")
+                    .expect("Must provide a path with configuration-yaml")
+                    .to_path_buf();
 
-                    if !file.is_file() {
-                        return Err(
-                            NeatErrors::FilterReadsError(
-                                FilterReadsError::CliError(
-                                    "Must supply either a configuration file or a reference file to run NEAT!".to_string()
-                                )
-                            )
-                        )
-                    }
-                    info!("Running gen-mut-model to generate a model for use in rneat.");
-                    let result = gen_mut_model::main(&file);
-                    match result {
-                        Err(error) => return Err(NeatErrors::GenMutModelError(error)),
-                        Ok(()) => info!("rneat gen-mut-model completed succesfully"),
-                    }
+                if !file.is_file() {
+                    return Err(NeatErrors::FilterReadsError(FilterReadsError::CliError(
+                        "Must supply either a configuration file or a reference file to run NEAT!"
+                            .to_string(),
+                    )));
+                }
+                info!("Running gen-mut-model to generate a model for use in rneat.");
+                let result = gen_mut_model::main(&file);
+                match result {
+                    Err(error) => return Err(NeatErrors::GenMutModelError(error)),
+                    Ok(()) => info!("rneat gen-mut-model completed succesfully"),
                 }
             }
-        },
+        }
         Some(("gen-seq-error-model", _)) => {
-            if let Some(("gen-seq-error-model", cmd)) = subcommand {
+            if let Some(("gen-seq-error-model", cmd)) = subcommand
+                && cmd.contains_id("configuration_yaml")
+            {
                 info!("Running rneat gen-seq-error-model");
-                if cmd.contains_id("configuration_yaml") {
-                    let file = cmd.get_one::<PathBuf>("configuration_yaml")
-                            .expect("Must provide a path with configuration-yaml")
-                            .to_path_buf();
+                let file = cmd
+                    .get_one::<PathBuf>("configuration_yaml")
+                    .expect("Must provide a path with configuration-yaml")
+                    .to_path_buf();
 
-                    if !file.is_file() {
-                        return Err(
-                            NeatErrors::FilterReadsError(
-                                FilterReadsError::CliError(
-                                    "Must supply a configuration file to run gen-seq-error-model!".to_string()
-                                )
-                            )
-                        )
-                    }
-                    info!("Running gen-seq-error-model to generate a sequencing error model.");
-                    let result = gen_seq_error_model::main(&file);
-                    match result {
-                        Err(error) => return Err(NeatErrors::GenSeqErrorModel(error)),
-                        Ok(()) => info!("rneat gen-seq-error-model completed successfully"),
-                    }
+                if !file.is_file() {
+                    return Err(NeatErrors::FilterReadsError(FilterReadsError::CliError(
+                        "Must supply a configuration file to run gen-seq-error-model!".to_string(),
+                    )));
+                }
+                info!("Running gen-seq-error-model to generate a sequencing error model.");
+                let result = gen_seq_error_model::main(&file);
+                match result {
+                    Err(error) => return Err(NeatErrors::GenSeqErrorModel(error)),
+                    Ok(()) => info!("rneat gen-seq-error-model completed successfully"),
                 }
             }
-        },
+        }
         Some(("gen-frag-length-model", _)) => {
-            if let Some(("gen-frag-length-model", cmd)) = subcommand {
+            if let Some(("gen-frag-length-model", cmd)) = subcommand
+                && cmd.contains_id("configuration_yaml")
+            {
                 info!("Running rneat gen-frag-length-model");
-                if cmd.contains_id("configuration_yaml") {
-                    let file = cmd.get_one::<PathBuf>("configuration_yaml")
-                            .expect("Must provide a path with configuration-yaml")
-                            .to_path_buf();
+                let file = cmd
+                    .get_one::<PathBuf>("configuration_yaml")
+                    .expect("Must provide a path with configuration-yaml")
+                    .to_path_buf();
 
-                    if !file.is_file() {
-                        return Err(
-                            NeatErrors::FilterReadsError(
-                                FilterReadsError::CliError(
-                                    "Must supply a configuration file to run gen-frag-length-model!".to_string()
-                                )
-                            )
-                        )
-                    }
-                    info!("Running gen-frag-length-model to generate a fragment length model.");
-                    let result = gen_frag_length_model::main(&file);
-                    match result {
-                        Err(error) => return Err(NeatErrors::GenFragLengthModel(error)),
-                        Ok(()) => info!("rneat gen-frag-length-model completed successfully"),
-                    }
+                if !file.is_file() {
+                    return Err(NeatErrors::FilterReadsError(FilterReadsError::CliError(
+                        "Must supply a configuration file to run gen-frag-length-model!"
+                            .to_string(),
+                    )));
+                }
+                info!("Running gen-frag-length-model to generate a fragment length model.");
+                let result = gen_frag_length_model::main(&file);
+                match result {
+                    Err(error) => return Err(NeatErrors::GenFragLengthModel(error)),
+                    Ok(()) => info!("rneat gen-frag-length-model completed successfully"),
                 }
             }
-        },
+        }
         Some(("gen-gc-bias-model", _)) => {
-            if let Some(("gen-gc-bias-model", cmd)) = subcommand {
+            if let Some(("gen-gc-bias-model", cmd)) = subcommand
+                && cmd.contains_id("configuration_yaml")
+            {
                 info!("Running rneat gen-gc-bias-model");
-                if cmd.contains_id("configuration_yaml") {
-                    let file = cmd.get_one::<PathBuf>("configuration_yaml")
-                            .expect("Must provide a path with configuration-yaml")
-                            .to_path_buf();
+                let file = cmd
+                    .get_one::<PathBuf>("configuration_yaml")
+                    .expect("Must provide a path with configuration-yaml")
+                    .to_path_buf();
 
-                    if !file.is_file() {
-                        return Err(NeatErrors::GenGcBiasModel(
-                            GenGcBiasModelError::ConfigError(
-                                "Must supply a valid configuration file to run gen-gc-bias-model!".to_string()
-                            )
-                        ))
-                    }
-                    info!("Running gen-gc-bias-model to generate a GC bias model.");
-                    let result = gen_gc_bias_model::main(&file);
-                    match result {
-                        Err(error) => return Err(NeatErrors::GenGcBiasModel(error)),
-                        Ok(()) => info!("rneat gen-gc-bias-model completed successfully"),
-                    }
+                if !file.is_file() {
+                    return Err(NeatErrors::GenGcBiasModel(
+                        GenGcBiasModelError::ConfigError(
+                            "Must supply a valid configuration file to run gen-gc-bias-model!"
+                                .to_string(),
+                        ),
+                    ));
+                }
+                info!("Running gen-gc-bias-model to generate a GC bias model.");
+                let result = gen_gc_bias_model::main(&file);
+                match result {
+                    Err(error) => return Err(NeatErrors::GenGcBiasModel(error)),
+                    Ok(()) => info!("rneat gen-gc-bias-model completed successfully"),
                 }
             }
-        },
-        _ => unreachable!("Parser should ensure no other subcommand choice is made.")
+        }
+        Some(("gen-bam-models", _)) => {
+            if let Some(("gen-bam-models", cmd)) = subcommand
+                && cmd.contains_id("configuration_yaml")
+            {
+                info!("Running rneat gen-bam-models");
+                let file = cmd
+                    .get_one::<PathBuf>("configuration_yaml")
+                    .expect("Must provide a path with configuration-yaml")
+                    .to_path_buf();
+
+                if !file.is_file() {
+                    return Err(NeatErrors::GenBamModels(GenBamModelsError::ConfigError(
+                        "Must supply a valid configuration file to run gen-bam-models!".to_string(),
+                    )));
+                }
+                info!("Running gen-bam-models to build multiple BAM-derived models in one pass.");
+                let result = gen_bam_models::main(&file);
+                match result {
+                    Err(error) => return Err(NeatErrors::GenBamModels(error)),
+                    Ok(()) => info!("rneat gen-bam-models completed successfully"),
+                }
+            }
+        }
+        _ => unreachable!("Parser should ensure no other subcommand choice is made."),
     }
 
     let elapsed_time = time::Instant::now() - start;
     if elapsed_time.as_millis() < 1000 {
-        info!("Processing finished in {} milliseconds", elapsed_time.as_millis());
+        info!(
+            "Processing finished in {} milliseconds",
+            elapsed_time.as_millis()
+        );
     } else if elapsed_time.as_secs() > 300 {
-        info!("Processing finished in {} minutes", ((elapsed_time.as_secs() as f64)/60.0))
+        info!(
+            "Processing finished in {} minutes",
+            ((elapsed_time.as_secs() as f64) / 60.0)
+        )
     } else {
         info!("Processing finished in {} seconds", elapsed_time.as_secs());
     }

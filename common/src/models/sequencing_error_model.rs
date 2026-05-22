@@ -1,17 +1,22 @@
-use log::debug;
-use std::{io, path::PathBuf};
-use serde::{Deserialize, Serialize};
-use thiserror::Error;
-use crate::{
-    models::{lib::{model_reader, model_writer}, quality_scores::{QualityModelError, QualityScoreModel}}, 
-    structs::{distributions::{DiscreteDistribution, DistributionErrors}, 
-    nucleotides::{Nucleotide, ALLOWED_NUCS}, 
-    transition_matrix::{TransitionMatrix, TransitionMatrixError}}
-};
 use crate::rng::{NeatRng, NeatRngError};
+use crate::{
+    models::{
+        lib::{model_reader, model_writer},
+        quality_scores::{QualityModelError, QualityScoreModel},
+    },
+    structs::{
+        distributions::{DiscreteDistribution, DistributionErrors},
+        nucleotides::{ALLOWED_NUCS, Nucleotide},
+        transition_matrix::{TransitionMatrix, TransitionMatrixError},
+    },
+};
+use log::debug;
+use serde::{Deserialize, Serialize};
+use std::{io, path::PathBuf};
+use thiserror::Error;
 
 #[derive(Debug, Error)]
-pub enum SeqModelError{
+pub enum SeqModelError {
     #[error("Error creating sequencing error model")]
     ModelCreationError,
     #[error("Error creating transition matrix: {0}")]
@@ -25,7 +30,7 @@ pub enum SeqModelError{
     #[error("Sequencing Error model return an IO error: {0}")]
     IoError(#[from] io::Error),
     #[error("Error initializing Quality Score model: {0}")]
-    QualModelError(#[from] QualityModelError)
+    QualModelError(#[from] QualityModelError),
 }
 
 #[derive(Debug)]
@@ -49,6 +54,9 @@ pub struct SequencingErrorModel {
 }
 
 impl SequencingErrorModel {
+    // Returns Result because it builds distributions that can fail; std::Default
+    // requires infallible `fn default() -> Self`, which doesn't fit.
+    #[allow(clippy::should_implement_trait)]
     pub fn default() -> Result<Self, SeqModelError> {
         // This is the default sequencing error model employed by NEAT2
         // Note that this was originally in a file, and we could have done it the way we did
@@ -61,17 +69,12 @@ impl SequencingErrorModel {
         )?;
         let default_error_rate = 0.006638164688495656;
         let default_lengths = vec![1, 2];
-        let default_ins_distr = DiscreteDistribution::new(
-            &vec![0.999, 0.001],
-            &default_lengths,
-        )?;
+        let default_ins_distr = DiscreteDistribution::new(&vec![0.999, 0.001], &default_lengths)?;
         let default_del_distr = default_ins_distr.clone();
         let default_indel_probability = 0.4;
         // default is no bias
-        let default_insertion_bias = DiscreteDistribution::new(
-            &vec![1.0, 1.0, 1.0, 1.0],
-            &ALLOWED_NUCS.to_vec(),
-        )?;
+        let default_insertion_bias =
+            DiscreteDistribution::new(&vec![1.0, 1.0, 1.0, 1.0], &ALLOWED_NUCS.to_vec())?;
         let quality_score_model = QualityScoreModel::default()?;
 
         Ok(SequencingErrorModel {
@@ -130,7 +133,11 @@ impl SequencingErrorModel {
         Ok(())
     }
 
-    pub fn generate_sequencing_error(&self, reference: Nucleotide, rng: &mut NeatRng) -> Result<SequencingErrorType, SeqModelError> {
+    pub fn generate_sequencing_error(
+        &self,
+        reference: Nucleotide,
+        rng: &mut NeatRng,
+    ) -> Result<SequencingErrorType, SeqModelError> {
         // This method picks an error type and determines any additional data needed
         // for the current error, based on the statistical model
         if rng.random()? < self.indel_probability {
@@ -138,29 +145,38 @@ impl SequencingErrorModel {
             Ok(self.generate_indel_error(rng)?)
         } else {
             // SNP error
-            Ok(SequencingErrorType::SnpError(self.generate_snp_error(reference, rng.random()?)?))
+            Ok(SequencingErrorType::SnpError(
+                self.generate_snp_error(reference, rng.random()?)?,
+            ))
         }
     }
 
     pub fn convert_score(&self, score: usize) -> Result<f64, SeqModelError> {
         // Takes a quality score, converts it to a probability of error, and returns the result
         let score = score as f64;
-        Ok(10.0_f64.powf(-score/10.0))
+        Ok(10.0_f64.powf(-score / 10.0))
     }
 
-    fn generate_snp_error(&self, reference: Nucleotide, rand: f64) -> Result<Nucleotide, SeqModelError> {
+    fn generate_snp_error(
+        &self,
+        reference: Nucleotide,
+        rand: f64,
+    ) -> Result<Nucleotide, SeqModelError> {
         // This is a basic mutation function for starting us off
         // Pick the weights list for the base that was input
         // We will use this simple model for sequence errors ultimately.
         debug!("Generating basic SNP error");
         let distro = &self.transition_distros[&reference];
         // Now we create a distribution from the weights and sample our choices.
-        // We have constructed things such that this will return a valid u8. But 
+        // We have constructed things such that this will return a valid u8. But
         // to be extra safe, we could mod by 4 and then convert
-        Ok(Nucleotide::from(distro.sample(rand)?))
+        Ok(distro.sample(rand)?)
     }
 
-    fn generate_indel_error(&self, rng: &mut NeatRng) -> Result<SequencingErrorType, SeqModelError> {
+    fn generate_indel_error(
+        &self,
+        rng: &mut NeatRng,
+    ) -> Result<SequencingErrorType, SeqModelError> {
         // Returns either an insertion (option 1) or a deletion (option 2) depending on a random selection from a list of potential
         // error lengths (-2..2). This makes an insertion of up to 2 bases as likely as a random deletion of up to 2 bases.
         if rng.random()? < 0.5 {
@@ -170,7 +186,7 @@ impl SequencingErrorModel {
             let length = self.ins_length_distribution.sample(rng.random()?)?;
             for _ in 0..length {
                 // We could mod this value by 4 to ensure it is a valid base. Or create a data structure.
-                sequence.push(Nucleotide::from(self.insertion_bias.sample(rng.random()?)?))
+                sequence.push(self.insertion_bias.sample(rng.random()?)?)
             }
             // Insertion of sequence
             Ok(SequencingErrorType::InsertionError(sequence))
@@ -184,9 +200,10 @@ impl SequencingErrorModel {
     pub fn generate_quality_scores(
         &self,
         read_length: usize,
-        rng: &mut NeatRng
+        rng: &mut NeatRng,
     ) -> Result<Vec<usize>, SeqModelError> {
-        self.quality_score_model.generate_quality_scores(read_length, rng)
+        self.quality_score_model
+            .generate_quality_scores(read_length, rng)
     }
 
     /// Borrow the inner quality-score model. Useful for tests and for callers that need
@@ -206,14 +223,17 @@ mod tests {
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),
-        ]).unwrap()
+        ])
+        .unwrap()
     }
 
     #[test]
     fn test_sequencing_error_model() {
         let model = SequencingErrorModel::default().unwrap();
         let mut rng = make_rng();
-        let result = model.generate_sequencing_error(Nucleotide::A, &mut rng).unwrap();
+        let result = model
+            .generate_sequencing_error(Nucleotide::A, &mut rng)
+            .unwrap();
         match result {
             SequencingErrorType::SnpError(base) => assert_ne!(base, Nucleotide::A),
             SequencingErrorType::InsertionError(seq) => assert!(!seq.is_empty()),
@@ -235,8 +255,12 @@ mod tests {
     #[test]
     fn test_sequencing_error_deterministic() {
         let model = SequencingErrorModel::default().unwrap();
-        let error1 = model.generate_sequencing_error(Nucleotide::C, &mut make_rng()).unwrap();
-        let error2 = model.generate_sequencing_error(Nucleotide::C, &mut make_rng()).unwrap();
+        let error1 = model
+            .generate_sequencing_error(Nucleotide::C, &mut make_rng())
+            .unwrap();
+        let error2 = model
+            .generate_sequencing_error(Nucleotide::C, &mut make_rng())
+            .unwrap();
         let type1 = match error1 {
             SequencingErrorType::SnpError(_) => 0,
             SequencingErrorType::InsertionError(_) => 1,
@@ -261,21 +285,28 @@ mod tests {
             insertion_bias: DiscreteDistribution::new(
                 &vec![1.0, 1.0, 1.0, 1.0],
                 &Vec::from(ALLOWED_NUCS),
-            ).unwrap(),
+            )
+            .unwrap(),
             transition_distros: TransitionMatrix::from(
                 [0.0, 0.5, 0.25, 0.25],
                 [0.5, 0.0, 0.25, 0.25],
                 [0.25, 0.25, 0.0, 0.5],
                 [0.25, 0.25, 0.5, 0.0],
-            ).unwrap(),
+            )
+            .unwrap(),
             quality_score_model: QualityScoreModel::default().unwrap(),
         };
         let mut rng = make_rng();
         let mut saw_insertion = false;
         let mut saw_deletion = false;
         for _ in 0..20 {
-            match model.generate_sequencing_error(Nucleotide::A, &mut rng).unwrap() {
-                SequencingErrorType::SnpError(_) => panic!("should not produce SNP when indel_probability=1.0"),
+            match model
+                .generate_sequencing_error(Nucleotide::A, &mut rng)
+                .unwrap()
+            {
+                SequencingErrorType::SnpError(_) => {
+                    panic!("should not produce SNP when indel_probability=1.0")
+                }
                 SequencingErrorType::InsertionError(seq) => {
                     assert!(!seq.is_empty());
                     saw_insertion = true;
@@ -285,10 +316,18 @@ mod tests {
                     saw_deletion = true;
                 }
             }
-            if saw_insertion && saw_deletion { break; }
+            if saw_insertion && saw_deletion {
+                break;
+            }
         }
-        assert!(saw_insertion, "should have seen at least one insertion in 20 calls");
-        assert!(saw_deletion, "should have seen at least one deletion in 20 calls");
+        assert!(
+            saw_insertion,
+            "should have seen at least one insertion in 20 calls"
+        );
+        assert!(
+            saw_deletion,
+            "should have seen at least one deletion in 20 calls"
+        );
     }
 
     #[test]
@@ -317,7 +356,8 @@ mod tests {
         use crate::models::quality_scores::QualityScoreModel;
         let quality_score_model = QualityScoreModel::default().unwrap();
         let error_rate = 0.00312;
-        let model = SequencingErrorModel::from_raw_data(error_rate, quality_score_model, None).unwrap();
+        let model =
+            SequencingErrorModel::from_raw_data(error_rate, quality_score_model, None).unwrap();
         assert!((model.error_rate() - error_rate).abs() < 1e-15);
         // indel_probability default from NEAT2 should be preserved
         assert!((model.indel_probability - 0.4).abs() < 1e-15);
@@ -337,7 +377,8 @@ mod tests {
             0.00555,
             QualityScoreModel::default().unwrap(),
             None,
-        ).unwrap();
+        )
+        .unwrap();
         model.write_model(&path).unwrap();
         let loaded = SequencingErrorModel::from_file(&path).unwrap();
         assert!((loaded.error_rate() - 0.00555).abs() < 1e-10);
@@ -357,9 +398,9 @@ mod tests {
         let n = bins.len();
         let row = vec![1.0; n];
         let trans_weights = vec![vec![row.clone(); n]; 3];
-        let qsm = QualityScoreModel::from_counts(
-            bins.clone(), 4, vec![1.0; n], trans_weights, true,
-        ).unwrap();
+        let qsm =
+            QualityScoreModel::from_counts(bins.clone(), 4, vec![1.0; n], trans_weights, true)
+                .unwrap();
         let model = SequencingErrorModel::from_raw_data(0.001, qsm, None).unwrap();
 
         let dir = tempdir().unwrap();
@@ -373,8 +414,10 @@ mod tests {
         for _ in 0..200 {
             let scores = loaded.generate_quality_scores(50, &mut rng).unwrap();
             for &s in &scores {
-                assert!(bin_set.contains(&s),
-                    "wrapper emitted non-bin score {s}; bins={bins:?}");
+                assert!(
+                    bin_set.contains(&s),
+                    "wrapper emitted non-bin score {s}; bins={bins:?}"
+                );
             }
         }
     }

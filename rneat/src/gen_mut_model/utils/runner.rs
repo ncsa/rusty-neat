@@ -1,19 +1,18 @@
-use std::{collections::HashMap, path::PathBuf};
 use log::*;
+use std::{collections::HashMap, path::PathBuf};
 
 use common::{
     file_tools::fasta_stream::{FastaStream, non_n_regions},
     models::{mutation_model::MutationModel, snp_trinuc_model::TrinucFrame},
     structs::{
         bed_record::BedRecord,
-        nucleotides::{Nucleotide, ALLOWED_NUCS},
+        nucleotides::{ALLOWED_NUCS, Nucleotide},
         transition_matrix::TransitionMatrix,
         variants::{Genotype, Variant, VariantType},
     },
 };
 
 use crate::gen_mut_model::errors::GenMutationModelError;
-
 
 pub fn runner(
     reference: &PathBuf,
@@ -58,7 +57,8 @@ pub fn runner(
                     }
                     bed_track_len += r_end - r_start;
                     for i in (r_start + 1)..(r_end - 1) {
-                        let frame = TrinucFrame::from((sequence[i - 1], sequence[i], sequence[i + 1]));
+                        let frame =
+                            TrinucFrame::from((sequence[i - 1], sequence[i], sequence[i + 1]));
                         *trinuc_count.entry(frame).or_default() += 1;
                     }
                 }
@@ -92,7 +92,10 @@ pub fn runner(
                     }
                     let loc = variant.location - 1; // 0-based
                     if loc + 1 >= sequence.len() {
-                        debug!("Skipping edge variant at position {} (out of contig bounds)", variant.location);
+                        debug!(
+                            "Skipping edge variant at position {} (out of contig bounds)",
+                            variant.location
+                        );
                         continue;
                     }
                     let canon = |n: Nucleotide| match n {
@@ -106,14 +109,20 @@ pub fn runner(
                     let n1 = canon(sequence[loc]);
                     let n2 = canon(sequence[loc + 1]);
                     if n1 != variant.reference[0] {
-                        warn!("Reference mismatch at position {}: VCF ref {:?}, FASTA base {:?}; skipping",
-                              variant.location, variant.reference[0], n1);
+                        warn!(
+                            "Reference mismatch at position {}: VCF ref {:?}, FASTA base {:?}; skipping",
+                            variant.location, variant.reference[0], n1
+                        );
                         continue;
                     }
                     let ref_frame = TrinucFrame::from((n0, n1, n2));
                     let alt_frame = TrinucFrame::from((n0, variant.alternate[0], n2));
-                    *trinuc_transition_count.entry((ref_frame, alt_frame)).or_default() += 1;
-                    *snp_transition_count.entry((variant.reference[0], variant.alternate[0])).or_default() += 1;
+                    *trinuc_transition_count
+                        .entry((ref_frame, alt_frame))
+                        .or_default() += 1;
+                    *snp_transition_count
+                        .entry((variant.reference[0], variant.alternate[0]))
+                        .or_default() += 1;
                 }
                 VariantType::Insertion => {
                     let variant_len = variant.alternate.len() - variant.reference.len();
@@ -158,23 +167,22 @@ pub fn runner(
         let alts = trans_by_ref.get(frame);
         let frame_count: usize = alts.map_or(0, |m| m.values().sum());
         trinuc_mut_prob.insert(*frame, (frame_count as f64) / (*count as f64));
-        if frame_count > 0 {
-            if let Some(alts) = alts {
-                for (&alt_f, &tc) in alts {
-                    trinuc_trans_prob.insert((*frame, alt_f), (tc as f64) / (frame_count as f64));
-                }
+        if frame_count > 0
+            && let Some(alts) = alts
+        {
+            for (&alt_f, &tc) in alts {
+                trinuc_trans_prob.insert((*frame, alt_f), (tc as f64) / (frame_count as f64));
             }
         }
     }
 
-    for nuc1 in ALLOWED_NUCS.clone() {
+    for nuc1 in ALLOWED_NUCS {
         let rolling_total: usize = ALLOWED_NUCS
-            .clone()
             .into_iter()
             .filter_map(|nuc2| snp_transition_count.get(&(nuc1, nuc2)))
             .sum();
         if rolling_total > 0 {
-            for nuc2 in ALLOWED_NUCS.clone() {
+            for nuc2 in ALLOWED_NUCS {
                 if let Some(&c) = snp_transition_count.get(&(nuc1, nuc2)) {
                     snp_trans_frequency.insert((nuc1, nuc2), (c as f64) / (rolling_total as f64));
                 }
@@ -189,7 +197,11 @@ pub fn runner(
     let average_snp_frequency = (snp_count as f64) / allowed_variant_count;
     let average_deletion_frequency = (total_deletions as f64) / allowed_variant_count;
     let average_insertion_frequency = (total_insertions as f64) / allowed_variant_count;
-    let variant_probs = vec![average_snp_frequency, average_insertion_frequency, average_deletion_frequency];
+    let variant_probs = vec![
+        average_snp_frequency,
+        average_insertion_frequency,
+        average_deletion_frequency,
+    ];
 
     let homozygous_frequency = if homozygous_count > 0 {
         (homozygous_count as f64) / allowed_variant_count
@@ -244,8 +256,7 @@ pub fn runner(
 mod tests {
     use super::*;
     use common::{
-        file_tools::vcf_tools::read_vcf,
-        models::mutation_model::MutationModel,
+        file_tools::vcf_tools::read_vcf, models::mutation_model::MutationModel,
         structs::bed_record::BedRecord,
     };
     use tempfile::tempdir;
@@ -261,8 +272,14 @@ mod tests {
         runner(&reference, mutations, HashMap::new(), &output_file, None).unwrap();
         assert!(output_file.exists());
         let model = MutationModel::from_file(&output_file).unwrap();
-        assert!(model.mutation_rate > 0.0, "mutation_rate should be positive");
-        assert!(model.homozygous_frequency > 0.0, "homozygous_frequency should be positive");
+        assert!(
+            model.mutation_rate > 0.0,
+            "mutation_rate should be positive"
+        );
+        assert!(
+            model.homozygous_frequency > 0.0,
+            "homozygous_frequency should be positive"
+        );
     }
 
     #[test]
@@ -285,7 +302,14 @@ mod tests {
         )
         .unwrap();
 
-        runner(&reference, mutations, HashMap::new(), &output_file, Some(tsv_path)).unwrap();
+        runner(
+            &reference,
+            mutations,
+            HashMap::new(),
+            &output_file,
+            Some(tsv_path),
+        )
+        .unwrap();
         assert!(output_file.exists());
         let model = MutationModel::from_file(&output_file).unwrap();
         assert!(model.mutation_rate > 0.0);
@@ -310,7 +334,8 @@ mod tests {
 H1N1_HA\t22\t.\tC\tT\t60\tPASS\t.\tGT\t0/1\n\
 H1N1_HA\t50\t.\tT\tTAG\t60\tPASS\t.\tGT\t0/1\n\
 H1N1_HA\t80\t.\tACG\tA\t60\tPASS\t.\tGT\t0/1\n",
-        ).unwrap();
+        )
+        .unwrap();
 
         let mutations = read_vcf(vcf_path).unwrap();
         let output_file = out_dir.path().join("indel_model.json.gz");
@@ -338,7 +363,8 @@ H1N1_HA\t80\t.\tACG\tA\t60\tPASS\t.\tGT\t0/1\n",
 #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n\
 H1N1_HA\t22\t.\tC\tT\t60\tPASS\t.\tGT\t0/1\n\
 H1N1_HA\t25\t.\tA\tG\t60\tPASS\t.\tGT\t0/1\n",
-        ).unwrap();
+        )
+        .unwrap();
 
         let mutations = read_vcf(vcf_path).unwrap();
         let output_file = out_dir.path().join("mismatch_model.json.gz");
@@ -384,7 +410,10 @@ H1N1_HA\t25\t.\tA\tG\t60\tPASS\t.\tGT\t0/1\n",
 
         assert!(output_file.exists());
         let model = MutationModel::from_file(&output_file).unwrap();
-        assert!(model.mutation_rate > 0.0, "mutation_rate should be positive");
+        assert!(
+            model.mutation_rate > 0.0,
+            "mutation_rate should be positive"
+        );
         // 3 variants / 99 bp ≈ 0.030; whole-reference denominator is ~14 000 bp total
         assert!(
             model.mutation_rate > 0.01,

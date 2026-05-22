@@ -9,7 +9,7 @@
 
 mod common;
 
-use common::{fresh_workdir, h1n1_reference, read_gzip_fastq_lines, rneat, GenReadsConfig};
+use common::{GenReadsConfig, fresh_workdir, h1n1_reference, read_gzip_fastq_lines, rneat};
 
 /// One parsed FASTQ record. Owned strings — these tests are small enough.
 #[derive(Debug)]
@@ -22,7 +22,7 @@ struct FastqRecord {
 /// Strict 4-line FASTQ parser. Returns an error string on any deviation rather than
 /// panicking, so the caller can assert it didn't fire.
 fn parse_fastq_strict(lines: &[String]) -> Result<Vec<FastqRecord>, String> {
-    if lines.len() % 4 != 0 {
+    if !lines.len().is_multiple_of(4) {
         return Err(format!(
             "FASTQ has {} lines, not a multiple of 4 (truncated record at end?)",
             lines.len(),
@@ -31,10 +31,16 @@ fn parse_fastq_strict(lines: &[String]) -> Result<Vec<FastqRecord>, String> {
     let mut out = Vec::with_capacity(lines.len() / 4);
     for (i, chunk) in lines.chunks(4).enumerate() {
         if !chunk[0].starts_with('@') {
-            return Err(format!("record {i}: name line must start with '@', got {:?}", chunk[0]));
+            return Err(format!(
+                "record {i}: name line must start with '@', got {:?}",
+                chunk[0]
+            ));
         }
         if chunk[2] != "+" {
-            return Err(format!("record {i}: separator line must be '+', got {:?}", chunk[2]));
+            return Err(format!(
+                "record {i}: separator line must be '+', got {:?}",
+                chunk[2]
+            ));
         }
         if chunk[1].is_empty() {
             return Err(format!("record {i}: sequence is empty"));
@@ -47,7 +53,10 @@ fn parse_fastq_strict(lines: &[String]) -> Result<Vec<FastqRecord>, String> {
             ));
         }
         // Sequence must be ACGTN-only (rneat doesn't emit lowercase or masked bases on output).
-        if !chunk[1].chars().all(|c| matches!(c, 'A' | 'C' | 'G' | 'T' | 'N')) {
+        if !chunk[1]
+            .chars()
+            .all(|c| matches!(c, 'A' | 'C' | 'G' | 'T' | 'N'))
+        {
             return Err(format!(
                 "record {i}: sequence contains non-ACGTN characters: {:?}",
                 chunk[1],
@@ -89,9 +98,12 @@ fn single_ended_fastq_is_well_formed() {
     // Every record's sequence length must equal the configured read_len.
     for r in &records {
         assert_eq!(
-            r.sequence.len(), config.read_len,
+            r.sequence.len(),
+            config.read_len,
             "read {:?} has sequence length {} but read_len is {}",
-            r.name, r.sequence.len(), config.read_len,
+            r.name,
+            r.sequence.len(),
+            config.read_len,
         );
     }
 }
@@ -116,26 +128,36 @@ fn paired_ended_fastq_pair_invariants() {
 
     let r1_path = out.join("validation_pe_r1.fastq.gz");
     let r2_path = out.join("validation_pe_r2.fastq.gz");
-    assert!(r1_path.exists() && r2_path.exists(),
-        "paired-end mode must produce both R1 and R2");
+    assert!(
+        r1_path.exists() && r2_path.exists(),
+        "paired-end mode must produce both R1 and R2"
+    );
 
-    let r1 = parse_fastq_strict(&read_gzip_fastq_lines(&r1_path))
-        .expect("R1 failed strict parse");
-    let r2 = parse_fastq_strict(&read_gzip_fastq_lines(&r2_path))
-        .expect("R2 failed strict parse");
+    let r1 = parse_fastq_strict(&read_gzip_fastq_lines(&r1_path)).expect("R1 failed strict parse");
+    let r2 = parse_fastq_strict(&read_gzip_fastq_lines(&r2_path)).expect("R2 failed strict parse");
 
     assert!(!r1.is_empty(), "R1 has no records");
     assert_eq!(
-        r1.len(), r2.len(),
+        r1.len(),
+        r2.len(),
         "R1/R2 record counts differ: r1={} r2={}",
-        r1.len(), r2.len(),
+        r1.len(),
+        r2.len(),
     );
 
     // Suffix and stem invariants. The /1 vs /2 suffix distinguishes mates; the stem
     // (everything before the suffix) is shared between paired reads.
     for (i, (a, b)) in r1.iter().zip(r2.iter()).enumerate() {
-        assert!(a.name.ends_with("/1"), "R1[{i}] name {:?} should end with /1", a.name);
-        assert!(b.name.ends_with("/2"), "R2[{i}] name {:?} should end with /2", b.name);
+        assert!(
+            a.name.ends_with("/1"),
+            "R1[{i}] name {:?} should end with /1",
+            a.name
+        );
+        assert!(
+            b.name.ends_with("/2"),
+            "R2[{i}] name {:?} should end with /2",
+            b.name
+        );
         let stem_a = a.name.trim_end_matches("/1");
         let stem_b = b.name.trim_end_matches("/2");
         assert_eq!(
@@ -158,8 +180,10 @@ fn all_qualities_are_valid_phred33() {
         .arg(yaml.path())
         .assert()
         .success();
-    let records = parse_fastq_strict(&read_gzip_fastq_lines(&out.join("validation_phred_r1.fastq.gz")))
-        .expect("FASTQ failed strict parse");
+    let records = parse_fastq_strict(&read_gzip_fastq_lines(
+        &out.join("validation_phred_r1.fastq.gz"),
+    ))
+    .expect("FASTQ failed strict parse");
 
     for r in &records {
         for &b in r.quality.as_bytes() {

@@ -1,8 +1,6 @@
 //! This contains only one function at the moment, a general opener and reader
-use std::io::{
-    self, BufRead, BufReader, Lines, Read, Result, Write
-};
 use std::fs::File;
+use std::io::{self, BufRead, BufReader, Lines, Read, Result, Write};
 use std::path::PathBuf;
 
 use flate2::read::GzDecoder;
@@ -28,27 +26,33 @@ pub fn open_safe(filename: &PathBuf) -> Result<BufReader<File>> {
 pub fn create_output_file(filename: &PathBuf, overwrite_file: bool) -> Result<File> {
     if filename.is_file() && !overwrite_file {
         // The file already exists and we're in non overwrite mode
-        panic!("Attempting to overwrite an existing file: {}", filename.display())
+        panic!(
+            "Attempting to overwrite an existing file: {}",
+            filename.display()
+        )
     } else {
-        File::create(&filename)
+        File::create(filename)
     }
 }
 
 pub fn append_to_file(filename: &PathBuf) -> Result<File> {
     // if the file doesn't exist, we'll create it. If it does, we'll append to it
     if filename.is_file() {
-        File::options()
-            .write(true)
-            .append(true)
-            .open(&filename)
+        File::options().append(true).open(filename)
     } else {
-        File::create(&filename)
+        File::create(filename)
     }
 }
 
 pub struct VectorBuffer {
     // The purpose of this struct is to mock a buffer so we can run single-ended read generation
     buffer: Vec<u8>,
+}
+
+impl Default for VectorBuffer {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl VectorBuffer {
@@ -98,10 +102,7 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let path = temp_dir.path().join("test.txt");
         std::fs::write(&path, "line1\nline2\nline3\n").unwrap();
-        let lines: Vec<String> = read_lines(&path)
-            .unwrap()
-            .map(|l| l.unwrap())
-            .collect();
+        let lines: Vec<String> = read_lines(&path).unwrap().map(|l| l.unwrap()).collect();
         assert_eq!(lines, vec!["line1", "line2", "line3"]);
     }
 

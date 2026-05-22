@@ -1,31 +1,26 @@
-use std::{num::{ParseFloatError, ParseIntError}, str::ParseBoolError};
+use std::{
+    num::{ParseFloatError, ParseIntError},
+    str::ParseBoolError,
+};
 
+use common::rng::NeatRngError;
 use common::{
     file_tools::{
-        bam_writer::BamWriterError,
-        bed_reader::BedReaderError,
-        fasta_stream::FastaStreamError,
-        fastq_tools::FastqToolsError,
-        vcf_tools::VcfToolsError,
+        bam_writer::BamWriterError, bed_reader::BedReaderError, fasta_stream::FastaStreamError,
+        fastq_tools::FastqToolsError, vcf_tools::VcfToolsError,
     },
-
     models::{
-        fragment_length::FragmentModelError,
-        mutation_model::MutationModelError,
-        quality_scores::QualityModelError,
+        fragment_length::FragmentModelError, gc_bias_model::GcBiasModelError,
+        mutation_model::MutationModelError, quality_scores::QualityModelError,
         sequencing_error_model::SeqModelError,
-        gc_bias_model::GcBiasModelError,
     },
-
     structs::{
-        distributions::DistributionErrors,
-        mutated_map::MutatedMapError,
+        distributions::DistributionErrors, mutated_map::MutatedMapError,
         sequence_block::SequenceBlockError,
-    }
+    },
 };
-use common::rng::NeatRngError;
-use thiserror::Error;
 use serde_yml;
+use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum GenerateReadsError {

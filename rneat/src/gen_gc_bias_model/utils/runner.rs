@@ -1,17 +1,14 @@
-use std::path::PathBuf;
 use log::*;
+use std::{collections::HashMap, path::PathBuf};
 
+use crate::gen_gc_bias_model::{errors::GenGcBiasModelError, utils::config::RunConfiguration};
 use common::{
     file_tools::{
-        bam_reader::{walk_bam, BamWalkFilter, CoverageObserver},
+        bam_reader::{BamWalkFilter, CoverageObserver, walk_bam},
         fasta_stream::{FastaStream, non_n_regions},
     },
     models::gc_bias_model::GcBiasModel,
     structs::nucleotides::Nucleotide,
-};
-use crate::gen_gc_bias_model::{
-    errors::GenGcBiasModelError,
-    utils::config::RunConfiguration,
 };
 
 pub fn runner(path: &PathBuf) -> Result<(), GenGcBiasModelError> {
@@ -22,8 +19,19 @@ pub fn runner(path: &PathBuf) -> Result<(), GenGcBiasModelError> {
     let mut filter = BamWalkFilter::for_coverage();
     filter.min_mapq = config.min_mapq;
     walk_bam(&config.bam_file, &filter, &mut [&mut obs])?;
-    let mut cov_by_contig = obs.into_by_contig();
+    run_from_coverage(&config, obs.into_by_contig())
+}
 
+/// Builds and writes a GC bias model from a pre-computed per-contig coverage
+/// map (e.g. produced by `CoverageObserver` during a shared BAM walk in the
+/// unified `gen-bam-models` runner). Reads the reference FASTA, sweeps
+/// windows, accumulates GC% vs mean-coverage, and writes the gzipped JSON
+/// model to `config.output_file`. `config.bam_file` and `config.min_mapq`
+/// are ignored on this path.
+pub fn run_from_coverage(
+    config: &RunConfiguration,
+    mut cov_by_contig: HashMap<String, Vec<u32>>,
+) -> Result<(), GenGcBiasModelError> {
     let mut gc_weight_sum = [0.0f64; 101];
     let mut gc_window_count = [0usize; 101];
 
@@ -53,16 +61,15 @@ pub fn runner(path: &PathBuf) -> Result<(), GenGcBiasModelError> {
             }
         };
 
-        let regions: Vec<(usize, usize)> = if let Some(bed_regions) =
-            config.bed_table.get(&contig_name)
-        {
-            bed_regions
-                .iter()
-                .map(|r| (r.start, r.end.min(contig_len)))
-                .collect()
-        } else {
-            non_n_regions(&sequence)
-        };
+        let regions: Vec<(usize, usize)> =
+            if let Some(bed_regions) = config.bed_table.get(&contig_name) {
+                bed_regions
+                    .iter()
+                    .map(|r| (r.start, r.end.min(contig_len)))
+                    .collect()
+            } else {
+                non_n_regions(&sequence)
+            };
 
         for (region_start, region_end) in regions {
             if region_end.saturating_sub(region_start) < config.window_size {
@@ -86,7 +93,8 @@ pub fn runner(path: &PathBuf) -> Result<(), GenGcBiasModelError> {
     let total_windows: usize = gc_window_count.iter().sum();
     if total_windows == 0 {
         return Err(GenGcBiasModelError::ConfigError(
-            "No windows were processed — verify that the BAM and reference share contig names".to_string(),
+            "No windows were processed — verify that the BAM and reference share contig names"
+                .to_string(),
         ));
     }
 
@@ -147,7 +155,10 @@ fn accumulate_region(
         .iter()
         .filter(|&&n| n == Nucleotide::G || n == Nucleotide::C)
         .count();
-    let mut n_count: usize = first.iter().filter(|&&n| n == Nucleotide::N || n == Nucleotide::X).count();
+    let mut n_count: usize = first
+        .iter()
+        .filter(|&&n| n == Nucleotide::N || n == Nucleotide::X)
+        .count();
 
     let mut cov_sum: u64 = (0..window_size)
         .map(|i| cov.get(region_start + i).copied().unwrap_or(0) as u64)
@@ -157,8 +168,7 @@ fn accumulate_region(
     loop {
         let called = window_size - n_count;
         if called > 0 {
-            let gc_pct = ((gc_count as f64 / called as f64) * 100.0)
-                .round() as usize;
+            let gc_pct = ((gc_count as f64 / called as f64) * 100.0).round() as usize;
             let gc_pct = gc_pct.min(100);
             gc_weight_sum[gc_pct] += cov_sum as f64 / window_size as f64;
             gc_window_count[gc_pct] += 1;
@@ -188,7 +198,6 @@ fn accumulate_region(
         w = next_w;
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -240,7 +249,10 @@ mod tests {
             alignment::{
                 RecordBuf,
                 io::Write as _,
-                record::{cigar::{op::Kind, Op}, Flags, MappingQuality},
+                record::{
+                    Flags, MappingQuality,
+                    cigar::{Op, op::Kind},
+                },
                 record_buf::{Cigar, Sequence},
             },
             header::record::value::{Map, map::ReferenceSequence},
@@ -250,9 +262,7 @@ mod tests {
         for &(name, len) in contigs {
             builder = builder.add_reference_sequence(
                 name.to_vec(),
-                Map::<ReferenceSequence>::new(
-                    std::num::NonZero::<usize>::new(len).unwrap(),
-                ),
+                Map::<ReferenceSequence>::new(std::num::NonZero::<usize>::new(len).unwrap()),
             );
         }
         let header = builder.build();
@@ -300,7 +310,9 @@ mod tests {
             &ref_file.path().to_path_buf(),
             &bam_path,
             &out_path,
-            100, 100, 1,
+            100,
+            100,
+            1,
         );
         runner(&cfg.path().to_path_buf()).unwrap();
 
@@ -310,7 +322,8 @@ mod tests {
             assert!(
                 (w - 1.0).abs() < 1e-6,
                 "Expected weight ~1.0 at GC {}%, got {}",
-                gc_pct, w
+                gc_pct,
+                w
             );
         }
     }
@@ -340,7 +353,9 @@ mod tests {
             &ref_file.path().to_path_buf(),
             &bam_path,
             &out_path,
-            200, 200, 1,
+            200,
+            200,
+            1,
         );
         runner(&cfg.path().to_path_buf()).unwrap();
 
@@ -376,7 +391,9 @@ mod tests {
             &ref_file.path().to_path_buf(),
             &bam_path,
             &out_path,
-            100, 100, 10,
+            100,
+            100,
+            10,
         );
         runner(&cfg.path().to_path_buf()).unwrap();
 
@@ -407,7 +424,9 @@ mod tests {
             &ref_file.path().to_path_buf(),
             &bam_path,
             &out_path,
-            100, 100, 1,
+            100,
+            100,
+            1,
         );
         runner(&cfg.path().to_path_buf()).unwrap();
     }
@@ -441,7 +460,9 @@ mod tests {
             &ref_file.path().to_path_buf(),
             &bam_path,
             &out_path,
-            100, 100, 2,
+            100,
+            100,
+            2,
         );
         runner(&cfg.path().to_path_buf()).unwrap();
 
@@ -480,7 +501,9 @@ mod tests {
             &ref_file.path().to_path_buf(),
             &bam_path,
             &out_path,
-            4, 2, 1,
+            4,
+            2,
+            1,
         );
         runner(&cfg.path().to_path_buf()).unwrap();
 

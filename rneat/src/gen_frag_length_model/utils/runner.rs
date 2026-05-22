@@ -1,13 +1,11 @@
-use std::collections::HashMap;
-use log::info;
-use common::{
-    file_tools::bam_reader::read_fragment_lengths,
-    models::fragment_length::FragmentLengthModel,
-};
 use crate::gen_frag_length_model::{
-    errors::GenFragLengthModelError,
-    utils::config::RunConfiguration,
+    errors::GenFragLengthModelError, utils::config::RunConfiguration,
 };
+use common::{
+    file_tools::bam_reader::read_fragment_lengths, models::fragment_length::FragmentLengthModel,
+};
+use log::info;
+use std::collections::HashMap;
 
 // Only consider fragment lengths up to this many median absolute deviations above the median.
 // Mirrors the FILTER_MEDDEV_M constant from Python NEAT.
@@ -16,26 +14,44 @@ const FILTER_MEDDEV_M: f64 = 10.0;
 pub fn runner(config: &RunConfiguration) -> Result<(), GenFragLengthModelError> {
     info!("Reading fragment lengths from {:?}", config.input_file);
     let tlens = read_fragment_lengths(&config.input_file)?;
+    run_from_tlens(tlens, config.min_reads, &config.output_file)
+}
 
+/// Builds and writes a fragment length model from a pre-collected list of
+/// template lengths (e.g. produced by `FragLengthObserver` during a shared
+/// BAM walk in the unified `gen-bam-models` runner). Applies MAD-based
+/// outlier filtering and rare-length pruning, fits a normal distribution,
+/// and writes the gzipped JSON model.
+pub fn run_from_tlens(
+    tlens: Vec<usize>,
+    min_reads: usize,
+    output_file: &std::path::PathBuf,
+) -> Result<(), GenFragLengthModelError> {
     if tlens.is_empty() {
         return Err(GenFragLengthModelError::EmptyData);
     }
     info!("Collected {} raw fragment lengths", tlens.len());
 
-    let filtered = filter_lengths(tlens, config.min_reads);
+    let filtered = filter_lengths(tlens, min_reads);
 
     if filtered.is_empty() {
         return Err(GenFragLengthModelError::FilteredToEmpty);
     }
-    info!("Retained {} fragment lengths after filtering", filtered.len());
+    info!(
+        "Retained {} fragment lengths after filtering",
+        filtered.len()
+    );
 
     let mean = compute_mean(&filtered);
     let std_dev = compute_std_dev(&filtered, mean);
-    info!("Fragment length model: mean={:.1}, std_dev={:.1}", mean, std_dev);
+    info!(
+        "Fragment length model: mean={:.1}, std_dev={:.1}",
+        mean, std_dev
+    );
 
     let model = FragmentLengthModel::new_normal(mean, std_dev)?;
-    model.write_file(&config.output_file)?;
-    info!("Wrote fragment length model to {:?}", config.output_file);
+    model.write_file(output_file)?;
+    info!("Wrote fragment length model to {:?}", output_file);
     Ok(())
 }
 
@@ -76,7 +92,7 @@ fn filter_lengths(mut tlens: Vec<usize>, min_reads: usize) -> Vec<usize> {
     unique.sort_unstable();
     for l in unique {
         if l > 0 && (l as f64) <= ceiling && counts[&l] >= min_reads {
-            output.extend(std::iter::repeat(l).take(counts[&l]));
+            output.extend(std::iter::repeat_n(l, counts[&l]));
         }
     }
     output
@@ -87,7 +103,7 @@ fn median_f64(sorted: &[usize]) -> f64 {
     if n == 0 {
         return 0.0;
     }
-    if n % 2 == 0 {
+    if n.is_multiple_of(2) {
         (sorted[n / 2 - 1] + sorted[n / 2]) as f64 / 2.0
     } else {
         sorted[n / 2] as f64
@@ -128,9 +144,12 @@ mod tests {
     fn test_filter_lengths_removes_rare() {
         // 100 appears 3× (>= min_reads=2), 999 appears 1× (< min_reads=2)
         let mut data: Vec<usize> = vec![999];
-        data.extend(std::iter::repeat(100).take(3));
+        data.extend(std::iter::repeat_n(100, 3));
         let result = filter_lengths(data, 2);
-        assert!(result.iter().all(|&x| x == 100), "rare length 999 should be removed");
+        assert!(
+            result.iter().all(|&x| x == 100),
+            "rare length 999 should be removed"
+        );
         assert_eq!(result.len(), 3);
     }
 
@@ -138,7 +157,7 @@ mod tests {
     fn test_filter_lengths_removes_outliers() {
         // Tight cluster around 200, plus one extreme outlier at 100_000
         let mut data: Vec<usize> = (180..=220).flat_map(|v| vec![v; 5]).collect();
-        data.extend(std::iter::repeat(100_000usize).take(5));
+        data.extend(std::iter::repeat_n(100_000usize, 5));
         let result = filter_lengths(data, 2);
         assert!(
             result.iter().all(|&x| x < 100_000),
@@ -189,7 +208,10 @@ mod tests {
     fn test_runner_with_bam() {
         let temp = tempfile::tempdir().unwrap();
         let bam_path = temp.path().join("frags.bam");
-        write_test_frag_bam(&bam_path, &[150usize, 151, 152, 150, 151, 152, 150, 151, 152, 150]);
+        write_test_frag_bam(
+            &bam_path,
+            &[150usize, 151, 152, 150, 151, 152, 150, 151, 152, 150],
+        );
         let output = temp.path().join("model.json.gz");
         let config = RunConfiguration {
             input_file: bam_path,
@@ -214,7 +236,10 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let bam_path = temp.path().join("frags.bam");
         // Every length appears exactly once → min_reads=2 would remove all; min_reads=0 keeps all
-        write_test_frag_bam(&bam_path, &[100, 200, 300, 400, 500, 150, 250, 350, 450, 160]);
+        write_test_frag_bam(
+            &bam_path,
+            &[100, 200, 300, 400, 500, 150, 250, 350, 450, 160],
+        );
         let output = temp.path().join("model.json.gz");
         let config = RunConfiguration {
             input_file: bam_path,
@@ -300,7 +325,10 @@ mod tests {
             alignment::{
                 RecordBuf,
                 io::Write as _,
-                record::{cigar::{op::Kind, Op}, Flags, MappingQuality},
+                record::{
+                    Flags, MappingQuality,
+                    cigar::{Op, op::Kind},
+                },
                 record_buf::{Cigar, Sequence},
             },
             header::record::value::{Map, map::ReferenceSequence},
@@ -338,7 +366,10 @@ mod tests {
             alignment::{
                 RecordBuf,
                 io::Write as _,
-                record::{cigar::{op::Kind, Op}, Flags, MappingQuality},
+                record::{
+                    Flags, MappingQuality,
+                    cigar::{Op, op::Kind},
+                },
                 record_buf::{Cigar, Sequence},
             },
             header::record::value::{Map, map::ReferenceSequence},
@@ -393,9 +424,8 @@ mod tests {
                 RecordBuf,
                 io::Write as _,
                 record::{
-                    cigar::{op::Kind, Op},
-                    Flags,
-                    MappingQuality,
+                    Flags, MappingQuality,
+                    cigar::{Op, op::Kind},
                 },
                 record_buf::{Cigar, Sequence},
             },
@@ -406,9 +436,7 @@ mod tests {
         let header = sam::Header::builder()
             .add_reference_sequence(
                 b"chr1".to_vec(),
-                Map::<ReferenceSequence>::new(
-                    std::num::NonZero::<usize>::new(1_000_000).unwrap(),
-                ),
+                Map::<ReferenceSequence>::new(std::num::NonZero::<usize>::new(1_000_000).unwrap()),
             )
             .build();
 
@@ -423,8 +451,7 @@ mod tests {
             *record.flags_mut() = Flags::SEGMENTED | Flags::FIRST_SEGMENT;
             *record.cigar_mut() = cigar;
             *record.sequence_mut() = Sequence::from(seq.as_ref());
-            *record.mapping_quality_mut() =
-                Some(MappingQuality::try_from(30u8).unwrap());
+            *record.mapping_quality_mut() = Some(MappingQuality::try_from(30u8).unwrap());
             *record.reference_sequence_id_mut() = Some(0);
             *record.mate_reference_sequence_id_mut() = Some(0);
             *record.template_length_mut() = tlen as i32;

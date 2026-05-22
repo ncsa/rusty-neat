@@ -1,16 +1,11 @@
 pub mod errors;
 pub mod utils;
-use std::path::PathBuf;
+use common::file_tools::bed_reader::{self};
 use log::*;
-use common::{file_tools::bed_reader::{self}};
+use std::path::PathBuf;
 use utils::filter_lib::{filter_fastq, filter_vcf};
 
-use crate::filter_reads::{
-    utils::config::RunConfiguration,
-    errors::FilterReadsError,
-};
-
-
+use crate::filter_reads::{errors::FilterReadsError, utils::config::RunConfiguration};
 
 pub fn main(config: &PathBuf) -> Result<(), FilterReadsError> {
     info!("////////////// Welcome to rusty-neat filter reads! \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\");
@@ -27,12 +22,15 @@ pub fn main(config: &PathBuf) -> Result<(), FilterReadsError> {
         let (output_file, is_gzip, is_fastq) = run_config.file_map[input_file].clone();
         if is_fastq {
             info!("Filtering input fastq file: {:?}", &input_file);
-            filter_fastq(&bed_table, &input_file, is_gzip, &output_file)?;
+            filter_fastq(&bed_table, input_file, is_gzip, &output_file)?;
         } else {
             info!("Filtering input vcf file: {:?}", &input_file);
-            filter_vcf(&bed_table, &input_file, is_gzip, &output_file)?;
+            filter_vcf(&bed_table, input_file, is_gzip, &output_file)?;
         }
-        info!("Successfully filtered input file {:?}, written to {:?}", input_file, output_file);
+        info!(
+            "Successfully filtered input file {:?}, written to {:?}",
+            input_file, output_file
+        );
     }
     Ok(())
 }

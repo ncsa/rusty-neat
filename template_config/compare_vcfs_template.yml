@@ -1,0 +1,38 @@
+# REQUIRED PARAMS
+# NEAT-simulated truth VCF (typically <prefix>_golden.vcf.gz from gen-reads).
+# Accepts .vcf or .vcf.gz.
+golden_vcf:
+
+# Downstream variant caller's VCF produced from the simulated reads.
+# Accepts .vcf or .vcf.gz.
+called_vcf:
+
+# Reference FASTA used for the simulation. Reserved for forward compatibility
+# with the Phase 2 equivalence-detection algorithm; in Phase 1 this is
+# path-checked but otherwise unused.
+reference:
+
+# Directory where the comparison report will be written. Created if absent.
+# Files written: comparison_summary.json, comparison_summary.txt.
+output_dir:
+
+# OPTIONAL PARAMS
+# Overwrite existing report files in output_dir. Default false.
+overwrite_output: false
+
+# Restrict comparison to variants inside these BED regions. "." disables.
+target_bed: .
+
+# Comma-separated list of contigs to consider, e.g. "chr1,chr2,chrX".
+# Variants on contigs not in this list are dropped from both VCFs before
+# classification (matches NEAT 4 behavior — un-simulated contigs do not
+# contribute to FN). "." treats every contig present in the golden VCF
+# as simulated.
+contigs_simulated: .
+
+# Include homozygous-reference calls (ALT == "." or ALT == REF). Default false.
+include_homs: false
+
+# Include calls whose FILTER column is anything other than PASS / ".".
+# Default false.
+include_filtered: false

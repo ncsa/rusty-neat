@@ -5,6 +5,7 @@ extern crate serde;
 extern crate serde_json;
 extern crate simplelog;
 
+pub mod compare_vcfs;
 pub mod filter_reads;
 pub mod gen_bam_models;
 pub mod gen_frag_length_model;
@@ -25,7 +26,8 @@ use std::path::PathBuf;
 use thiserror::Error;
 
 use crate::{
-    filter_reads::errors::FilterReadsError, gen_bam_models::errors::GenBamModelsError,
+    compare_vcfs::errors::CompareVcfsError, filter_reads::errors::FilterReadsError,
+    gen_bam_models::errors::GenBamModelsError,
     gen_frag_length_model::errors::GenFragLengthModelError,
     gen_gc_bias_model::errors::GenGcBiasModelError, gen_mut_model::errors::GenMutationModelError,
     gen_reads::errors::GenerateReadsError, gen_seq_error_model::errors::GenSeqErrorModelError,
@@ -50,9 +52,11 @@ pub enum NeatErrors {
     GenGcBiasModel(#[from] GenGcBiasModelError),
     #[error("Error while generating BAM-derived models {0}")]
     GenBamModels(#[from] GenBamModelsError),
+    #[error("Error while comparing VCFs {0}")]
+    CompareVcfs(#[from] CompareVcfsError),
 }
 
-fn neat_commands() -> [Command; 7] {
+fn neat_commands() -> [Command; 8] {
     // These are the submodule commands. Any new commands added should go here.
     let configuration_arg = Arg::new("configuration_yaml")
         .long("configuration-yaml")
@@ -90,6 +94,10 @@ fn neat_commands() -> [Command; 7] {
             .arg(&configuration_arg),
         Command::new("gen-bam-models")
             .about("Build multiple models (frag-length, GC bias) from one BAM in a single pass")
+            .arg_required_else_help(true)
+            .arg(&configuration_arg),
+        Command::new("compare-vcfs")
+            .about("Compare a NEAT-simulated golden VCF against a downstream variant-caller VCF")
             .arg_required_else_help(true)
             .arg(&configuration_arg),
     ]
@@ -346,6 +354,32 @@ fn main() -> Result<(), NeatErrors> {
                 match result {
                     Err(error) => return Err(NeatErrors::GenBamModels(error)),
                     Ok(()) => info!("rneat gen-bam-models completed successfully"),
+                }
+            }
+        }
+        Some(("compare-vcfs", _)) => {
+            if let Some(("compare-vcfs", cmd)) = subcommand
+                && cmd.contains_id("configuration_yaml")
+            {
+                info!("Running rneat compare-vcfs");
+                let file = cmd
+                    .get_one::<PathBuf>("configuration_yaml")
+                    .expect("Must provide a path with configuration-yaml")
+                    .to_path_buf();
+
+                if !file.is_file() {
+                    return Err(NeatErrors::CompareVcfs(
+                        CompareVcfsError::ConfigurationError(
+                            "Must supply a valid configuration file to run compare-vcfs!"
+                                .to_string(),
+                        ),
+                    ));
+                }
+                info!("Running compare-vcfs to classify golden vs called variants.");
+                let result = compare_vcfs::main(&file);
+                match result {
+                    Err(error) => return Err(NeatErrors::CompareVcfs(error)),
+                    Ok(()) => info!("rneat compare-vcfs completed successfully"),
                 }
             }
         }

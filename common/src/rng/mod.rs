@@ -159,10 +159,10 @@ mod tests {
             "World".to_string(),
         ])
         .unwrap();
-        assert_eq!(rng.gen_bool(0.5).unwrap(), false);
-        assert_eq!(rng.gen_bool(0.5).unwrap(), true);
-        assert_eq!(rng.gen_bool(0.5).unwrap(), false);
-        assert_eq!(rng.gen_bool(0.5).unwrap(), true);
+        assert!(!rng.gen_bool(0.5).unwrap());
+        assert!(rng.gen_bool(0.5).unwrap());
+        assert!(!rng.gen_bool(0.5).unwrap());
+        assert!(rng.gen_bool(0.5).unwrap());
     }
 
     #[test]

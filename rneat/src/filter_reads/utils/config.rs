@@ -135,7 +135,6 @@ mod tests {
 
     #[test]
     fn test_run_configuration() {
-        // TODO create test
-        assert!(true)
+        // TODO: real assertions — stub kept so the test name is reserved.
     }
 }

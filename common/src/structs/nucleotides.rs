@@ -31,6 +31,12 @@ pub struct NucleotideSelector {
     distribution: DiscreteDistribution<Nucleotide>,
 }
 
+impl Default for NucleotideSelector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl NucleotideSelector {
     pub fn new() -> Self {
         let allowed_nucs: Vec<Nucleotide> = allowed_vec();
@@ -45,7 +51,6 @@ impl NucleotideSelector {
         self.distribution
             .sample(rand)
             .expect("Error sampling bases")
-            .into()
     }
 }
 
@@ -66,7 +71,7 @@ pub enum Nucleotide {
 impl fmt::Display for Nucleotide {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let name: char = self.to_owned().into();
-        write!(f, "{}", name.to_string())
+        write!(f, "{}", name)
     }
 }
 
@@ -102,33 +107,33 @@ impl From<usize> for Nucleotide {
     }
 }
 
-impl Into<usize> for Nucleotide {
-    fn into(self) -> usize {
-        match self {
-            Self::A => 0,
-            Self::C => 1,
-            Self::G => 2,
-            Self::T => 3,
-            Self::Maskeda => 5,
-            Self::Maskedc => 6,
-            Self::Maskedg => 7,
-            Self::Maskedt => 8,
+impl From<Nucleotide> for usize {
+    fn from(val: Nucleotide) -> Self {
+        match val {
+            Nucleotide::A => 0,
+            Nucleotide::C => 1,
+            Nucleotide::G => 2,
+            Nucleotide::T => 3,
+            Nucleotide::Maskeda => 5,
+            Nucleotide::Maskedc => 6,
+            Nucleotide::Maskedg => 7,
+            Nucleotide::Maskedt => 8,
             _ => 4,
         }
     }
 }
 
-impl Into<char> for Nucleotide {
-    fn into(self) -> char {
-        match self {
-            Self::A => 'A',
-            Self::C => 'C',
-            Self::G => 'G',
-            Self::T => 'T',
-            Self::Maskeda => 'a',
-            Self::Maskedc => 'c',
-            Self::Maskedg => 'g',
-            Self::Maskedt => 't',
+impl From<Nucleotide> for char {
+    fn from(val: Nucleotide) -> Self {
+        match val {
+            Nucleotide::A => 'A',
+            Nucleotide::C => 'C',
+            Nucleotide::G => 'G',
+            Nucleotide::T => 'T',
+            Nucleotide::Maskeda => 'a',
+            Nucleotide::Maskedc => 'c',
+            Nucleotide::Maskedg => 'g',
+            Nucleotide::Maskedt => 't',
             _ => 'N',
         }
     }
@@ -146,7 +151,7 @@ impl Nucleotide {
             Self::Maskedc => Self::Maskedg,
             Self::Maskedg => Self::Maskedc,
             Self::Maskedt => Self::Maskeda,
-            _ => self.clone(),
+            _ => *self,
         }
     }
 
@@ -157,14 +162,14 @@ impl Nucleotide {
             Self::Maskedg => Nucleotide::G,
             Self::Maskedt => Nucleotide::T,
             Self::X => Self::N,
-            _ => return self.clone(),
+            _ => *self,
         }
     }
 
     pub fn is_masked(&self) -> bool {
         match self {
             Self::Maskeda | Self::Maskedc | Self::Maskedg | Self::Maskedt | Self::X => true,
-            _ => return false,
+            _ => false,
         }
     }
 
@@ -175,7 +180,7 @@ impl Nucleotide {
             Self::G => Self::Maskedg,
             Self::T => Self::Maskedt,
             Self::N => Self::X,
-            _ => return self.clone(),
+            _ => *self,
         }
     }
 }

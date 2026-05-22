@@ -333,7 +333,7 @@ fn write_test_bam(
         let mut md = String::new();
         let mut match_count = 0usize;
         for (&r, &q) in ref_bases.iter().zip(read_bases.iter()) {
-            if r.to_ascii_uppercase() == q.to_ascii_uppercase() {
+            if r.eq_ignore_ascii_case(&q) {
                 match_count += 1;
             } else {
                 md.push_str(&match_count.to_string());
@@ -532,7 +532,7 @@ mod tests {
             .map(|_| model.generate_quality_scores(3, &mut rng).unwrap()[2])
             .collect();
         assert!(
-            scores.iter().any(|&s| s == 41),
+            scores.contains(&41),
             "expected Q41 to appear in last-position scores with uniform fallback; got {scores:?}"
         );
     }

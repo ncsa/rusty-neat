@@ -88,7 +88,7 @@ pub struct MutationModel {
     // Store a reference to the NeatRng for this run
 }
 
-static DATA_FILE: &'static [u8] = include_bytes!("model_data/default_mutation_model.json.gz");
+static DATA_FILE: &[u8] = include_bytes!("model_data/default_mutation_model.json.gz");
 
 impl MutationModel {
     pub fn from_raw_data(
@@ -210,7 +210,7 @@ impl MutationModel {
             self.generate_genotype(ploidy, rng.gen_bool(self.homozygous_frequency)?)?;
         // Select a type of mutation.
         let index = self.variant_dist.sample(rng.random()?)?;
-        let mut variant_type = VariantType::from(index);
+        let mut variant_type = index;
         // Unmask before use: soft-masked (a/c/g/t) and post-N-substitution bases
         // must not appear as-is in VCF REF/ALT or FASTQ reads.
         let ref_base = check_base(reference_sequence[variant_location]);
@@ -264,14 +264,14 @@ impl MutationModel {
                     .new_delete_length(rng.random()?)?;
                 // +1 is so that we grab a base for the reference in the VCF. This is similar
                 // to how we appended bases to the reference in the insertion model.
-                if (variant_location + length as usize + 1) > reference_sequence.len() {
+                if (variant_location + length + 1) > reference_sequence.len() {
                     // Too close to the end, so let's skip this
                     let ref_base = check_base(reference_sequence[variant_location]);
                     alternate = pick_random_snp(ref_base, rng)?;
                     variant_type = VariantType::SNP;
                 } else {
                     reference = reference_sequence
-                        .get(variant_location..(variant_location + length as usize + 1))
+                        .get(variant_location..(variant_location + length + 1))
                         .unwrap()
                         .iter()
                         .map(|&b| check_base(b))

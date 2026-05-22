@@ -167,7 +167,7 @@ impl SequencingErrorModel {
         // Now we create a distribution from the weights and sample our choices.
         // We have constructed things such that this will return a valid u8. But
         // to be extra safe, we could mod by 4 and then convert
-        Ok(Nucleotide::from(distro.sample(rand)?))
+        Ok(distro.sample(rand)?)
     }
 
     fn generate_indel_error(
@@ -183,7 +183,7 @@ impl SequencingErrorModel {
             let length = self.ins_length_distribution.sample(rng.random()?)?;
             for _ in 0..length {
                 // We could mod this value by 4 to ensure it is a valid base. Or create a data structure.
-                sequence.push(Nucleotide::from(self.insertion_bias.sample(rng.random()?)?))
+                sequence.push(self.insertion_bias.sample(rng.random()?)?)
             }
             // Insertion of sequence
             Ok(SequencingErrorType::InsertionError(sequence))

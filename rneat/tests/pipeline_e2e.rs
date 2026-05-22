@@ -21,7 +21,7 @@ fn qual_bytes_to_scores(line: &str) -> Vec<u8> {
 fn quality_lines(fastq_path: &std::path::Path) -> Vec<String> {
     let lines = read_gzip_fastq_lines(fastq_path);
     assert!(
-        lines.len() % 4 == 0,
+        lines.len().is_multiple_of(4),
         "FASTQ line count must be a multiple of 4, got {}",
         lines.len(),
     );

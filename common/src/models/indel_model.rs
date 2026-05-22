@@ -40,7 +40,7 @@ pub struct IndelModel {
     del_dist: DiscreteDistribution<usize>,
 }
 
-static DATA_FILE: &'static [u8] = include_bytes!("model_data/default_indel_model.json.gz");
+static DATA_FILE: &[u8] = include_bytes!("model_data/default_indel_model.json.gz");
 
 impl IndelModel {
     pub fn from_raw_data(
@@ -173,13 +173,13 @@ mod tests {
     #[test]
     fn test_is_insertion_below_threshold() {
         let model = make_model();
-        assert_eq!(model.is_insertion(0.3).unwrap(), true);
+        assert!(model.is_insertion(0.3).unwrap());
     }
 
     #[test]
     fn test_is_insertion_above_threshold() {
         let model = make_model();
-        assert_eq!(model.is_insertion(0.8).unwrap(), false);
+        assert!(!model.is_insertion(0.8).unwrap());
     }
 
     #[test]
@@ -190,7 +190,7 @@ mod tests {
             ins_dist: DiscreteDistribution::new(&vec![1.0], &vec![1]).unwrap(),
             del_dist: DiscreteDistribution::new(&vec![1.0], &vec![1]).unwrap(),
         };
-        assert_eq!(model.is_insertion(0.5).unwrap(), false);
+        assert!(!model.is_insertion(0.5).unwrap());
     }
 
     #[test]

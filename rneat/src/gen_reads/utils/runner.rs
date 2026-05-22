@@ -817,7 +817,7 @@ mod tests {
         // block_offset = 1000
         // r1 global [1100, 1200], r2 global [1300, 1400]
         let b2 = BedRecord::new_bed_record("chr1".to_string(), 1150, 1350).unwrap();
-        let result2 = intersect_with_bed(&regions, &vec![b2], 1000);
+        let result2 = intersect_with_bed(&regions, &[b2], 1000);
         assert_eq!(result2.len(), 2);
         assert_eq!(result2[0].start, 150); // global 1150 - 1000
         assert_eq!(result2[0].end, 200); // global 1200 - 1000

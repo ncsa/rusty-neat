@@ -590,7 +590,7 @@ mod tests {
         // Paired-end produces 2 reads per fragment, so fragment count is halved to keep
         // per-base read depth equal to the requested coverage.
         // Use ceiling division to match generate_fragments behavior.
-        let expected = (seq_len * coverage + 2 * read_length - 1) / (2 * read_length);
+        let expected = (seq_len * coverage).div_ceil(2 * read_length);
         assert!(!reads.is_empty());
         assert_eq!(
             reads.len(),
@@ -611,7 +611,7 @@ mod tests {
         let seq_len = 50_000_usize;
         let read_length = 100;
         let coverage = 2;
-        let num_frags = (seq_len * coverage + 2 * read_length - 1) / (2 * read_length);
+        let num_frags = (seq_len * coverage).div_ceil(2 * read_length);
         let mut rng = NeatRng::new_from_seed(&vec!["pool-fill-test".to_string()]).unwrap();
         let fragment_model = FragmentLengthModel::new_normal(600.0, 30.0).unwrap();
         let reads = generate_fragments(
@@ -641,7 +641,7 @@ mod tests {
     fn test_weighted_fragments_short_region_returns_empty() {
         // region_len=50, read_length=30, max_del_len=10 → guard: 50 <= 30 + 20
         let sequence_block =
-            make_sequence_block(std::iter::repeat([A, C, G, T]).take(25).flatten().collect());
+            make_sequence_block(std::iter::repeat_n([A, C, G, T], 25).flatten().collect());
         let fragment_model = FragmentLengthModel::default().unwrap();
         let mut rng = make_rng();
 
@@ -702,8 +702,7 @@ mod tests {
     #[test]
     fn test_weighted_fragments_produces_fragments_for_valid_region() {
         let sequence_block = make_sequence_block(
-            std::iter::repeat([A, C, G, T])
-                .take(500)
+            std::iter::repeat_n([A, C, G, T], 500)
                 .flatten()
                 .collect(),
         );
@@ -735,8 +734,7 @@ mod tests {
     #[test]
     fn test_weighted_fragments_all_within_bounds() {
         let sequence_block = make_sequence_block(
-            std::iter::repeat([A, C, G, T])
-                .take(1000)
+            std::iter::repeat_n([A, C, G, T], 1000)
                 .flatten()
                 .collect(),
         );
@@ -779,8 +777,7 @@ mod tests {
     #[test]
     fn test_weighted_fragments_deterministic() {
         let sequence_block = make_sequence_block(
-            std::iter::repeat([A, C, G, T])
-                .take(500)
+            std::iter::repeat_n([A, C, G, T], 500)
                 .flatten()
                 .collect(),
         );
@@ -827,8 +824,7 @@ mod tests {
     fn test_weighted_fragments_normalize_true_generates_more_than_false() {
         // 50% GC sequence; model mean weight ≈ 0.5 → normalize should roughly double count.
         let sequence_block = make_sequence_block(
-            std::iter::repeat([A, C, G, T])
-                .take(2500)
+            std::iter::repeat_n([A, C, G, T], 2500)
                 .flatten()
                 .collect(),
         );
@@ -885,7 +881,7 @@ mod tests {
         // 100% GC sequence; model weights[100]=1e-6 → mean_weight ≈ 1e-6
         // → normalize would inflate by ~1e6, capped at 100x.
         let sequence_block =
-            make_sequence_block(std::iter::repeat([C, G]).take(5000).flatten().collect());
+            make_sequence_block(std::iter::repeat_n([C, G], 5000).flatten().collect());
         let mut weights = weights_with_value(0.0);
         weights[100] = 1e-6;
         weights[50] = 1.0; // ensures model is valid (at least one positive weight)
@@ -928,15 +924,14 @@ mod tests {
         // until num_frags fragments are placed, not stop early.
         let read_length = 200;
         let sequence_block = make_sequence_block(
-            std::iter::repeat([A, C, G, T])
-                .take(5000)
+            std::iter::repeat_n([A, C, G, T], 5000)
                 .flatten()
                 .collect(),
         );
         let (region_start, region_end) = (0, sequence_block.sequence.len());
         let coverage = 5;
         let region_len = region_end - region_start;
-        let num_frags_expected = (region_len * coverage + read_length - 1) / read_length;
+        let num_frags_expected = (region_len * coverage).div_ceil(read_length);
         // mean=220 with st_dev=40 → P(frag < 200) ≈ 31% rejection rate
         let fragment_model = FragmentLengthModel::new_normal(220.0, 40.0).unwrap();
         let mut rng = make_rng();

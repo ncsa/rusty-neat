@@ -22,7 +22,7 @@ struct FastqRecord {
 /// Strict 4-line FASTQ parser. Returns an error string on any deviation rather than
 /// panicking, so the caller can assert it didn't fire.
 fn parse_fastq_strict(lines: &[String]) -> Result<Vec<FastqRecord>, String> {
-    if lines.len() % 4 != 0 {
+    if !lines.len().is_multiple_of(4) {
         return Err(format!(
             "FASTQ has {} lines, not a multiple of 4 (truncated record at end?)",
             lines.len(),

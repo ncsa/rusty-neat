@@ -61,11 +61,7 @@ impl BedRecord {
 
     pub fn contains(&self, contig: &str, position: usize) -> bool {
         if self.contig == contig {
-            if (position >= self.start) && (position < self.end) {
-                true
-            } else {
-                false
-            }
+            (position >= self.start) && (position < self.end)
         } else {
             false
         }
@@ -111,13 +107,13 @@ mod test {
     #[test]
     fn test_parse_other_finds_mut_rate() {
         let other = "mut_rate=0.003";
-        assert_eq!(BedRecord::parse_other_for_mut(&other).unwrap(), 0.003);
+        assert_eq!(BedRecord::parse_other_for_mut(other).unwrap(), 0.003);
 
         let other = "name=gene1;mut_rate=0.005;score=100";
-        assert_eq!(BedRecord::parse_other_for_mut(&other).unwrap(), 0.005);
+        assert_eq!(BedRecord::parse_other_for_mut(other).unwrap(), 0.005);
 
         let other = "some_other_field mut_rate=0.001\tmore_fields";
-        assert_eq!(BedRecord::parse_other_for_mut(&other).unwrap(), 0.001);
+        assert_eq!(BedRecord::parse_other_for_mut(other).unwrap(), 0.001);
     }
 
     #[test]

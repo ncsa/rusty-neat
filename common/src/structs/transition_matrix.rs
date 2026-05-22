@@ -151,12 +151,10 @@ impl TransitionMatrix {
         g_weights: [f64; 4],
         t_weights: [f64; 4],
     ) -> Result<Self, TransitionMatrixError> {
-        let weights_test = vec![
-            a_weights.clone(),
-            c_weights.clone(),
-            g_weights.clone(),
-            t_weights.clone(),
-        ];
+        let weights_test = [a_weights,
+            c_weights,
+            g_weights,
+            t_weights];
         for vector in weights_test.iter() {
             if vector.len() != 4 {
                 return Err(TransitionMatrixError::UnequalWeightsError);

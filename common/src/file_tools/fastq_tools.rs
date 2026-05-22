@@ -116,18 +116,17 @@ pub fn write_block_fastq<T: Write, W: Write>(
         let mut read2_variants: HashMap<usize, &Variant> = HashMap::new();
         let mut reads2_flagged: Vec<usize> = Vec::new();
         for (pos, variant) in &block_map.variant_map {
-            if (start..(start + effective_read_len)).contains(&pos) {
+            if (start..(start + effective_read_len)).contains(pos) {
                 let var_pos = pos - start;
                 read1_variants.insert(var_pos, variant);
                 reads1_flagged.push(var_pos);
             }
-            if end > effective_read_len {
-                if paired_ended && ((end - effective_read_len)..end).contains(&pos) {
+            if end > effective_read_len
+                && paired_ended && ((end - effective_read_len)..end).contains(pos) {
                     let var_pos = (end - 1) - pos;
                     read2_variants.insert(var_pos, variant);
                     reads2_flagged.push(var_pos);
                 }
-            }
         }
 
         let ref_start = sequence_block.ref_start;
@@ -182,11 +181,7 @@ pub fn write_block_fastq<T: Write, W: Write>(
         if paired_ended {
             let quality_scores_2 =
                 quality_score_model.generate_quality_scores(effective_read_len, rng)?;
-            let r2_pos = if abs_end >= effective_read_len {
-                abs_end - effective_read_len
-            } else {
-                0
-            };
+            let r2_pos = abs_end.saturating_sub(effective_read_len);
             let tlen_r2 = -((abs_end - abs_start) as i32);
 
             let r2_record = match generate_read(
@@ -238,11 +233,10 @@ pub fn combine_temp_fastqs(
     final_filename_r2: Option<&PathBuf>,
 ) -> Result<(), FastqToolsError> {
     stream_gzip_files(&files_r1, final_filename_r1)?;
-    if let Some(filename_r2) = final_filename_r2 {
-        if !files_r2.is_empty() {
+    if let Some(filename_r2) = final_filename_r2
+        && !files_r2.is_empty() {
             stream_gzip_files(&files_r2, filename_r2)?;
         }
-    }
     Ok(())
 }
 
@@ -967,7 +961,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let bam_path = temp.path().join("out.bam");
         let block = make_block(500);
-        let mut bw = BamWriter::new(&bam_path, &vec![("chr1".to_string(), 500usize)]).unwrap();
+        let mut bw = BamWriter::new(&bam_path, &[("chr1".to_string(), 500usize)]).unwrap();
 
         let fragments = vec![(0usize, 10), (50, 60), (100, 110), (150, 160), (200, 210)];
         run_write_block(&mut bw, fragments, &block, false, 10);
@@ -987,7 +981,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let bam_path = temp.path().join("out.bam");
         let block = make_block(5000);
-        let mut bw = BamWriter::new(&bam_path, &vec![("chr1".to_string(), 5000usize)]).unwrap();
+        let mut bw = BamWriter::new(&bam_path, &[("chr1".to_string(), 5000usize)]).unwrap();
 
         // Fragments 400 bp wide, spaced 100 bp apart so positions are strictly increasing.
         let fragments = vec![

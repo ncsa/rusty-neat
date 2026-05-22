@@ -42,7 +42,7 @@ pub enum FragmentLengthModel {
     },
 }
 
-static DATA_FILE: &'static [u8] =
+static DATA_FILE: &[u8] =
     include_bytes!("model_data/default_fragment_length_model.json.gz");
 
 impl FragmentLengthModel {
@@ -93,16 +93,13 @@ impl FragmentLengthModel {
         //   "fragment_weights": [ ... ]
         // }
         // Where fragment lengths are of type usize and fragment weights are of (or can be cast as) type f64.
-        match filename.exists() {
-            false => {
-                return Err(FragmentModelError::FileNotFound(
-                    filename.display().to_string(),
-                ));
-            }
-            _ => {}
+        if !filename.exists() {
+            return Err(FragmentModelError::FileNotFound(
+                filename.display().to_string(),
+            ));
         }
 
-        let data: FragmentLengthModel = model_reader(&filename).unwrap();
+        let data: FragmentLengthModel = model_reader(filename).unwrap();
 
         Ok(data)
     }
@@ -115,7 +112,7 @@ impl FragmentLengthModel {
                     "Called normal_params on a discrete fragment model",
                 ))
             }
-            FragmentLengthModel::Normal { mean, st_dev } => Ok((mean.clone(), st_dev.clone())),
+            FragmentLengthModel::Normal { mean, st_dev } => Ok((*mean, *st_dev)),
         }
     }
 
@@ -124,7 +121,7 @@ impl FragmentLengthModel {
         // or based on a discrete distribution.
         match self {
             // The discrete one is pretty easy
-            Self::Discrete { distribution } => Ok(distribution.sample(rand)? as usize),
+            Self::Discrete { distribution } => Ok(distribution.sample(rand)?),
             // for normal we have to build the distribution, then sample. Not sure if this will be a pinch point.
             Self::Normal { mean, st_dev } => {
                 let distribution = NormalDistribution::new(*mean, *st_dev)?;
@@ -143,7 +140,7 @@ impl FragmentLengthModel {
     fn is_discrete(&self) -> bool {
         // This is mainly for testing purposes
         if let FragmentLengthModel::Discrete { distribution } = self {
-            distribution.weights.len() > 0
+            !distribution.weights.is_empty()
         } else {
             false
         }
@@ -295,11 +292,7 @@ mod tests {
         let mut temp_file = PathBuf::from(temp_dir.path());
         let filename = "model_test.json";
         temp_file.push(filename);
-        let result = model.write_file(&temp_file);
-        match result {
-            Ok(()) => assert!(true),
-            Err(_) => assert!(false),
-        }
+        model.write_file(&temp_file).expect("write_file should succeed");
         let model2 = FragmentLengthModel::discrete_from_file(&temp_file).unwrap();
         assert_eq!(model.is_discrete(), model2.is_discrete());
         temp_dir.close().unwrap();

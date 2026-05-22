@@ -534,7 +534,7 @@ mod tests {
         let a_count = seq.iter().filter(|&&n| n == Nucleotide::A).count();
         assert_eq!(g_count + a_count, 1000);
         assert!(
-            g_count >= 400 && g_count <= 600,
+            (400..=600).contains(&g_count),
             "G count {} outside [400, 600]",
             g_count
         );
@@ -553,17 +553,17 @@ mod tests {
         assert_eq!(a_count + c_count + t_count, 3000);
         // Each constituent should be ~1000; allow ±20% (200)
         assert!(
-            a_count >= 800 && a_count <= 1200,
+            (800..=1200).contains(&a_count),
             "A count {} outside [800, 1200]",
             a_count
         );
         assert!(
-            c_count >= 800 && c_count <= 1200,
+            (800..=1200).contains(&c_count),
             "C count {} outside [800, 1200]",
             c_count
         );
         assert!(
-            t_count >= 800 && t_count <= 1200,
+            (800..=1200).contains(&t_count),
             "T count {} outside [800, 1200]",
             t_count
         );

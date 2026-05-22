@@ -126,7 +126,7 @@ impl Variant {
                 let gt_pos = format
                     .clone()
                     .into_iter()
-                    .position(|x| x == String::from("GT"))
+                    .position(|x| x == "GT")
                     .unwrap();
                 sample[gt_pos].to_string()
             } else {

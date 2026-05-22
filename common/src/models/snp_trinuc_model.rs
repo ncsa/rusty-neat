@@ -129,7 +129,7 @@ lazy_static! {
         let mut alias_map = HashMap::new();
         for frame in all_frames {
             alias_map.insert(
-                TrinucFrame::from(frame),
+                frame,
                 TrinucFrame::from((frame[0], N, frame[2]))
             );
         }
@@ -142,8 +142,8 @@ lazy_static! {
             .values()
             .map(|s| s.convert())
             .collect();
-        let frames = frames.iter().unique().cloned().collect::<Vec<_>>();
-        frames
+        
+        frames.iter().unique().cloned().collect::<Vec<_>>()
     };
 
     static ref CONTEXT_FRAME_MAP: HashMap<TrinucFrame, Vec<TrinucFrame>> = {
@@ -160,7 +160,7 @@ lazy_static! {
                     let frame_0: usize = frame[0].into();
                     let frame_2: usize = frame[2].into();
                     if frame_0 == i && frame_2 == k {
-                        frame_list.push(TrinucFrame::from(frame.clone()))
+                        frame_list.push(frame)
                     }
                 }
                 frame_map.insert(
@@ -198,7 +198,7 @@ impl From<(Nucleotide, Nucleotide, Nucleotide)> for TrinucFrame {
 
 impl TrinucFrame {
     pub fn convert(self) -> TrinucFrame {
-        TrinucFrame::from(self)
+        self
     }
 }
 
@@ -237,7 +237,7 @@ pub struct SnpTrinucModel {
     trinuc_distros: HashMap<TrinucFrame, TransitionMatrix>,
 }
 
-static DATA_FILE: &'static [u8] = include_bytes!("model_data/default_trinuc_model.json.gz");
+static DATA_FILE: &[u8] = include_bytes!("model_data/default_trinuc_model.json.gz");
 
 impl SnpTrinucModel {
     pub fn from_raw_data(
@@ -258,11 +258,10 @@ impl SnpTrinucModel {
             if let Some(&context) = alias_map.get(from_trinuc) {
                 let row: usize = from_trinuc[1].into();
                 let col: usize = to_trinuc[1].into();
-                if row < 4 && col < 4 {
-                    if let Some(matrix) = accum.get_mut(&context) {
+                if row < 4 && col < 4
+                    && let Some(matrix) = accum.get_mut(&context) {
                         matrix[row][col] += prob;
                     }
-                }
             }
         }
 
@@ -302,7 +301,7 @@ impl SnpTrinucModel {
         let all_contexts = ALL_CONTEXTS.clone();
         debug!("All contexts: {:?}", &all_contexts);
         for frame in &all_contexts {
-            trinuc_distros.insert(frame.clone(), TransitionMatrix::default()?);
+            trinuc_distros.insert(*frame, TransitionMatrix::default()?);
             snp_weights.push(1.0);
         }
         let snp_distr =
@@ -336,7 +335,8 @@ impl SnpTrinucModel {
         // Uses the serde_json crate to write out the json form of the model. This will help us
         // create base datasets from old neat data, and give us a way to write out models that are
         // generated from user data.
-        Ok(model_writer(self, filename).unwrap())
+        model_writer(self, filename).unwrap();
+        Ok(())
     }
 
     pub fn generate_snp(
@@ -349,10 +349,10 @@ impl SnpTrinucModel {
         // eliminating the need to copy the rng or a pointer to it, if possible
         let trinuc = TrinucFrame::from(trinuc_reference);
         let alias_map = &ALIAS_MAP.clone();
-        let alias_trinuc = alias_map[&trinuc].clone();
+        let alias_trinuc = alias_map[&trinuc];
         let matrix = self.trinuc_distros[&alias_trinuc].clone();
 
-        let nuc: Nucleotide = matrix[&trinuc[1]].sample(rand)?.into();
+        let nuc: Nucleotide = matrix[&trinuc[1]].sample(rand)?;
         Ok(nuc)
     }
 }

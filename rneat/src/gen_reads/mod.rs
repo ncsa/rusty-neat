@@ -3,6 +3,61 @@ pub mod utils;
 use errors::GenerateReadsError;
 use log::*;
 
+use crate::gen_reads::utils::{config::RunConfiguration, runner::run_neat};
+use common::rng::NeatRng;
+use std::path::PathBuf;
+
+/// gen-reads is the primary read generation function of rneat. It reads a fasta file and generates a set of fastqs and/or a set of variants. It can now also filter reads by bed file.
+pub fn main(config: &PathBuf) -> Result<(), GenerateReadsError> {
+    info!("////////////// Welcome to rusty-neat read generator! \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\");
+    // set up the config struct based on whether there was an input config. Input config
+    // overrides any other inputs.
+    let config = if !config.display().to_string().is_empty() {
+        info!("Using Configuration file input: {:?}", &config);
+        RunConfiguration::from_yaml_file(config)
+            .expect("Error generating run configuration from input yaml")
+    } else {
+        panic!("Failed to supply config file!");
+    };
+
+    // Check that we are clear to write outputs
+    if !config.overwrite_output {
+        if let Some(filename) = &config.output_fastq_1
+            && filename.is_file()
+        {
+            panic!("Attempting to overwrite an existing file: {:?}", filename);
+        }
+        if let Some(filename) = &config.output_fastq_2
+            && filename.is_file()
+        {
+            panic!("Attempting to overwrite an existing file: {:?}", filename);
+        }
+        if let Some(filename) = &config.output_vcf
+            && filename.is_file()
+        {
+            panic!("Attempting to overwrite an existing file: {:?}", filename);
+        }
+    }
+
+    info!("////////////// Configuration successuful! Ready to run! \\\\\\\\\\\\\\\\\\\\\\\\\\");
+    // Generate the RNG used for this run. If one was given in the config file, use that, or else
+    // use thread_rng to generate a random seed, then seed using a SeedableRng based on StdRng
+    let mut rng: NeatRng =
+        NeatRng::new_from_seed(&config.seed_vec).expect("Neat failed during rng creation!");
+    // run the generate reads main script
+    let result = run_neat(&Box::new(config.clone()), &mut rng);
+    match result {
+        Ok(_) => {
+            // Continue on for bed filtering
+            Ok(())
+        }
+        Err(error) => {
+            error!("runner returned an error {:?}", error);
+            Err(GenerateReadsError::RunnerError)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::gen_reads::utils::{config::RunConfiguration, runner::run_neat};
@@ -205,9 +260,9 @@ mod tests {
             let pos: usize = fields[1].parse().unwrap(); // 1-based
             let pos0 = pos - 1;
 
-            if pos0 >= 100 && pos0 < 200 {
+            if (100..200).contains(&pos0) {
                 variants_in_high_rate += 1;
-            } else if pos0 >= 300 && pos0 < 400 {
+            } else if (300..400).contains(&pos0) {
                 // The variant's location is actually the start position of the mutation.
                 // For a SNP it is exactly pos0.
                 variants_in_zero_rate += 1;
@@ -622,12 +677,11 @@ mod tests {
                 continue;
             }
             let sequence = record.sequence();
-            if let Some(base_byte) = sequence.get(offset) {
-                if (base_byte as char).to_ascii_uppercase() == 'T' {
+            if let Some(base_byte) = sequence.get(offset)
+                && (base_byte as char).eq_ignore_ascii_case(&'T') {
                     alt_seen = true;
                     break;
                 }
-            }
         }
 
         assert!(
@@ -685,60 +739,5 @@ mod tests {
             found,
             "Expected SNP at H1N1_HA:100 in output VCF but did not find it"
         );
-    }
-}
-
-use crate::gen_reads::utils::{config::RunConfiguration, runner::run_neat};
-use common::rng::NeatRng;
-use std::path::PathBuf;
-
-/// gen-reads is the primary read generation function of rneat. It reads a fasta file and generates a set of fastqs and/or a set of variants. It can now also filter reads by bed file.
-pub fn main(config: &PathBuf) -> Result<(), GenerateReadsError> {
-    info!("////////////// Welcome to rusty-neat read generator! \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\");
-    // set up the config struct based on whether there was an input config. Input config
-    // overrides any other inputs.
-    let config = if !config.display().to_string().is_empty() {
-        info!("Using Configuration file input: {:?}", &config);
-        RunConfiguration::from_yaml_file(config)
-            .expect("Error generating run configuration from input yaml")
-    } else {
-        panic!("Failed to supply config file!");
-    };
-
-    // Check that we are clear to write outputs
-    if !config.overwrite_output {
-        if let Some(filename) = &config.output_fastq_1
-            && filename.is_file()
-        {
-            panic!("Attempting to overwrite an existing file: {:?}", filename);
-        }
-        if let Some(filename) = &config.output_fastq_2
-            && filename.is_file()
-        {
-            panic!("Attempting to overwrite an existing file: {:?}", filename);
-        }
-        if let Some(filename) = &config.output_vcf
-            && filename.is_file()
-        {
-            panic!("Attempting to overwrite an existing file: {:?}", filename);
-        }
-    }
-
-    info!("////////////// Configuration successuful! Ready to run! \\\\\\\\\\\\\\\\\\\\\\\\\\");
-    // Generate the RNG used for this run. If one was given in the config file, use that, or else
-    // use thread_rng to generate a random seed, then seed using a SeedableRng based on StdRng
-    let mut rng: NeatRng =
-        NeatRng::new_from_seed(&config.seed_vec).expect("Neat failed during rng creation!");
-    // run the generate reads main script
-    let result = run_neat(&Box::new(config.clone()), &mut rng);
-    match result {
-        Ok(_) => {
-            // Continue on for bed filtering
-            Ok(())
-        }
-        Err(error) => {
-            error!("runner returned an error {:?}", error);
-            Err(GenerateReadsError::RunnerError)
-        }
     }
 }

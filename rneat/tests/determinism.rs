@@ -39,7 +39,7 @@ fn run_gen_reads(seed: &str, output_dir: &std::path::Path, name: &str, threads: 
 /// turns line order into a multiset comparison.
 fn sorted_records(lines: Vec<String>) -> Vec<[String; 4]> {
     assert!(
-        lines.len() % 4 == 0,
+        lines.len().is_multiple_of(4),
         "FASTQ line count must be multiple of 4"
     );
     let mut records: Vec<[String; 4]> = lines

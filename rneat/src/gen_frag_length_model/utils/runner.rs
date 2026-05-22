@@ -132,7 +132,7 @@ mod tests {
     fn test_filter_lengths_removes_rare() {
         // 100 appears 3× (>= min_reads=2), 999 appears 1× (< min_reads=2)
         let mut data: Vec<usize> = vec![999];
-        data.extend(std::iter::repeat(100).take(3));
+        data.extend(std::iter::repeat_n(100, 3));
         let result = filter_lengths(data, 2);
         assert!(
             result.iter().all(|&x| x == 100),
@@ -145,7 +145,7 @@ mod tests {
     fn test_filter_lengths_removes_outliers() {
         // Tight cluster around 200, plus one extreme outlier at 100_000
         let mut data: Vec<usize> = (180..=220).flat_map(|v| vec![v; 5]).collect();
-        data.extend(std::iter::repeat(100_000usize).take(5));
+        data.extend(std::iter::repeat_n(100_000usize, 5));
         let result = filter_lengths(data, 2);
         assert!(
             result.iter().all(|&x| x < 100_000),

@@ -215,11 +215,8 @@ mod tests {
         file_obj.flush().unwrap();
         let mut outfile = PathBuf::from(temp_dir.path());
         outfile.push("test_data_filtered.txt");
-        let result = prep_files_for_filtering(&temp_file, false, &outfile);
-        match result {
-            Ok(_tuple) => assert!(true),
-            Err(_error) => assert!(false),
-        }
+        prep_files_for_filtering(&temp_file, false, &outfile)
+            .expect("prep_files_for_filtering should succeed on a real input");
     }
 
     #[test]

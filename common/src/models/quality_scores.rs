@@ -84,7 +84,7 @@ impl Display for QualityScoreModel {
     }
 }
 
-static DATA_FILE: &'static [u8] = include_bytes!("model_data/default_quality_score_model.json.gz");
+static DATA_FILE: &[u8] = include_bytes!("model_data/default_quality_score_model.json.gz");
 
 impl QualityScoreModel {
     // methods for QualityScoreModel objects
@@ -218,12 +218,12 @@ impl QualityScoreModel {
         // Advantages: should be pretty quick. Easy calculations.
         // Disadvantages: Tends to lose info from the back of the read when downsizing. Might need
         //                to check that.
-        if length == self.assumed_read_length as usize {
+        if length == self.assumed_read_length {
             (1..length).collect()
         } else {
             let mut indexes: Vec<usize> = Vec::new();
             for i in 1..length {
-                let index: usize = (self.assumed_read_length as usize * i) / length;
+                let index: usize = (self.assumed_read_length * i) / length;
                 // This first value(s) will always be zero when run_read_length is longer than
                 // assumed read length.
                 if index < 1 {
@@ -249,7 +249,7 @@ impl QualityScoreModel {
         // (see generate_quality_scores). A binned model that included 31 would silently break
         // the binning invariant when the seed-`@` workaround fires, so reject it here. Config
         // validation in gen_seq_error_model also catches this earlier with a friendlier message.
-        if is_binned && quality_score_options.iter().any(|&q| q == 31) {
+        if is_binned && quality_score_options.contains(&31) {
             return Err(QualityModelError::InvalidConfiguration(
                 "binned quality model cannot include score 31 ('@' under Phred+33)".to_string(),
             ));

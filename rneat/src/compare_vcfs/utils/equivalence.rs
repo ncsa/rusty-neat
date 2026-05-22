@@ -131,7 +131,11 @@ fn apply_variants(
         if offset + ref_len > result.len() {
             continue;
         }
-        let alt_bytes: Vec<u8> = v.alternate.iter().map(|n| char::from(*n) as u8).collect();
+        let alt_bytes: Vec<u8> = v
+            .alternate
+            .iter()
+            .map(|n| Into::<char>::into(*n) as u8)
+            .collect();
         let alt_len = alt_bytes.len();
         result.splice(offset..offset + ref_len, alt_bytes);
         adj += alt_len as isize - ref_len as isize;

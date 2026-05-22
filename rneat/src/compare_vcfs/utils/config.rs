@@ -24,6 +24,14 @@ pub struct RunConfiguration {
     pub equivalence_window: usize,
     /// Skip the equivalence sweep entirely. Matches NEAT 2.1's `--fast`.
     pub fast: bool,
+    /// Mutation regions BED used by the simulator. Used only for FN
+    /// attribution — FNs whose position falls outside these regions are
+    /// tagged `outside_mutation_bed`. None when not configured.
+    pub mutation_bed: Option<PathBuf>,
+    /// Two-column TSV remapping BED chrom names to the reference's
+    /// canonical names (e.g. `1\tchr1`). Applied to both `mutation_bed`
+    /// and `target_bed` at load time. None when not configured.
+    pub chrom_aliases: Option<PathBuf>,
 }
 
 impl RunConfiguration {
@@ -73,6 +81,8 @@ impl RunConfiguration {
             .get("fast")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+        let mutation_bed = optional_path(&scrape, "mutation_bed")?;
+        let chrom_aliases = optional_path(&scrape, "chrom_aliases")?;
 
         Ok(RunConfiguration {
             golden_vcf,
@@ -86,6 +96,8 @@ impl RunConfiguration {
             include_filtered,
             equivalence_window,
             fast,
+            mutation_bed,
+            chrom_aliases,
         })
     }
 }

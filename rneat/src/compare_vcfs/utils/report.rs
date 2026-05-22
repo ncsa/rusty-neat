@@ -4,13 +4,14 @@
 //! Schema is versioned so downstream tooling can detect format drift; bump
 //! [`SCHEMA_VERSION`] only when a backward-incompatible field change lands.
 use crate::compare_vcfs::errors::CompareVcfsError;
+use crate::compare_vcfs::utils::attribution::{ChromNamingWarning, Reason};
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-pub const SCHEMA_VERSION: &str = "1.0.0";
+pub const SCHEMA_VERSION: &str = "1.1.0";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ContigCounts {
@@ -79,6 +80,14 @@ pub struct ComparisonSummary {
     pub per_contig: BTreeMap<String, ContigCounts>,
     pub skipped_golden: SkipCounts,
     pub skipped_called: SkipCounts,
+    /// Rolled-up false-negative reason counts. Each FN contributes once per
+    /// tagged reason — see `attribution::Reason` for the taxonomy.
+    #[serde(default)]
+    pub fn_attribution: BTreeMap<Reason, usize>,
+    /// Warnings surfaced during attribution. Currently: BED-vs-reference
+    /// chrom-naming mismatches.
+    #[serde(default)]
+    pub warnings: Vec<ChromNamingWarning>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -92,6 +101,8 @@ pub struct SummaryInputs {
     pub include_filtered: bool,
     pub equivalence_window: usize,
     pub fast: bool,
+    pub mutation_bed: Option<PathBuf>,
+    pub chrom_aliases: Option<PathBuf>,
 }
 
 pub fn write_json(
@@ -234,6 +245,34 @@ fn render_txt(s: &ComparisonSummary) -> String {
         s.skipped_golden.outside_simulated_contigs, s.skipped_called.outside_simulated_contigs
     ));
 
+    out.push_str("\nFN attribution\n--------------\n");
+    if s.fn_attribution.is_empty() {
+        out.push_str("  (no false negatives)\n");
+    } else {
+        let label_width = s
+            .fn_attribution
+            .keys()
+            .map(|r| r.as_str().len())
+            .max()
+            .unwrap_or(0)
+            + 2;
+        for (reason, count) in &s.fn_attribution {
+            out.push_str(&format!(
+                "  {:<width$} {}\n",
+                reason.as_str(),
+                count,
+                width = label_width
+            ));
+        }
+    }
+
+    if !s.warnings.is_empty() {
+        out.push_str("\nWarnings\n--------\n");
+        for w in &s.warnings {
+            out.push_str(&format!("  - {}\n", w.message));
+        }
+    }
+
     out
 }
 
@@ -278,6 +317,8 @@ mod tests {
                 include_filtered: false,
                 equivalence_window: 50,
                 fast: false,
+                mutation_bed: None,
+                chrom_aliases: None,
             },
             totals: ContigCounts {
                 tp: 7,
@@ -289,6 +330,8 @@ mod tests {
             per_contig: BTreeMap::new(),
             skipped_golden: SkipCounts::default(),
             skipped_called: SkipCounts::default(),
+            fn_attribution: BTreeMap::new(),
+            warnings: Vec::new(),
         };
         let txt = render_txt(&s);
         assert!(txt.contains("True positives  (TP): 7"));
@@ -311,6 +354,8 @@ mod tests {
                 include_filtered: false,
                 equivalence_window: 50,
                 fast: false,
+                mutation_bed: None,
+                chrom_aliases: None,
             },
             totals: ContigCounts {
                 tp: 3,
@@ -322,11 +367,13 @@ mod tests {
             per_contig: BTreeMap::new(),
             skipped_golden: SkipCounts::default(),
             skipped_called: SkipCounts::default(),
+            fn_attribution: BTreeMap::new(),
+            warnings: Vec::new(),
         };
         let path = write_json(&s, dir.path(), false).unwrap();
         let raw = fs::read_to_string(&path).unwrap();
         let val: serde_json::Value = serde_json::from_str(&raw).unwrap();
-        assert_eq!(val["schema_version"], "1.0.0");
+        assert_eq!(val["schema_version"], "1.1.0");
         assert_eq!(val["totals"]["tp"], 3);
     }
 
@@ -347,6 +394,8 @@ mod tests {
                 include_filtered: false,
                 equivalence_window: 50,
                 fast: false,
+                mutation_bed: None,
+                chrom_aliases: None,
             },
             totals: ContigCounts {
                 tp: 0,
@@ -358,6 +407,8 @@ mod tests {
             per_contig: BTreeMap::new(),
             skipped_golden: SkipCounts::default(),
             skipped_called: SkipCounts::default(),
+            fn_attribution: BTreeMap::new(),
+            warnings: Vec::new(),
         };
         let err = write_json(&s, dir.path(), false).unwrap_err();
         assert!(matches!(err, CompareVcfsError::OverwriteFileError(_)));

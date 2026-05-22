@@ -1,15 +1,12 @@
 // This is the run configuration for this particular run, which holds the parameters needed by the
 // various side functions. It is build with a ConfigurationBuilder, which can take either a
 // config yaml file or command line arguments and turn them into the configuration.
+use crate::gen_gc_bias_model::errors::GenGcBiasModelError;
+use common::{file_tools::bed_reader::read_bed, structs::bed_record::BedRecord};
 use serde_yml::Value;
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::fs;
-use common::{
-    file_tools::bed_reader::read_bed,
-    structs::bed_record::BedRecord,
-};
-use crate::gen_gc_bias_model::errors::GenGcBiasModelError;
+use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
 pub struct RunConfiguration {
@@ -27,7 +24,7 @@ pub struct RunConfiguration {
     pub overwrite_output: bool,
     pub window_size: usize,
     pub window_stride: usize,
-    pub min_windows_per_bin: usize
+    pub min_windows_per_bin: usize,
 }
 
 impl RunConfiguration {
@@ -35,27 +32,28 @@ impl RunConfiguration {
         let file = fs::File::open(yml_file)?;
         let scrape_config: HashMap<String, Value> = serde_yml::from_reader(file)?;
 
-        let reference = PathBuf::from(
-            scrape_config["reference"]
-                .as_str()
-                .ok_or_else(|| GenGcBiasModelError::ConfigError("Missing reference".to_string()))?
-        );
+        let reference =
+            PathBuf::from(scrape_config["reference"].as_str().ok_or_else(|| {
+                GenGcBiasModelError::ConfigError("Missing reference".to_string())
+            })?);
         if !reference.is_file() {
-            return Err(GenGcBiasModelError::ConfigError(
-                format!("Invalid reference file {:?}", reference)
-            ));
+            return Err(GenGcBiasModelError::ConfigError(format!(
+                "Invalid reference file {:?}",
+                reference
+            )));
         }
 
         let bam_file = PathBuf::from(
             scrape_config
                 .get("bam_file")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| GenGcBiasModelError::ConfigError("Missing bam_file".to_string()))?
+                .ok_or_else(|| GenGcBiasModelError::ConfigError("Missing bam_file".to_string()))?,
         );
         if !bam_file.is_file() {
-            return Err(GenGcBiasModelError::ConfigError(
-                format!("Invalid bam_file {:?}", bam_file)
-            ));
+            return Err(GenGcBiasModelError::ConfigError(format!(
+                "Invalid bam_file {:?}",
+                bam_file
+            )));
         }
 
         let min_mapq = scrape_config
@@ -73,9 +71,10 @@ impl RunConfiguration {
         } else {
             let bed_file = PathBuf::from(bed_file_raw);
             if !bed_file.is_file() {
-                return Err(GenGcBiasModelError::ConfigError(
-                    format!("Invalid BED file {:?}", bed_file)
-                ));
+                return Err(GenGcBiasModelError::ConfigError(format!(
+                    "Invalid BED file {:?}",
+                    bed_file
+                )));
             }
             read_bed(&bed_file, false)?
         };
@@ -85,16 +84,16 @@ impl RunConfiguration {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        let output_file = PathBuf::from(
-            scrape_config["output_file"]
-                .as_str()
-                .ok_or_else(|| GenGcBiasModelError::ConfigError("Missing output_file".to_string()))?
-        );
+        let output_file =
+            PathBuf::from(scrape_config["output_file"].as_str().ok_or_else(|| {
+                GenGcBiasModelError::ConfigError("Missing output_file".to_string())
+            })?);
 
         if !overwrite_output && output_file.is_file() {
-            return Err(GenGcBiasModelError::ConfigError(
-                format!("Attempting to overwrite existing file {:?}", output_file)
-            ));
+            return Err(GenGcBiasModelError::ConfigError(format!(
+                "Attempting to overwrite existing file {:?}",
+                output_file
+            )));
         }
 
         let window_size = scrape_config
@@ -104,7 +103,7 @@ impl RunConfiguration {
 
         if window_size == 0 {
             return Err(GenGcBiasModelError::ConfigError(
-                "window_size must be > 0".to_string()
+                "window_size must be > 0".to_string(),
             ));
         }
 
@@ -115,7 +114,7 @@ impl RunConfiguration {
 
         if window_stride == 0 {
             return Err(GenGcBiasModelError::ConfigError(
-                "window_stride must be > 0".to_string()
+                "window_stride must be > 0".to_string(),
             ));
         }
 
@@ -145,7 +144,6 @@ impl RunConfiguration {
         })
     }
 }
-
 
 #[cfg(test)]
 mod tests {

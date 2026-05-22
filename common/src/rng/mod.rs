@@ -6,8 +6,8 @@
 //! of overflow, I kept the numbers to within the range of u32, even though they are u64 and f64
 //! outputs. I'm hoping the simplicity of this overall makes it very fast for NEAT
 mod mash;
-use thiserror::Error;
 use mash::Mash;
+use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum NeatRngError {
@@ -37,7 +37,6 @@ pub struct NeatRng {
     s2: f64,
     c: u32,
 }
-
 
 impl NeatRng {
     pub fn new_from_seed(seed_list: &Vec<String>) -> Result<NeatRng, NeatRngError> {
@@ -73,12 +72,7 @@ impl NeatRng {
             }
         }
 
-        Ok(NeatRng {
-            s0,
-            s1,
-            s2,
-            c,
-        })
+        Ok(NeatRng { s0, s1, s2, c })
     }
 
     pub fn random(&mut self) -> Result<f64, NeatRngError> {
@@ -127,8 +121,14 @@ impl NeatRng {
     pub fn derive_child(&self, idx: u64) -> NeatRng {
         let seeds = vec![
             format!("{}", self.s0.to_bits() ^ idx),
-            format!("{}", self.s1.to_bits() ^ idx.wrapping_mul(0x9e3779b97f4a7c15)),
-            format!("{}", self.s2.to_bits() ^ idx.wrapping_mul(0x6c62272e07bb0142)),
+            format!(
+                "{}",
+                self.s1.to_bits() ^ idx.wrapping_mul(0x9e3779b97f4a7c15)
+            ),
+            format!(
+                "{}",
+                self.s2.to_bits() ^ idx.wrapping_mul(0x6c62272e07bb0142)
+            ),
             format!("{}", (self.c as u64) ^ idx),
         ];
         NeatRng::new_from_seed(&seeds).unwrap()
@@ -140,7 +140,7 @@ impl NeatRng {
         for i in (0..=(a.len() - 1)).rev() {
             let j = (self.random().unwrap() * i as f64).floor() as usize;
             if j == 0 {
-                return Ok(a[i].clone())
+                return Ok(a[i].clone());
             }
         }
         Ok(a[0].clone())
@@ -157,12 +157,12 @@ mod tests {
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),
-        ]).unwrap();
+        ])
+        .unwrap();
         assert_eq!(rng.gen_bool(0.5).unwrap(), false);
         assert_eq!(rng.gen_bool(0.5).unwrap(), true);
         assert_eq!(rng.gen_bool(0.5).unwrap(), false);
         assert_eq!(rng.gen_bool(0.5).unwrap(), true);
-
     }
 
     #[test]
@@ -171,7 +171,8 @@ mod tests {
             "hello".to_string(),
             "cruel".to_string(),
             "world".to_string(),
-        ]).unwrap();
+        ])
+        .unwrap();
         let test = rng.random().unwrap();
         assert_eq!(test, 0.8797469853889197);
         let test2 = rng.random().unwrap();
@@ -187,7 +188,8 @@ mod tests {
             "hello".to_string(),
             "cruel".to_string(),
             "world".to_string(),
-        ]).unwrap();
+        ])
+        .unwrap();
         rng.shuffle_in_place(&mut my_vec).unwrap();
         assert_eq!(my_vec, vec![7.0, 3.0, 6.0, 4.0, 2.0, 1.0, 9.0, 5.0, 8.0]);
         rng.shuffle_in_place(&mut my_vec).unwrap();
@@ -202,7 +204,8 @@ mod tests {
             "hello".to_string(),
             "cruel".to_string(),
             "world".to_string(),
-        ]).unwrap();
+        ])
+        .unwrap();
         let num = rng.range_i64(min, max).unwrap();
         assert_eq!(num, 8);
         let num2 = rng.range_i64(min, max).unwrap();
@@ -216,7 +219,8 @@ mod tests {
             "hello".to_string(),
             "cruel".to_string(),
             "world".to_string(),
-        ]).unwrap();
+        ])
+        .unwrap();
         assert_eq!(rng.rand_int().unwrap(), 16228467489086898176);
         assert_eq!(rng.rand_int().unwrap(), 9226227395537666048);
         assert_eq!(rng.rand_int().unwrap(), 11428961760531447808);

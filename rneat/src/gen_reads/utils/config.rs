@@ -3,16 +3,14 @@
 // config yaml file or command line arguments and turn them into the configuration.
 use chrono::Utc;
 
-use log::{info, warn, error};
+use crate::common::file_tools::folder_tools::check_create_dir;
+use crate::gen_reads::errors::GenerateReadsError;
+use log::{error, info, warn};
 use serde_yml::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::string::String;
 use std::{env, fs};
-use crate::gen_reads::errors::GenerateReadsError;
-use crate::{
-    common::file_tools::folder_tools::check_create_dir,
-};
 
 #[derive(Debug, Clone)]
 pub struct RunConfiguration {
@@ -58,7 +56,7 @@ pub struct RunConfiguration {
     pub output_fastq_1: Option<PathBuf>,
     pub output_fastq_2: Option<PathBuf>,
     pub output_vcf: Option<PathBuf>,
-    pub output_bam: Option<PathBuf>, 
+    pub output_bam: Option<PathBuf>,
     // model input
     pub quality_score_model: Option<PathBuf>,
     pub mutation_model: Option<PathBuf>,
@@ -133,8 +131,7 @@ impl RunConfiguration {
             Ok(l) => l,
             Err(error) => panic!(
                 "Problem reading the config file: {:?}. System error: {}",
-                &yaml_file,
-                error,
+                &yaml_file, error,
             ),
         };
         // Uses serde_yml to read the file into a HashMap
@@ -142,23 +139,24 @@ impl RunConfiguration {
         Self::from_scrape_config(scrape_config)
     }
 
-    pub fn from_scrape_config(scrape_config: HashMap<String, Value>) -> Result<RunConfiguration, GenerateReadsError> {
+    pub fn from_scrape_config(
+        scrape_config: HashMap<String, Value>,
+    ) -> Result<RunConfiguration, GenerateReadsError> {
         // Fill in the reference first, all hinges on that
-        let reference = scrape_config.get("reference")
+        let reference = scrape_config
+            .get("reference")
             .ok_or(GenerateReadsError::MissingReferenceError)?;
-        
+
         let ref_str = reference.as_str();
         let ref_buf = match ref_str {
             Some(str) => {
                 let path = PathBuf::from(&str);
                 if !path.is_file() {
-                    return Err(GenerateReadsError::FileNotFound(str.to_owned()))
+                    return Err(GenerateReadsError::FileNotFound(str.to_owned()));
                 }
                 path
-            },
-            None => {
-                return Err(GenerateReadsError::MissingReferenceError)
             }
+            None => return Err(GenerateReadsError::MissingReferenceError),
         };
 
         let mut config = RunConfiguration {
@@ -177,45 +175,85 @@ impl RunConfiguration {
                 Some(".") => continue,
                 _ => match key.as_str() {
                     "read_len" => {
-                        config.read_len = value.as_u64()
-                            .ok_or_else(|| GenerateReadsError::ConfigReadError("read_len".to_string(), "integer".to_string()))? as usize;
-                    },
+                        config.read_len = value.as_u64().ok_or_else(|| {
+                            GenerateReadsError::ConfigReadError(
+                                "read_len".to_string(),
+                                "integer".to_string(),
+                            )
+                        })? as usize;
+                    }
                     "coverage" => {
-                        config.coverage = value.as_u64()
-                            .ok_or_else(|| GenerateReadsError::ConfigReadError("coverage".to_string(), "integer".to_string()))? as usize;
-                    },
+                        config.coverage = value.as_u64().ok_or_else(|| {
+                            GenerateReadsError::ConfigReadError(
+                                "coverage".to_string(),
+                                "integer".to_string(),
+                            )
+                        })? as usize;
+                    }
                     "mutation_rate" => {
-                        config.mutation_rate = Some(value.as_f64()
-                            .ok_or_else(|| GenerateReadsError::ConfigReadError("mutation_rate".to_string(), "float".to_string()))?);
-                    },
+                        config.mutation_rate = Some(value.as_f64().ok_or_else(|| {
+                            GenerateReadsError::ConfigReadError(
+                                "mutation_rate".to_string(),
+                                "float".to_string(),
+                            )
+                        })?);
+                    }
                     "ploidy" => {
-                        config.ploidy = value.as_u64()
-                            .ok_or_else(|| GenerateReadsError::ConfigReadError("ploidy".to_string(), "integer".to_string()))? as usize;
-                    },
+                        config.ploidy = value.as_u64().ok_or_else(|| {
+                            GenerateReadsError::ConfigReadError(
+                                "ploidy".to_string(),
+                                "integer".to_string(),
+                            )
+                        })? as usize;
+                    }
                     "paired_ended" => {
-                        config.paired_ended = value.as_bool()
-                            .ok_or_else(|| GenerateReadsError::ConfigReadError("paired_ended".to_string(), "boolean".to_string()))?;
-                    },
+                        config.paired_ended = value.as_bool().ok_or_else(|| {
+                            GenerateReadsError::ConfigReadError(
+                                "paired_ended".to_string(),
+                                "boolean".to_string(),
+                            )
+                        })?;
+                    }
                     "fragment_mean" => {
-                        config.fragment_mean = Some(value.as_f64()
-                            .ok_or_else(|| GenerateReadsError::ConfigReadError("fragment_mean".to_string(), "float".to_string()))?);
-                    },
+                        config.fragment_mean = Some(value.as_f64().ok_or_else(|| {
+                            GenerateReadsError::ConfigReadError(
+                                "fragment_mean".to_string(),
+                                "float".to_string(),
+                            )
+                        })?);
+                    }
                     "fragment_st_dev" => {
-                        config.fragment_st_dev = Some(value.as_f64()
-                            .ok_or_else(|| GenerateReadsError::ConfigReadError("frament_st_dev".to_string(), "float".to_string()))?);
-                    },
+                        config.fragment_st_dev = Some(value.as_f64().ok_or_else(|| {
+                            GenerateReadsError::ConfigReadError(
+                                "frament_st_dev".to_string(),
+                                "float".to_string(),
+                            )
+                        })?);
+                    }
                     "produce_fastq" => {
-                        config.produce_fastq = value.as_bool()
-                            .ok_or_else(|| GenerateReadsError::ConfigReadError("produce_fastq".to_string(), "boolean".to_string()))?;
-                    },
+                        config.produce_fastq = value.as_bool().ok_or_else(|| {
+                            GenerateReadsError::ConfigReadError(
+                                "produce_fastq".to_string(),
+                                "boolean".to_string(),
+                            )
+                        })?;
+                    }
                     "produce_vcf" => {
-                        config.produce_vcf = value.as_bool()
-                            .ok_or_else(|| GenerateReadsError::ConfigReadError("produce_vcf".to_string(), "boolean".to_string()))?;
-                    },
+                        config.produce_vcf = value.as_bool().ok_or_else(|| {
+                            GenerateReadsError::ConfigReadError(
+                                "produce_vcf".to_string(),
+                                "boolean".to_string(),
+                            )
+                        })?;
+                    }
                     "produce_bam" => {
-                        config.produce_bam = value.as_bool()
-                            .ok_or_else(|| GenerateReadsError::ConfigReadError("produce_bam".to_string(), "boolean".to_string()))?;
-                    },
+                        config.produce_bam = value.as_bool().ok_or_else(|| {
+                            GenerateReadsError::ConfigReadError(
+                                "produce_bam".to_string(),
+                                "boolean".to_string(),
+                            )
+                        })?;
+                    }
                     "rng_seed" => {
                         // Accept either a quoted string (whitespace-separated multi-term seeds)
                         // or a bare integer literal; integers are coerced to their string form
@@ -233,121 +271,184 @@ impl RunConfiguration {
                             ));
                         };
                         config.rng_seed = Some(seed_string);
-                    },
+                    }
                     "overwrite_output" => {
-                        config.overwrite_output = value.as_bool()
-                            .ok_or_else(|| GenerateReadsError::ConfigReadError("overwrite_output".to_string(), "boolean".to_string()))?;
-                    },
+                        config.overwrite_output = value.as_bool().ok_or_else(|| {
+                            GenerateReadsError::ConfigReadError(
+                                "overwrite_output".to_string(),
+                                "boolean".to_string(),
+                            )
+                        })?;
+                    }
                     "minimum_mutations" => {
-                        config.minimum_mutations = value.as_u64()
-                            .ok_or_else(|| GenerateReadsError::ConfigReadError("minimum_mutations".to_string(), "Integer".to_string()))? as usize;
-                    },
+                        config.minimum_mutations = value.as_u64().ok_or_else(|| {
+                            GenerateReadsError::ConfigReadError(
+                                "minimum_mutations".to_string(),
+                                "Integer".to_string(),
+                            )
+                        })? as usize;
+                    }
                     "output_dir" => {
-                        let output_path = value.as_str()
-                            .ok_or_else(|| GenerateReadsError::ConfigReadError("output_dir".to_string(), "String".to_string()))?;
+                        let output_path = value.as_str().ok_or_else(|| {
+                            GenerateReadsError::ConfigReadError(
+                                "output_dir".to_string(),
+                                "String".to_string(),
+                            )
+                        })?;
                         config.output_dir = PathBuf::from(output_path);
                         if !config.output_dir.is_dir() {
                             info!("Creating output directory: {:?}", config.output_dir);
                             check_create_dir(&config.output_dir);
                         }
-                    },
+                    }
                     // output_prefix is for backward compatability
                     "output_filename" | "output_prefix" => {
-                        config.output_filename = value.as_str()
-                            .ok_or_else(|| GenerateReadsError::ConfigReadError("output_filename".to_string(), "String".to_string()))?.to_string();
-                    },
+                        config.output_filename = value
+                            .as_str()
+                            .ok_or_else(|| {
+                                GenerateReadsError::ConfigReadError(
+                                    "output_filename".to_string(),
+                                    "String".to_string(),
+                                )
+                            })?
+                            .to_string();
+                    }
                     "quality_score_model" => {
-                        let name = value.as_str()
-                            .ok_or_else(|| GenerateReadsError::ConfigReadError("quality_score_model".to_string(), "path to file".to_string()))?;
+                        let name = value.as_str().ok_or_else(|| {
+                            GenerateReadsError::ConfigReadError(
+                                "quality_score_model".to_string(),
+                                "path to file".to_string(),
+                            )
+                        })?;
                         let filename = PathBuf::from(name);
                         if filename.is_file() {
                             config.quality_score_model = Some(filename);
                         } else {
-                            return Err(GenerateReadsError::FileNotFound(name.to_string()))
+                            return Err(GenerateReadsError::FileNotFound(name.to_string()));
                         }
-                    },
+                    }
                     "mutation_model" => {
-                        let name = value.as_str()
-                            .ok_or_else(|| GenerateReadsError::ConfigReadError("mutation_model".to_string(), "path to file".to_string()))?;
+                        let name = value.as_str().ok_or_else(|| {
+                            GenerateReadsError::ConfigReadError(
+                                "mutation_model".to_string(),
+                                "path to file".to_string(),
+                            )
+                        })?;
                         let filename = PathBuf::from(name);
                         if filename.is_file() {
                             config.mutation_model = Some(filename);
                         } else {
-                            return Err(GenerateReadsError::FileNotFound(name.to_string()))
+                            return Err(GenerateReadsError::FileNotFound(name.to_string()));
                         }
-                    },
+                    }
                     "fragment_model" => {
-                        let name = value.as_str()
-                            .ok_or_else(|| GenerateReadsError::ConfigReadError("fragment_model".to_string(), "path to file".to_string()))?;
+                        let name = value.as_str().ok_or_else(|| {
+                            GenerateReadsError::ConfigReadError(
+                                "fragment_model".to_string(),
+                                "path to file".to_string(),
+                            )
+                        })?;
                         let filename = PathBuf::from(name);
                         if filename.is_file() {
                             config.fragment_model = Some(filename);
                         } else {
-                            return Err(GenerateReadsError::FileNotFound(name.to_string()))
+                            return Err(GenerateReadsError::FileNotFound(name.to_string()));
                         }
-                    },
+                    }
                     "sequence_error_model" => {
-                        let name = value.as_str()
-                            .ok_or_else(|| GenerateReadsError::ConfigReadError("sequence_error_model".to_string(), "path to file".to_string()))?;
+                        let name = value.as_str().ok_or_else(|| {
+                            GenerateReadsError::ConfigReadError(
+                                "sequence_error_model".to_string(),
+                                "path to file".to_string(),
+                            )
+                        })?;
                         let filename = PathBuf::from(name);
                         if filename.is_file() {
                             config.sequence_error_model = Some(filename);
                         } else {
-                            return Err(GenerateReadsError::FileNotFound(name.to_string()))
+                            return Err(GenerateReadsError::FileNotFound(name.to_string()));
                         }
-                    },
+                    }
                     "target_bed" => {
-                        let name = value.as_str()
-                            .ok_or_else(|| GenerateReadsError::ConfigReadError("target_bed".to_string(), "path to file".to_string()))?;
+                        let name = value.as_str().ok_or_else(|| {
+                            GenerateReadsError::ConfigReadError(
+                                "target_bed".to_string(),
+                                "path to file".to_string(),
+                            )
+                        })?;
                         let filename = PathBuf::from(name);
                         if filename.is_file() {
                             config.target_bed = Some(filename);
                         } else {
-                            return Err(GenerateReadsError::FileNotFound(name.to_string()))
+                            return Err(GenerateReadsError::FileNotFound(name.to_string()));
                         }
-                    },
+                    }
                     "mutation_regions" => {
-                        let name = value.as_str()
-                            .ok_or_else(|| GenerateReadsError::ConfigReadError("mutation_regions".to_string(), "path to file".to_string()))?;
+                        let name = value.as_str().ok_or_else(|| {
+                            GenerateReadsError::ConfigReadError(
+                                "mutation_regions".to_string(),
+                                "path to file".to_string(),
+                            )
+                        })?;
                         let filename = PathBuf::from(name);
                         if filename.is_file() {
                             config.mutation_regions = Some(filename)
                         } else {
-                            return Err(GenerateReadsError::FileNotFound(name.to_string()))
+                            return Err(GenerateReadsError::FileNotFound(name.to_string()));
                         }
                     }
                     "input_vcf" => {
-                        let name = value.as_str()
-                            .ok_or_else(|| GenerateReadsError::ConfigReadError("input_vcf".to_string(), "path to file".to_string()))?;
+                        let name = value.as_str().ok_or_else(|| {
+                            GenerateReadsError::ConfigReadError(
+                                "input_vcf".to_string(),
+                                "path to file".to_string(),
+                            )
+                        })?;
                         let filename = PathBuf::from(name);
                         if filename.is_file() {
                             config.input_vcf = Some(filename);
                         } else {
-                            return Err(GenerateReadsError::FileNotFound(name.to_string()))
+                            return Err(GenerateReadsError::FileNotFound(name.to_string()));
                         }
-                    },
+                    }
                     "gc_bias_model" => {
-                        let name = value.as_str()
-                            .ok_or_else(|| GenerateReadsError::ConfigReadError("gc_bias_model".to_string(), "path to file".to_string()))?;
+                        let name = value.as_str().ok_or_else(|| {
+                            GenerateReadsError::ConfigReadError(
+                                "gc_bias_model".to_string(),
+                                "path to file".to_string(),
+                            )
+                        })?;
                         let filename = PathBuf::from(name);
                         if filename.is_file() {
                             config.gc_bias_model = Some(filename)
                         } else {
-                            return Err(GenerateReadsError::FileNotFound(name.to_string()))
+                            return Err(GenerateReadsError::FileNotFound(name.to_string()));
                         }
-                    },
+                    }
                     "gc_bias_normalize_coverage" => {
-                        config.gc_bias_normalize_coverage = value.as_bool()
-                            .ok_or_else(|| GenerateReadsError::ConfigReadError("gc_bias_normalize_coverage".to_string(), "boolean".to_string()))?;
-                    },
+                        config.gc_bias_normalize_coverage = value.as_bool().ok_or_else(|| {
+                            GenerateReadsError::ConfigReadError(
+                                "gc_bias_normalize_coverage".to_string(),
+                                "boolean".to_string(),
+                            )
+                        })?;
+                    }
                     "num_threads" => {
-                        config.num_threads = Some(value.as_u64()
-                            .ok_or_else(|| GenerateReadsError::ConfigReadError("num_threads".to_string(), "integer".to_string()))? as usize);
-                    },
+                        config.num_threads = Some(value.as_u64().ok_or_else(|| {
+                            GenerateReadsError::ConfigReadError(
+                                "num_threads".to_string(),
+                                "integer".to_string(),
+                            )
+                        })? as usize);
+                    }
                     "long_reads" => {
-                        config.long_reads = value.as_bool()
-                            .ok_or_else(|| GenerateReadsError::ConfigReadError("long_reads".to_string(), "boolean".to_string()))?;
-                    },
+                        config.long_reads = value.as_bool().ok_or_else(|| {
+                            GenerateReadsError::ConfigReadError(
+                                "long_reads".to_string(),
+                                "boolean".to_string(),
+                            )
+                        })?;
+                    }
                     _ => continue,
                 },
             }
@@ -384,7 +485,7 @@ impl RunConfiguration {
         // No point in running if we aren't producing files
         if !(config.produce_fastq || config.produce_vcf || config.produce_bam) {
             error!("All file types set to false, no files would be produced.");
-            return Err(GenerateReadsError::ConfigError)
+            return Err(GenerateReadsError::ConfigError);
         }
 
         if config.paired_ended {
@@ -410,7 +511,7 @@ impl RunConfiguration {
                         "Paired ended is set to true, but fragment mean \
                         and standard deviation were not set."
                     );
-                    return Err(GenerateReadsError::ConfigError)
+                    return Err(GenerateReadsError::ConfigError);
                 }
             }
         } else {
@@ -463,12 +564,11 @@ impl RunConfiguration {
             info!("\t>Mutation model: {:?}", seq_err_model)
         }
 
-
         if !config.produce_bam {
             match config.num_threads {
                 Some(n) => {
                     info!("\t>Maximum number of threads to use: {}", n)
-                },
+                }
                 None => info!("\t>parallel threads: auto (all available cores)"),
             }
         }
@@ -483,7 +583,7 @@ impl RunConfiguration {
                 }
                 info!("\t>Reproducibility seed string: {}", &seed);
                 Ok(())
-            },
+            }
 
             None => {
                 // Since no seed was provided, we'll use a datetime stamp with nanoseconds
@@ -496,7 +596,7 @@ impl RunConfiguration {
                 }
                 info!("\t>Reproducibility seed string: {}", &raw_string);
                 Ok(())
-            },
+            }
         }
     }
 }
@@ -528,7 +628,7 @@ mod tests {
             output_fastq_1: None,
             output_fastq_2: None,
             output_vcf: None,
-            output_bam: None, 
+            output_bam: None,
             quality_score_model: None,
             mutation_model: None,
             fragment_model: None,
@@ -586,7 +686,10 @@ mod tests {
         let mut config = RunConfiguration::default();
         config.reference = PathBuf::from("test_data/references/H1N1.fa");
         config.produce_fastq = false;
-        assert!(matches!(RunConfiguration::check_and_log_config(&mut config), Err(GenerateReadsError::ConfigError)));
+        assert!(matches!(
+            RunConfiguration::check_and_log_config(&mut config),
+            Err(GenerateReadsError::ConfigError)
+        ));
     }
 
     #[test]
@@ -594,7 +697,10 @@ mod tests {
         let mut config = RunConfiguration::default();
         config.reference = PathBuf::from("test_data/references/H1N1.fa");
         config.paired_ended = true;
-        assert!(matches!(RunConfiguration::check_and_log_config(&mut config), Err(GenerateReadsError::ConfigError)));
+        assert!(matches!(
+            RunConfiguration::check_and_log_config(&mut config),
+            Err(GenerateReadsError::ConfigError)
+        ));
     }
 
     #[test]
@@ -603,7 +709,10 @@ mod tests {
         config.reference = PathBuf::from("test_data/references/H1N1.fa");
         config.paired_ended = true;
         config.fragment_st_dev = Some(10.0);
-        assert!(matches!(RunConfiguration::check_and_log_config(&mut config), Err(GenerateReadsError::ConfigError)));
+        assert!(matches!(
+            RunConfiguration::check_and_log_config(&mut config),
+            Err(GenerateReadsError::ConfigError)
+        ));
     }
 
     #[test]
@@ -612,14 +721,20 @@ mod tests {
         config.reference = PathBuf::from("test_data/references/H1N1.fa");
         config.paired_ended = true;
         config.fragment_mean = Some(100.0);
-        assert!(matches!(RunConfiguration::check_and_log_config(&mut config), Err(GenerateReadsError::ConfigError)));
+        assert!(matches!(
+            RunConfiguration::check_and_log_config(&mut config),
+            Err(GenerateReadsError::ConfigError)
+        ));
     }
 
     #[test]
     fn test_read_config_yaml() {
         let yaml = PathBuf::from("test_data/configs/neat_test.yml");
         let test_config = RunConfiguration::from_yaml_file(&yaml).unwrap();
-        assert_eq!(test_config.reference, PathBuf::from("test_data/references/ecoli.fa"));
+        assert_eq!(
+            test_config.reference,
+            PathBuf::from("test_data/references/ecoli.fa")
+        );
         assert_eq!(test_config.coverage, 3);
     }
 
@@ -655,9 +770,15 @@ mod tests {
         let yaml_file = temp_dir.path().join("test.yml");
         fs::write(&yaml_file, &yaml_content).unwrap();
 
-        assert!(!output_dir.is_dir(), "output dir should not exist before the call");
+        assert!(
+            !output_dir.is_dir(),
+            "output dir should not exist before the call"
+        );
         RunConfiguration::from_yaml_file(&yaml_file).unwrap();
-        assert!(output_dir.is_dir(), "from_yaml_file should have created the output dir");
+        assert!(
+            output_dir.is_dir(),
+            "from_yaml_file should have created the output dir"
+        );
     }
 
     #[test]
@@ -694,7 +815,7 @@ mod tests {
     fn test_from_scrape_config() {
         // We need a real file for the reference check in from_scrape_config
         let ref_path = "test_data/references/H1N1.fa";
-        
+
         let mut scrape_config = HashMap::new();
         scrape_config.insert("reference".to_string(), Value::String(ref_path.to_string()));
         scrape_config.insert("read_len".to_string(), Value::Number(200.into()));
@@ -702,9 +823,9 @@ mod tests {
         scrape_config.insert("paired_ended".to_string(), Value::Bool(true));
         scrape_config.insert("fragment_mean".to_string(), Value::Number(400.into()));
         scrape_config.insert("fragment_st_dev".to_string(), Value::Number(40.into()));
-        
+
         let config = RunConfiguration::from_scrape_config(scrape_config).unwrap();
-        
+
         assert_eq!(config.reference, PathBuf::from(ref_path));
         assert_eq!(config.read_len, 200);
         assert_eq!(config.coverage, 30);
@@ -716,14 +837,14 @@ mod tests {
     #[test]
     fn test_from_scrape_config_dot_notation() {
         let ref_path = "test_data/references/H1N1.fa";
-        
+
         let mut scrape_config = HashMap::new();
         scrape_config.insert("reference".to_string(), Value::String(ref_path.to_string()));
         // Use default for read_len
         scrape_config.insert("read_len".to_string(), Value::String(".".to_string()));
-        
+
         let config = RunConfiguration::from_scrape_config(scrape_config).unwrap();
-        
+
         assert_eq!(config.reference, PathBuf::from(ref_path));
         assert_eq!(config.read_len, RunConfiguration::default().read_len);
     }
@@ -733,20 +854,29 @@ mod tests {
         let ref_path = "test_data/references/H1N1.fa";
         let mut scrape_config = HashMap::new();
         scrape_config.insert("reference".to_string(), Value::String(ref_path.to_string()));
-        
+
         // Invalid integer
         let mut sc1 = scrape_config.clone();
-        sc1.insert("read_len".to_string(), Value::String("not_an_int".to_string()));
+        sc1.insert(
+            "read_len".to_string(),
+            Value::String("not_an_int".to_string()),
+        );
         assert!(RunConfiguration::from_scrape_config(sc1).is_err());
 
         // Invalid boolean
         let mut sc2 = scrape_config.clone();
-        sc2.insert("paired_ended".to_string(), Value::String("not_a_bool".to_string()));
+        sc2.insert(
+            "paired_ended".to_string(),
+            Value::String("not_a_bool".to_string()),
+        );
         assert!(RunConfiguration::from_scrape_config(sc2).is_err());
 
         // Invalid float
         let mut sc3 = scrape_config.clone();
-        sc3.insert("mutation_rate".to_string(), Value::String("not_a_float".to_string()));
+        sc3.insert(
+            "mutation_rate".to_string(),
+            Value::String("not_a_float".to_string()),
+        );
         assert!(RunConfiguration::from_scrape_config(sc3).is_err());
     }
 
@@ -759,7 +889,10 @@ mod tests {
     #[test]
     fn test_config_file_not_found() {
         let mut scrape_config = HashMap::new();
-        scrape_config.insert("reference".to_string(), Value::String("non_existent_file.fasta".to_string()));
+        scrape_config.insert(
+            "reference".to_string(),
+            Value::String("non_existent_file.fasta".to_string()),
+        );
         assert!(RunConfiguration::from_scrape_config(scrape_config).is_err());
     }
 

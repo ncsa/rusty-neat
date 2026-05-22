@@ -20,13 +20,13 @@
 //!     translate to Rust. May need a custom data structure. Like seed + subsequent.
 //!   * Assumes a fixed read length, meaning you have to extrapolate for longer read lengths.
 //!   * In Python, at least, this was slow, although in retrospect it didn't eat up much memory.
-use serde_json;
-use std::{io, path::PathBuf};
-use thiserror::Error;
+use crate::rng::{NeatRng, NeatRngError};
 use flate2::read::GzDecoder;
 use serde::{Deserialize, Serialize};
-use std::{fmt::{Display, Formatter}};
-use crate::rng::{NeatRng, NeatRngError};
+use serde_json;
+use std::fmt::{Display, Formatter};
+use std::{io, path::PathBuf};
+use thiserror::Error;
 
 use crate::models::lib::{model_reader, model_writer};
 use crate::models::sequencing_error_model::SeqModelError;
@@ -90,18 +90,18 @@ impl QualityScoreModel {
     // methods for QualityScoreModel objects
 
     pub fn default() -> Result<Self, QualityModelError> {
-        // This generates the default quality score model based on the original NEAT default. 
+        // This generates the default quality score model based on the original NEAT default.
         // the parameters are sort of outdated now:
         //  - quality_score_options: 0 - 41
         //  - binned_scores: false
         //  - assumed_read_length: 101
-        // I won't list all the NEAT calculated weights. zcat the model file if you are interested, but 
+        // I won't list all the NEAT calculated weights. zcat the model file if you are interested, but
         // it's a lot of data.
-        
+
         // this map_err thing I had help on. I feel like this is something rust-analyzer should have known.
         let reader = GzDecoder::new(DATA_FILE);
-        let data: QualityScoreModel = serde_json::from_reader(reader)
-            .map_err(QualityModelError::SerdeError)?;
+        let data: QualityScoreModel =
+            serde_json::from_reader(reader).map_err(QualityModelError::SerdeError)?;
         Ok(data)
     }
 
@@ -191,15 +191,14 @@ impl QualityScoreModel {
             // on the previous score. We have to subtract one from the index because the first matrix
             // (position 0) corresponds to the second quality score (position 1).
             // We need to figure out a better way if we're going to do discrete.
-            let index = self.distros_from_one[i-1][score_position]
-                .sample(rng.random()?)?;
+            let index = self.distros_from_one[i - 1][score_position].sample(rng.random()?)?;
             let score = self.quality_score_options[index];
-            score_list.push(score); 
+            score_list.push(score);
             current_index += 1;
         }
         Ok(score_list)
     }
-    
+
     fn quality_index_remap(&self, length: usize) -> Vec<usize> {
         // Basically, this function does integer division (truncation) to fill positions
         // in a vector the length of the desired read length.
@@ -295,7 +294,6 @@ impl QualityScoreModel {
         model_writer(self, filename)?;
         Ok(())
     }
-
 }
 
 #[cfg(test)]
@@ -328,9 +326,12 @@ mod tests {
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),
-        ]).unwrap();
+        ])
+        .unwrap();
         let model = QualityScoreModel::default().unwrap();
-        let scores = model.generate_quality_scores(run_read_length, &mut rng).unwrap();
+        let scores = model
+            .generate_quality_scores(run_read_length, &mut rng)
+            .unwrap();
         assert!(!scores.is_empty());
         assert_eq!(scores.len(), 100);
         scores
@@ -346,9 +347,12 @@ mod tests {
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),
-        ]).unwrap();
+        ])
+        .unwrap();
         let model = QualityScoreModel::default().unwrap();
-        let scores = model.generate_quality_scores(run_read_length, &mut rng).unwrap();
+        let scores = model
+            .generate_quality_scores(run_read_length, &mut rng)
+            .unwrap();
         assert!(!scores.is_empty());
         assert_eq!(scores.len(), 150);
         scores
@@ -364,9 +368,12 @@ mod tests {
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),
-        ]).unwrap();
+        ])
+        .unwrap();
         let model = QualityScoreModel::default().unwrap();
-        let scores = model.generate_quality_scores(run_read_length, &mut rng).unwrap();
+        let scores = model
+            .generate_quality_scores(run_read_length, &mut rng)
+            .unwrap();
         assert!(!scores.is_empty());
         assert_eq!(scores.len(), 200);
         scores
@@ -382,9 +389,12 @@ mod tests {
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),
-        ]).unwrap();
+        ])
+        .unwrap();
         let model = QualityScoreModel::default().unwrap();
-        let scores = model.generate_quality_scores(run_read_length, &mut rng).unwrap();
+        let scores = model
+            .generate_quality_scores(run_read_length, &mut rng)
+            .unwrap();
         assert!(!scores.is_empty());
         assert_eq!(scores.len(), 2000);
         scores
@@ -404,9 +414,9 @@ mod tests {
             // position 1→2
             vec![vec![1.0, 1.0], vec![1.0, 0.0]],
         ];
-        let model = QualityScoreModel::from_counts(
-            options.clone(), 3, seed_weights, trans_weights, false,
-        ).unwrap();
+        let model =
+            QualityScoreModel::from_counts(options.clone(), 3, seed_weights, trans_weights, false)
+                .unwrap();
         assert_eq!(model.quality_score_options, options);
         assert_eq!(model.assumed_read_length, 3);
         assert!(!model.binned_scores);
@@ -435,9 +445,9 @@ mod tests {
             // position 0→1: prev=Q30 has real data; prev=Q40 row is all zeros
             vec![vec![2.0, 1.0], vec![0.0, 0.0]],
         ];
-        let model = QualityScoreModel::from_counts(
-            options.clone(), 2, seed_weights, trans_weights, false,
-        ).unwrap();
+        let model =
+            QualityScoreModel::from_counts(options.clone(), 2, seed_weights, trans_weights, false)
+                .unwrap();
         // distros_from_one[pos=0][prev_idx=1] is the formerly-zero row for Q40
         let zero_row = &model.distros_from_one[0][1];
         let cdf = zero_row.weights().unwrap();
@@ -463,9 +473,9 @@ mod tests {
             vec![uniform_row.clone(); n],
             vec![uniform_row.clone(); n],
         ];
-        let model = QualityScoreModel::from_counts(
-            bins.clone(), 4, seed_weights, trans_weights, true,
-        ).unwrap();
+        let model =
+            QualityScoreModel::from_counts(bins.clone(), 4, seed_weights, trans_weights, true)
+                .unwrap();
         assert!(model.binned_scores);
         assert_eq!(model.quality_score_options, bins);
         let mut rng = NeatRng::new_from_seed(&vec!["binned".to_string()]).unwrap();
@@ -479,7 +489,10 @@ mod tests {
         for _ in 0..250 {
             let scores = model.generate_quality_scores(11, &mut rng).unwrap();
             for &s in &scores {
-                assert!(bins.contains(&s), "binned model emitted non-bin score {s} under remap");
+                assert!(
+                    bins.contains(&s),
+                    "binned model emitted non-bin score {s} under remap"
+                );
             }
         }
     }
@@ -494,9 +507,9 @@ mod tests {
         let seed_weights = vec![1.0, 2.0, 3.0, 4.0];
         let row = vec![1.0; n];
         let trans_weights = vec![vec![row.clone(); n]; 3];
-        let model = QualityScoreModel::from_counts(
-            bins.clone(), 4, seed_weights, trans_weights, true,
-        ).unwrap();
+        let model =
+            QualityScoreModel::from_counts(bins.clone(), 4, seed_weights, trans_weights, true)
+                .unwrap();
 
         let temp_dir = tempfile::tempdir().unwrap();
         let mut path = PathBuf::from(temp_dir.path());
@@ -504,7 +517,10 @@ mod tests {
         model.write_to_file(&path).unwrap();
         let loaded = QualityScoreModel::from_file(&path).unwrap();
 
-        assert!(loaded.binned_scores, "binned_scores flag must survive round trip");
+        assert!(
+            loaded.binned_scores,
+            "binned_scores flag must survive round trip"
+        );
         assert_eq!(loaded.quality_score_options, bins);
         assert_eq!(loaded.assumed_read_length, model.assumed_read_length);
         assert_eq!(
@@ -522,10 +538,11 @@ mod tests {
         let seed_weights = vec![1.0; n];
         let uniform_row = vec![1.0; n];
         let trans_weights = vec![vec![uniform_row.clone(); n]];
-        let result = QualityScoreModel::from_counts(
-            options, 2, seed_weights, trans_weights, true,
-        );
-        assert!(matches!(result, Err(QualityModelError::InvalidConfiguration(_))));
+        let result = QualityScoreModel::from_counts(options, 2, seed_weights, trans_weights, true);
+        assert!(matches!(
+            result,
+            Err(QualityModelError::InvalidConfiguration(_))
+        ));
     }
 
     #[test]
@@ -536,12 +553,20 @@ mod tests {
         let seed_weights = vec![1.0; n];
         let uniform_row = vec![1.0; n];
         let trans_weights = vec![
-            vec![uniform_row.clone(), uniform_row.clone(), uniform_row.clone()],
-            vec![uniform_row.clone(), uniform_row.clone(), uniform_row.clone()],
+            vec![
+                uniform_row.clone(),
+                uniform_row.clone(),
+                uniform_row.clone(),
+            ],
+            vec![
+                uniform_row.clone(),
+                uniform_row.clone(),
+                uniform_row.clone(),
+            ],
         ];
-        let model = QualityScoreModel::from_counts(
-            options.clone(), 3, seed_weights, trans_weights, false,
-        ).unwrap();
+        let model =
+            QualityScoreModel::from_counts(options.clone(), 3, seed_weights, trans_weights, false)
+                .unwrap();
         let mut rng = NeatRng::new_from_seed(&vec!["t".to_string()]).unwrap();
         for _ in 0..50 {
             let scores = model.generate_quality_scores(3, &mut rng).unwrap();

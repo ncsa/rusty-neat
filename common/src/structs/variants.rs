@@ -1,9 +1,9 @@
 //! These enums and structs help us keep track of variants added to the reference
 //! It stores all the necessary data to write a variant out.
-use thiserror::Error;
-use serde::{Deserialize, Serialize};
 use crate::structs::nucleotides::Nucleotide;
 use log::*;
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum VariantError {
@@ -35,10 +35,12 @@ fn gt_from_str(input: &str) -> Genotype {
     }
     let mut found_zero = false;
     for item in result {
-        if item == "." { continue; }
+        if item == "." {
+            continue;
+        }
         if item.parse::<u64>().unwrap_or(1) == 0 {
             found_zero = true;
-            break
+            break;
         }
     }
     if found_zero {
@@ -63,7 +65,7 @@ impl From<usize> for VariantType {
             1 => Self::Insertion,
             2 => Self::Deletion,
             3 => Self::Complex,
-            _ => panic!("Index out of range!")
+            _ => panic!("Index out of range!"),
         }
     }
 }
@@ -84,7 +86,7 @@ pub struct Variant {
     pub reference: Vec<Nucleotide>,
     // The alternate allele of interest. This is either one base or several bases for an insertion.
     pub alternate: Vec<Nucleotide>,
-    // the genotype string is feor writing in the vcf. 
+    // the genotype string is feor writing in the vcf.
     pub genotype_str: String,
     // The genotype is either heterozygous (not on all alleles) or homozygous (on all alleles)
     pub genotype: Genotype,
@@ -103,11 +105,10 @@ pub struct Variant {
     // Other included information, if present
     pub format: Vec<String>,
     // Sample, if present, must be same length as format
-    pub sample: Vec<String>
+    pub sample: Vec<String>,
 }
 
 impl Variant {
-
     pub fn from_file(
         location: usize,
         id: &str,
@@ -119,7 +120,6 @@ impl Variant {
         format: Vec<String>,
         sample: Vec<String>,
     ) -> Result<Self, VariantError> {
-
         let genotype_str = {
             if format.contains(&String::from("GT")) {
                 debug!("Found genotype in vcf file");
@@ -130,14 +130,13 @@ impl Variant {
                     .unwrap();
                 sample[gt_pos].to_string()
             } else {
-                return Err(
-                    VariantError::InvalidVcf(
-                        "Missing GT field. Cannot process input VCF without GT in FORMAT field".to_string()
-                    )
-                )
+                return Err(VariantError::InvalidVcf(
+                    "Missing GT field. Cannot process input VCF without GT in FORMAT field"
+                        .to_string(),
+                ));
             }
         };
-    
+
         let mut variant_type = VariantType::SNP;
         if vcf_reference.len() > 1 {
             if vcf_alternate.len() > 1 {
@@ -145,11 +144,9 @@ impl Variant {
             } else if vcf_alternate.len() == 1 {
                 variant_type = VariantType::Deletion
             } else {
-                return Err(
-                    VariantError::InvalidVcf(
-                        "ALT field in vcf with empty alt. Invalid VCF.".to_string()
-                    )
-                )
+                return Err(VariantError::InvalidVcf(
+                    "ALT field in vcf with empty alt. Invalid VCF.".to_string(),
+                ));
             }
         } else if vcf_reference.len() == 1 {
             if vcf_alternate.len() > 1 {
@@ -158,11 +155,9 @@ impl Variant {
                 // snp
             }
         } else {
-            return Err(
-                VariantError::InvalidVcf(
-                    "REF field in vcf with empty ref. Invalid VCF.".to_string()
-                )
-            )
+            return Err(VariantError::InvalidVcf(
+                "REF field in vcf with empty ref. Invalid VCF.".to_string(),
+            ));
         }
         let mut reference = Vec::new();
         for char in vcf_reference.chars() {
@@ -173,7 +168,7 @@ impl Variant {
             alternate.push(Nucleotide::from(char))
         }
         let genotype = gt_from_str(&genotype_str);
-        Ok(Variant{
+        Ok(Variant {
             variant_type,
             location,
             reference,
@@ -185,9 +180,8 @@ impl Variant {
             filter: Some(filter.to_string()),
             info: Some(info_field.to_string()),
             format,
-            sample
+            sample,
         })
-
     }
 
     pub fn new(
@@ -199,25 +193,23 @@ impl Variant {
     ) -> Result<Self, VariantError> {
         // Check for empty vecs before any index access
         if reference.is_empty() {
-            return Err(VariantError::MalformedRef)
+            return Err(VariantError::MalformedRef);
         }
         if alternate.is_empty() {
-            return Err(VariantError::MalformedAlt)
+            return Err(VariantError::MalformedAlt);
         }
 
         match variant_type {
-            VariantType::Insertion |
-            VariantType::Deletion => {
-                if (reference.len() == alternate.len()) ||
-                    reference[0] != alternate[0] {
-                    return Err(VariantError::MalformedIndel)
+            VariantType::Insertion | VariantType::Deletion => {
+                if (reference.len() == alternate.len()) || reference[0] != alternate[0] {
+                    return Err(VariantError::MalformedIndel);
                 }
-            },
+            }
             VariantType::SNP => {
                 if reference.len() != alternate.len() {
-                    return Err(VariantError::MalformedSnp)
+                    return Err(VariantError::MalformedSnp);
                 }
-            },
+            }
             _ => {
                 panic!("Complex variants not yet supported.")
             }
@@ -230,7 +222,7 @@ impl Variant {
         if genotype.contains(&0) {
             genotype_label = Genotype::Heterozygous;
         }
-        
+
         Ok(Variant {
             variant_type,
             location,
@@ -243,7 +235,7 @@ impl Variant {
             filter: None,
             info: None,
             format: Vec::new(),
-            sample: Vec::new()
+            sample: Vec::new(),
         })
     }
 
@@ -259,17 +251,20 @@ fn genotype_to_string(genotype: &mut Vec<usize>) -> Result<String, VariantError>
     // In order to make the vcf look a little more realistic, we shuffle the genotypes, that way
     // it doesn't look like one ploid got all the mutations. I actually don't know if this is
     // realistic or not, but that's what we're doing.
-    let geno_str = genotype.iter().map(|x| x.to_string() + "/").collect::<String>();
+    let geno_str = genotype
+        .iter()
+        .map(|x| x.to_string() + "/")
+        .collect::<String>();
     match geno_str.strip_suffix("/") {
         Some(str) => Ok(str.to_string()),
-        None => Err(VariantError::GenoStringError)
+        None => Err(VariantError::GenoStringError),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::structs::variants::VariantType::{SNP, Insertion, Deletion};
+    use crate::structs::variants::VariantType::{Deletion, Insertion, SNP};
 
     #[test]
     fn test_variant_creation() {
@@ -289,7 +284,10 @@ mod tests {
             sample: Vec::new(),
         };
         assert_eq!(variant.variant_type, SNP);
-        assert_eq!(variant.reference, vec![Nucleotide::A, Nucleotide::C, Nucleotide::T, Nucleotide::G]);
+        assert_eq!(
+            variant.reference,
+            vec![Nucleotide::A, Nucleotide::C, Nucleotide::T, Nucleotide::G]
+        );
         assert_eq!(variant.genotype, Genotype::Homozygous);
     }
 
@@ -301,7 +299,8 @@ mod tests {
             &vec![Nucleotide::A],
             &vec![Nucleotide::A, Nucleotide::C, Nucleotide::T, Nucleotide::G],
             &mut vec![0, 1],
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(variant.genotype, Genotype::Heterozygous)
     }
 
@@ -313,7 +312,8 @@ mod tests {
             &vec![Nucleotide::A, Nucleotide::C, Nucleotide::T, Nucleotide::G],
             &vec![Nucleotide::A],
             &mut vec![1, 1],
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(variant.genotype, Genotype::Homozygous)
     }
 
@@ -326,36 +326,28 @@ mod tests {
             &vec![Nucleotide::A, Nucleotide::C, Nucleotide::T, Nucleotide::G],
             &vec![Nucleotide::A],
             &mut vec![1, 1, 1],
-        ).unwrap();
+        )
+        .unwrap();
     }
 
     #[test]
     fn test_genotype_to_string() {
         let mut genotype = vec![0, 1, 0];
-        assert_eq!(String::from("0/1/0"), genotype_to_string(&mut genotype).unwrap());
+        assert_eq!(
+            String::from("0/1/0"),
+            genotype_to_string(&mut genotype).unwrap()
+        );
     }
 
     #[test]
     fn test_empty_reference_returns_malformed_ref() {
-        let result = Variant::new(
-            SNP,
-            0,
-            &vec![],
-            &vec![Nucleotide::G],
-            &mut vec![1, 1],
-        );
+        let result = Variant::new(SNP, 0, &vec![], &vec![Nucleotide::G], &mut vec![1, 1]);
         assert!(matches!(result, Err(VariantError::MalformedRef)));
     }
 
     #[test]
     fn test_empty_alternate_returns_malformed_alt() {
-        let result = Variant::new(
-            SNP,
-            0,
-            &vec![Nucleotide::A],
-            &vec![],
-            &mut vec![1, 1],
-        );
+        let result = Variant::new(SNP, 0, &vec![Nucleotide::A], &vec![], &mut vec![1, 1]);
         assert!(matches!(result, Err(VariantError::MalformedAlt)));
     }
 }

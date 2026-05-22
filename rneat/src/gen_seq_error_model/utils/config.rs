@@ -1,8 +1,8 @@
+use crate::gen_seq_error_model::errors::GenSeqErrorModelError;
 use serde_yml::Value;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use crate::gen_seq_error_model::errors::GenSeqErrorModelError;
 
 #[derive(Debug, Clone)]
 pub struct RunConfiguration {
@@ -116,7 +116,8 @@ impl RunConfiguration {
                 if bins.contains(&31) {
                     return Err(GenSeqErrorModelError::ConfigurationError(
                         "binned_quality_bins cannot include 31 (encodes to '@' under \
-                         Phred+33 and would corrupt FASTQ output)".to_string(),
+                         Phred+33 and would corrupt FASTQ output)"
+                            .to_string(),
                     ));
                 }
                 bins.sort_unstable();
@@ -195,7 +196,8 @@ mod tests {
 
         let tmp = write_config(&format!(
             "fastq_file: {}\noutput_file: {}\noverwrite_output: true\nmax_reads: 1000\nqual_offset: 33\n",
-            fastq.display(), output.display()
+            fastq.display(),
+            output.display()
         ));
         let config = RunConfiguration::from(&tmp.path().to_path_buf()).unwrap();
         assert_eq!(config.max_reads, 1000);
@@ -225,7 +227,8 @@ mod tests {
 
         let tmp = write_config(&format!(
             "fastq_file: {}\noutput_file: {}\noverwrite_output: false\n",
-            fastq.display(), output.display()
+            fastq.display(),
+            output.display()
         ));
         assert!(RunConfiguration::from(&tmp.path().to_path_buf()).is_err());
     }
@@ -238,7 +241,8 @@ mod tests {
 
         let tmp = write_config(&format!(
             "fastq_file: {}\noutput_file: {}\n",
-            fastq.display(), output.display()
+            fastq.display(),
+            output.display()
         ));
         let config = RunConfiguration::from(&tmp.path().to_path_buf()).unwrap();
         assert_eq!(config.max_reads, 0);
@@ -256,7 +260,9 @@ mod tests {
 
         let tmp = write_config(&format!(
             "fastq_file: {}\noutput_file: {}\noverwrite_output: true\nbam_file: {}\n",
-            fastq.display(), output.display(), bam_path.display()
+            fastq.display(),
+            output.display(),
+            bam_path.display()
         ));
         let config = RunConfiguration::from(&tmp.path().to_path_buf()).unwrap();
         assert!(config.bam_file.is_some());
@@ -268,12 +274,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let fastq = make_fastq(&dir);
         let tsv_path = dir.path().join("matrix.tsv");
-        std::fs::write(&tsv_path, "A\tC\tG\tT\n0\t0.5\t0.3\t0.2\n0.5\t0\t0.3\t0.2\n0.4\t0.3\t0\t0.3\n0.3\t0.3\t0.4\t0\n").unwrap();
+        std::fs::write(
+            &tsv_path,
+            "A\tC\tG\tT\n0\t0.5\t0.3\t0.2\n0.5\t0\t0.3\t0.2\n0.4\t0.3\t0\t0.3\n0.3\t0.3\t0.4\t0\n",
+        )
+        .unwrap();
         let output = dir.path().join("model.json.gz");
 
         let tmp = write_config(&format!(
             "fastq_file: {}\noutput_file: {}\noverwrite_output: true\ntransition_matrix_file: {}\n",
-            fastq.display(), output.display(), tsv_path.display()
+            fastq.display(),
+            output.display(),
+            tsv_path.display()
         ));
         let config = RunConfiguration::from(&tmp.path().to_path_buf()).unwrap();
         assert!(config.transition_matrix_file.is_some());
@@ -288,7 +300,8 @@ mod tests {
 
         let tmp = write_config(&format!(
             "fastq_file: {}\noutput_file: {}\noverwrite_output: true\nbam_file: /nonexistent/reads.bam\n",
-            fastq.display(), output.display()
+            fastq.display(),
+            output.display()
         ));
         assert!(RunConfiguration::from(&tmp.path().to_path_buf()).is_err());
     }
@@ -301,7 +314,8 @@ mod tests {
 
         let tmp = write_config(&format!(
             "fastq_file: {}\noutput_file: {}\noverwrite_output: true\nbinned_quality_bins: [37, 2, 23, 12, 12]\n",
-            fastq.display(), output.display()
+            fastq.display(),
+            output.display()
         ));
         let config = RunConfiguration::from(&tmp.path().to_path_buf()).unwrap();
         assert_eq!(config.binned_quality_bins, Some(vec![2, 12, 23, 37]));
@@ -315,7 +329,8 @@ mod tests {
 
         let tmp = write_config(&format!(
             "fastq_file: {}\noutput_file: {}\noverwrite_output: true\n",
-            fastq.display(), output.display()
+            fastq.display(),
+            output.display()
         ));
         let config = RunConfiguration::from(&tmp.path().to_path_buf()).unwrap();
         assert!(config.binned_quality_bins.is_none());
@@ -329,7 +344,8 @@ mod tests {
 
         let tmp = write_config(&format!(
             "fastq_file: {}\noutput_file: {}\noverwrite_output: true\nbinned_quality_bins: []\n",
-            fastq.display(), output.display()
+            fastq.display(),
+            output.display()
         ));
         assert!(RunConfiguration::from(&tmp.path().to_path_buf()).is_err());
     }
@@ -342,7 +358,8 @@ mod tests {
 
         let tmp = write_config(&format!(
             "fastq_file: {}\noutput_file: {}\noverwrite_output: true\nbinned_quality_bins: [2, 12, 94]\n",
-            fastq.display(), output.display()
+            fastq.display(),
+            output.display()
         ));
         assert!(RunConfiguration::from(&tmp.path().to_path_buf()).is_err());
     }
@@ -355,7 +372,8 @@ mod tests {
 
         let tmp = write_config(&format!(
             "fastq_file: {}\noutput_file: {}\noverwrite_output: true\nbinned_quality_bins: [2, 12, 31, 37]\n",
-            fastq.display(), output.display()
+            fastq.display(),
+            output.display()
         ));
         assert!(RunConfiguration::from(&tmp.path().to_path_buf()).is_err());
     }
@@ -368,7 +386,8 @@ mod tests {
 
         let tmp = write_config(&format!(
             "fastq_file: {}\noutput_file: {}\noverwrite_output: true\nbinned_quality_bins: \"2,12,23,37\"\n",
-            fastq.display(), output.display()
+            fastq.display(),
+            output.display()
         ));
         assert!(RunConfiguration::from(&tmp.path().to_path_buf()).is_err());
     }
@@ -381,7 +400,8 @@ mod tests {
 
         let tmp = write_config(&format!(
             "fastq_file: {}\noutput_file: {}\noverwrite_output: true\ntransition_matrix_file: /nonexistent/matrix.tsv\n",
-            fastq.display(), output.display()
+            fastq.display(),
+            output.display()
         ));
         assert!(RunConfiguration::from(&tmp.path().to_path_buf()).is_err());
     }

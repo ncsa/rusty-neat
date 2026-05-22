@@ -3,26 +3,28 @@
 //! this function is generic enough to work with the fragmented method we are implementing
 //! This one needs a major overhaul, it is autogenerating quality scores etc.
 //! Will wait to get other things set up first
-use std::fs::File;
-use std::io::{BufReader, BufWriter, Write};
-use log::debug;
-use std::path::PathBuf;
-use std::collections::HashMap;
 use crate::rng::{NeatRng, NeatRngError};
 use flate2::Compression;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
+use log::debug;
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::{BufReader, BufWriter, Write};
+use std::path::PathBuf;
 use thiserror::Error;
 
-use crate::structs::mutated_map::{MutatedMap, MutatedMapError};
-use crate::structs::sequence_block::{SequenceBlock, SequenceBlockError};
-use crate::structs::nucleotides::Nucleotide;
-use crate::structs::read_record::ReadRecord;
-use crate::file_tools::file_io::append_to_file;
 use crate::file_tools::bam_writer::BamRecordStager;
+use crate::file_tools::file_io::append_to_file;
 use crate::models::quality_scores::QualityScoreModel;
-use crate::models::sequencing_error_model::{SeqModelError, SequencingErrorModel, SequencingErrorType};
+use crate::models::sequencing_error_model::{
+    SeqModelError, SequencingErrorModel, SequencingErrorType,
+};
+use crate::structs::mutated_map::{MutatedMap, MutatedMapError};
+use crate::structs::nucleotides::Nucleotide;
 use crate::structs::nucleotides::Nucleotide::N;
+use crate::structs::read_record::ReadRecord;
+use crate::structs::sequence_block::{SequenceBlock, SequenceBlockError};
 use crate::structs::variants::{Genotype, Variant};
 
 #[derive(Error, Debug)]
@@ -76,7 +78,7 @@ fn reverse_complement(sequence: Vec<Nucleotide>) -> Vec<Nucleotide> {
     rev_comp
 }
 
-pub fn write_block_fastq<T: Write, W: Write> (
+pub fn write_block_fastq<T: Write, W: Write>(
     block_fragments: Vec<(usize, usize)>,
     block_map: &MutatedMap,
     sequence_block: &SequenceBlock,
@@ -114,13 +116,13 @@ pub fn write_block_fastq<T: Write, W: Write> (
         let mut read2_variants: HashMap<usize, &Variant> = HashMap::new();
         let mut reads2_flagged: Vec<usize> = Vec::new();
         for (pos, variant) in &block_map.variant_map {
-            if (start..(start+effective_read_len)).contains(&pos) {
+            if (start..(start + effective_read_len)).contains(&pos) {
                 let var_pos = pos - start;
                 read1_variants.insert(var_pos, variant);
                 reads1_flagged.push(var_pos);
             }
             if end > effective_read_len {
-                if paired_ended && ((end-effective_read_len)..end).contains(&pos) {
+                if paired_ended && ((end - effective_read_len)..end).contains(&pos) {
                     let var_pos = (end - 1) - pos;
                     read2_variants.insert(var_pos, variant);
                     reads2_flagged.push(var_pos);
@@ -138,9 +140,14 @@ pub fn write_block_fastq<T: Write, W: Write> (
         } else {
             0
         };
-        let tlen = if paired_ended { (abs_end - abs_start) as i32 } else { 0 };
+        let tlen = if paired_ended {
+            (abs_end - abs_start) as i32
+        } else {
+            0
+        };
 
-        let quality_scores_1 = quality_score_model.generate_quality_scores(effective_read_len, rng)?;
+        let quality_scores_1 =
+            quality_score_model.generate_quality_scores(effective_read_len, rng)?;
         let r1_record = match generate_read(
             &fragment,
             &reads1_flagged,
@@ -159,7 +166,10 @@ pub fn write_block_fastq<T: Write, W: Write> (
             paired_ended,
         ) {
             Ok(record) => record,
-            Err(FastqToolsError::TruncatedRead(msg)) => { debug!("{}", msg); continue }
+            Err(FastqToolsError::TruncatedRead(msg)) => {
+                debug!("{}", msg);
+                continue;
+            }
             Err(e) => return Err(e),
         };
 
@@ -170,8 +180,13 @@ pub fn write_block_fastq<T: Write, W: Write> (
         }
 
         if paired_ended {
-            let quality_scores_2 = quality_score_model.generate_quality_scores(effective_read_len, rng)?;
-            let r2_pos = if abs_end >= effective_read_len { abs_end - effective_read_len } else { 0 };
+            let quality_scores_2 =
+                quality_score_model.generate_quality_scores(effective_read_len, rng)?;
+            let r2_pos = if abs_end >= effective_read_len {
+                abs_end - effective_read_len
+            } else {
+                0
+            };
             let tlen_r2 = -((abs_end - abs_start) as i32);
 
             let r2_record = match generate_read(
@@ -192,7 +207,10 @@ pub fn write_block_fastq<T: Write, W: Write> (
                 true,
             ) {
                 Ok(record) => record,
-                Err(FastqToolsError::TruncatedRead(msg)) => { debug!("{}", msg); continue }
+                Err(FastqToolsError::TruncatedRead(msg)) => {
+                    debug!("{}", msg);
+                    continue;
+                }
                 Err(e) => return Err(e),
             };
 
@@ -233,8 +251,7 @@ fn stream_gzip_files(files: &[PathBuf], output: &PathBuf) -> Result<(), FastqToo
     let enc = GzEncoder::new(out_file, Compression::default());
     let mut writer = BufWriter::new(enc);
     for file in files {
-        let f = File::open(file)
-            .map_err(|e| FastqToolsError::FastqReadError(e.to_string()))?;
+        let f = File::open(file).map_err(|e| FastqToolsError::FastqReadError(e.to_string()))?;
         let mut decoder = GzDecoder::new(BufReader::new(f));
         std::io::copy(&mut decoder, &mut writer)
             .map_err(|e| FastqToolsError::FastqWriteError(e.to_string()))?;
@@ -260,7 +277,7 @@ fn generate_read(
     is_paired: bool,
 ) -> Result<ReadRecord, FastqToolsError> {
     if sequence.len() < read_length {
-        return Err(FastqToolsError::TruncatedRead(format!("{:?}", sequence)))
+        return Err(FastqToolsError::TruncatedRead(format!("{:?}", sequence)));
     }
 
     let is_reverse = matches!(read_strand, Strand::Reverse);
@@ -296,19 +313,20 @@ fn generate_read(
             let prob = sequencing_error_model.convert_score(score)?;
             if rng.random()? < prob {
                 debug!("Creating sequencing error");
-                let error = sequencing_error_model.generate_sequencing_error(reference_base, rng)?;
+                let error =
+                    sequencing_error_model.generate_sequencing_error(reference_base, rng)?;
                 match error {
                     SequencingErrorType::SnpError(base) => {
                         debug!("Snp error");
                         base_to_write = vec![base];
-                    },
+                    }
                     SequencingErrorType::DeletionError(length) => {
                         debug!("Deletion error");
                         if seq_index + length < sequence.len() {
                             seq_index += length;
                             deletion_skip = length;
                         }
-                    },
+                    }
                     SequencingErrorType::InsertionError(vec) => {
                         debug!("Insertion error");
                         let mut insertion = vec![reference_base];
@@ -344,7 +362,7 @@ fn generate_read(
     }
 
     if bases_written < read_length {
-        return Err(FastqToolsError::TruncatedRead(format!("{:?}", sequence)))
+        return Err(FastqToolsError::TruncatedRead(format!("{:?}", sequence)));
     }
 
     Ok(ReadRecord {
@@ -382,15 +400,14 @@ pub fn quality_scores_to_char_vec(array: &[usize]) -> Result<Vec<u8>, FastqTools
     Ok(score_vec)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::file_tools::file_io::{create_output_file, read_gzip_lines, VectorBuffer};
-    use crate::file_tools::bam_writer::{BamWriter, BamRecordStager};
-    use crate::structs::variants::{Variant, VariantType};
-    use crate::structs::sequence_block::{RegionType, SequenceMap};
+    use crate::file_tools::bam_writer::{BamRecordStager, BamWriter};
+    use crate::file_tools::file_io::{VectorBuffer, create_output_file, read_gzip_lines};
     use crate::structs::nucleotides::Nucleotide::*;
+    use crate::structs::sequence_block::{RegionType, SequenceMap};
+    use crate::structs::variants::{Variant, VariantType};
     use std::io::Write;
 
     #[test]
@@ -416,7 +433,11 @@ mod tests {
             .unwrap()
             .map(|l| l.unwrap())
             .collect();
-        assert_eq!(lines.len(), 8, "Combined file should have 8 lines (2 records × 4 lines)");
+        assert_eq!(
+            lines.len(),
+            8,
+            "Combined file should have 8 lines (2 records × 4 lines)"
+        );
         assert_eq!(lines[0], "@read1");
         assert_eq!(lines[4], "@read2");
     }
@@ -441,7 +462,8 @@ mod tests {
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),
-        ]).unwrap();
+        ])
+        .unwrap();
         let record = generate_read(
             &rev_comp_seq,
             &flagged_positions,
@@ -458,7 +480,8 @@ mod tests {
             0,
             0,
             false,
-        ).unwrap();
+        )
+        .unwrap();
         let mut buffer = GzEncoder::new(&mut temp_writer, Compression::default());
         write_read_to_fastq(&record, &mut buffer).unwrap();
         buffer.flush().unwrap();
@@ -471,7 +494,7 @@ mod tests {
                     // skip name line
                 } else {
                     rtrn = l;
-                    break
+                    break;
                 }
             }
             rtrn
@@ -484,7 +507,10 @@ mod tests {
     fn test_qual_score_to_write() {
         let qual_scores = vec![33, 25, 37, 28, 15, 33, 33, 37, 37, 25];
         let qual_string = "B:F=0BBFF:".as_bytes();
-        assert_eq!(qual_string, quality_scores_to_char_vec(&qual_scores).unwrap())
+        assert_eq!(
+            qual_string,
+            quality_scores_to_char_vec(&qual_scores).unwrap()
+        )
     }
 
     #[test]
@@ -499,14 +525,19 @@ mod tests {
         // Verifies that when a SequenceBlock has ref_start > 0, the read names in the
         // output FASTQ use reference-relative positions, not block-local positions.
         use crate::structs::{
-            sequence_block::{RegionType, SequenceBlock, SequenceMap},
             mutated_map::MutatedMap,
+            sequence_block::{RegionType, SequenceBlock, SequenceMap},
         };
         let temp_dir = tempfile::tempdir().unwrap();
         let ref_start: usize = 1000;
         let seq_len: usize = 50;
         let sequence: Vec<Nucleotide> = (0..seq_len)
-            .map(|i| match i % 4 { 0 => A, 1 => C, 2 => G, _ => T })
+            .map(|i| match i % 4 {
+                0 => A,
+                1 => C,
+                2 => G,
+                _ => T,
+            })
             .collect();
         let block = SequenceBlock {
             contig: "chr1".to_string(),
@@ -515,7 +546,8 @@ mod tests {
             sequence: sequence.clone(),
             sequence_map: vec![SequenceMap::from(RegionType::NonNRegion, 0, seq_len)],
         };
-        let mutated_map = MutatedMap::from_interval(ref_start, ref_start + seq_len, vec![]).unwrap();
+        let mutated_map =
+            MutatedMap::from_interval(ref_start, ref_start + seq_len, vec![]).unwrap();
         let frag_start: usize = 5;
         let frag_end: usize = 25;
         let fragments = vec![(frag_start, frag_end)];
@@ -529,42 +561,68 @@ mod tests {
         let quality_model = QualityScoreModel::default().unwrap();
         let mut rng = NeatRng::new_from_seed(&vec!["test".to_string()]).unwrap();
         write_block_fastq(
-            fragments, &mutated_map, &block, false,
-            &mut buf1, &mut buf2,
-            10, false, "chr1",
-            &quality_model, &seq_err_model, &mut rng,
+            fragments,
+            &mutated_map,
+            &block,
+            false,
+            &mut buf1,
+            &mut buf2,
+            10,
+            false,
+            "chr1",
+            &quality_model,
+            &seq_err_model,
+            &mut rng,
             None,
-        ).unwrap();
+        )
+        .unwrap();
         buf1.finish().unwrap();
         let lines: Vec<String> = read_gzip_lines(&out_path)
             .unwrap()
             .map(|l| l.unwrap())
             .collect();
         let header = &lines[0];
-        assert!(header.starts_with('@'), "Expected FASTQ header, got: {}", header);
+        assert!(
+            header.starts_with('@'),
+            "Expected FASTQ header, got: {}",
+            header
+        );
         // Read name must contain ref-relative positions, not block-local ones
         let expected_start = format!("{:010}", frag_start + ref_start); // 0000001005
-        let expected_end   = format!("{:010}", frag_end   + ref_start); // 0000001025
+        let expected_end = format!("{:010}", frag_end + ref_start); // 0000001025
         assert!(
             header.contains(&expected_start),
-            "Read name should contain ref-relative start {}; got: {}", expected_start, header
+            "Read name should contain ref-relative start {}; got: {}",
+            expected_start,
+            header
         );
         assert!(
             header.contains(&expected_end),
-            "Read name should contain ref-relative end {}; got: {}", expected_end, header
+            "Read name should contain ref-relative end {}; got: {}",
+            expected_end,
+            header
         );
         // Also verify block-local positions are NOT what was written
         let local_start = format!("{:010}", frag_start); // 0000000005
         assert!(
             !header.contains(&local_start),
-            "Read name should NOT contain block-local start {}; got: {}", local_start, header
+            "Read name should NOT contain block-local start {}; got: {}",
+            local_start,
+            header
         );
     }
 
     // --- CIGAR-building tests for the refactored generate_read ---
 
     fn make_sequence(len: usize) -> Vec<Nucleotide> {
-        (0..len).map(|i| match i % 4 { 0 => A, 1 => C, 2 => G, _ => T }).collect()
+        (0..len)
+            .map(|i| match i % 4 {
+                0 => A,
+                1 => C,
+                2 => G,
+                _ => T,
+            })
+            .collect()
     }
 
     #[test]
@@ -576,14 +634,30 @@ mod tests {
         let model = SequencingErrorModel::default().unwrap();
         let mut rng = NeatRng::new_from_seed(&vec!["no_error".to_string()]).unwrap();
         let record = generate_read(
-            &sequence, &[], &HashMap::new(), read_length,
-            "r/1".to_string(), Strand::Forward, quality_scores, &model, &mut rng,
-            "chr1".to_string(), 0, "chr1".to_string(), 0, 0, false,
-        ).unwrap();
+            &sequence,
+            &[],
+            &HashMap::new(),
+            read_length,
+            "r/1".to_string(),
+            Strand::Forward,
+            quality_scores,
+            &model,
+            &mut rng,
+            "chr1".to_string(),
+            0,
+            "chr1".to_string(),
+            0,
+            0,
+            false,
+        )
+        .unwrap();
         assert_eq!(record.sequence.len(), read_length);
         assert_eq!(record.cigar_ops.len(), read_length);
-        assert!(record.cigar_ops.iter().all(|&c| c == 'M'),
-            "expected all-M cigar, got: {:?}", record.cigar_ops);
+        assert!(
+            record.cigar_ops.iter().all(|&c| c == 'M'),
+            "expected all-M cigar, got: {:?}",
+            record.cigar_ops
+        );
     }
 
     #[test]
@@ -595,12 +669,29 @@ mod tests {
         let model = SequencingErrorModel::default().unwrap();
         let mut rng = NeatRng::new_from_seed(&vec!["invariant".to_string()]).unwrap();
         let record = generate_read(
-            &sequence, &[], &HashMap::new(), read_length,
-            "r/1".to_string(), Strand::Forward, quality_scores, &model, &mut rng,
-            "chr1".to_string(), 0, "chr1".to_string(), 0, 0, false,
-        ).unwrap();
-        let mi = record.cigar_ops.iter().filter(|&&c| c == 'M' || c == 'I').count();
-        let d  = record.cigar_ops.iter().filter(|&&c| c == 'D').count();
+            &sequence,
+            &[],
+            &HashMap::new(),
+            read_length,
+            "r/1".to_string(),
+            Strand::Forward,
+            quality_scores,
+            &model,
+            &mut rng,
+            "chr1".to_string(),
+            0,
+            "chr1".to_string(),
+            0,
+            0,
+            false,
+        )
+        .unwrap();
+        let mi = record
+            .cigar_ops
+            .iter()
+            .filter(|&&c| c == 'M' || c == 'I')
+            .count();
+        let d = record.cigar_ops.iter().filter(|&&c| c == 'D').count();
         assert_eq!(record.sequence.len(), read_length);
         assert_eq!(mi, read_length, "M+I must equal read_length");
         assert_eq!(record.cigar_ops.len(), mi + d, "cigar len must equal M+I+D");
@@ -617,13 +708,29 @@ mod tests {
         let model = SequencingErrorModel::default().unwrap();
         let mut rng = NeatRng::new_from_seed(&vec!["snp_cigar".to_string()]).unwrap();
         let record = generate_read(
-            &sequence, &[3], &variant_map, read_length,
-            "r/1".to_string(), Strand::Forward, quality_scores, &model, &mut rng,
-            "chr1".to_string(), 0, "chr1".to_string(), 0, 0, false,
-        ).unwrap();
+            &sequence,
+            &[3],
+            &variant_map,
+            read_length,
+            "r/1".to_string(),
+            Strand::Forward,
+            quality_scores,
+            &model,
+            &mut rng,
+            "chr1".to_string(),
+            0,
+            "chr1".to_string(),
+            0,
+            0,
+            false,
+        )
+        .unwrap();
         assert_eq!(record.cigar_ops.len(), read_length);
-        assert!(record.cigar_ops.iter().all(|&c| c == 'M'),
-            "SNP variant must not add I or D ops; got: {:?}", record.cigar_ops);
+        assert!(
+            record.cigar_ops.iter().all(|&c| c == 'M'),
+            "SNP variant must not add I or D ops; got: {:?}",
+            record.cigar_ops
+        );
     }
 
     #[test]
@@ -632,20 +739,42 @@ mod tests {
         let sequence = make_sequence(30);
         let read_length = 10;
         let ins = Variant::new(
-            VariantType::Insertion, 3, &vec![A], &vec![A, C, G], &mut vec![1, 1],
-        ).unwrap();
+            VariantType::Insertion,
+            3,
+            &vec![A],
+            &vec![A, C, G],
+            &mut vec![1, 1],
+        )
+        .unwrap();
         let variant_map = HashMap::from([(3usize, &ins)]);
         let quality_scores = vec![40usize; read_length];
         let model = SequencingErrorModel::default().unwrap();
         let mut rng = NeatRng::new_from_seed(&vec!["ins_variant".to_string()]).unwrap();
         let record = generate_read(
-            &sequence, &[3], &variant_map, read_length,
-            "r/1".to_string(), Strand::Forward, quality_scores, &model, &mut rng,
-            "chr1".to_string(), 0, "chr1".to_string(), 0, 0, false,
-        ).unwrap();
+            &sequence,
+            &[3],
+            &variant_map,
+            read_length,
+            "r/1".to_string(),
+            Strand::Forward,
+            quality_scores,
+            &model,
+            &mut rng,
+            "chr1".to_string(),
+            0,
+            "chr1".to_string(),
+            0,
+            0,
+            false,
+        )
+        .unwrap();
         let i_count = record.cigar_ops.iter().filter(|&&c| c == 'I').count();
         assert_eq!(i_count, 2, "2-base insertion variant must produce 2 I ops");
-        let mi = record.cigar_ops.iter().filter(|&&c| c == 'M' || c == 'I').count();
+        let mi = record
+            .cigar_ops
+            .iter()
+            .filter(|&&c| c == 'M' || c == 'I')
+            .count();
         assert_eq!(mi, read_length);
     }
 
@@ -660,16 +789,34 @@ mod tests {
         let model = SequencingErrorModel::default().unwrap();
         let mut rng = NeatRng::new_from_seed(&vec!["error_indel".to_string()]).unwrap();
         let record = generate_read(
-            &sequence, &[], &HashMap::new(), read_length,
-            "r/1".to_string(), Strand::Forward, quality_scores, &model, &mut rng,
-            "chr1".to_string(), 0, "chr1".to_string(), 0, 0, false,
-        ).unwrap();
+            &sequence,
+            &[],
+            &HashMap::new(),
+            read_length,
+            "r/1".to_string(),
+            Strand::Forward,
+            quality_scores,
+            &model,
+            &mut rng,
+            "chr1".to_string(),
+            0,
+            "chr1".to_string(),
+            0,
+            0,
+            false,
+        )
+        .unwrap();
         assert!(
             record.cigar_ops.iter().any(|&c| c != 'M'),
-            "expected non-M ops when every position has a guaranteed error; got: {:?}", record.cigar_ops
+            "expected non-M ops when every position has a guaranteed error; got: {:?}",
+            record.cigar_ops
         );
         // Invariant must hold even under heavy errors
-        let mi = record.cigar_ops.iter().filter(|&&c| c == 'M' || c == 'I').count();
+        let mi = record
+            .cigar_ops
+            .iter()
+            .filter(|&&c| c == 'M' || c == 'I')
+            .count();
         assert_eq!(mi, read_length);
     }
 
@@ -684,42 +831,54 @@ mod tests {
         let model = SequencingErrorModel::default().unwrap();
         let mut rng = NeatRng::new_from_seed(&vec!["del_len".to_string()]).unwrap();
         let record = generate_read(
-            &sequence, &[], &HashMap::new(), read_length,
-            "r/1".to_string(), Strand::Forward, quality_scores, &model, &mut rng,
-            "chr1".to_string(), 0, "chr1".to_string(), 0, 0, false,
-        ).unwrap();
-        let mi = record.cigar_ops.iter().filter(|&&c| c == 'M' || c == 'I').count();
-        let d  = record.cigar_ops.iter().filter(|&&c| c == 'D').count();
+            &sequence,
+            &[],
+            &HashMap::new(),
+            read_length,
+            "r/1".to_string(),
+            Strand::Forward,
+            quality_scores,
+            &model,
+            &mut rng,
+            "chr1".to_string(),
+            0,
+            "chr1".to_string(),
+            0,
+            0,
+            false,
+        )
+        .unwrap();
+        let mi = record
+            .cigar_ops
+            .iter()
+            .filter(|&&c| c == 'M' || c == 'I')
+            .count();
+        let d = record.cigar_ops.iter().filter(|&&c| c == 'D').count();
         assert_eq!(mi, read_length);
         assert_eq!(record.cigar_ops.len(), mi + d);
         if d > 0 {
-            assert!(record.cigar_ops.len() > read_length,
-                "deletion errors must make cigar longer than read_length");
+            assert!(
+                record.cigar_ops.len() > read_length,
+                "deletion errors must make cigar longer than read_length"
+            );
         }
     }
 
     #[test]
     fn test_apply_variants() {
         let sequence = vec![A, C, G, T, T, A, T, G, A, C, G, T, T, A, T, G];
-        let variant1 = Variant::new(
-                VariantType::SNP,
-                1,
-                &vec![T],
-                &vec![C],
-                &mut vec![1, 0],
-        ).unwrap();
+        let variant1 =
+            Variant::new(VariantType::SNP, 1, &vec![T], &vec![C], &mut vec![1, 0]).unwrap();
         let variant2 = Variant::new(
-                VariantType::Deletion,
-                3,
-                &vec![T, T],
-                &vec![T],
-                &mut vec![0,1],
-        ).unwrap();
-        let variant_map = HashMap::from([
-            (1, &variant1),
-            (3, &variant2),
-        ]);
-        let flagged_positions = vec![1,3];
+            VariantType::Deletion,
+            3,
+            &vec![T, T],
+            &vec![T],
+            &mut vec![0, 1],
+        )
+        .unwrap();
+        let variant_map = HashMap::from([(1, &variant1), (3, &variant2)]);
+        let flagged_positions = vec![1, 3];
         let read_name = "neat_generated__0000000000_0000000008/1".to_string();
         let qual_scores = vec![33, 25, 37, 28, 15, 33, 33, 37];
         let sequencing_error_model = SequencingErrorModel::default().unwrap();
@@ -727,7 +886,8 @@ mod tests {
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),
-        ]).unwrap();
+        ])
+        .unwrap();
         let result = generate_read(
             &sequence,
             &flagged_positions,
@@ -752,7 +912,12 @@ mod tests {
 
     fn make_block(seq_len: usize) -> SequenceBlock {
         let sequence: Vec<Nucleotide> = (0..seq_len)
-            .map(|i| match i % 4 { 0 => A, 1 => C, 2 => G, _ => T })
+            .map(|i| match i % 4 {
+                0 => A,
+                1 => C,
+                2 => G,
+                _ => T,
+            })
             .collect();
         SequenceBlock {
             contig: "chr1".to_string(),
@@ -778,12 +943,21 @@ mod tests {
         let mut buf2 = GzEncoder::new(VectorBuffer::new(), Compression::default());
         let stager: Option<&mut dyn BamRecordStager> = Some(bam_writer);
         write_block_fastq(
-            fragments, &mutated_map, block, paired_ended,
-            &mut buf1, &mut buf2,
-            read_len, false, "chr1",
-            &quality_model, &seq_err_model, &mut rng,
+            fragments,
+            &mutated_map,
+            block,
+            paired_ended,
+            &mut buf1,
+            &mut buf2,
+            read_len,
+            false,
+            "chr1",
+            &quality_model,
+            &seq_err_model,
+            &mut rng,
             stager,
-        ).unwrap();
+        )
+        .unwrap();
     }
 
     #[test]
@@ -798,8 +972,12 @@ mod tests {
         let fragments = vec![(0usize, 10), (50, 60), (100, 110), (150, 160), (200, 210)];
         run_write_block(&mut bw, fragments, &block, false, 10);
 
-        assert_eq!(bw.carry_len(), 1,
-            "SE: carry should hold only the last fragment's read, got {}", bw.carry_len());
+        assert_eq!(
+            bw.carry_len(),
+            1,
+            "SE: carry should hold only the last fragment's read, got {}",
+            bw.carry_len()
+        );
     }
 
     #[test]
@@ -812,11 +990,21 @@ mod tests {
         let mut bw = BamWriter::new(&bam_path, &vec![("chr1".to_string(), 5000usize)]).unwrap();
 
         // Fragments 400 bp wide, spaced 100 bp apart so positions are strictly increasing.
-        let fragments = vec![(0usize,400), (500,900), (1000,1400), (1500,1900), (2000,2400)];
+        let fragments = vec![
+            (0usize, 400),
+            (500, 900),
+            (1000, 1400),
+            (1500, 1900),
+            (2000, 2400),
+        ];
         run_write_block(&mut bw, fragments, &block, true, 150);
 
-        assert_eq!(bw.carry_len(), 2,
-            "PE: carry should hold only the last fragment's read pair, got {}", bw.carry_len());
+        assert_eq!(
+            bw.carry_len(),
+            2,
+            "PE: carry should hold only the last fragment's read pair, got {}",
+            bw.carry_len()
+        );
     }
 
     #[test]
@@ -839,11 +1027,15 @@ mod tests {
         let file = std::fs::File::open(&bam_path).unwrap();
         let mut reader = bam::io::Reader::new(file);
         reader.read_header().unwrap();
-        let positions: Vec<usize> = reader.records()
+        let positions: Vec<usize> = reader
+            .records()
             .map(|r| r.unwrap().alignment_start().unwrap().unwrap().get() - 1)
             .collect();
-        assert_eq!(positions, vec![0, 50, 100, 150, 200],
-            "BAM must be coordinate-sorted; got: {:?}", positions);
+        assert_eq!(
+            positions,
+            vec![0, 50, 100, 150, 200],
+            "BAM must be coordinate-sorted; got: {:?}",
+            positions
+        );
     }
-
 }

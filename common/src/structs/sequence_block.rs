@@ -1,6 +1,6 @@
-use thiserror::Error;
 use crate::structs::nucleotides::Nucleotide;
 use log::error;
+use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum SequenceBlockError {
@@ -19,7 +19,11 @@ pub struct SequenceMap {
 
 impl SequenceMap {
     pub fn from(region_type: RegionType, start: usize, end: usize) -> SequenceMap {
-        SequenceMap { region_type, start, end }
+        SequenceMap {
+            region_type,
+            start,
+            end,
+        }
     }
 
     pub fn get_len(&self) -> usize {
@@ -55,11 +59,18 @@ impl SequenceBlock {
         self.ref_end - self.ref_start
     }
 
-    pub fn get_subseq(&self, request_start: usize, request_end: usize) -> Result<Vec<Nucleotide>, SequenceBlockError> {
+    pub fn get_subseq(
+        &self,
+        request_start: usize,
+        request_end: usize,
+    ) -> Result<Vec<Nucleotide>, SequenceBlockError> {
         let block_start = request_start + self.ref_start;
         let block_end = request_end + self.ref_start;
         if request_start >= request_end {
-            error!("Bad coordinates: start {} >= end {}", request_start, request_end);
+            error!(
+                "Bad coordinates: start {} >= end {}",
+                request_start, request_end
+            );
             return Err(SequenceBlockError::BadCoordinatesError);
         }
         if (block_end <= self.ref_start)
@@ -108,13 +119,19 @@ mod tests {
     #[test]
     fn test_get_subseq_bad_coords() {
         let block = make_block();
-        assert!(matches!(block.get_subseq(10, 5), Err(SequenceBlockError::BadCoordinatesError)));
+        assert!(matches!(
+            block.get_subseq(10, 5),
+            Err(SequenceBlockError::BadCoordinatesError)
+        ));
     }
 
     #[test]
     fn test_get_subseq_out_of_bounds() {
         let block = make_block();
-        assert!(matches!(block.get_subseq(15, 25), Err(SequenceBlockError::OutOfBoundsError)));
+        assert!(matches!(
+            block.get_subseq(15, 25),
+            Err(SequenceBlockError::OutOfBoundsError)
+        ));
     }
 
     #[test]

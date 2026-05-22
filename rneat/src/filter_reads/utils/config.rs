@@ -5,9 +5,9 @@
 use log::*;
 use serde_yml::Value;
 use std::collections::HashMap;
+use std::fs;
 use std::path::PathBuf;
 use std::string::String;
-use std::fs;
 
 #[derive(Debug, Clone)]
 pub struct RunConfiguration {
@@ -32,13 +32,12 @@ impl RunConfiguration {
             Ok(l) => l,
             Err(error) => panic!(
                 "Problem reading the config file: {:?}. System error: {}",
-                &yml_file,
-                error,
+                &yml_file, error,
             ),
         };
         // Uses serde_yml to read the file into a HashMap
-        let scrape_config: HashMap<String, Value> = serde_yml::from_reader(file)
-            .expect("Error reading yaml file!");
+        let scrape_config: HashMap<String, Value> =
+            serde_yml::from_reader(file).expect("Error reading yaml file!");
         // Fill in the bed_file first, all hinges on that
         let bed_file = PathBuf::from(scrape_config["bed_file"].as_str().unwrap());
         if !bed_file.is_file() {
@@ -47,11 +46,7 @@ impl RunConfiguration {
         let files_to_filter_raw = scrape_config["files_to_filter"].as_sequence().unwrap();
         let filter_key: &str = {
             let temp_key = scrape_config["filter_key"].as_str().unwrap();
-            if temp_key == "." {
-                "_filter"
-            } else {
-                temp_key
-            }
+            if temp_key == "." { "_filter" } else { temp_key }
         };
         let overwrite_output = scrape_config["overwrite_output"].as_bool().unwrap();
         info!("Overwrite? {overwrite_output}");
@@ -63,10 +58,10 @@ impl RunConfiguration {
                 let raw_string = raw_value.as_str().unwrap();
                 let split_string: Vec<&str> = raw_string.split(".").collect();
                 let elem_len = split_string.len();
-                let ext1 = split_string[elem_len-1];
+                let ext1 = split_string[elem_len - 1];
                 if ext1 == "gz" {
                     is_gzip = true;
-                    let ext2 = split_string[elem_len-2];
+                    let ext2 = split_string[elem_len - 2];
                     if ext2 == "vcf" {
                         is_fastq = false;
                     } else if ext2 == "fastq" {
@@ -81,29 +76,24 @@ impl RunConfiguration {
                 } else {
                     panic!("Unknown File Extension! {:?}", raw_string)
                 }
-                let (input_path, output_path) = create_map_item(
-                    split_string,
-                    raw_string,
-                    elem_len,
-                    filter_key,
-                );
-                if !overwrite_output
-                    && output_path.is_file() {
-                        panic!("Attempting to overwrite an existing file {:?}", output_path)
-                    }
+                let (input_path, output_path) =
+                    create_map_item(split_string, raw_string, elem_len, filter_key);
+                if !overwrite_output && output_path.is_file() {
+                    panic!("Attempting to overwrite an existing file {:?}", output_path)
+                }
                 temp_map.insert(input_path, (output_path, is_gzip, is_fastq));
             }
             temp_map
         };
-        
-        RunConfiguration { 
-            bed_file, 
-            file_map,
-        }
+
+        RunConfiguration { bed_file, file_map }
     }
 
     pub fn log(&mut self) {
-        info!("Using bed file to filter the input files: {:?}", self.bed_file);
+        info!(
+            "Using bed file to filter the input files: {:?}",
+            self.bed_file
+        );
         for key in self.file_map.keys() {
             info!("Filtering: {:?}", key);
             info!("Producing: {:?}", self.file_map[key].0);
@@ -112,17 +102,17 @@ impl RunConfiguration {
 }
 
 pub fn create_map_item(
-    split_string: Vec<&str>, 
+    split_string: Vec<&str>,
     raw_string: &str,
     length: usize,
     filter_key: &str,
 ) -> (PathBuf, PathBuf) {
-    let old_element = split_string[length-3];
+    let old_element = split_string[length - 3];
     let new_element = format!("{old_element}{filter_key}");
     let mut output_name = String::new();
     // stop one short of the end
-    for i in 0..length-1 {
-        if i == length-3 {
+    for i in 0..length - 1 {
+        if i == length - 3 {
             output_name.push_str(&new_element);
             output_name.push('.');
         } else {
@@ -131,7 +121,7 @@ pub fn create_map_item(
         }
     }
     // End with the last extension with no traling dot.
-    output_name.push_str(split_string[length-1]);
+    output_name.push_str(split_string[length - 1]);
     let temp_path = PathBuf::from(raw_string);
     if !temp_path.is_file() {
         panic!("Input file not found! {:?}", temp_path)

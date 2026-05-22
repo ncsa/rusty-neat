@@ -53,10 +53,7 @@ fn missing_config_file_exits_nonzero_with_error_message() {
     // Each subcommand asserts the config file exists before invoking the runner. A
     // missing path must surface as a non-zero exit *and* a stderr message that
     // identifies what went wrong, so users / CI logs aren't left guessing.
-    let unique = format!(
-        "/nonexistent-rneat-smoke-{}.yml",
-        std::process::id(),
-    );
+    let unique = format!("/nonexistent-rneat-smoke-{}.yml", std::process::id(),);
     rneat()
         .args(["gen-reads", "-c", &unique])
         .assert()

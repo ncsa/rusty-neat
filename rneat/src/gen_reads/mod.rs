@@ -1,17 +1,17 @@
 pub mod errors;
 pub mod utils;
-use log::*;
 use errors::GenerateReadsError;
+use log::*;
 
 #[cfg(test)]
 mod tests {
-    use std::io::{BufRead, BufReader, Write};
-    use std::path::{Path, PathBuf};
+    use crate::gen_reads::utils::{config::RunConfiguration, runner::run_neat};
+    use common::rng::NeatRng;
     use flate2::read::MultiGzDecoder;
     use noodles::bam;
-    use tempfile::{tempdir, NamedTempFile};
-    use common::rng::NeatRng;
-    use crate::gen_reads::utils::{config::RunConfiguration, runner::run_neat};
+    use std::io::{BufRead, BufReader, Write};
+    use std::path::{Path, PathBuf};
+    use tempfile::{NamedTempFile, tempdir};
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
@@ -30,7 +30,8 @@ mod tests {
             ref = reference.display(),
             out = output_dir.display(),
             pair = pair_section,
-        ).unwrap();
+        )
+        .unwrap();
         RunConfiguration::from_yaml_file(&yaml.path().to_path_buf()).unwrap()
     }
 
@@ -43,16 +44,20 @@ mod tests {
     fn bam_positions(path: &Path) -> Vec<(usize, usize)> {
         let mut reader = bam::io::Reader::new(std::fs::File::open(path).unwrap());
         reader.read_header().unwrap();
-        reader.records()
+        reader
+            .records()
             .map(|r| {
                 let rec = r.unwrap();
-                let ref_id = rec.reference_sequence_id()
-                    .unwrap()  // Option → Some(Result<usize>)
+                let ref_id = rec
+                    .reference_sequence_id()
+                    .unwrap() // Option → Some(Result<usize>)
                     .unwrap(); // Result  → usize
-                let pos = rec.alignment_start()
-                    .unwrap()  // Option → Some(Result<Position>)
-                    .unwrap()  // Result → Position
-                    .get() - 1;
+                let pos = rec
+                    .alignment_start()
+                    .unwrap() // Option → Some(Result<Position>)
+                    .unwrap() // Result → Position
+                    .get()
+                    - 1;
                 (ref_id, pos)
             })
             .collect()
@@ -66,7 +71,10 @@ mod tests {
     }
 
     fn h1n1_reference() -> PathBuf {
-        PathBuf::from(format!("{}/test_data/references/H1N1.fa", env!("CARGO_MANIFEST_DIR")))
+        PathBuf::from(format!(
+            "{}/test_data/references/H1N1.fa",
+            env!("CARGO_MANIFEST_DIR")
+        ))
     }
 
     // ── tests ─────────────────────────────────────────────────────────────────
@@ -85,7 +93,8 @@ mod tests {
             assert!(
                 window[0] <= window[1],
                 "BAM not coordinate-sorted: {:?} followed by {:?}",
-                window[0], window[1]
+                window[0],
+                window[1]
             );
         }
     }
@@ -104,7 +113,8 @@ mod tests {
             assert!(
                 window[0] <= window[1],
                 "BAM not coordinate-sorted: {:?} followed by {:?}",
-                window[0], window[1]
+                window[0],
+                window[1]
             );
         }
     }
@@ -133,7 +143,7 @@ mod tests {
         use std::fs::File;
         let out = tempdir().unwrap();
         let ref_path = h1n1_reference();
-        
+
         // Create a mutation BED file
         // H1N1 has 8 segments. We'll set rates for all of them to be safe,
         // or just check the contig name in the VCF.
@@ -141,8 +151,15 @@ mod tests {
         {
             let mut f = File::create(&mut_bed_path).unwrap();
             let segments = [
-                "H1N1_segment_1", "H1N1_HA", "H1N1_MP", "H1N1_NA", 
-                "H1N1_NP", "H1N1_NS", "H1N1_PA", "H1N1_PB1", "H1N1_PB2"
+                "H1N1_segment_1",
+                "H1N1_HA",
+                "H1N1_MP",
+                "H1N1_NA",
+                "H1N1_NP",
+                "H1N1_NS",
+                "H1N1_PA",
+                "H1N1_PB1",
+                "H1N1_PB2",
             ];
             for seg in segments {
                 // High rate in 100-200
@@ -163,8 +180,9 @@ mod tests {
             ref = ref_path.display(),
             out = out.path().display(),
             mut_bed = mut_bed_path.display(),
-        ).unwrap();
-        
+        )
+        .unwrap();
+
         let config = RunConfiguration::from_yaml_file(&yaml.path().to_path_buf()).unwrap();
         run(config.clone());
 
@@ -201,13 +219,25 @@ mod tests {
 
         // With rate 1.0 over 100bp, we expect ~100 mutations in the high rate region.
         // With rate 0.0 over 100bp, we expect 0 mutations.
-        // With rate 0.1 over the rest of the contig (segment 1 is 2341 bp), 
+        // With rate 0.1 over the rest of the contig (segment 1 is 2341 bp),
         // area = 2341 - 100 (high) - 100 (zero) = 2141 bp.
         // Expected mutations elsewhere = 2141 * 0.1 = 214.1 -> 214.
-        
-        assert!(variants_in_high_rate > 50, "Should have many mutations in high rate region, got {}", variants_in_high_rate);
-        assert_eq!(variants_in_zero_rate, 0, "Should have NO mutations in zero rate region, got {}", variants_in_zero_rate);
-        assert!(variants_elsewhere > 100, "Should have mutations in default rate regions, got {}", variants_elsewhere);
+
+        assert!(
+            variants_in_high_rate > 50,
+            "Should have many mutations in high rate region, got {}",
+            variants_in_high_rate
+        );
+        assert_eq!(
+            variants_in_zero_rate, 0,
+            "Should have NO mutations in zero rate region, got {}",
+            variants_in_zero_rate
+        );
+        assert!(
+            variants_elsewhere > 100,
+            "Should have mutations in default rate regions, got {}",
+            variants_elsewhere
+        );
     }
 
     #[test]
@@ -227,7 +257,8 @@ mod tests {
             ref = h1n1_reference().display(),
             out = out.path().display(),
             bed = bed_path.display(),
-        ).unwrap();
+        )
+        .unwrap();
         let config = RunConfiguration::from_yaml_file(&yaml.path().to_path_buf()).unwrap();
         let fastq_path = config.output_fastq_1.clone().unwrap();
         run(config);
@@ -265,13 +296,17 @@ mod tests {
             ref = h1n1_reference().display(),
             out = out.path().display(),
             bed = bed_path.display(),
-        ).unwrap();
+        )
+        .unwrap();
         let config = RunConfiguration::from_yaml_file(&yaml.path().to_path_buf()).unwrap();
         let fastq_path = config.output_fastq_1.clone().unwrap();
         run(config);
 
         let count = fastq_record_count(&fastq_path);
-        assert_eq!(count, 0, "Expected no reads when BED references only unknown contigs, got {count}");
+        assert_eq!(
+            count, 0,
+            "Expected no reads when BED references only unknown contigs, got {count}"
+        );
     }
 
     /// When produce_fastq=false and produce_bam=true, reads must still be generated and
@@ -290,7 +325,8 @@ mod tests {
              rng_seed: bam only test\npaired_ended: false\n",
             ref = h1n1_reference().display(),
             out = out.path().display(),
-        ).unwrap();
+        )
+        .unwrap();
         let config = RunConfiguration::from_yaml_file(&yaml.path().to_path_buf()).unwrap();
         let bam_path = config.output_bam.clone().unwrap();
         let fastq_path = config.output_fastq_1.clone();
@@ -298,27 +334,39 @@ mod tests {
         run(config);
 
         if let Some(ref fq) = fastq_path {
-            assert!(!fq.exists(),
-                "FASTQ file must not be created when produce_fastq=false");
+            assert!(
+                !fq.exists(),
+                "FASTQ file must not be created when produce_fastq=false"
+            );
         }
 
-        assert!(bam_path.exists(), "BAM file must exist with produce_bam=true");
+        assert!(
+            bam_path.exists(),
+            "BAM file must exist with produce_bam=true"
+        );
 
         let mut reader = bam::io::Reader::new(std::fs::File::open(&bam_path).unwrap());
         let header = reader.read_header().unwrap();
         let n_ref_seqs = header.reference_sequences().len();
-        assert_eq!(n_ref_seqs, 8,
-            "H1N1 BAM header should list 8 reference sequences, got {n_ref_seqs}");
+        assert_eq!(
+            n_ref_seqs, 8,
+            "H1N1 BAM header should list 8 reference sequences, got {n_ref_seqs}"
+        );
 
         let positions = bam_positions(&bam_path);
-        assert!(!positions.is_empty(),
-            "BAM must contain records when produce_bam=true even if produce_fastq=false");
+        assert!(
+            !positions.is_empty(),
+            "BAM must contain records when produce_bam=true even if produce_fastq=false"
+        );
 
         // Records must be in coordinate-sorted order.
         for window in positions.windows(2) {
-            assert!(window[0] <= window[1],
+            assert!(
+                window[0] <= window[1],
                 "BAM not coordinate-sorted in BAM-only mode: {:?} followed by {:?}",
-                window[0], window[1]);
+                window[0],
+                window[1]
+            );
         }
     }
 
@@ -339,21 +387,27 @@ mod tests {
         run(config);
 
         let positions = bam_positions(&bam_path);
-        assert!(!positions.is_empty(), "BAM should contain records with num_threads=2");
+        assert!(
+            !positions.is_empty(),
+            "BAM should contain records with num_threads=2"
+        );
 
         for window in positions.windows(2) {
             assert!(
                 window[0] <= window[1],
                 "BAM is not coordinate-sorted with num_threads=2: {:?} followed by {:?}",
-                window[0], window[1]
+                window[0],
+                window[1]
             );
         }
 
         let fastq_count = fastq_record_count(&fastq_path);
         assert_eq!(
-            positions.len(), fastq_count,
+            positions.len(),
+            fastq_count,
             "BAM record count ({}) must equal FASTQ record count ({}) with num_threads=2",
-            positions.len(), fastq_count
+            positions.len(),
+            fastq_count
         );
     }
 
@@ -417,21 +471,25 @@ mod tests {
                 r1_count += 1;
                 assert!(
                     !flags.is_reverse_complemented(),
-                    "R1 must not have REVERSE_COMPLEMENTED (0x10); flags={:?}", flags
+                    "R1 must not have REVERSE_COMPLEMENTED (0x10); flags={:?}",
+                    flags
                 );
                 assert!(
                     flags.contains(Flags::MATE_REVERSE_COMPLEMENTED),
-                    "R1 must have MATE_REVERSE_COMPLEMENTED (0x20); flags={:?}", flags
+                    "R1 must have MATE_REVERSE_COMPLEMENTED (0x20); flags={:?}",
+                    flags
                 );
             } else {
                 assert!(
                     flags.is_last_segment(),
-                    "Record is neither R1 (FIRST_SEGMENT) nor R2 (LAST_SEGMENT); flags={:?}", flags
+                    "Record is neither R1 (FIRST_SEGMENT) nor R2 (LAST_SEGMENT); flags={:?}",
+                    flags
                 );
                 r2_count += 1;
                 assert!(
                     flags.is_reverse_complemented(),
-                    "R2 must have REVERSE_COMPLEMENTED (0x10); flags={:?}", flags
+                    "R2 must have REVERSE_COMPLEMENTED (0x10); flags={:?}",
+                    flags
                 );
             }
         }
@@ -471,7 +529,10 @@ mod tests {
             }
         }
 
-        assert!(!tlens.is_empty(), "No TLEN values found in paired-ended BAM");
+        assert!(
+            !tlens.is_empty(),
+            "No TLEN values found in paired-ended BAM"
+        );
         let mean = tlens.iter().sum::<f64>() / tlens.len() as f64;
         let expected = 200.0_f64;
         let tolerance = 0.20;
@@ -492,11 +553,13 @@ mod tests {
         let out = tempdir().unwrap();
 
         let vcf_path = out.path().join("input.vcf");
-        std::fs::write(&vcf_path,
+        std::fs::write(
+            &vcf_path,
             "##fileformat=VCFv4.2\n\
              #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n\
-             H1N1_HA\t100\t.\tA\tT\t.\tPASS\t.\tGT\t1/1\n"
-        ).unwrap();
+             H1N1_HA\t100\t.\tA\tT\t.\tPASS\t.\tGT\t1/1\n",
+        )
+        .unwrap();
 
         let mut yaml = NamedTempFile::new().unwrap();
         write!(yaml,
@@ -507,7 +570,8 @@ mod tests {
             ref = h1n1_reference().display(),
             out = out.path().display(),
             vcf = vcf_path.display(),
-        ).unwrap();
+        )
+        .unwrap();
         let config = RunConfiguration::from_yaml_file(&yaml.path().to_path_buf()).unwrap();
         let bam_path = config.output_bam.clone().unwrap();
         run(config);
@@ -523,7 +587,11 @@ mod tests {
             .enumerate()
             .find_map(|(i, (name, _))| {
                 let name_bytes: &[u8] = name.as_ref();
-                if name_bytes == b"H1N1_HA" { Some(i) } else { None }
+                if name_bytes == b"H1N1_HA" {
+                    Some(i)
+                } else {
+                    None
+                }
             })
             .expect("H1N1_HA not found in BAM header");
 
@@ -578,11 +646,13 @@ mod tests {
 
         // Minimal single-sample VCF: position 100 (1-based), A→T, homozygous
         let vcf_path = out.path().join("input.vcf");
-        std::fs::write(&vcf_path,
+        std::fs::write(
+            &vcf_path,
             "##fileformat=VCFv4.2\n\
              #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n\
-             H1N1_HA\t100\t.\tA\tT\t.\tPASS\t.\tGT\t1/1\n"
-        ).unwrap();
+             H1N1_HA\t100\t.\tA\tT\t.\tPASS\t.\tGT\t1/1\n",
+        )
+        .unwrap();
 
         let mut yaml = NamedTempFile::new().unwrap();
         write!(yaml,
@@ -593,37 +663,37 @@ mod tests {
             ref = h1n1_reference().display(),
             out = out.path().display(),
             vcf = vcf_path.display(),
-        ).unwrap();
+        )
+        .unwrap();
         let config = RunConfiguration::from_yaml_file(&yaml.path().to_path_buf()).unwrap();
         let output_vcf = config.output_vcf.clone().unwrap();
         run(config);
 
         // Read the output VCF and look for a record at position 100 on H1N1_HA
-        use std::io::{BufRead, BufReader};
         use flate2::read::GzDecoder;
+        use std::io::{BufRead, BufReader};
         let reader = BufReader::new(GzDecoder::new(std::fs::File::open(&output_vcf).unwrap()));
-        let found = reader.lines()
+        let found = reader
+            .lines()
             .filter_map(|l| l.ok())
             .filter(|l| !l.starts_with('#'))
             .any(|l| {
                 let cols: Vec<&str> = l.split('\t').collect();
                 cols.len() >= 5 && cols[0] == "H1N1_HA" && cols[1] == "100"
             });
-        assert!(found, "Expected SNP at H1N1_HA:100 in output VCF but did not find it");
+        assert!(
+            found,
+            "Expected SNP at H1N1_HA:100 in output VCF but did not find it"
+        );
     }
 }
 
-use std::path::PathBuf;
-use crate::{
-    gen_reads::utils::{
-        config::RunConfiguration, 
-        runner::run_neat
-    }
-};
+use crate::gen_reads::utils::{config::RunConfiguration, runner::run_neat};
 use common::rng::NeatRng;
+use std::path::PathBuf;
 
 /// gen-reads is the primary read generation function of rneat. It reads a fasta file and generates a set of fastqs and/or a set of variants. It can now also filter reads by bed file.
-pub fn main(config: &PathBuf) -> Result<(), GenerateReadsError> {   
+pub fn main(config: &PathBuf) -> Result<(), GenerateReadsError> {
     info!("////////////// Welcome to rusty-neat read generator! \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\");
     // set up the config struct based on whether there was an input config. Input config
     // overrides any other inputs.
@@ -638,34 +708,37 @@ pub fn main(config: &PathBuf) -> Result<(), GenerateReadsError> {
     // Check that we are clear to write outputs
     if !config.overwrite_output {
         if let Some(filename) = &config.output_fastq_1
-            && filename.is_file() {
-                panic!("Attempting to overwrite an existing file: {:?}", filename);
-            }
+            && filename.is_file()
+        {
+            panic!("Attempting to overwrite an existing file: {:?}", filename);
+        }
         if let Some(filename) = &config.output_fastq_2
-            && filename.is_file() {
-                panic!("Attempting to overwrite an existing file: {:?}", filename);
-            }
+            && filename.is_file()
+        {
+            panic!("Attempting to overwrite an existing file: {:?}", filename);
+        }
         if let Some(filename) = &config.output_vcf
-            && filename.is_file() {
-                panic!("Attempting to overwrite an existing file: {:?}", filename);
-            }
+            && filename.is_file()
+        {
+            panic!("Attempting to overwrite an existing file: {:?}", filename);
+        }
     }
-    
+
     info!("////////////// Configuration successuful! Ready to run! \\\\\\\\\\\\\\\\\\\\\\\\\\");
     // Generate the RNG used for this run. If one was given in the config file, use that, or else
     // use thread_rng to generate a random seed, then seed using a SeedableRng based on StdRng
-    let mut rng: NeatRng = NeatRng::new_from_seed(&config.seed_vec)
-        .expect("Neat failed during rng creation!");
+    let mut rng: NeatRng =
+        NeatRng::new_from_seed(&config.seed_vec).expect("Neat failed during rng creation!");
     // run the generate reads main script
     let result = run_neat(&Box::new(config.clone()), &mut rng);
     match result {
         Ok(_) => {
             // Continue on for bed filtering
             Ok(())
-        },
+        }
         Err(error) => {
             error!("runner returned an error {:?}", error);
             Err(GenerateReadsError::RunnerError)
-        },
+        }
     }
 }

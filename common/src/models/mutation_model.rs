@@ -1,37 +1,27 @@
 //! The mutation model
-use std::{self, collections::HashMap};
+use crate::rng::{NeatRng, NeatRngError};
+use flate2::read::GzDecoder;
+use log::error;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use flate2::read::GzDecoder;
+use std::{self, collections::HashMap};
 use thiserror::Error;
-use crate::rng::{NeatRng, NeatRngError};
-use log::error;
 
-use crate::{models::snp_trinuc_model::TrinucFrame, structs::{
-    distributions::{
-        DiscreteDistribution, 
-        DistributionErrors
-    }, 
-    nucleotides::{
-        allowed_vec, 
-        Nucleotide
-    }, 
-    transition_matrix::{
-        TransitionMatrix, 
-        TransitionMatrixError
-    }, 
-    variants::{
-        Variant, 
-        VariantError, 
-        VariantType
-    }
-}};
 use crate::models::{
     indel_model::{IndelModel, IndelModelError},
-    quality_scores::{QualityModelError},
-    sequencing_error_model::{SeqModelError},
-    snp_trinuc_model::{SnpTrinucModel, SnpTrinucError},
     lib::{model_reader, model_writer},
+    quality_scores::QualityModelError,
+    sequencing_error_model::SeqModelError,
+    snp_trinuc_model::{SnpTrinucError, SnpTrinucModel},
+};
+use crate::{
+    models::snp_trinuc_model::TrinucFrame,
+    structs::{
+        distributions::{DiscreteDistribution, DistributionErrors},
+        nucleotides::{Nucleotide, allowed_vec},
+        transition_matrix::{TransitionMatrix, TransitionMatrixError},
+        variants::{Variant, VariantError, VariantType},
+    },
 };
 
 #[derive(Error, Debug)]
@@ -66,7 +56,7 @@ pub enum MutationModelError {
     SerdeError(#[from] serde_json::Error),
 }
 
-fn allowed_variant_types() -> Vec<VariantType> { 
+fn allowed_variant_types() -> Vec<VariantType> {
     vec![
         VariantType::SNP,
         VariantType::Insertion,
@@ -129,14 +119,13 @@ impl MutationModel {
             )?
         };
         // build transition matrices from data for snps and trinucs
-        let snp_trinuc_model = SnpTrinucModel::from_raw_data(
-            trinuc_frequency,
-            trinuc_transition_frequency,
-        )?;
+        let snp_trinuc_model =
+            SnpTrinucModel::from_raw_data(trinuc_frequency, trinuc_transition_frequency)?;
         // Probability, given that it is an indel, that it is an insertion.
         // Fall back to the default indel model when no indel data was observed.
         let indel_denom = variant_probs[1] + variant_probs[2];
-        let indel_model = if indel_denom == 0.0 || ins_lengths.is_empty() || del_lengths.is_empty() {
+        let indel_model = if indel_denom == 0.0 || ins_lengths.is_empty() || del_lengths.is_empty()
+        {
             IndelModel::default()?
         } else {
             let insertion_probability = variant_probs[1] / indel_denom;
@@ -155,13 +144,13 @@ impl MutationModel {
         };
         // SNP, Insertion, Deletion, respectively.
         if variant_probs.len() != 3 {
-            error!("Input to mutation model from raw incorrect. Variant probs should have a length of 3: SNP, INS, DEL");
-            return Err(MutationModelError::InputError)
+            error!(
+                "Input to mutation model from raw incorrect. Variant probs should have a length of 3: SNP, INS, DEL"
+            );
+            return Err(MutationModelError::InputError);
         }
-        let variant_distribution = DiscreteDistribution::new(
-            &variant_probs,
-            &(allowed_variant_types()),
-        )?;
+        let variant_distribution =
+            DiscreteDistribution::new(&variant_probs, &(allowed_variant_types()))?;
         Ok(MutationModel {
             mutation_rate: average_mutation_rate,
             variant_dist: variant_distribution,
@@ -173,8 +162,8 @@ impl MutationModel {
     pub fn default() -> Result<Self, MutationModelError> {
         // Creating the default model based on the default for the original NEAT.
         let reader = GzDecoder::new(DATA_FILE);
-        let data: MutationModel = serde_json::from_reader(reader)
-            .map_err(MutationModelError::SerdeError)?;
+        let data: MutationModel =
+            serde_json::from_reader(reader).map_err(MutationModelError::SerdeError)?;
         Ok(data)
     }
 
@@ -188,15 +177,19 @@ impl MutationModel {
         Ok(())
     }
 
-    fn generate_genotype(&self, ploidy: usize, is_homozygous: bool) -> Result<Vec<usize>, MutationModelError> {
+    fn generate_genotype(
+        &self,
+        ploidy: usize,
+        is_homozygous: bool,
+    ) -> Result<Vec<usize>, MutationModelError> {
         // "Homozygous" is ambiguous for polyploid organisms, so we'll just take "heterozygous" to
         // mean roughly half the reads will have the variant, to keep it simple
         // The is_homozygous flag is expected to be randomly determined in practice
         if is_homozygous {
             Ok(vec![1; ploidy])
         } else {
-            let num_ploids = ploidy/2;
-            Ok([vec![1; num_ploids], vec![0; ploidy-num_ploids]].concat())
+            let num_ploids = ploidy / 2;
+            Ok([vec![1; num_ploids], vec![0; ploidy - num_ploids]].concat())
         }
     }
 
@@ -213,9 +206,8 @@ impl MutationModel {
         rng: &mut NeatRng,
     ) -> Result<Variant, MutationModelError> {
         // Select a genotype for the variant
-        let mut genotype= self.generate_genotype(
-            ploidy, rng.gen_bool(self.homozygous_frequency)?
-        )?;
+        let mut genotype =
+            self.generate_genotype(ploidy, rng.gen_bool(self.homozygous_frequency)?)?;
         // Select a type of mutation.
         let index = self.variant_dist.sample(rng.random()?)?;
         let mut variant_type = VariantType::from(index);
@@ -229,17 +221,19 @@ impl MutationModel {
         match variant_type {
             VariantType::SNP => {
                 if (variant_location < 1) || ((variant_location + 1) >= reference_sequence.len()) {
-                    // We don't want to accidentally go out of bounds, so we'll 
+                    // We don't want to accidentally go out of bounds, so we'll
                     // just pick a random base.
                     alternate = pick_random_snp(ref_base, rng)?;
                 } else {
                     // In this case we use the trinculeotide model
                     let trinuc_reference = [
-                        check_base(reference_sequence[variant_location-1]),
+                        check_base(reference_sequence[variant_location - 1]),
                         check_base(reference_sequence[variant_location]),
-                        check_base(reference_sequence[variant_location+1]),
+                        check_base(reference_sequence[variant_location + 1]),
                     ];
-                    let alternate_base = self.statistical_models.snp_trinuc_model
+                    let alternate_base = self
+                        .statistical_models
+                        .snp_trinuc_model
                         .generate_snp(rng.random()?, &trinuc_reference)?;
 
                     // Degenerate model context (sparse data, all-zero row): fall back to
@@ -250,17 +244,24 @@ impl MutationModel {
                         alternate = vec![alternate_base];
                     }
                 }
-            },
+            }
             VariantType::Insertion => {
-                let length = self.statistical_models.indel_model
+                let length = self
+                    .statistical_models
+                    .indel_model
                     .new_insert_length(rng.random()?)?;
-                let insertion_vec = self.statistical_models.indel_model
+                let insertion_vec = self
+                    .statistical_models
+                    .indel_model
                     .generate_random_insertion(length, rng)?;
                 alternate = [reference.clone(), insertion_vec.clone()].concat();
-            },
+            }
             VariantType::Deletion => {
                 // todo Deletions are a bitch. I need to think about them.
-                let length = self.statistical_models.indel_model.new_delete_length(rng.random()?)?;
+                let length = self
+                    .statistical_models
+                    .indel_model
+                    .new_delete_length(rng.random()?)?;
                 // +1 is so that we grab a base for the reference in the VCF. This is similar
                 // to how we appended bases to the reference in the insertion model.
                 if (variant_location + length as usize + 1) > reference_sequence.len() {
@@ -276,15 +277,18 @@ impl MutationModel {
                         .map(|&b| check_base(b))
                         .collect();
                 }
-            },
+            }
             _ => {
                 panic!("Unsupported option for generating mutation")
             }
         };
-        
+
         if reference.is_empty() || alternate.is_empty() || reference == alternate {
-            error!("Malformed mutation: {:?} {:?} {:?}", variant_type, reference, alternate);
-            return Err(MutationModelError::GenerateMutationError)
+            error!(
+                "Malformed mutation: {:?} {:?} {:?}",
+                variant_type, reference, alternate
+            );
+            return Err(MutationModelError::GenerateMutationError);
         }
         Ok(Variant::new(
             variant_type,
@@ -306,7 +310,10 @@ struct StatisticalModels {
     snp_trinuc_model: SnpTrinucModel,
 }
 
-fn pick_random_snp(ref_base: Nucleotide, rng: &mut NeatRng)-> Result<Vec<Nucleotide>, MutationModelError> {
+fn pick_random_snp(
+    ref_base: Nucleotide,
+    rng: &mut NeatRng,
+) -> Result<Vec<Nucleotide>, MutationModelError> {
     // Grab allowed nucs
     let mut allowed: Vec<Nucleotide> = allowed_vec();
     // Throw out the reference base
@@ -321,7 +328,7 @@ fn pick_random_snp(ref_base: Nucleotide, rng: &mut NeatRng)-> Result<Vec<Nucleot
 fn check_base(nuc: Nucleotide) -> Nucleotide {
     // For now we'll replace occasional N's with A's.
     if nuc.is_masked() {
-        return nuc.get_unmasked_base()
+        return nuc.get_unmasked_base();
     }
     match nuc {
         Nucleotide::N => Nucleotide::A,
@@ -385,9 +392,8 @@ mod tests {
     #[test]
     fn test_generate_mutation_produces_variant() {
         let model = MutationModel::default().unwrap();
-        let mut rng = NeatRng::new_from_seed(&vec![
-            "test".to_string(), "seed".to_string(),
-        ]).unwrap();
+        let mut rng =
+            NeatRng::new_from_seed(&vec!["test".to_string(), "seed".to_string()]).unwrap();
         // 20-base sequence with room on both sides of position 5
         let seq = vec![A, C, G, T, A, C, G, T, A, C, G, T, A, C, G, T, A, C, G, T];
         let variant = model.generate_mutation(&seq, 5, 2, &mut rng).unwrap();
@@ -431,7 +437,11 @@ mod tests {
             vec![],
             None,
         );
-        assert!(result.is_ok(), "Expected Ok with no indels, got {:?}", result);
+        assert!(
+            result.is_ok(),
+            "Expected Ok with no indels, got {:?}",
+            result
+        );
         let model = result.unwrap();
         assert_eq!(model.mutation_rate, 0.001);
     }

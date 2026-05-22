@@ -21,7 +21,7 @@
 
 mod common;
 
-use common::{fresh_workdir, h1n1_reference, read_gzip_fastq_lines, rneat, GenReadsConfig};
+use common::{GenReadsConfig, fresh_workdir, h1n1_reference, read_gzip_fastq_lines, rneat};
 
 fn run_gen_reads(seed: &str, output_dir: &std::path::Path, name: &str, threads: Option<usize>) {
     let mut config = GenReadsConfig::new(h1n1_reference(), output_dir.to_path_buf(), name);
@@ -38,7 +38,10 @@ fn run_gen_reads(seed: &str, output_dir: &std::path::Path, name: &str, threads: 
 /// Group a flat FASTQ line list into 4-line records, then sort lexicographically. This
 /// turns line order into a multiset comparison.
 fn sorted_records(lines: Vec<String>) -> Vec<[String; 4]> {
-    assert!(lines.len() % 4 == 0, "FASTQ line count must be multiple of 4");
+    assert!(
+        lines.len() % 4 == 0,
+        "FASTQ line count must be multiple of 4"
+    );
     let mut records: Vec<[String; 4]> = lines
         .chunks(4)
         .map(|c| [c[0].clone(), c[1].clone(), c[2].clone(), c[3].clone()])
@@ -64,9 +67,11 @@ fn same_seed_single_threaded_produces_same_record_multiset() {
 
     assert!(!a.is_empty(), "first run produced no records");
     assert_eq!(
-        a.len(), b.len(),
+        a.len(),
+        b.len(),
         "same seed (single-threaded) produced different record counts: a={}, b={}",
-        a.len(), b.len(),
+        a.len(),
+        b.len(),
     );
     assert_eq!(
         a, b,
@@ -93,9 +98,11 @@ fn same_seed_multi_threaded_produces_same_record_multiset() {
 
     assert!(!a.is_empty(), "first run produced no records");
     assert_eq!(
-        a.len(), b.len(),
+        a.len(),
+        b.len(),
         "same seed produced different record counts (multi-threaded): a={}, b={}",
-        a.len(), b.len(),
+        a.len(),
+        b.len(),
     );
     assert_eq!(
         a, b,

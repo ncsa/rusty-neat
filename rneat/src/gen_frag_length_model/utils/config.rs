@@ -1,8 +1,8 @@
+use crate::gen_frag_length_model::errors::GenFragLengthModelError;
 use serde_yml::Value;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use crate::gen_frag_length_model::errors::GenFragLengthModelError;
 
 #[derive(Debug, Clone)]
 pub struct RunConfiguration {

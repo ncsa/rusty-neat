@@ -13,13 +13,12 @@ use noodles::sam::{
     alignment::{
         io::Write as AlignmentWrite,
         record::{
+            Flags, MappingQuality,
             cigar::op::{Kind as CigarKind, Op},
-Flags,
-            MappingQuality,
         },
         record_buf::{Cigar, QualityScores, RecordBuf, Sequence},
     },
-    header::record::value::{map::ReferenceSequence, Map},
+    header::record::value::{Map, map::ReferenceSequence},
 };
 use thiserror::Error;
 
@@ -46,8 +45,8 @@ impl BamWriter {
         let mut builder = sam::Header::builder();
         let mut contig_index = HashMap::new();
         for (i, (name, length)) in contigs.iter().enumerate() {
-            let len = NonZero::<usize>::new(*length)
-                .unwrap_or_else(|| NonZero::<usize>::new(1).unwrap());
+            let len =
+                NonZero::<usize>::new(*length).unwrap_or_else(|| NonZero::<usize>::new(1).unwrap());
             builder = builder.add_reference_sequence(
                 name.as_bytes().to_vec(),
                 Map::<ReferenceSequence>::new(len),
@@ -128,13 +127,12 @@ impl BamWriter {
     /// is less than `flush_pos`. Records at or beyond `flush_pos` are retained
     /// for the next flush (they may be joined by records from the next block).
     pub fn flush_up_to(&mut self, flush_pos: usize) -> Result<(), BamWriterError> {
-        self.carry.sort_unstable_by_key(|r| {
-            r.alignment_start().map(|p| p.get()).unwrap_or(0)
-        });
+        self.carry
+            .sort_unstable_by_key(|r| r.alignment_start().map(|p| p.get()).unwrap_or(0));
         // alignment_start is 1-based; 0-based pos = p.get() - 1 < flush_pos ↔ p.get() <= flush_pos
-        let split = self.carry.partition_point(|r| {
-            r.alignment_start().map(|p| p.get()).unwrap_or(0) <= flush_pos
-        });
+        let split = self
+            .carry
+            .partition_point(|r| r.alignment_start().map(|p| p.get()).unwrap_or(0) <= flush_pos);
         for record in self.carry.drain(..split) {
             self.writer.write_alignment_record(&self.header, &record)?;
         }
@@ -144,9 +142,8 @@ impl BamWriter {
     /// Sort and write all remaining buffered records, then clear the carry.
     /// Call once after all blocks of a contig are processed.
     pub fn flush_all(&mut self) -> Result<(), BamWriterError> {
-        self.carry.sort_unstable_by_key(|r| {
-            r.alignment_start().map(|p| p.get()).unwrap_or(0)
-        });
+        self.carry
+            .sort_unstable_by_key(|r| r.alignment_start().map(|p| p.get()).unwrap_or(0));
         for record in self.carry.drain(..) {
             self.writer.write_alignment_record(&self.header, &record)?;
         }
@@ -160,10 +157,8 @@ impl BamWriter {
 
 const BGZF_EOF_LEN: usize = 28;
 const BGZF_EOF_BLOCK: [u8; BGZF_EOF_LEN] = [
-    0x1f, 0x8b, 0x08, 0x04, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0xff, 0x06, 0x00, 0x42, 0x43, 0x02, 0x00,
-    0x1b, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00,
+    0x1f, 0x8b, 0x08, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0x06, 0x00, 0x42, 0x43, 0x02, 0x00,
+    0x1b, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 ];
 
 /// Shared BAM header context for parallel per-contig writers.
@@ -178,15 +173,18 @@ impl BamContext {
         let mut builder = sam::Header::builder();
         let mut contig_index = HashMap::new();
         for (i, (name, length)) in contigs.iter().enumerate() {
-            let len = NonZero::<usize>::new(*length)
-                .unwrap_or_else(|| NonZero::<usize>::new(1).unwrap());
+            let len =
+                NonZero::<usize>::new(*length).unwrap_or_else(|| NonZero::<usize>::new(1).unwrap());
             builder = builder.add_reference_sequence(
                 name.as_bytes().to_vec(),
                 Map::<ReferenceSequence>::new(len),
             );
             contig_index.insert(name.clone(), i);
         }
-        Self { header: builder.build(), contig_index }
+        Self {
+            header: builder.build(),
+            contig_index,
+        }
     }
 }
 
@@ -203,21 +201,28 @@ impl BamRecordStager for BamWriter {
         let cigar = rle_to_cigar(&record.cigar_ops);
         let flags = read_flags(record.is_paired, record.is_reverse);
         let bam_record = build_bam_record(
-            &record.name, ref_id, record.position, flags, 60, cigar,
-            mate_ref_id, record.mate_position, record.template_length,
-            &record.sequence, &record.quality_scores,
+            &record.name,
+            ref_id,
+            record.position,
+            flags,
+            60,
+            cigar,
+            mate_ref_id,
+            record.mate_position,
+            record.template_length,
+            &record.sequence,
+            &record.quality_scores,
         );
         self.carry.push(bam_record);
         Ok(())
     }
 
     fn flush_up_to(&mut self, flush_pos: usize) -> Result<(), BamWriterError> {
-        self.carry.sort_unstable_by_key(|r| {
-            r.alignment_start().map(|p| p.get()).unwrap_or(0)
-        });
-        let split = self.carry.partition_point(|r| {
-            r.alignment_start().map(|p| p.get()).unwrap_or(0) <= flush_pos
-        });
+        self.carry
+            .sort_unstable_by_key(|r| r.alignment_start().map(|p| p.get()).unwrap_or(0));
+        let split = self
+            .carry
+            .partition_point(|r| r.alignment_start().map(|p| p.get()).unwrap_or(0) <= flush_pos);
         for record in self.carry.drain(..split) {
             self.writer.write_alignment_record(&self.header, &record)?;
         }
@@ -239,22 +244,28 @@ impl BamBodyWriter {
         let file = std::fs::File::create(&path)?;
         // Do not write a header — this file holds only alignment record BGZF blocks.
         let writer = bam::io::Writer::new(file);
-        Ok(Self { writer, context, carry: Vec::new(), path })
+        Ok(Self {
+            writer,
+            context,
+            carry: Vec::new(),
+            path,
+        })
     }
 
     fn contig_id(&self, name: &str) -> Result<usize, BamWriterError> {
-        self.context.contig_index
+        self.context
+            .contig_index
             .get(name)
             .copied()
             .ok_or_else(|| BamWriterError::UnknownContig(name.to_string()))
     }
 
     pub fn flush_all(&mut self) -> Result<(), BamWriterError> {
-        self.carry.sort_unstable_by_key(|r| {
-            r.alignment_start().map(|p| p.get()).unwrap_or(0)
-        });
+        self.carry
+            .sort_unstable_by_key(|r| r.alignment_start().map(|p| p.get()).unwrap_or(0));
         for record in self.carry.drain(..) {
-            self.writer.write_alignment_record(&self.context.header, &record)?;
+            self.writer
+                .write_alignment_record(&self.context.header, &record)?;
         }
         Ok(())
     }
@@ -267,23 +278,31 @@ impl BamRecordStager for BamBodyWriter {
         let cigar = rle_to_cigar(&record.cigar_ops);
         let flags = read_flags(record.is_paired, record.is_reverse);
         let bam_record = build_bam_record(
-            &record.name, ref_id, record.position, flags, 60, cigar,
-            mate_ref_id, record.mate_position, record.template_length,
-            &record.sequence, &record.quality_scores,
+            &record.name,
+            ref_id,
+            record.position,
+            flags,
+            60,
+            cigar,
+            mate_ref_id,
+            record.mate_position,
+            record.template_length,
+            &record.sequence,
+            &record.quality_scores,
         );
         self.carry.push(bam_record);
         Ok(())
     }
 
     fn flush_up_to(&mut self, flush_pos: usize) -> Result<(), BamWriterError> {
-        self.carry.sort_unstable_by_key(|r| {
-            r.alignment_start().map(|p| p.get()).unwrap_or(0)
-        });
-        let split = self.carry.partition_point(|r| {
-            r.alignment_start().map(|p| p.get()).unwrap_or(0) <= flush_pos
-        });
+        self.carry
+            .sort_unstable_by_key(|r| r.alignment_start().map(|p| p.get()).unwrap_or(0));
+        let split = self
+            .carry
+            .partition_point(|r| r.alignment_start().map(|p| p.get()).unwrap_or(0) <= flush_pos);
         for record in self.carry.drain(..split) {
-            self.writer.write_alignment_record(&self.context.header, &record)?;
+            self.writer
+                .write_alignment_record(&self.context.header, &record)?;
         }
         Ok(())
     }
@@ -420,9 +439,9 @@ pub fn build_bam_record(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::structs::read_record::ReadRecord;
     use std::path::PathBuf;
     use std::sync::Arc;
-    use crate::structs::read_record::ReadRecord;
     use tempfile::tempdir;
 
     fn make_read(name: &str, pos: usize) -> ReadRecord {
@@ -445,13 +464,15 @@ mod tests {
         let file = std::fs::File::open(path).unwrap();
         let mut reader = bam::io::Reader::new(file);
         reader.read_header().unwrap();
-        reader.records()
+        reader
+            .records()
             .map(|r| {
                 r.unwrap()
                     .alignment_start()
-                    .unwrap()  // Option<Result<Position>> → Result<Position>
-                    .unwrap()  // Result<Position>         → Position
-                    .get() - 1
+                    .unwrap() // Option<Result<Position>> → Result<Position>
+                    .unwrap() // Result<Position>         → Position
+                    .get()
+                    - 1
             })
             .collect()
     }
@@ -572,8 +593,12 @@ mod tests {
         concat_temp_bams(&context, &[body], &out).unwrap();
 
         let positions = read_bam_positions(&out);
-        assert_eq!(positions, vec![100, 200],
-            "single-body concat: expected [100, 200], got: {:?}", positions);
+        assert_eq!(
+            positions,
+            vec![100, 200],
+            "single-body concat: expected [100, 200], got: {:?}",
+            positions
+        );
     }
 
     #[test]
@@ -606,8 +631,12 @@ mod tests {
 
         // Verify the result is a readable BAM with 3 records
         let positions = read_bam_positions(&out);
-        assert_eq!(positions, vec![100, 200, 300],
-            "expected [100, 200, 300], got: {:?}", positions);
+        assert_eq!(
+            positions,
+            vec![100, 200, 300],
+            "expected [100, 200, 300], got: {:?}",
+            positions
+        );
     }
 
     #[test]

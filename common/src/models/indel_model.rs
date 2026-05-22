@@ -7,15 +7,18 @@
 //!
 //! We have the variants separated out in the variants struct, into Insertion and Deletion, but they
 //! will share this model to avoid duplicating code, since code-wise they are closely linked.
-use serde::{Deserialize, Serialize};
 use crate::rng::{NeatRng, NeatRngError};
-use thiserror::Error;
-use std::{io, path::PathBuf};
+use crate::{
+    models::lib::{model_reader, model_writer},
+    structs::{
+        distributions::{DiscreteDistribution, DistributionErrors},
+        nucleotides::{Nucleotide, allowed_vec},
+    },
+};
 use flate2::read::GzDecoder;
-use crate::{models::lib::{model_reader, model_writer}, structs::{
-    distributions::{DiscreteDistribution, DistributionErrors}, 
-    nucleotides::{allowed_vec, Nucleotide}
-}};
+use serde::{Deserialize, Serialize};
+use std::{io, path::PathBuf};
+use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum IndelModelError {
@@ -32,7 +35,7 @@ pub enum IndelModelError {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndelModel {
     // Based what was in the original NEAT
-    pub (crate) insertion_probability: f64,
+    pub(crate) insertion_probability: f64,
     ins_dist: DiscreteDistribution<usize>,
     del_dist: DiscreteDistribution<usize>,
 }
@@ -47,14 +50,8 @@ impl IndelModel {
         del_lens: Vec<usize>,
         del_weights: Vec<f64>,
     ) -> Result<Self, IndelModelError> {
-        let ins_dist = DiscreteDistribution::new(
-            &ins_weights,
-            &ins_lens,
-        )?;
-        let del_dist = DiscreteDistribution::new(
-            &del_weights,
-            &del_lens,
-        )?;
+        let ins_dist = DiscreteDistribution::new(&ins_weights, &ins_lens)?;
+        let del_dist = DiscreteDistribution::new(&del_weights, &del_lens)?;
         Ok(IndelModel {
             insertion_probability,
             ins_dist,
@@ -64,8 +61,8 @@ impl IndelModel {
     pub fn default() -> Result<Self, IndelModelError> {
         // Default Indel model from the original NEAT, scaled by the lowest value and rounded.
         let reader = GzDecoder::new(DATA_FILE);
-        let data: IndelModel = serde_json::from_reader(reader)
-            .map_err(IndelModelError::SerdeError)?;
+        let data: IndelModel =
+            serde_json::from_reader(reader).map_err(IndelModelError::SerdeError)?;
         Ok(data)
     }
 
@@ -92,11 +89,11 @@ impl IndelModel {
         // This function is the same as above, but uses the deletion lengths instead.
         Ok(self.del_dist.sample(rand)?)
     }
-    
+
     pub fn generate_random_insertion(
-        &self, 
-        length: usize, 
-        rng: &mut NeatRng
+        &self,
+        length: usize,
+        rng: &mut NeatRng,
     ) -> Result<Vec<Nucleotide>, IndelModelError> {
         // We could refine this with a nucleotide bias matrix. Maybe it would make a difference,
         // but probably not, since the presence of the insertion is more important than it's content,
@@ -111,7 +108,6 @@ impl IndelModel {
         Ok(insertion_vec)
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -133,7 +129,8 @@ mod tests {
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),
-        ]).unwrap();
+        ])
+        .unwrap();
 
         let indel_model = IndelModel {
             insertion_probability: 0.75,
@@ -141,19 +138,22 @@ mod tests {
             del_dist: DiscreteDistribution::new(&vec![1.0, 1000.0], &vec![3, 4]).unwrap(),
         };
 
-        let length = indel_model.new_insert_length(rng.random().unwrap()).unwrap();
+        let length = indel_model
+            .new_insert_length(rng.random().unwrap())
+            .unwrap();
         if length > 0 {
             assert!((length == 1) || (length == 2));
         }
     }
 
     #[test]
-    fn test_generate_insertion () {
+    fn test_generate_insertion() {
         let mut rng = NeatRng::new_from_seed(&vec![
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),
-        ]).unwrap();
+        ])
+        .unwrap();
 
         let indel_model = IndelModel {
             insertion_probability: 0.75,
@@ -219,7 +219,8 @@ mod tests {
         let ins_weights = vec![0.5, 0.3, 0.2];
         let del_lens = vec![1, 5];
         let del_weights = vec![0.9, 0.1];
-        let model = IndelModel::from_raw_data(0.4, ins_lens, ins_weights, del_lens, del_weights).unwrap();
+        let model =
+            IndelModel::from_raw_data(0.4, ins_lens, ins_weights, del_lens, del_weights).unwrap();
         assert_eq!(model.insertion_probability, 0.4);
         assert_eq!(model.new_insert_length(0.0).unwrap(), 1);
         assert_eq!(model.new_delete_length(0.0).unwrap(), 1);

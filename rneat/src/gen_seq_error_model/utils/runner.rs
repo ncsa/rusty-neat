@@ -1,22 +1,16 @@
-use log::{info, warn};
-#[cfg(test)]
-use std::path::PathBuf;
+use crate::gen_seq_error_model::{errors::GenSeqErrorModelError, utils::config::RunConfiguration};
+use common::file_tools::file_io::is_gzipped_file;
 use common::{
     file_tools::{
         bam_reader::read_bam_transitions,
         file_io::{read_gzip_lines, read_lines},
     },
-    models::{
-        quality_scores::QualityScoreModel,
-        sequencing_error_model::SequencingErrorModel,
-    },
+    models::{quality_scores::QualityScoreModel, sequencing_error_model::SequencingErrorModel},
     structs::transition_matrix::TransitionMatrix,
 };
-use common::file_tools::file_io::is_gzipped_file;
-use crate::gen_seq_error_model::{
-    errors::GenSeqErrorModelError,
-    utils::config::RunConfiguration,
-};
+use log::{info, warn};
+#[cfg(test)]
+use std::path::PathBuf;
 
 const MAX_SCORE: usize = 94;
 
@@ -37,7 +31,6 @@ fn snap_to_bin(score: usize, bins: &[usize]) -> usize {
         }
     }
 }
-
 
 /// Normalizes a raw 4×4 mismatch count matrix into a `TransitionMatrix`.
 ///
@@ -62,7 +55,9 @@ fn build_transition_matrix_from_counts(
             weights[i][i] = 0.0;
         }
     }
-    Ok(TransitionMatrix::from(weights[0], weights[1], weights[2], weights[3])?)
+    Ok(TransitionMatrix::from(
+        weights[0], weights[1], weights[2], weights[3],
+    )?)
 }
 
 pub fn runner(config: &RunConfiguration) -> Result<(), GenSeqErrorModelError> {
@@ -78,17 +73,21 @@ pub fn runner(config: &RunConfiguration) -> Result<(), GenSeqErrorModelError> {
         match iter.next() {
             Some(Ok(_)) => {}
             Some(Err(e)) => return Err(e.into()),
-            None => return Err(GenSeqErrorModelError::MalformedFastq(
-                "FASTQ file has fewer than 4 lines".to_string(),
-            )),
+            None => {
+                return Err(GenSeqErrorModelError::MalformedFastq(
+                    "FASTQ file has fewer than 4 lines".to_string(),
+                ));
+            }
         }
     }
     let first_qual = match iter.next() {
         Some(Ok(q)) => q,
         Some(Err(e)) => return Err(e.into()),
-        None => return Err(GenSeqErrorModelError::MalformedFastq(
-            "FASTQ file has fewer than 4 lines".to_string(),
-        )),
+        None => {
+            return Err(GenSeqErrorModelError::MalformedFastq(
+                "FASTQ file has fewer than 4 lines".to_string(),
+            ));
+        }
     };
 
     let read_length = first_qual.len();
@@ -142,8 +141,14 @@ pub fn runner(config: &RunConfiguration) -> Result<(), GenSeqErrorModelError> {
     let bins_slice: Option<&[usize]> = config.binned_quality_bins.as_deref();
 
     if accumulate_qual(
-        &first_qual, qual_offset, read_length, bins_slice,
-        &mut seed_counts, &mut transition_counts, &mut global_counts, &mut total_bases,
+        &first_qual,
+        qual_offset,
+        read_length,
+        bins_slice,
+        &mut seed_counts,
+        &mut transition_counts,
+        &mut global_counts,
+        &mut total_bases,
     ) {
         reads_processed += 1;
     }
@@ -165,14 +170,23 @@ pub fn runner(config: &RunConfiguration) -> Result<(), GenSeqErrorModelError> {
             Some(Err(e)) => return Err(e.into()),
         };
         if accumulate_qual(
-            &qual, qual_offset, read_length, bins_slice,
-            &mut seed_counts, &mut transition_counts, &mut global_counts, &mut total_bases,
+            &qual,
+            qual_offset,
+            read_length,
+            bins_slice,
+            &mut seed_counts,
+            &mut transition_counts,
+            &mut global_counts,
+            &mut total_bases,
         ) {
             reads_processed += 1;
         }
     }
 
-    info!("Processed {} reads ({} bases)", reads_processed, total_bases);
+    info!(
+        "Processed {} reads ({} bases)",
+        reads_processed, total_bases
+    );
 
     if total_bases == 0 {
         return Err(GenSeqErrorModelError::MalformedFastq(
@@ -193,13 +207,17 @@ pub fn runner(config: &RunConfiguration) -> Result<(), GenSeqErrorModelError> {
     // that from_counts' uniform fallback can produce a sane transition row for them.
     let (quality_score_options, is_binned): (Vec<usize>, bool) = match &config.binned_quality_bins {
         Some(bins) => {
-            let zero_count_bins: Vec<usize> =
-                bins.iter().copied().filter(|&b| global_counts[b] == 0).collect();
+            let zero_count_bins: Vec<usize> = bins
+                .iter()
+                .copied()
+                .filter(|&b| global_counts[b] == 0)
+                .collect();
             if !zero_count_bins.is_empty() {
                 warn!(
                     "Binned quality model has {} bin(s) with no observed counts: {:?}; \
                      transition rows for these will use a uniform fallback",
-                    zero_count_bins.len(), zero_count_bins,
+                    zero_count_bins.len(),
+                    zero_count_bins,
                 );
             }
             (bins.clone(), true)
@@ -260,14 +278,21 @@ pub fn runner(config: &RunConfiguration) -> Result<(), GenSeqErrorModelError> {
                 );
                 None
             } else {
-                info!("Observed {} SNP mismatches across all records", total_mismatches);
+                info!(
+                    "Observed {} SNP mismatches across all records",
+                    total_mismatches
+                );
                 Some(build_transition_matrix_from_counts(counts)?)
             }
         } else {
             None
         };
 
-    let model = SequencingErrorModel::from_raw_data(error_rate, quality_score_model, snp_transition_matrix)?;
+    let model = SequencingErrorModel::from_raw_data(
+        error_rate,
+        quality_score_model,
+        snp_transition_matrix,
+    )?;
     model.write_model(&config.output_file)?;
 
     info!("Wrote sequencing error model to {:?}", config.output_file);
@@ -278,7 +303,13 @@ pub fn runner(config: &RunConfiguration) -> Result<(), GenSeqErrorModelError> {
 /// Each record uses `ref_bases` for the MD mismatch source and `read_bases` for the SEQ field.
 /// Slices must be the same length. Pass `with_md = false` to omit the MD tag entirely.
 #[cfg(test)]
-fn write_test_bam(path: &PathBuf, n_records: usize, ref_bases: &[u8], read_bases: &[u8], with_md: bool) {
+fn write_test_bam(
+    path: &PathBuf,
+    n_records: usize,
+    ref_bases: &[u8],
+    read_bases: &[u8],
+    with_md: bool,
+) {
     use noodles::bam;
     use noodles::sam::{
         self as sam,
@@ -286,9 +317,9 @@ fn write_test_bam(path: &PathBuf, n_records: usize, ref_bases: &[u8], read_bases
             RecordBuf,
             io::Write as _,
             record::{
-                cigar::{op::Kind, Op},
-                data::field::Tag,
                 Flags,
+                cigar::{Op, op::Kind},
+                data::field::Tag,
             },
             record_buf::{Cigar, Sequence, data::field::Value as BufValue},
         },
@@ -378,9 +409,12 @@ mod tests {
         runner(&config).unwrap();
         assert!(output_path.exists());
         let model = SequencingErrorModel::from_file(&output_path).unwrap();
-        let scores = model.generate_quality_scores(50, &mut common::rng::NeatRng::new_from_seed(
-            &vec!["test".to_string()]
-        ).unwrap()).unwrap();
+        let scores = model
+            .generate_quality_scores(
+                50,
+                &mut common::rng::NeatRng::new_from_seed(&vec!["test".to_string()]).unwrap(),
+            )
+            .unwrap();
         assert_eq!(scores.len(), 50);
     }
 
@@ -488,9 +522,7 @@ mod tests {
     fn test_runner_zero_transition_row_handled() {
         let temp = tempfile::tempdir().unwrap();
         let fastq_path = temp.path().join("sparse.fastq");
-        let content: String = (0..20)
-            .map(|i| format!("@r{i}\nAAA\n+\n?=J\n"))
-            .collect();
+        let content: String = (0..20).map(|i| format!("@r{i}\nAAA\n+\n?=J\n")).collect();
         std::fs::write(&fastq_path, content).unwrap();
         let output_path = temp.path().join("model.json.gz");
         runner(&make_config(fastq_path, output_path.clone())).unwrap();
@@ -547,7 +579,10 @@ mod tests {
         let mut rng = common::rng::NeatRng::new_from_seed(&vec!["h1n1".to_string()]).unwrap();
         let scores = model.generate_quality_scores(151, &mut rng).unwrap();
         assert_eq!(scores.len(), 151);
-        assert!(scores.iter().all(|&s| s <= 94), "all scores should be ≤ MAX_SCORE");
+        assert!(
+            scores.iter().all(|&s| s <= 94),
+            "all scores should be ≤ MAX_SCORE"
+        );
     }
 
     #[test]
@@ -601,7 +636,8 @@ mod tests {
              0.5\t0.0\t0.3\t0.2\n\
              0.4\t0.3\t0.0\t0.3\n\
              0.3\t0.3\t0.4\t0.0\n",
-        ).unwrap();
+        )
+        .unwrap();
 
         let config = RunConfiguration {
             fastq_file: fastq_path,
@@ -713,8 +749,8 @@ mod tests {
         // other bases are reachable.
         let mut counts = [[0usize; 4]; 4];
         counts[1][0] = 10; // C→A
-        counts[1][2] = 5;  // C→G
-        counts[1][3] = 5;  // C→T
+        counts[1][2] = 5; // C→G
+        counts[1][3] = 5; // C→T
         let tm = build_transition_matrix_from_counts(counts).unwrap();
 
         // Sample the A row at several evenly-spaced random values
@@ -723,10 +759,18 @@ mod tests {
         for k in 1..=99 {
             let r = k as f64 / 100.0;
             let result = a_dist.sample(r).unwrap();
-            assert_ne!(result, Nucleotide::A, "A→A self-transition should be impossible");
+            assert_ne!(
+                result,
+                Nucleotide::A,
+                "A→A self-transition should be impossible"
+            );
             seen.insert(result as usize);
         }
-        assert_eq!(seen.len(), 3, "all three off-diagonal bases should be reachable");
+        assert_eq!(
+            seen.len(),
+            3,
+            "all three off-diagonal bases should be reachable"
+        );
     }
 
     #[test]
@@ -795,7 +839,8 @@ mod tests {
 
         let model = SequencingErrorModel::from_file(&output_path).unwrap();
         let qsm = model.quality_score_model();
-        let bins: std::collections::HashSet<usize> = qsm.quality_score_options.iter().copied().collect();
+        let bins: std::collections::HashSet<usize> =
+            qsm.quality_score_options.iter().copied().collect();
 
         let mut rng = NeatRng::new_from_seed(&vec!["binned-runner".to_string()]).unwrap();
         for _ in 0..200 {
@@ -821,14 +866,18 @@ mod tests {
         let out_unbinned = temp.path().join("unbinned.json.gz");
         let config = make_config(fastq_path.clone(), out_unbinned.clone());
         runner(&config).unwrap();
-        let er_unbinned = SequencingErrorModel::from_file(&out_unbinned).unwrap().error_rate();
+        let er_unbinned = SequencingErrorModel::from_file(&out_unbinned)
+            .unwrap()
+            .error_rate();
 
         // Run 2: binned.
         let out_binned = temp.path().join("binned.json.gz");
         let mut binned_config = make_config(fastq_path, out_binned.clone());
         binned_config.binned_quality_bins = Some(vec![2, 12, 23, 37]);
         runner(&binned_config).unwrap();
-        let er_binned = SequencingErrorModel::from_file(&out_binned).unwrap().error_rate();
+        let er_binned = SequencingErrorModel::from_file(&out_binned)
+            .unwrap()
+            .error_rate();
 
         assert!(er_unbinned > 0.0, "unbinned error_rate should be positive");
         assert!(er_binned > 0.0, "binned error_rate should be positive");

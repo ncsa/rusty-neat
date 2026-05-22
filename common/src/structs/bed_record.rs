@@ -4,7 +4,7 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum BedErrors {
     #[error("Error creating bed record: {0}")]
-    BedRecordError(String)
+    BedRecordError(String),
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -16,29 +16,39 @@ pub struct BedRecord {
 }
 
 impl BedRecord {
-    pub fn new_bed_record(
-        contig: String,
-        start: usize,
-        end: usize
-    ) -> Result<Self, BedErrors> {
+    pub fn new_bed_record(contig: String, start: usize, end: usize) -> Result<Self, BedErrors> {
         if start >= end {
-            return Err(BedErrors::BedRecordError("Region with start pos >= end_pos".to_string()))
+            return Err(BedErrors::BedRecordError(
+                "Region with start pos >= end_pos".to_string(),
+            ));
         }
         // skip string parsing if we know this is a regular target bed
-        Ok(BedRecord { contig, start, end, mut_rate: None})
+        Ok(BedRecord {
+            contig,
+            start,
+            end,
+            mut_rate: None,
+        })
     }
 
     pub fn new_mut_region_record(
         contig: String,
         start: usize,
         end: usize,
-        other: &str
+        other: &str,
     ) -> Result<Self, BedErrors> {
         if start >= end {
-            return Err(BedErrors::BedRecordError("Region with start pos >= end_pos".to_string()))
+            return Err(BedErrors::BedRecordError(
+                "Region with start pos >= end_pos".to_string(),
+            ));
         }
         let mut_rate = Some(Self::parse_other_for_mut(other)?);
-        Ok(BedRecord { contig, start, end, mut_rate})
+        Ok(BedRecord {
+            contig,
+            start,
+            end,
+            mut_rate,
+        })
     }
 
     pub fn len(&self) -> usize {
@@ -75,17 +85,21 @@ impl BedRecord {
             let start_index = index + "mut_rate=".len();
             let remainder = &other[start_index..];
             // The value might be followed by a space, tab, or semicolon if there are other fields
-            let end_index = remainder.find(
-                |c: char| c.is_whitespace() || c == ';' || c == ',' || c == '|'
-            ).unwrap_or(remainder.len());
+            let end_index = remainder
+                .find(|c: char| c.is_whitespace() || c == ';' || c == ',' || c == '|')
+                .unwrap_or(remainder.len());
             let value_str = &remainder[..end_index];
-            value_str.parse::<f64>().map_err(|_| BedErrors::BedRecordError(
-                format!("Error parsing text after 'mut_rate': {}", value_str)
-            ))
+            value_str.parse::<f64>().map_err(|_| {
+                BedErrors::BedRecordError(format!(
+                    "Error parsing text after 'mut_rate': {}",
+                    value_str
+                ))
+            })
         } else {
-            Err(BedErrors::BedRecordError(
-                format!("Failed to locate 'mut_rate' text after column 3: {}", other)
-            ))
+            Err(BedErrors::BedRecordError(format!(
+                "Failed to locate 'mut_rate' text after column 3: {}",
+                other
+            )))
         }
     }
 }
@@ -141,31 +155,23 @@ mod test {
 
     #[test]
     fn test_overlaps() {
-        let record = BedRecord::new_bed_record(
-            "chr1".to_string(),
-            100,
-            200
-        ).unwrap();
-        assert!(record.overlaps("chr1", 150, 250));  // end inside
-        assert!(record.overlaps("chr1", 50, 150));   // start inside
-        assert!(record.overlaps("chr1", 150, 160));  // fully inside
-        assert!(record.overlaps("chr1", 50, 250));   // fully contains record
+        let record = BedRecord::new_bed_record("chr1".to_string(), 100, 200).unwrap();
+        assert!(record.overlaps("chr1", 150, 250)); // end inside
+        assert!(record.overlaps("chr1", 50, 150)); // start inside
+        assert!(record.overlaps("chr1", 150, 160)); // fully inside
+        assert!(record.overlaps("chr1", 50, 250)); // fully contains record
         assert!(!record.overlaps("chr1", 200, 300)); // fully after (end is exclusive)
-        assert!(!record.overlaps("chr1", 0, 100));   // fully before
+        assert!(!record.overlaps("chr1", 0, 100)); // fully before
         assert!(!record.overlaps("chr2", 150, 250)); // wrong contig
     }
 
     #[test]
     fn test_contains() {
-        let record = BedRecord::new_bed_record(
-            "chr1".to_string(),
-            100,
-            200,
-        ).unwrap();
-        assert!(record.contains("chr1", 100));  // start is inclusive
-        assert!(record.contains("chr1", 199));  // last valid position
+        let record = BedRecord::new_bed_record("chr1".to_string(), 100, 200).unwrap();
+        assert!(record.contains("chr1", 100)); // start is inclusive
+        assert!(record.contains("chr1", 199)); // last valid position
         assert!(!record.contains("chr1", 200)); // end is exclusive
-        assert!(!record.contains("chr1", 99));  // before start
+        assert!(!record.contains("chr1", 99)); // before start
         assert!(!record.contains("chr2", 150)); // wrong contig
     }
 
@@ -185,7 +191,7 @@ mod test {
         assert!(BedRecord::new_bed_record("chr1".to_string(), 100, 100).is_err());
         // Negative length (start > end) should fail
         assert!(BedRecord::new_bed_record("chr1".to_string(), 200, 100).is_err());
-        
+
         // Large coordinates
         let rec = BedRecord::new_bed_record("chr1".to_string(), 0, usize::MAX).unwrap();
         assert_eq!(rec.len(), usize::MAX);
@@ -205,8 +211,14 @@ mod test {
 
     #[test]
     fn test_parse_other_delimiters() {
-        assert_eq!(BedRecord::parse_other_for_mut("mut_rate=0.1,other=1").unwrap(), 0.1);
-        assert_eq!(BedRecord::parse_other_for_mut("mut_rate=0.2|other=1").unwrap(), 0.2);
+        assert_eq!(
+            BedRecord::parse_other_for_mut("mut_rate=0.1,other=1").unwrap(),
+            0.1
+        );
+        assert_eq!(
+            BedRecord::parse_other_for_mut("mut_rate=0.2|other=1").unwrap(),
+            0.2
+        );
     }
 
     #[test]

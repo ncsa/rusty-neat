@@ -1,14 +1,18 @@
-use std::io;
-use std::path::PathBuf;
-use thiserror::Error;
 use crate::{
     file_tools::file_io::{is_gzipped_file, read_gzip_lines, read_lines},
     rng::{NeatRng, NeatRngError},
     structs::{
-        nucleotides::{Nucleotide, Nucleotide::{N, X}, NucleotideSelector},
+        nucleotides::{
+            Nucleotide,
+            Nucleotide::{N, X},
+            NucleotideSelector,
+        },
         sequence_block::{RegionType, SequenceMap},
     },
 };
+use std::io;
+use std::path::PathBuf;
+use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum FastaStreamError {
@@ -33,14 +37,16 @@ pub struct FastaStream {
 
 impl FastaStream {
     pub fn open(path: &PathBuf) -> Result<Self, FastaStreamError> {
-        let lines: Box<dyn Iterator<Item = io::Result<String>> + Send> =
-            if is_gzipped_file(path)? {
-                Box::new(read_gzip_lines(path)?)
-            } else {
-                Box::new(read_lines(path)?)
-            };
+        let lines: Box<dyn Iterator<Item = io::Result<String>> + Send> = if is_gzipped_file(path)? {
+            Box::new(read_gzip_lines(path)?)
+        } else {
+            Box::new(read_lines(path)?)
+        };
 
-        let mut stream = FastaStream { lines, pending_name: None };
+        let mut stream = FastaStream {
+            lines,
+            pending_name: None,
+        };
 
         // Advance to the first header line.
         loop {
@@ -133,7 +139,11 @@ pub fn map_buffer(sequence: &[Nucleotide]) -> Vec<SequenceMap> {
                     region_end += 1;
                 } else {
                     inside_n_region = true;
-                    map.push(SequenceMap::from(RegionType::NonNRegion, region_start, region_end));
+                    map.push(SequenceMap::from(
+                        RegionType::NonNRegion,
+                        region_start,
+                        region_end,
+                    ));
                     region_start = region_end;
                     region_end = region_start + 1;
                 }
@@ -141,7 +151,11 @@ pub fn map_buffer(sequence: &[Nucleotide]) -> Vec<SequenceMap> {
             _ => {
                 if inside_n_region {
                     inside_n_region = false;
-                    map.push(SequenceMap::from(RegionType::NRegion, region_start, region_end));
+                    map.push(SequenceMap::from(
+                        RegionType::NRegion,
+                        region_start,
+                        region_end,
+                    ));
                     region_start = region_end;
                     region_end = region_start + 1;
                 } else {
@@ -151,7 +165,11 @@ pub fn map_buffer(sequence: &[Nucleotide]) -> Vec<SequenceMap> {
         }
     }
 
-    let region_type = if inside_n_region { RegionType::NRegion } else { RegionType::NonNRegion };
+    let region_type = if inside_n_region {
+        RegionType::NRegion
+    } else {
+        RegionType::NonNRegion
+    };
     map.push(SequenceMap::from(region_type, region_start, region_end));
     map
 }
@@ -183,16 +201,46 @@ pub fn resolve_iupac_bases(
 
     for c in raw.chars() {
         let resolved = match c.to_ascii_uppercase() {
-            'R' => { iupac_count += 1; iupac_pick(&['G', 'A'], rng)? }
-            'Y' => { iupac_count += 1; iupac_pick(&['C', 'T'], rng)? }
-            'M' => { iupac_count += 1; iupac_pick(&['A', 'C'], rng)? }
-            'K' => { iupac_count += 1; iupac_pick(&['G', 'T'], rng)? }
-            'S' => { iupac_count += 1; iupac_pick(&['C', 'G'], rng)? }
-            'W' => { iupac_count += 1; iupac_pick(&['A', 'T'], rng)? }
-            'H' => { iupac_count += 1; iupac_pick(&['A', 'C', 'T'], rng)? }
-            'B' => { iupac_count += 1; iupac_pick(&['C', 'G', 'T'], rng)? }
-            'V' => { iupac_count += 1; iupac_pick(&['A', 'C', 'G'], rng)? }
-            'D' => { iupac_count += 1; iupac_pick(&['A', 'G', 'T'], rng)? }
+            'R' => {
+                iupac_count += 1;
+                iupac_pick(&['G', 'A'], rng)?
+            }
+            'Y' => {
+                iupac_count += 1;
+                iupac_pick(&['C', 'T'], rng)?
+            }
+            'M' => {
+                iupac_count += 1;
+                iupac_pick(&['A', 'C'], rng)?
+            }
+            'K' => {
+                iupac_count += 1;
+                iupac_pick(&['G', 'T'], rng)?
+            }
+            'S' => {
+                iupac_count += 1;
+                iupac_pick(&['C', 'G'], rng)?
+            }
+            'W' => {
+                iupac_count += 1;
+                iupac_pick(&['A', 'T'], rng)?
+            }
+            'H' => {
+                iupac_count += 1;
+                iupac_pick(&['A', 'C', 'T'], rng)?
+            }
+            'B' => {
+                iupac_count += 1;
+                iupac_pick(&['C', 'G', 'T'], rng)?
+            }
+            'V' => {
+                iupac_count += 1;
+                iupac_pick(&['A', 'C', 'G'], rng)?
+            }
+            'D' => {
+                iupac_count += 1;
+                iupac_pick(&['A', 'G', 'T'], rng)?
+            }
             _ => c,
         };
         sequence.push(Nucleotide::from(resolved));
@@ -232,12 +280,11 @@ pub fn non_n_regions(sequence: &[Nucleotide]) -> Vec<(usize, usize)> {
 /// Scans a FASTA file and returns `(contig_name, length)` for each contig
 /// without storing sequences. Used to build BAM headers before streaming reads.
 pub fn scan_fasta_lengths(path: &PathBuf) -> Result<Vec<(String, usize)>, FastaStreamError> {
-    let lines: Box<dyn Iterator<Item = io::Result<String>>> =
-        if is_gzipped_file(path)? {
-            Box::new(read_gzip_lines(path)?)
-        } else {
-            Box::new(read_lines(path)?)
-        };
+    let lines: Box<dyn Iterator<Item = io::Result<String>>> = if is_gzipped_file(path)? {
+        Box::new(read_gzip_lines(path)?)
+    } else {
+        Box::new(read_lines(path)?)
+    };
 
     let mut result: Vec<(String, usize)> = Vec::new();
     let mut current_name: Option<String> = None;
@@ -265,9 +312,9 @@ pub fn scan_fasta_lengths(path: &PathBuf) -> Result<Vec<(String, usize)>, FastaS
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flate2::{Compression, write::GzEncoder};
     use std::io::Write;
     use tempfile::NamedTempFile;
-    use flate2::{Compression, write::GzEncoder};
 
     fn write_fasta(content: &str) -> NamedTempFile {
         let mut f = NamedTempFile::new().unwrap();
@@ -419,10 +466,10 @@ mod tests {
     fn test_scan_fasta_lengths_multiple_contigs() {
         let f = write_fasta(">chr1\nACGT\n>chr2\nGGGGGGGGGG\n");
         let lengths = scan_fasta_lengths(&f.path().to_path_buf()).unwrap();
-        assert_eq!(lengths, vec![
-            ("chr1".to_string(), 4),
-            ("chr2".to_string(), 10),
-        ]);
+        assert_eq!(
+            lengths,
+            vec![("chr1".to_string(), 4), ("chr2".to_string(), 10),]
+        );
     }
 
     #[test]
@@ -449,8 +496,12 @@ mod tests {
         assert_eq!(seq.len(), 15);
         for nuc in &seq {
             assert!(
-                matches!(nuc, Nucleotide::A | Nucleotide::C | Nucleotide::G | Nucleotide::T | Nucleotide::N),
-                "unexpected nucleotide {:?}", nuc
+                matches!(
+                    nuc,
+                    Nucleotide::A | Nucleotide::C | Nucleotide::G | Nucleotide::T | Nucleotide::N
+                ),
+                "unexpected nucleotide {:?}",
+                nuc
             );
         }
     }
@@ -460,7 +511,16 @@ mod tests {
         let mut rng = NeatRng::new_from_seed(&vec!["iupac_test".to_string()]).unwrap();
         let (seq, count) = resolve_iupac_bases("ACGTN", &mut rng).unwrap();
         assert_eq!(count, 0);
-        assert_eq!(seq, vec![Nucleotide::A, Nucleotide::C, Nucleotide::G, Nucleotide::T, Nucleotide::N]);
+        assert_eq!(
+            seq,
+            vec![
+                Nucleotide::A,
+                Nucleotide::C,
+                Nucleotide::G,
+                Nucleotide::T,
+                Nucleotide::N
+            ]
+        );
     }
 
     #[test]
@@ -473,7 +533,11 @@ mod tests {
         let g_count = seq.iter().filter(|&&n| n == Nucleotide::G).count();
         let a_count = seq.iter().filter(|&&n| n == Nucleotide::A).count();
         assert_eq!(g_count + a_count, 1000);
-        assert!(g_count >= 400 && g_count <= 600, "G count {} outside [400, 600]", g_count);
+        assert!(
+            g_count >= 400 && g_count <= 600,
+            "G count {} outside [400, 600]",
+            g_count
+        );
     }
 
     #[test]
@@ -488,9 +552,21 @@ mod tests {
         let t_count = seq.iter().filter(|&&n| n == Nucleotide::T).count();
         assert_eq!(a_count + c_count + t_count, 3000);
         // Each constituent should be ~1000; allow ±20% (200)
-        assert!(a_count >= 800 && a_count <= 1200, "A count {} outside [800, 1200]", a_count);
-        assert!(c_count >= 800 && c_count <= 1200, "C count {} outside [800, 1200]", c_count);
-        assert!(t_count >= 800 && t_count <= 1200, "T count {} outside [800, 1200]", t_count);
+        assert!(
+            a_count >= 800 && a_count <= 1200,
+            "A count {} outside [800, 1200]",
+            a_count
+        );
+        assert!(
+            c_count >= 800 && c_count <= 1200,
+            "C count {} outside [800, 1200]",
+            c_count
+        );
+        assert!(
+            t_count >= 800 && t_count <= 1200,
+            "T count {} outside [800, 1200]",
+            t_count
+        );
     }
 
     #[test]
@@ -498,9 +574,14 @@ mod tests {
         let mut rng = NeatRng::new_from_seed(&vec!["iupac_mask_test".to_string()]).unwrap();
         let (seq, count) = resolve_iupac_bases("acgt", &mut rng).unwrap();
         assert_eq!(count, 0);
-        assert_eq!(seq, vec![
-            Nucleotide::Maskeda, Nucleotide::Maskedc,
-            Nucleotide::Maskedg, Nucleotide::Maskedt,
-        ]);
+        assert_eq!(
+            seq,
+            vec![
+                Nucleotide::Maskeda,
+                Nucleotide::Maskedc,
+                Nucleotide::Maskedg,
+                Nucleotide::Maskedt,
+            ]
+        );
     }
 }

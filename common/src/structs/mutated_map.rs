@@ -1,11 +1,11 @@
+use crate::rng::NeatRng;
 use crate::structs::{
     nucleotides::Nucleotide,
     variants::{Genotype, Variant, VariantError},
 };
-use std::collections::HashMap;
-use crate::rng::NeatRng;
-use thiserror::Error;
 use log::debug;
+use std::collections::HashMap;
+use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum MutatedMapError {
@@ -33,7 +33,10 @@ impl MutatedMap {
         for variant in variant_vec {
             let location = variant.get_loc()?;
             if variant_map.contains_key(&location) {
-                debug!("Two mutations sampled at position {}; keeping first, discarding second", location);
+                debug!(
+                    "Two mutations sampled at position {}; keeping first, discarding second",
+                    location
+                );
                 continue;
             }
             variant_map.insert(location, variant);
@@ -84,7 +87,8 @@ mod tests {
 
     #[test]
     fn test_is_flagged() {
-        let variant = Variant::new(VariantType::SNP, 1003, &vec![A], &vec![G], &mut vec![1, 0]).unwrap();
+        let variant =
+            Variant::new(VariantType::SNP, 1003, &vec![A], &vec![G], &mut vec![1, 0]).unwrap();
         let map = make_map(1000, 2000, variant);
         assert!(map.is_flagged(&1003));
         assert!(!map.is_flagged(&1007));
@@ -92,7 +96,8 @@ mod tests {
 
     #[test]
     fn test_contains() {
-        let variant = Variant::new(VariantType::SNP, 1003, &vec![A], &vec![G], &mut vec![1, 0]).unwrap();
+        let variant =
+            Variant::new(VariantType::SNP, 1003, &vec![A], &vec![G], &mut vec![1, 0]).unwrap();
         let map = make_map(1000, 2000, variant);
         assert!(map.contains((1003, 1300)));
         assert!(!map.contains((1900, 2100)));
@@ -100,7 +105,8 @@ mod tests {
 
     #[test]
     fn test_mutate_position_homozygous_always_returns_alt() {
-        let variant = Variant::new(VariantType::SNP, 1003, &vec![A], &vec![G], &mut vec![1, 1]).unwrap();
+        let variant =
+            Variant::new(VariantType::SNP, 1003, &vec![A], &vec![G], &mut vec![1, 1]).unwrap();
         let map = make_map(1000, 2000, variant);
         let mut rng = NeatRng::new_from_seed(&vec!["test".to_string()]).unwrap();
         for _ in 0..10 {
@@ -110,7 +116,8 @@ mod tests {
 
     #[test]
     fn test_mutate_position_heterozygous_returns_ref_or_alt() {
-        let variant = Variant::new(VariantType::SNP, 1003, &vec![A], &vec![G], &mut vec![1, 0]).unwrap();
+        let variant =
+            Variant::new(VariantType::SNP, 1003, &vec![A], &vec![G], &mut vec![1, 0]).unwrap();
         let map = make_map(1000, 2000, variant);
         let mut rng = NeatRng::new_from_seed(&vec!["test".to_string()]).unwrap();
         let mut saw_ref = false;
@@ -118,8 +125,12 @@ mod tests {
         for _ in 0..20 {
             let result = map.mutate_position(1003, &mut rng).unwrap();
             assert!(result == vec![A] || result == vec![G]);
-            if result == vec![A] { saw_ref = true; }
-            if result == vec![G] { saw_alt = true; }
+            if result == vec![A] {
+                saw_ref = true;
+            }
+            if result == vec![G] {
+                saw_alt = true;
+            }
         }
         assert!(saw_ref, "expected at least one ref result in 20 trials");
         assert!(saw_alt, "expected at least one alt result in 20 trials");

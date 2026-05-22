@@ -6,6 +6,13 @@ bam_file: /path/to/aligned.bam
 # Walker-level MAPQ filter for the shared BAM pass. Observers may apply
 # stricter filters internally (FragLengthObserver always requires MAPQ > 10).
 # Default 0 matches `samtools depth` defaults.
+#
+# NOTE: this single knob gates BOTH observers. The standalone tools differ:
+# `gen-frag-length-model` hard-codes its own MAPQ > 10 cutoff, while
+# `gen-gc-bias-model` honors whatever you pass it. To match the standalone
+# frag-length output byte-for-byte, use min_mapq: 10. To match a standalone
+# gc-bias run with min_mapq: 20, use min_mapq: 20. If the two outputs need
+# different MAPQ policies, run gen-bam-models twice with one section per run.
 min_mapq: 0
 
 # Fragment-length model. Optional.

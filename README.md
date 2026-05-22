@@ -599,6 +599,8 @@ gc_bias:
 
 Both sections are optional but at least one must be present. The output models are interchangeable with what `gen-frag-length-model` and `gen-gc-bias-model` would produce on their own, so the resulting files plug into `gen-reads` exactly the same way.
 
+**One filter for the shared walk.** The top-level `min_mapq` is the only MAPQ knob exposed to the unified walker, and it gates *both* observers. The standalone tools differ: `gen-frag-length-model` hard-codes its own MAPQ > 10 cutoff (via `BamWalkFilter::for_frag_length()`), while `gen-gc-bias-model` honors the `min_mapq` you pass it. If you want the unified runner's frag-length output to match the standalone command byte-for-byte, set `min_mapq: 10`; if you want the GC bias output to match a standalone run with `min_mapq: 20`, set `min_mapq: 20`. When the two policies need to differ, run `gen-bam-models` twice — one config per output — and the per-observer BAM iteration savings still beat running the standalone commands.
+
 Running on HPC
 ==============
 

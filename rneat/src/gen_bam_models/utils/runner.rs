@@ -1,20 +1,20 @@
 // Unified runner: one BAM walk feeding multiple observers. Each requested
 // model is built from its observer's accumulated state via the per-tool
 // `run_from_*` helpers exposed by the standalone modules.
-use std::path::PathBuf;
 use log::info;
+use std::path::PathBuf;
 
 use common::file_tools::bam_reader::{
-    walk_bam, BamWalkFilter, CoverageObserver, FragLengthObserver, RecordObserver,
+    BamWalkFilter, CoverageObserver, FragLengthObserver, RecordObserver, walk_bam,
 };
 
 use crate::gen_bam_models::{
     errors::GenBamModelsError,
-    utils::config::{RunConfiguration, GcBiasSection},
+    utils::config::{GcBiasSection, RunConfiguration},
 };
 use crate::gen_frag_length_model::utils::runner::run_from_tlens;
-use crate::gen_gc_bias_model::utils::runner::run_from_coverage as gc_bias_run_from_coverage;
 use crate::gen_gc_bias_model::utils::config::RunConfiguration as GcBiasRunConfig;
+use crate::gen_gc_bias_model::utils::runner::run_from_coverage as gc_bias_run_from_coverage;
 
 pub fn runner(config_path: &PathBuf) -> Result<(), GenBamModelsError> {
     let config = RunConfiguration::from(config_path)?;
@@ -105,7 +105,10 @@ mod tests {
             alignment::{
                 RecordBuf,
                 io::Write as _,
-                record::{cigar::{op::Kind, Op}, Flags, MappingQuality},
+                record::{
+                    Flags, MappingQuality,
+                    cigar::{Op, op::Kind},
+                },
                 record_buf::{Cigar, Sequence},
             },
             header::record::value::{Map, map::ReferenceSequence},
@@ -114,9 +117,7 @@ mod tests {
         let header = sam::Header::builder()
             .add_reference_sequence(
                 contig.to_vec(),
-                Map::<ReferenceSequence>::new(
-                    std::num::NonZero::<usize>::new(contig_len).unwrap(),
-                ),
+                Map::<ReferenceSequence>::new(std::num::NonZero::<usize>::new(contig_len).unwrap()),
             )
             .build();
         let file = std::fs::File::create(path).unwrap();
@@ -216,7 +217,8 @@ mod tests {
             assert!(
                 (w - 1.0).abs() < 1e-6,
                 "Expected weight ~1.0 at GC {}%, got {}",
-                gc_pct, w
+                gc_pct,
+                w
             );
         }
     }
@@ -251,13 +253,20 @@ mod tests {
         // The two models should be numerically identical (same TLENs collected,
         // same filter, same normal-fit parameters).
         let m_unified =
-            common::models::fragment_length::FragmentLengthModel::discrete_from_file(&unified_out).unwrap();
+            common::models::fragment_length::FragmentLengthModel::discrete_from_file(&unified_out)
+                .unwrap();
         let m_standalone =
-            common::models::fragment_length::FragmentLengthModel::discrete_from_file(&standalone_out).unwrap();
+            common::models::fragment_length::FragmentLengthModel::discrete_from_file(
+                &standalone_out,
+            )
+            .unwrap();
         // Models serialize to JSON; the easiest equivalence check is to compare
         // the serialized representations.
         let s_unified = serde_json::to_string(&m_unified).unwrap();
         let s_standalone = serde_json::to_string(&m_standalone).unwrap();
-        assert_eq!(s_unified, s_standalone, "unified and standalone frag-length models diverged");
+        assert_eq!(
+            s_unified, s_standalone,
+            "unified and standalone frag-length models diverged"
+        );
     }
 }

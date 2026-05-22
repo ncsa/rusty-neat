@@ -6,9 +6,9 @@ extern crate serde_json;
 extern crate simplelog;
 
 pub mod filter_reads;
+pub mod gen_bam_models;
 pub mod gen_frag_length_model;
 pub mod gen_gc_bias_model;
-pub mod gen_bam_models;
 pub mod gen_mut_model;
 pub mod gen_reads;
 pub mod gen_seq_error_model;
@@ -338,8 +338,7 @@ fn main() -> Result<(), NeatErrors> {
 
                 if !file.is_file() {
                     return Err(NeatErrors::GenBamModels(GenBamModelsError::ConfigError(
-                        "Must supply a valid configuration file to run gen-bam-models!"
-                            .to_string(),
+                        "Must supply a valid configuration file to run gen-bam-models!".to_string(),
                     )));
                 }
                 info!("Running gen-bam-models to build multiple BAM-derived models in one pass.");

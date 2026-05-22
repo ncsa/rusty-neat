@@ -131,9 +131,7 @@ fn assert_or_bless(canonical: &str, baseline_name: &str) {
         );
     });
     if expected != canonical {
-        let diff_path = path
-            .with_extension("")
-            .with_extension("actual.json");
+        let diff_path = path.with_extension("").with_extension("actual.json");
         fs::write(&diff_path, canonical).ok();
         panic!(
             "Model parity drift detected for `{baseline_name}`.\n\

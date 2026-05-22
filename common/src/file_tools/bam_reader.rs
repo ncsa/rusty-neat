@@ -1,10 +1,13 @@
-use std::{io, path::PathBuf};
+use std::{collections::HashMap, io, path::PathBuf};
 
 use noodles::bam;
-use noodles::sam::alignment::record::{
-    cigar::op::Kind as CigarKind,
-    data::field::{Tag, Value},
-    Flags,
+use noodles::sam::{
+    self as sam,
+    alignment::record::{
+        cigar::op::Kind as CigarKind,
+        data::field::{Tag, Value},
+        Flags,
+    },
 };
 use thiserror::Error;
 
@@ -171,10 +174,30 @@ impl BamWalkFilter {
             require_same_ref_as_mate: false,
         }
     }
+
+    /// Matches `samtools depth` defaults for coverage accumulation:
+    /// skip unmapped/secondary/supplementary, no MAPQ filter, no pairing requirements.
+    pub fn for_coverage() -> Self {
+        Self {
+            min_mapq: 0,
+            skip_flags: SKIP_FLAGS,
+            require_paired: false,
+            require_first_in_pair: false,
+            require_mate_mapped: false,
+            require_same_ref_as_mate: false,
+        }
+    }
 }
 
 /// Visitor invoked once per record that passes the `BamWalkFilter`.
+///
+/// `on_start` runs once after the header is read but before any records are
+/// dispatched. Observers that need to map reference_sequence_id → contig
+/// name/length (e.g. `CoverageObserver`) cache that lookup here.
 pub trait RecordObserver {
+    fn on_start(&mut self, _header: &sam::Header) -> Result<(), BamReaderError> {
+        Ok(())
+    }
     fn observe(&mut self, record: &bam::Record) -> Result<(), BamReaderError>;
 }
 
@@ -194,7 +217,11 @@ pub fn walk_bam(
     observers: &mut [&mut dyn RecordObserver],
 ) -> Result<WalkStats, BamReaderError> {
     let mut reader = std::fs::File::open(path).map(bam::io::Reader::new)?;
-    reader.read_header()?;
+    let header = reader.read_header()?;
+
+    for obs in observers.iter_mut() {
+        obs.on_start(&header)?;
+    }
 
     let mut stats = WalkStats::default();
 
@@ -308,6 +335,101 @@ impl RecordObserver for TransitionObserver {
                     walker.skip_deletion();
                 }
                 CigarKind::HardClip | CigarKind::Pad => {}
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Accumulates per-base reference coverage from aligned records.
+///
+/// `on_start` snapshots the contig name / length tables from the BAM header.
+/// `observe` walks each kept record's CIGAR M/=/X spans starting at
+/// `alignment_start` and increments per-base depth counters. CIGAR D/N
+/// advance the reference position without incrementing; I/S/H/P do not
+/// consume reference positions and leave depth unchanged.
+///
+/// Records with no `reference_sequence_id` or no `alignment_start` are
+/// silently skipped — pair with `BamWalkFilter::for_coverage()` which
+/// drops unmapped records via `SKIP_FLAGS`.
+///
+/// Depth arrays are allocated lazily, so contigs with no observed
+/// records consume no memory.
+#[derive(Debug, Default)]
+pub struct CoverageObserver {
+    contig_names: Vec<String>,
+    contig_lengths: Vec<usize>,
+    depths_by_id: Vec<Option<Vec<u32>>>,
+}
+
+impl CoverageObserver {
+    /// Consumes the observer and returns depth arrays keyed by contig name.
+    /// Only contigs that received at least one record are included.
+    pub fn into_by_contig(self) -> HashMap<String, Vec<u32>> {
+        self.contig_names
+            .into_iter()
+            .zip(self.depths_by_id)
+            .filter_map(|(name, depths)| depths.map(|d| (name, d)))
+            .collect()
+    }
+}
+
+impl RecordObserver for CoverageObserver {
+    fn on_start(&mut self, header: &sam::Header) -> Result<(), BamReaderError> {
+        self.contig_names.clear();
+        self.contig_lengths.clear();
+        for (name, ref_seq) in header.reference_sequences() {
+            let name_bytes: &[u8] = name.as_ref();
+            let name_str = std::str::from_utf8(name_bytes)
+                .map(|s| s.to_string())
+                .unwrap_or_else(|_| String::from_utf8_lossy(name_bytes).into_owned());
+            self.contig_names.push(name_str);
+            self.contig_lengths.push(ref_seq.length().get());
+        }
+        self.depths_by_id = (0..self.contig_names.len()).map(|_| None).collect();
+        Ok(())
+    }
+
+    fn observe(&mut self, record: &bam::Record) -> Result<(), BamReaderError> {
+        let ref_id = match record.reference_sequence_id().transpose()? {
+            Some(id) => id,
+            None => return Ok(()),
+        };
+        if ref_id >= self.depths_by_id.len() {
+            return Ok(());
+        }
+        let start_1based = match record.alignment_start() {
+            Some(Ok(p)) => p.get(),
+            _ => return Ok(()),
+        };
+        if start_1based == 0 {
+            return Ok(());
+        }
+        let mut ref_pos = start_1based - 1;
+        let contig_len = self.contig_lengths[ref_id];
+        let depths = self.depths_by_id[ref_id]
+            .get_or_insert_with(|| vec![0u32; contig_len]);
+
+        for op_result in record.cigar().iter() {
+            let op = op_result?;
+            let len = op.len();
+            match op.kind() {
+                CigarKind::Match
+                | CigarKind::SequenceMatch
+                | CigarKind::SequenceMismatch => {
+                    let end = (ref_pos + len).min(depths.len());
+                    for i in ref_pos..end {
+                        depths[i] = depths[i].saturating_add(1);
+                    }
+                    ref_pos += len;
+                }
+                CigarKind::Deletion | CigarKind::Skip => {
+                    ref_pos += len;
+                }
+                CigarKind::Insertion
+                | CigarKind::SoftClip
+                | CigarKind::HardClip
+                | CigarKind::Pad => {}
             }
         }
         Ok(())
@@ -598,5 +720,202 @@ mod tests {
         let stats =
             walk_bam(&path, &BamWalkFilter::for_frag_length(), &mut [&mut frag]).unwrap();
         assert_eq!(stats.records_kept, 0);
+    }
+
+    /// Builds a minimal BGZF BAM at `path` with caller-specified CIGAR and
+    /// alignment start per record. Each record is mapped, primary, mapq=30,
+    /// flags=empty. Sequence is filled with 'A' sized to the read-consuming
+    /// CIGAR ops so noodles is happy.
+    fn write_coverage_test_bam(
+        path: &std::path::PathBuf,
+        contigs: &[(&[u8], usize)],
+        records: &[(usize, usize, &[(noodles::sam::alignment::record::cigar::op::Kind, usize)])],
+    ) {
+        use noodles::core::Position;
+        use noodles::sam::{
+            self as sam,
+            alignment::{
+                RecordBuf,
+                io::Write as _,
+                record::{cigar::{op::Kind, Op}, MappingQuality},
+                record_buf::{Cigar, Sequence},
+            },
+            header::record::value::{Map, map::ReferenceSequence},
+        };
+        let mut builder = sam::Header::builder();
+        for &(name, len) in contigs {
+            builder = builder.add_reference_sequence(
+                name.to_vec(),
+                Map::<ReferenceSequence>::new(std::num::NonZero::<usize>::new(len).unwrap()),
+            );
+        }
+        let header = builder.build();
+        let file = std::fs::File::create(path).unwrap();
+        let mut writer = bam::io::Writer::new(file);
+        writer.write_header(&header).unwrap();
+
+        for &(ref_id, start_1based, cigar_ops) in records {
+            let cigar: Cigar = cigar_ops
+                .iter()
+                .map(|&(k, l)| Op::new(k, l))
+                .collect();
+            let read_len: usize = cigar_ops
+                .iter()
+                .filter(|(k, _)| {
+                    matches!(
+                        k,
+                        Kind::Match
+                            | Kind::SequenceMatch
+                            | Kind::SequenceMismatch
+                            | Kind::Insertion
+                            | Kind::SoftClip
+                    )
+                })
+                .map(|&(_, l)| l)
+                .sum();
+            let mut record = RecordBuf::default();
+            *record.flags_mut() = Flags::empty();
+            *record.cigar_mut() = cigar;
+            *record.reference_sequence_id_mut() = Some(ref_id);
+            *record.alignment_start_mut() = Position::new(start_1based);
+            *record.sequence_mut() = Sequence::from(vec![b'A'; read_len].as_slice());
+            *record.mapping_quality_mut() = Some(MappingQuality::try_from(30u8).unwrap());
+            writer.write_alignment_record(&header, &record).unwrap();
+        }
+    }
+
+    #[test]
+    fn test_coverage_observer_single_record() {
+        use noodles::sam::alignment::record::cigar::op::Kind;
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("t.bam");
+        write_coverage_test_bam(
+            &path,
+            &[(b"chr1", 10)],
+            &[(0, 1, &[(Kind::Match, 4)])],
+        );
+        let mut cov = CoverageObserver::default();
+        walk_bam(&path, &BamWalkFilter::for_coverage(), &mut [&mut cov]).unwrap();
+        let by_contig = cov.into_by_contig();
+        let depths = by_contig.get("chr1").expect("chr1 should have depths");
+        assert_eq!(&depths[..6], &[1, 1, 1, 1, 0, 0]);
+    }
+
+    #[test]
+    fn test_coverage_observer_overlapping_reads_add() {
+        // Two reads overlapping at ref positions 2..4 (0-based) should yield depth 2 there.
+        use noodles::sam::alignment::record::cigar::op::Kind;
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("t.bam");
+        write_coverage_test_bam(
+            &path,
+            &[(b"chr1", 10)],
+            &[
+                (0, 1, &[(Kind::Match, 4)]), // covers 0..4
+                (0, 3, &[(Kind::Match, 4)]), // covers 2..6
+            ],
+        );
+        let mut cov = CoverageObserver::default();
+        walk_bam(&path, &BamWalkFilter::for_coverage(), &mut [&mut cov]).unwrap();
+        let depths = cov.into_by_contig().remove("chr1").unwrap();
+        assert_eq!(&depths[..7], &[1, 1, 2, 2, 1, 1, 0]);
+    }
+
+    #[test]
+    fn test_coverage_observer_insertion_does_not_advance_reference() {
+        // CIGAR 2M2I2M at pos=1: ref positions 0,1,4,5? No — insertion consumes read
+        // only, so ref goes 0,1 (first 2M) → 0,1 (skip insertion) → 2,3 (second 2M).
+        // Result: depth 1 at positions 0..4.
+        use noodles::sam::alignment::record::cigar::op::Kind;
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("t.bam");
+        write_coverage_test_bam(
+            &path,
+            &[(b"chr1", 10)],
+            &[(0, 1, &[(Kind::Match, 2), (Kind::Insertion, 2), (Kind::Match, 2)])],
+        );
+        let mut cov = CoverageObserver::default();
+        walk_bam(&path, &BamWalkFilter::for_coverage(), &mut [&mut cov]).unwrap();
+        let depths = cov.into_by_contig().remove("chr1").unwrap();
+        assert_eq!(&depths[..6], &[1, 1, 1, 1, 0, 0]);
+    }
+
+    #[test]
+    fn test_coverage_observer_deletion_advances_reference_without_depth() {
+        // CIGAR 2M2D2M at pos=1: ref goes 0,1 → skip 2,3 (deletion) → cover 4,5.
+        // Result: depth 1 at positions 0,1,4,5; 0 at 2,3.
+        use noodles::sam::alignment::record::cigar::op::Kind;
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("t.bam");
+        write_coverage_test_bam(
+            &path,
+            &[(b"chr1", 10)],
+            &[(0, 1, &[(Kind::Match, 2), (Kind::Deletion, 2), (Kind::Match, 2)])],
+        );
+        let mut cov = CoverageObserver::default();
+        walk_bam(&path, &BamWalkFilter::for_coverage(), &mut [&mut cov]).unwrap();
+        let depths = cov.into_by_contig().remove("chr1").unwrap();
+        assert_eq!(&depths[..7], &[1, 1, 0, 0, 1, 1, 0]);
+    }
+
+    #[test]
+    fn test_coverage_observer_soft_clip_does_not_count() {
+        // CIGAR 2S4M at pos=1: soft-clipped bases don't consume reference, so
+        // the 4 matches cover ref positions 0..4.
+        use noodles::sam::alignment::record::cigar::op::Kind;
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("t.bam");
+        write_coverage_test_bam(
+            &path,
+            &[(b"chr1", 10)],
+            &[(0, 1, &[(Kind::SoftClip, 2), (Kind::Match, 4)])],
+        );
+        let mut cov = CoverageObserver::default();
+        walk_bam(&path, &BamWalkFilter::for_coverage(), &mut [&mut cov]).unwrap();
+        let depths = cov.into_by_contig().remove("chr1").unwrap();
+        assert_eq!(&depths[..6], &[1, 1, 1, 1, 0, 0]);
+    }
+
+    #[test]
+    fn test_coverage_observer_multi_contig() {
+        // Records on different contigs land in different depth arrays;
+        // unobserved contigs are absent from the output map.
+        use noodles::sam::alignment::record::cigar::op::Kind;
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("t.bam");
+        write_coverage_test_bam(
+            &path,
+            &[(b"chr1", 10), (b"chr2", 10), (b"chr3", 10)],
+            &[
+                (0, 1, &[(Kind::Match, 3)]),
+                (1, 5, &[(Kind::Match, 3)]),
+            ],
+        );
+        let mut cov = CoverageObserver::default();
+        walk_bam(&path, &BamWalkFilter::for_coverage(), &mut [&mut cov]).unwrap();
+        let by_contig = cov.into_by_contig();
+        assert_eq!(by_contig.len(), 2, "chr3 had no records, should be absent");
+        assert_eq!(&by_contig.get("chr1").unwrap()[..4], &[1, 1, 1, 0]);
+        assert_eq!(&by_contig.get("chr2").unwrap()[..8], &[0, 0, 0, 0, 1, 1, 1, 0]);
+    }
+
+    #[test]
+    fn test_coverage_observer_clips_at_contig_end() {
+        // A read whose match span runs past the contig end is silently clipped,
+        // not a panic. CIGAR 6M at pos=8 on a 10-length contig: positions 7..10
+        // get incremented, position 10..13 are out of bounds and dropped.
+        use noodles::sam::alignment::record::cigar::op::Kind;
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("t.bam");
+        write_coverage_test_bam(
+            &path,
+            &[(b"chr1", 10)],
+            &[(0, 8, &[(Kind::Match, 6)])],
+        );
+        let mut cov = CoverageObserver::default();
+        walk_bam(&path, &BamWalkFilter::for_coverage(), &mut [&mut cov]).unwrap();
+        let depths = cov.into_by_contig().remove("chr1").unwrap();
+        assert_eq!(depths.len(), 10);
+        assert_eq!(&depths[..], &[0, 0, 0, 0, 0, 0, 0, 1, 1, 1]);
     }
 }

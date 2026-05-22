@@ -38,10 +38,18 @@ impl CoverageFormat {
 #[derive(Debug, Clone)]
 pub struct RunConfiguration {
     // This struct holds all the parameters for running GC Bias modeling.
-    // It is built from user-supplied input in the form of a configuration yaml file
+    // It is built from user-supplied input in the form of a configuration yaml file.
+    //
+    // Coverage source: exactly one of `bam_file` or `coverage_file` must be set.
+    // `bam_file` is the preferred path; `coverage_file` is retained for users with
+    // pre-computed samtools-depth / bedtools-genomecov output.
     pub reference: PathBuf,
-    pub coverage_file: PathBuf,
-    pub coverage_format: CoverageFormat,
+    pub bam_file: Option<PathBuf>,
+    pub coverage_file: Option<PathBuf>,
+    pub coverage_format: Option<CoverageFormat>,
+    /// Minimum mapping quality for in-process coverage accumulation from `bam_file`.
+    /// Ignored on the `coverage_file` path. Default 0 matches `samtools depth`.
+    pub min_mapq: u8,
     pub bed_table: HashMap<String, Vec<BedRecord>>,
     pub output_file: PathBuf,
     pub overwrite_output: bool,
@@ -66,23 +74,67 @@ impl RunConfiguration {
             ));
         }
 
-        let coverage_file = PathBuf::from(
-            scrape_config["coverage_file"]
-                .as_str()
-                .ok_or_else(|| GenGcBiasModelError::ConfigError("Missing coverage_file".to_string()))?
-        );
-        if !coverage_file.is_file() {
-            return Err(GenGcBiasModelError::ConfigError(
-                format!("Invalid coverage file {:?}", coverage_file)
-            ));
+        let bam_file = scrape_config
+            .get("bam_file")
+            .and_then(|v| v.as_str())
+            .map(PathBuf::from);
+        if let Some(p) = &bam_file {
+            if !p.is_file() {
+                return Err(GenGcBiasModelError::ConfigError(
+                    format!("Invalid bam_file {:?}", p)
+                ));
+            }
         }
 
-        let coverage_format = CoverageFormat::from_str(
-            scrape_config
-                .get("coverage_format")
-                .and_then(|v| v.as_str())
-                .unwrap_or("samtools-depth")
-        )?;
+        let coverage_file = scrape_config
+            .get("coverage_file")
+            .and_then(|v| v.as_str())
+            .map(PathBuf::from);
+        if let Some(p) = &coverage_file {
+            if !p.is_file() {
+                return Err(GenGcBiasModelError::ConfigError(
+                    format!("Invalid coverage file {:?}", p)
+                ));
+            }
+        }
+
+        match (&bam_file, &coverage_file) {
+            (Some(_), Some(_)) => {
+                return Err(GenGcBiasModelError::ConfigError(
+                    "Specify either bam_file or coverage_file, not both".to_string()
+                ));
+            }
+            (None, None) => {
+                return Err(GenGcBiasModelError::ConfigError(
+                    "Must specify exactly one of bam_file or coverage_file".to_string()
+                ));
+            }
+            _ => {}
+        }
+
+        // coverage_format only applies to the coverage_file path. It is required (with
+        // a default) when coverage_file is set, and disallowed when bam_file is set so
+        // a misplaced field doesn't silently mislead the user.
+        let coverage_format = if coverage_file.is_some() {
+            Some(CoverageFormat::from_str(
+                scrape_config
+                    .get("coverage_format")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("samtools-depth")
+            )?)
+        } else {
+            if scrape_config.contains_key("coverage_format") {
+                return Err(GenGcBiasModelError::ConfigError(
+                    "coverage_format only applies to coverage_file input".to_string()
+                ));
+            }
+            None
+        };
+
+        let min_mapq = scrape_config
+            .get("min_mapq")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as u8;
 
         let bed_file_raw = scrape_config
             .get("bed_file")
@@ -155,8 +207,10 @@ impl RunConfiguration {
 
         Ok(RunConfiguration {
             reference,
+            bam_file,
             coverage_file,
             coverage_format,
+            min_mapq,
             bed_table,
             output_file,
             overwrite_output,
@@ -257,8 +311,9 @@ min_windows_per_bin: 10
         let config = RunConfiguration::from(&config_file.path().to_path_buf()).unwrap();
 
         assert_eq!(config.reference, reference.path());
-        assert_eq!(config.coverage_file, coverage.path());
-        assert_eq!(config.coverage_format, CoverageFormat::SamtoolsDepth);
+        assert_eq!(config.coverage_file.as_deref(), Some(coverage.path()));
+        assert_eq!(config.coverage_format, Some(CoverageFormat::SamtoolsDepth));
+        assert!(config.bam_file.is_none());
         assert!(config.bed_table.is_empty());
         assert_eq!(config.output_file, output_path);
         assert!(config.overwrite_output);
@@ -290,7 +345,7 @@ overwrite_output: true
 
         let config = RunConfiguration::from(&config_file.path().to_path_buf()).unwrap();
 
-        assert_eq!(config.coverage_format, CoverageFormat::SamtoolsDepth);
+        assert_eq!(config.coverage_format, Some(CoverageFormat::SamtoolsDepth));
         assert!(config.bed_table.is_empty());
         assert_eq!(config.window_size, 100);
         assert_eq!(config.window_stride, 100);
@@ -325,8 +380,8 @@ min_windows_per_bin: 5
 
         let config = RunConfiguration::from(&config_file.path().to_path_buf()).unwrap();
 
-        assert_eq!(config.coverage_format, CoverageFormat::BedtoolsGenomecovD);
-        assert!(!config.coverage_format.is_zero_based());
+        assert_eq!(config.coverage_format, Some(CoverageFormat::BedtoolsGenomecovD));
+        assert!(!config.coverage_format.unwrap().is_zero_based());
         assert_eq!(config.window_size, 50);
         assert_eq!(config.window_stride, 25);
         assert_eq!(config.min_windows_per_bin, 5);
@@ -357,8 +412,8 @@ overwrite_output: true
 
         let config = RunConfiguration::from(&config_file.path().to_path_buf()).unwrap();
 
-        assert_eq!(config.coverage_format, CoverageFormat::BedtoolsGenomecovDz);
-        assert!(config.coverage_format.is_zero_based());
+        assert_eq!(config.coverage_format, Some(CoverageFormat::BedtoolsGenomecovDz));
+        assert!(config.coverage_format.unwrap().is_zero_based());
     }
 
     #[test]
@@ -707,5 +762,141 @@ window_stride: 100
 
         let config = RunConfiguration::from(&config_file.path().to_path_buf()).unwrap();
         assert_eq!(config.window_stride, 100);
+    }
+
+    #[test]
+    fn test_run_configuration_rejects_both_bam_and_coverage_file() {
+        let reference = write_temp_file(">chr1\nACGTACGT\n");
+        let bam = write_temp_file("dummy"); // contents don't matter, only is_file
+        let coverage = write_temp_file("chr1\t1\t10\n");
+        let output = tempfile::NamedTempFile::new().unwrap();
+        let output_path = output.path().to_path_buf();
+        drop(output);
+
+        let yaml = format!(
+            "\
+reference: {}
+bam_file: {}
+coverage_file: {}
+output_file: {}
+overwrite_output: true
+",
+            reference.path().display(),
+            bam.path().display(),
+            coverage.path().display(),
+            output_path.display(),
+        );
+        let config_file = write_config(&yaml);
+        let result = RunConfiguration::from(&config_file.path().to_path_buf());
+        assert!(
+            result.is_err(),
+            "Expected setting both bam_file and coverage_file to be rejected"
+        );
+    }
+
+    #[test]
+    fn test_run_configuration_rejects_neither_input_specified() {
+        let reference = write_temp_file(">chr1\nACGTACGT\n");
+        let output = tempfile::NamedTempFile::new().unwrap();
+        let output_path = output.path().to_path_buf();
+        drop(output);
+
+        let yaml = format!(
+            "\
+reference: {}
+output_file: {}
+overwrite_output: true
+",
+            reference.path().display(),
+            output_path.display(),
+        );
+        let config_file = write_config(&yaml);
+        let result = RunConfiguration::from(&config_file.path().to_path_buf());
+        assert!(
+            result.is_err(),
+            "Expected missing both bam_file and coverage_file to be rejected"
+        );
+    }
+
+    #[test]
+    fn test_run_configuration_rejects_coverage_format_with_bam_file() {
+        // coverage_format applies only to coverage_file; surfacing it on the BAM path
+        // would silently mislead the user about how their BAM is processed.
+        let reference = write_temp_file(">chr1\nACGTACGT\n");
+        let bam = write_temp_file("dummy");
+        let output = tempfile::NamedTempFile::new().unwrap();
+        let output_path = output.path().to_path_buf();
+        drop(output);
+
+        let yaml = format!(
+            "\
+reference: {}
+bam_file: {}
+coverage_format: samtools-depth
+output_file: {}
+overwrite_output: true
+",
+            reference.path().display(),
+            bam.path().display(),
+            output_path.display(),
+        );
+        let config_file = write_config(&yaml);
+        let result = RunConfiguration::from(&config_file.path().to_path_buf());
+        assert!(
+            result.is_err(),
+            "Expected coverage_format with bam_file to be rejected"
+        );
+    }
+
+    #[test]
+    fn test_run_configuration_parses_bam_file_path() {
+        let reference = write_temp_file(">chr1\nACGTACGT\n");
+        let bam = write_temp_file("dummy");
+        let output = tempfile::NamedTempFile::new().unwrap();
+        let output_path = output.path().to_path_buf();
+        drop(output);
+
+        let yaml = format!(
+            "\
+reference: {}
+bam_file: {}
+output_file: {}
+overwrite_output: true
+min_mapq: 20
+",
+            reference.path().display(),
+            bam.path().display(),
+            output_path.display(),
+        );
+        let config_file = write_config(&yaml);
+        let config = RunConfiguration::from(&config_file.path().to_path_buf()).unwrap();
+        assert_eq!(config.bam_file.as_deref(), Some(bam.path()));
+        assert!(config.coverage_file.is_none());
+        assert!(config.coverage_format.is_none());
+        assert_eq!(config.min_mapq, 20);
+    }
+
+    #[test]
+    fn test_run_configuration_min_mapq_defaults_to_zero() {
+        let reference = write_temp_file(">chr1\nACGTACGT\n");
+        let bam = write_temp_file("dummy");
+        let output = tempfile::NamedTempFile::new().unwrap();
+        let output_path = output.path().to_path_buf();
+        drop(output);
+
+        let yaml = format!(
+            "\
+reference: {}
+bam_file: {}
+output_file: {}
+overwrite_output: true
+",
+            reference.path().display(),
+            bam.path().display(),
+            output_path.display(),
+        );
+        let config_file = write_config(&yaml);
+        let config = RunConfiguration::from(&config_file.path().to_path_buf()).unwrap();
+        assert_eq!(config.min_mapq, 0);
     }
 }

@@ -113,7 +113,7 @@ impl RunConfiguration {
                         "binned_quality_bins entries must be < 94".to_string(),
                     ));
                 }
-                if bins.iter().any(|&b| b == 31) {
+                if bins.contains(&31) {
                     return Err(GenSeqErrorModelError::ConfigurationError(
                         "binned_quality_bins cannot include 31 (encodes to '@' under \
                          Phred+33 and would corrupt FASTQ output)".to_string(),

@@ -128,7 +128,7 @@ impl RunConfiguration {
         // parameters based on the inputs. A "." value means to use the default value.
 
         // Opens file for reading
-        let f = fs::File::open(&yaml_file);
+        let f = fs::File::open(yaml_file);
         let file = match f {
             Ok(l) => l,
             Err(error) => panic!(

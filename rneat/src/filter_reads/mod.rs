@@ -27,10 +27,10 @@ pub fn main(config: &PathBuf) -> Result<(), FilterReadsError> {
         let (output_file, is_gzip, is_fastq) = run_config.file_map[input_file].clone();
         if is_fastq {
             info!("Filtering input fastq file: {:?}", &input_file);
-            filter_fastq(&bed_table, &input_file, is_gzip, &output_file)?;
+            filter_fastq(&bed_table, input_file, is_gzip, &output_file)?;
         } else {
             info!("Filtering input vcf file: {:?}", &input_file);
-            filter_vcf(&bed_table, &input_file, is_gzip, &output_file)?;
+            filter_vcf(&bed_table, input_file, is_gzip, &output_file)?;
         }
         info!("Successfully filtered input file {:?}, written to {:?}", input_file, output_file);
     }

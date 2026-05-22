@@ -54,7 +54,7 @@ pub fn generate_fragments(
     // Use ceiling division (matching NEAT Python's ceil()) so fractional fragments are
     // rounded up rather than truncated — truncation compounds across many small regions.
     let denom = if paired_ended { (2 * read_length).max(1) } else { read_length };
-    let num_frags = (sequence_length.saturating_mul(coverage) + denom - 1) / denom;
+    let num_frags = sequence_length.saturating_mul(coverage).div_ceil(denom);
     if paired_ended {
         // For paired-end reads the physical fragment length (insert size) determines spacing.
         // Keep sampling until num_frags valid fragments are collected so that the pool has
@@ -102,7 +102,7 @@ pub fn generate_fragments(
 
     if fragments.is_empty() {
         debug!("No fragments generated!");
-        return Ok(Vec::new())
+        Ok(Vec::new())
     } else {
         Ok(fragments)
     }
@@ -239,7 +239,7 @@ pub fn generate_weighted_fragments(
     // so halve the count so that mean per-base read depth matches requested coverage.
     // Use ceiling division so fractional fragments are rounded up, not truncated.
     let denom = if paired_ended { (2 * read_length).max(1) } else { read_length };
-    let num_frags_base = (region_len.saturating_mul(coverage) + denom - 1) / denom;
+    let num_frags_base = region_len.saturating_mul(coverage).div_ceil(denom);
     let num_frags = if normalize {
         let inflated = (num_frags_base as f64 / mean_weight).round() as usize;
         let cap = num_frags_base.saturating_mul(MAX_COVERAGE_MULTIPLIER);

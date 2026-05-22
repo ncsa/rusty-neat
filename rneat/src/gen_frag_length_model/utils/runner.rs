@@ -76,7 +76,7 @@ fn filter_lengths(mut tlens: Vec<usize>, min_reads: usize) -> Vec<usize> {
     unique.sort_unstable();
     for l in unique {
         if l > 0 && (l as f64) <= ceiling && counts[&l] >= min_reads {
-            output.extend(std::iter::repeat(l).take(counts[&l]));
+            output.extend(std::iter::repeat_n(l, counts[&l]));
         }
     }
     output
@@ -87,7 +87,7 @@ fn median_f64(sorted: &[usize]) -> f64 {
     if n == 0 {
         return 0.0;
     }
-    if n % 2 == 0 {
+    if n.is_multiple_of(2) {
         (sorted[n / 2 - 1] + sorted[n / 2]) as f64 / 2.0
     } else {
         sorted[n / 2] as f64

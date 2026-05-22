@@ -39,7 +39,7 @@ impl RunConfiguration {
         // parameters based on the inputs. A "." value means to use the default value.
         //
         // Opens file for reading
-        let f = fs::File::open(&yml_file);
+        let f = fs::File::open(yml_file);
         let file = match f {
             Ok(l) => l,
             Err(error) => panic!(
@@ -72,11 +72,10 @@ impl RunConfiguration {
         };
         let overwrite_output = scrape_config["overwrite_output"].as_bool().unwrap_or(false);
         let output_file = PathBuf::from(scrape_config["output_file"].as_str().unwrap());
-        if !overwrite_output {
-            if output_file.is_file() {
+        if !overwrite_output
+            && output_file.is_file() {
                 panic!("Attempting to overwrite an existing file {:?}", output_file)
             }
-        }
         let mutations = read_vcf(vcf_file)?;
 
         let transition_matrix_file = scrape_config

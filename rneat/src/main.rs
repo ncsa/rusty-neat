@@ -182,7 +182,7 @@ fn main() -> Result<(), NeatErrors> {
     // Check that the parent dir exists
     let log_destination = check_parent(&log_dest, true).expect("Log destination parent path doesn't exist");
     let log_file = create_output_file(log_destination, true)
-        .expect(&format!("Error creating log file: {:?}", log_destination));
+        .unwrap_or_else(|_| panic!("Error creating log file: {:?}", log_destination));
     // Set up the logger for the run
     CombinedLogger::init(vec![
         TermLogger::new(
@@ -201,8 +201,8 @@ fn main() -> Result<(), NeatErrors> {
     let start = time::Instant::now();
     match subcommand {
         Some(("gen-reads", _)) => {
-            if let Some(("gen-reads", cmd)) = subcommand {
-                if cmd.contains_id("configuration_yaml") {
+            if let Some(("gen-reads", cmd)) = subcommand
+                && cmd.contains_id("configuration_yaml") {
                     let file = cmd.get_one::<PathBuf>("configuration_yaml")
                             .expect("Must provide a path with configuration-yaml")
                             .to_path_buf();
@@ -222,8 +222,7 @@ fn main() -> Result<(), NeatErrors> {
                         Err(error) => return Err(NeatErrors::GenerateReadsError(error)),
                         Ok(()) => info!("rneat gen-reads completed successfully"),
                     }
-                } 
-            }
+                }
         },
         Some(("filter-reads", _)) => {
             if let Some(("filter-reads", cmd)) = subcommand {

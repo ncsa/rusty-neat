@@ -34,21 +34,11 @@ impl Iterator for ReaderType {
         match self {
             Self::GzipReader(iterator) => {
                 let next = iterator.next();
-                match next {
-                    Some(result) => {
-                        Some(result.expect("Error reading gzipped file."))
-                    },
-                    None => None,
-                }
+                next.map(|result| result.expect("Error reading gzipped file."))
             },
             Self::NonZipReader(iterator) => {
                 let next = iterator.next();
-                match next {
-                    Some(result) => {
-                        Some(result.expect("Error reading non-zipped file."))
-                    },
-                    None => None,
-                }
+                next.map(|result| result.expect("Error reading non-zipped file."))
             },
         }
     }
@@ -58,9 +48,9 @@ fn prep_files_for_filtering(file_in: &PathBuf, is_gzip: bool, file_out: &PathBuf
     // Open file for reading.
     let lines: ReaderType = {
         if is_gzip {
-            open_gzipped(&file_in)
+            open_gzipped(file_in)
         } else {
-            open_unzipped(&file_in)
+            open_unzipped(file_in)
         }
     };
     let out_file = create_output_file(file_out, true)?;
@@ -185,12 +175,11 @@ pub fn filter_vcf(
             let line_vec: Vec<&str> = line.split('\t').collect();
             let chrom = line_vec[0];
             let pos: usize = line_vec[1].parse()?;
-            if let Some(records) = bed_table.get(line_vec[0]) {
-                if records.iter().any(|r| r.contains(chrom, pos)) {
+            if let Some(records) = bed_table.get(line_vec[0])
+                && records.iter().any(|r| r.contains(chrom, pos)) {
                     outfile.write_all(line.as_bytes())?;
                     outfile.write_all(b"\n")?;
                 }
-            }
         }
     }
     Ok(())

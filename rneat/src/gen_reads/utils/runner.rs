@@ -90,7 +90,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
     info!("Generate mutation model");
     let mutation_model = {
         match &config.mutation_model {
-            Some(filename) => MutationModel::from_file(&filename)?,
+            Some(filename) => MutationModel::from_file(filename)?,
             None => MutationModel::default()?,
         }
     };
@@ -109,16 +109,16 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
     info!("Generate fragment length model");
     let fragment_length_model: FragmentLengthModel = {
         match &config.fragment_model {
-            Some(filename) => FragmentLengthModel::discrete_from_file(&filename)?.into(),
+            Some(filename) => FragmentLengthModel::discrete_from_file(filename)?,
             None => {
                 match config.fragment_mean {
                     Some(mean) => {
                         FragmentLengthModel::new_normal(
                             mean,
                             config.fragment_st_dev.unwrap()
-                        )?.into()
+                        )?
                     },
-                    None => FragmentLengthModel::default()?.into(),
+                    None => FragmentLengthModel::default()?,
                 }
             }
         }
@@ -127,7 +127,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
     info!("Generate sequencing error model");
     let seq_error_model: SequencingErrorModel = {
         match &config.sequence_error_model {
-            Some(filename) => SequencingErrorModel::from_file(&filename)?,
+            Some(filename) => SequencingErrorModel::from_file(filename)?,
             None => SequencingErrorModel::default()?,
         }
     };
@@ -300,8 +300,8 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
         }
     }
 
-    if config.produce_bam {
-        if let (Some(bam_ctx), Some(bam_path)) = (ctx.bam_context.as_ref(), &config.output_bam) {
+    if config.produce_bam
+        && let (Some(bam_ctx), Some(bam_path)) = (ctx.bam_context.as_ref(), &config.output_bam) {
             info!("Assembling BAM from {} temp body file(s)", bam_body_files.len());
             let ordered_bodies: Vec<PathBuf> = contig_order.iter()
                 .filter_map(|name| bam_body_files.remove(name))
@@ -310,7 +310,6 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
             info!("Successfully wrote BAM file: {:?}", bam_path);
             files_written.push(bam_path.clone());
         }
-    }
 
     if let Some(filename) = &config.output_vcf {
         info!("Writing output vcf file");
@@ -320,7 +319,7 @@ pub fn run_neat(config: &Box<RunConfiguration>, rng: &mut NeatRng) -> Result<Vec
             &fasta_lengths,
             &config.reference,
             config.overwrite_output,
-            &filename,
+            filename,
         );
         match result {
             Ok(()) => {
@@ -346,12 +345,11 @@ fn process_contig(
     let contig_len = sequence.len();
     debug!("Processing {}", contig_name);
 
-    if let Some(bed) = ctx.target_bed {
-        if !bed.contains_key(&contig_name) {
+    if let Some(bed) = ctx.target_bed
+        && !bed.contains_key(&contig_name) {
             debug!("Skipping {} — not in target BED", contig_name);
             return Ok(ContigResult { idx, name: contig_name, len: contig_len, data: None });
         }
-    }
 
     if sequence.is_empty() {
         warn!("Contig {} has empty sequence, skipping", contig_name);
@@ -392,8 +390,8 @@ fn process_contig(
         .map(|r| (r.start, r.end, ctx.default_run_mutation_rate))
         .collect();
 
-    if let Some(mut_beds) = ctx.mutation_regions {
-        if let Some(records) = mut_beds.get(&contig_name) {
+    if let Some(mut_beds) = ctx.mutation_regions
+        && let Some(records) = mut_beds.get(&contig_name) {
             for rec in records {
                 if let Some(custom_rate) = rec.mut_rate {
                     rate_segments = apply_rate_override(
@@ -402,7 +400,6 @@ fn process_contig(
                 }
             }
         }
-    }
 
     let mut num_mutations_sum: f64 = rate_segments
         .iter()
@@ -411,8 +408,8 @@ fn process_contig(
 
     let block_end = contig_len;
     let mut block_variants: Vec<Variant> = Vec::new();
-    if let Some(iv) = ctx.input_variants {
-        if let Some(vs) = iv.get(&contig_name) {
+    if let Some(iv) = ctx.input_variants
+        && let Some(vs) = iv.get(&contig_name) {
             let mut excluded: Vec<usize> = Vec::new();
             let mut seen: HashSet<usize> = HashSet::new();
             for v in vs {
@@ -437,7 +434,6 @@ fn process_contig(
                 rate_segments = exclude_positions(rate_segments, &excluded);
             }
         }
-    }
     debug!("Seeded {} user variant(s) into contig {}", block_variants.len(), contig_name);
     let num_mutations = num_mutations_sum.trunc() as usize;
     debug!("Adding {} mutations to contig {}", num_mutations, contig_name);
@@ -458,11 +454,10 @@ fn process_contig(
         )?;
         if let Some(vec) = result {
             for variant in vec {
-                if variant.variant_type == VariantType::Deletion {
-                    if variant.reference.len() - 1 > max_del_len {
+                if variant.variant_type == VariantType::Deletion
+                    && variant.reference.len() - 1 > max_del_len {
                         max_del_len = variant.reference.len() - 1;
                     }
-                }
                 block_variants.push(variant);
             }
         }

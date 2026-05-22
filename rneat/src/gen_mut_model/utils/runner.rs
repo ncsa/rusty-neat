@@ -158,23 +158,21 @@ pub fn runner(
         let alts = trans_by_ref.get(frame);
         let frame_count: usize = alts.map_or(0, |m| m.values().sum());
         trinuc_mut_prob.insert(*frame, (frame_count as f64) / (*count as f64));
-        if frame_count > 0 {
-            if let Some(alts) = alts {
+        if frame_count > 0
+            && let Some(alts) = alts {
                 for (&alt_f, &tc) in alts {
                     trinuc_trans_prob.insert((*frame, alt_f), (tc as f64) / (frame_count as f64));
                 }
             }
-        }
     }
 
-    for nuc1 in ALLOWED_NUCS.clone() {
+    for nuc1 in ALLOWED_NUCS {
         let rolling_total: usize = ALLOWED_NUCS
-            .clone()
             .into_iter()
             .filter_map(|nuc2| snp_transition_count.get(&(nuc1, nuc2)))
             .sum();
         if rolling_total > 0 {
-            for nuc2 in ALLOWED_NUCS.clone() {
+            for nuc2 in ALLOWED_NUCS {
                 if let Some(&c) = snp_transition_count.get(&(nuc1, nuc2)) {
                     snp_trans_frequency.insert((nuc1, nuc2), (c as f64) / (rolling_total as f64));
                 }

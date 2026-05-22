@@ -27,7 +27,7 @@ impl RunConfiguration {
         // parameters based on the inputs. A "." value means to use the default value.
 
         // Opens file for reading
-        let f = fs::File::open(&yml_file);
+        let f = fs::File::open(yml_file);
         let file = match f {
             Ok(l) => l,
             Err(error) => panic!(
@@ -87,11 +87,10 @@ impl RunConfiguration {
                     elem_len,
                     filter_key,
                 );
-                if !overwrite_output {
-                    if output_path.is_file() {
+                if !overwrite_output
+                    && output_path.is_file() {
                         panic!("Attempting to overwrite an existing file {:?}", output_path)
                     }
-                }
                 temp_map.insert(input_path, (output_path, is_gzip, is_fastq));
             }
             temp_map

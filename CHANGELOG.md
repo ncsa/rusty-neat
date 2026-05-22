@@ -1,3 +1,33 @@
+5/21/2026
+=========
+## rneat v1.6.0
+
+### `gen-gc-bias-model`: BAM input replaces pre-computed coverage files
+- `gen-gc-bias-model` now reads an aligned BAM directly. Coverage is accumulated in process per reference base using `samtools depth`-equivalent defaults (skip unmapped/secondary/supplementary, configurable `min_mapq`, default 0). The external `samtools depth` / `bedtools genomecov` preprocessing step is no longer required.
+- **Breaking change.** Config fields `coverage_file`, `coverage_format`, and the `CoverageFormat` enum (`samtools-depth`, `bedtools-genomecov-d`, `bedtools-genomecov-dz`) have been removed. Replace `coverage_file` with `bam_file` pointing at the aligned BAM the depth file was originally generated from. `min_mapq` is the new optional knob (default 0; set to 20 to mirror typical `samtools depth -q 20` filtering).
+- Memory profile changes: peak memory is now ~4 bytes × total reference bases that received at least one record (~13 GB for hg38 WGS at 30×). The plain-text coverage-file path's per-contig-on-demand behavior is gone; if memory is a constraint on whole-genome runs, split the BAM by chromosome.
+- The legacy `CoverageReader`, `CoverageData`, and `coverage_reader.rs` module (459 lines) have been deleted along with the samtools-depth / bedtools-genomecov line parsers.
+
+### Shared BAM-walking infrastructure
+- Introduced `common::file_tools::bam_reader::walk_bam` — a single-pass BAM iterator with a configurable `BamWalkFilter` and a `RecordObserver` visitor trait. Multiple observers receive each kept record in one pass, avoiding redundant BAM opens across consumers.
+- Concrete observers: `FragLengthObserver` (TLEN histogram, used by `gen-frag-length-model`), `TransitionObserver` (4×4 read-vs-reference mismatch matrix from MD tags, used by `gen-seq-error-model`), and `CoverageObserver` (per-base reference depth, used by `gen-gc-bias-model`).
+- `read_fragment_lengths` and `read_bam_transitions` are now thin wrappers over `walk_bam`; their signatures are unchanged so existing call sites continue to compile.
+- `BamWalkFilter::for_frag_length()` / `for_transitions()` / `for_coverage()` centralize the per-tool filter policy that was previously duplicated across modules.
+- An `on_start(&Header)` hook lets observers cache reference_sequence_id → contig name/length lookup tables once per walk.
+
+### Migration
+- In `gen_gc_bias_model.yml`, replace:
+  ```yaml
+  coverage_file: /path/to/coverage.txt
+  coverage_format: samtools-depth
+  ```
+  with:
+  ```yaml
+  bam_file: /path/to/aligned.bam
+  min_mapq: 20  # optional; default 0 matches `samtools depth` defaults
+  ```
+  No other config fields changed.
+
 5/20/2026
 =========
 ## rneat v1.5.1

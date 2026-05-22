@@ -20,7 +20,7 @@ SUB-COMMANDS:
   gen-mut-model          Generates a mutation model from real VCF data
   gen-seq-error-model    Generates a sequencing error model from real FASTQ data
   gen-frag-length-model  Generates a fragment length model from a BAM or SAM file
-  gen-gc-bias-model      Generates a GC bias model from a reference FASTA and coverage file
+  gen-gc-bias-model      Generates a GC bias model from a reference FASTA and aligned BAM
   help                   Print this message or the help of the given subcommand(s)
 
 Options:
@@ -459,7 +459,7 @@ Some common platform bin sets (consult your sequencer's documentation for the au
 
 Generating a GC Bias Model
 ====================
-`rneat` can learn a GC bias model from a reference FASTA and a per-base coverage file using the `rneat gen-gc-bias-model` subcommand. It tiles the reference in fixed-size windows, computes the GC% of each window, looks up the mean coverage over that window, and accumulates the data into a 101-bin weight table (one bin per integer GC percentage, 0–100%). The resulting model can be passed to `gen-reads` to make fragment start positions favour regions whose GC content matches the coverage bias observed in your data.
+`rneat` can learn a GC bias model from a reference FASTA and an aligned BAM file using the `rneat gen-gc-bias-model` subcommand. It walks the BAM once to accumulate per-base reference coverage, tiles the reference in fixed-size windows, computes the GC% of each window, looks up the mean coverage over that window, and accumulates the data into a 101-bin weight table (one bin per integer GC percentage, 0–100%). The resulting model can be passed to `gen-reads` to make fragment start positions favour regions whose GC content matches the coverage bias observed in your data.
 
 ```bash
 $ rneat gen-gc-bias-model -c gen_gc_bias_model_config.yml
@@ -474,14 +474,12 @@ Copy `template_config/gen_gc_bias_model.yml` to a directory of your choosing and
 # Both plain and gzipped (.fa.gz) references are accepted.
 reference: /path/to/reference.fa
 
-# required: per-base coverage file produced by samtools or bedtools
-coverage_file: /path/to/coverage.txt
+# required: aligned BAM. Coverage is accumulated in process per reference base.
+bam_file: /path/to/aligned.bam
 
-# required: format of the coverage file
-# samtools-depth        → samtools depth output  (CHROM  1-based-pos  depth)
-# bedtools-genomecov-d  → bedtools genomecov -d  (CHROM  1-based-pos  depth)
-# bedtools-genomecov-dz → bedtools genomecov -dz (CHROM  0-based-pos  depth, nonzero only)
-coverage_format: samtools-depth
+# optional: minimum mapping quality applied while accumulating coverage.
+# Default 0 matches `samtools depth` defaults.
+min_mapq: 0
 
 # optional: BED file restricting model inference to target regions
 # Use "." (dot) to use the entire reference (default)
@@ -510,43 +508,9 @@ window_stride: 100
 min_windows_per_bin: 10
 ```
 
-**Generating the coverage file:**
+**BAM filtering:** unmapped, secondary, and supplementary records are skipped automatically. Reads with mapping quality `<= min_mapq` are dropped before contributing to coverage. The default `min_mapq: 0` reproduces `samtools depth` defaults; set it to 20 if your downstream `gen-reads` runs assume mapq-filtered coverage.
 
-The recommended command is:
-
-```bash
-samtools depth -a -q 20 -F 1796 aligned.bam > coverage.txt
-```
-
-- `-a` outputs all positions including zero-depth sites (required for `samtools-depth` and `bedtools-genomecov-d` formats)
-- `-q 20` excludes reads with mapping quality below 20
-- `-F 1796` excludes unmapped, secondary, duplicate, and supplementary reads
-
-Getting these filters wrong silently produces a biased model, so use this command as-is unless you have a specific reason to deviate.
-
-If you prefer bedtools or need smaller files:
-
-```bash
-# bedtools genomecov -d (1-based, all positions)
-bedtools genomecov -d -ibam aligned.bam > coverage.txt
-
-# bedtools genomecov -dz (0-based, nonzero positions only; smaller files)
-bedtools genomecov -dz -ibam aligned.bam > coverage.txt
-```
-
-Note that bedtools does not expose MAPQ or flag filtering as simply as samtools; if duplicate removal or MAPQ filtering matters for your dataset, pre-filter the BAM first:
-
-```bash
-samtools view -b -q 20 -F 1796 aligned.bam > filtered.bam
-samtools index filtered.bam
-bedtools genomecov -dz -ibam filtered.bam > coverage.txt
-```
-
-Set `coverage_format` in your config to match whichever command you used.
-
-**Coverage file format:** Both plain-text and gzip-compressed (`.gz`) coverage files are accepted. Plain text is recommended for whole-genome runs on memory-constrained machines (see the HPC section below for details).
-
-**Large genomes:** The tool is designed to handle human-scale genomes without excessive memory use. With a plain-text coverage file it indexes the file once and loads each contig's data on demand via byte-offset seeking, so peak memory is proportional to the longest contig, not total genome size. With a gzip coverage file, all contigs are decompressed into RAM simultaneously — manageable for a few chromosomes but significant for a full genome (~12–15 GB for hg38 at 30×).
+**Large genomes:** The tool walks the BAM once and allocates a per-contig depth array (`u32` per reference base) only for contigs that receive at least one record. Peak memory for hg38 at 30× is on the order of all-contigs-summed depth arrays — see the HPC section below for sizing.
 
 **Long reads:** Set `window_size` to approximately your typical read length (e.g. 5000–50000 for ONT or PacBio). Larger windows mean fewer windows per contig and faster model building. Non-overlapping windows (`window_stride: window_size`) are recommended so each observation is independent.
 
@@ -637,32 +601,16 @@ Example SLURM header:
 
 ### gen-gc-bias-model
 
-With a **plain-text** coverage file, the tool indexes the file once and loads only one contig at a time — memory is proportional to the largest contig (~1–2 GB for chr1 at 30×), not total genome size. This is the recommended format for full-genome HPC runs.
+Single-threaded; walks the BAM once and accumulates per-base reference coverage as a `Vec<u32>` per observed contig. Peak memory is roughly `4 bytes × total reference bases that received at least one record`. For a full human genome (~3.2 Gbp) this is ~13 GB. For a single chromosome or a targeted/exome BAM it is much smaller.
 
-With a **gzip** coverage file, all contigs are held in RAM simultaneously. For a full human genome this is roughly 12–15 GB. If you need gzip, use per-chromosome files rather than one monolithic archive to keep the footprint manageable.
+If memory is tight on whole-genome runs, split the BAM by chromosome and run `gen-gc-bias-model` once per chromosome on a representative subset that spans your GC range of interest, then average or combine the resulting models.
 
-To generate a whole-genome plain-text depth file from a remote or local BAM:
-
-```bash
-samtools depth -a -q 20 -F 1796 aligned.bam > coverage.txt
-```
-
-If disk space is a concern and you choose gzip, consider splitting by chromosome:
-
-```bash
-for chr in chr1 chr2 ... chrX chrY; do
-    samtools depth -a -q 20 -F 1796 -r ${chr} aligned.bam | gzip -1 > ${chr}_coverage.txt.gz
-done
-```
-
-Then run `gen-gc-bias-model` once per chromosome and combine the models, or run on a representative subset of chromosomes that span your GC range of interest.
-
-Recommended SLURM header (plain-text coverage):
+Recommended SLURM header (whole-genome BAM):
 
 ```bash
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=8G
+#SBATCH --mem=16G
 #SBATCH --time=1:00:00
 ```
 

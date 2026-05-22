@@ -101,7 +101,7 @@ fn neat_commands() -> [Command; 6] {
                 &configuration_arg
             ),
         Command::new("gen-gc-bias-model")
-            .about("Generate a GC bias model from a reference FASTA and coverage file")
+            .about("Generate a GC bias model from a reference FASTA and aligned BAM")
             .arg_required_else_help(true)
             .arg(
                 &configuration_arg

@@ -1,4 +1,5 @@
 use thiserror::Error;
+use common::file_tools::bam_reader::BamReaderError;
 use common::file_tools::bed_reader::BedReaderError;
 use common::file_tools::fasta_stream::FastaStreamError;
 use common::models::gc_bias_model::GcBiasModelError;
@@ -15,8 +16,8 @@ pub enum GenGcBiasModelError {
     BedReadError(#[from] BedReaderError),
     #[error("Error building GC bias model: {0}")]
     GcBiasModelError(#[from] GcBiasModelError),
-    #[error("Error parsing coverage file: {0}")]
-    CoverageParseError(String),
     #[error("Error reading FASTA: {0}")]
     FastaStreamError(#[from] FastaStreamError),
+    #[error("Error reading BAM: {0}")]
+    BamReaderError(#[from] BamReaderError),
 }

@@ -1,21 +1,12 @@
 # Reference FASTA used to compute GC content.
 reference: .
 
-# Per-base coverage file.
-# Supported:
-#   samtools-depth
-#   bedtools-genomecov-d
-#   bedtools-genomecov-dz
-coverage_file: .
+# Aligned BAM. Coverage is accumulated in process per reference base.
+bam_file: .
 
-# Coverage file format.
-# samtools-depth and bedtools-genomecov-d are:
-#   contig  1-based-position  depth
-#
-# bedtools-genomecov-dz is:
-#   contig  0-based-position  depth
-# and usually omits zero-coverage positions.
-coverage_format: samtools-depth
+# Minimum mapping quality applied while accumulating coverage from bam_file.
+# Default 0 matches `samtools depth`.
+min_mapq: 0
 
 # Optional BED file limiting model inference to target regions.
 # Use "." to disable.

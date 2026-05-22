@@ -4,9 +4,9 @@ use noodles::bam;
 use noodles::sam::{
     self as sam,
     alignment::record::{
+        Flags,
         cigar::op::Kind as CigarKind,
         data::field::{Tag, Value},
-        Flags,
     },
 };
 use thiserror::Error;
@@ -334,17 +334,15 @@ impl RecordObserver for TransitionObserver {
             let len = op.len();
 
             match op.kind() {
-                CigarKind::Match
-                | CigarKind::SequenceMatch
-                | CigarKind::SequenceMismatch => {
+                CigarKind::Match | CigarKind::SequenceMatch | CigarKind::SequenceMismatch => {
                     for _ in 0..len {
-                        if let Some(ref_b) = walker.next_alignment_base() {
-                            if let Some(read_b) = sequence.get(read_pos) {
-                                let ri: usize = Nucleotide::from(ref_b as char).into();
-                                let wi: usize = Nucleotide::from(read_b as char).into();
-                                if ri < 4 && wi < 4 {
-                                    self.counts[ri][wi] += 1;
-                                }
+                        if let Some(ref_b) = walker.next_alignment_base()
+                            && let Some(read_b) = sequence.get(read_pos)
+                        {
+                            let ri: usize = Nucleotide::from(ref_b as char).into();
+                            let wi: usize = Nucleotide::from(read_b as char).into();
+                            if ri < 4 && wi < 4 {
+                                self.counts[ri][wi] += 1;
                             }
                         }
                         read_pos += 1;
@@ -429,16 +427,13 @@ impl RecordObserver for CoverageObserver {
         }
         let mut ref_pos = start_1based - 1;
         let contig_len = self.contig_lengths[ref_id];
-        let depths = self.depths_by_id[ref_id]
-            .get_or_insert_with(|| vec![0u32; contig_len]);
+        let depths = self.depths_by_id[ref_id].get_or_insert_with(|| vec![0u32; contig_len]);
 
         for op_result in record.cigar().iter() {
             let op = op_result?;
             let len = op.len();
             match op.kind() {
-                CigarKind::Match
-                | CigarKind::SequenceMatch
-                | CigarKind::SequenceMismatch => {
+                CigarKind::Match | CigarKind::SequenceMatch | CigarKind::SequenceMismatch => {
                     let end = (ref_pos + len).min(depths.len());
                     for i in ref_pos..end {
                         depths[i] = depths[i].saturating_add(1);
@@ -602,16 +597,16 @@ mod tests {
     /// Fields: (flags, mapq, tlen, reference_sequence_id, mate_reference_sequence_id).
     /// Two reference sequences (chr1, chr2) are declared so mate-on-different-ref
     /// scenarios are expressible.
-    fn write_test_bam(
-        path: &std::path::PathBuf,
-        records: &[TestBamRecord],
-    ) {
+    fn write_test_bam(path: &std::path::PathBuf, records: &[TestBamRecord]) {
         use noodles::sam::{
             self as sam,
             alignment::{
                 RecordBuf,
                 io::Write as _,
-                record::{cigar::{op::Kind, Op}, MappingQuality},
+                record::{
+                    MappingQuality,
+                    cigar::{Op, op::Kind},
+                },
                 record_buf::{Cigar, Sequence},
             },
             header::record::value::{Map, map::ReferenceSequence},
@@ -690,8 +685,7 @@ mod tests {
             ],
         );
         let mut frag = FragLengthObserver::default();
-        let stats =
-            walk_bam(&path, &BamWalkFilter::for_frag_length(), &mut [&mut frag]).unwrap();
+        let stats = walk_bam(&path, &BamWalkFilter::for_frag_length(), &mut [&mut frag]).unwrap();
         assert_eq!(stats.records_seen, 2);
         assert_eq!(stats.records_kept, 1);
         assert_eq!(frag.tlens, vec![200]);
@@ -704,13 +698,9 @@ mod tests {
         // when min_mapq > 0.
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("t.bam");
-        write_test_bam(
-            &path,
-            &[(Flags::empty(), None, 0, Some(0), Some(0))],
-        );
+        write_test_bam(&path, &[(Flags::empty(), None, 0, Some(0), Some(0))]);
         let mut trans = TransitionObserver::default();
-        let stats =
-            walk_bam(&path, &BamWalkFilter::for_transitions(), &mut [&mut trans]).unwrap();
+        let stats = walk_bam(&path, &BamWalkFilter::for_transitions(), &mut [&mut trans]).unwrap();
         assert_eq!(stats.records_seen, 1);
         assert_eq!(stats.records_kept, 1);
     }
@@ -724,8 +714,7 @@ mod tests {
             &[(Flags::SECONDARY, Some(30), 100, Some(0), Some(0))],
         );
         let mut trans = TransitionObserver::default();
-        let stats =
-            walk_bam(&path, &BamWalkFilter::for_transitions(), &mut [&mut trans]).unwrap();
+        let stats = walk_bam(&path, &BamWalkFilter::for_transitions(), &mut [&mut trans]).unwrap();
         assert_eq!(stats.records_seen, 1);
         assert_eq!(stats.records_kept, 0);
     }
@@ -747,8 +736,7 @@ mod tests {
             )],
         );
         let mut frag = FragLengthObserver::default();
-        let stats =
-            walk_bam(&path, &BamWalkFilter::for_frag_length(), &mut [&mut frag]).unwrap();
+        let stats = walk_bam(&path, &BamWalkFilter::for_frag_length(), &mut [&mut frag]).unwrap();
         assert_eq!(stats.records_kept, 0);
     }
 
@@ -767,7 +755,10 @@ mod tests {
             alignment::{
                 RecordBuf,
                 io::Write as _,
-                record::{cigar::{op::Kind, Op}, MappingQuality},
+                record::{
+                    MappingQuality,
+                    cigar::{Op, op::Kind},
+                },
                 record_buf::{Cigar, Sequence},
             },
             header::record::value::{Map, map::ReferenceSequence},
@@ -785,10 +776,7 @@ mod tests {
         writer.write_header(&header).unwrap();
 
         for &(ref_id, start_1based, cigar_ops) in records {
-            let cigar: Cigar = cigar_ops
-                .iter()
-                .map(|&(k, l)| Op::new(k, l))
-                .collect();
+            let cigar: Cigar = cigar_ops.iter().map(|&(k, l)| Op::new(k, l)).collect();
             let read_len: usize = cigar_ops
                 .iter()
                 .filter(|(k, _)| {
@@ -819,11 +807,7 @@ mod tests {
         use noodles::sam::alignment::record::cigar::op::Kind;
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("t.bam");
-        write_coverage_test_bam(
-            &path,
-            &[(b"chr1", 10)],
-            &[(0, 1, &[(Kind::Match, 4)])],
-        );
+        write_coverage_test_bam(&path, &[(b"chr1", 10)], &[(0, 1, &[(Kind::Match, 4)])]);
         let mut cov = CoverageObserver::default();
         walk_bam(&path, &BamWalkFilter::for_coverage(), &mut [&mut cov]).unwrap();
         let by_contig = cov.into_by_contig();
@@ -862,7 +846,11 @@ mod tests {
         write_coverage_test_bam(
             &path,
             &[(b"chr1", 10)],
-            &[(0, 1, &[(Kind::Match, 2), (Kind::Insertion, 2), (Kind::Match, 2)])],
+            &[(
+                0,
+                1,
+                &[(Kind::Match, 2), (Kind::Insertion, 2), (Kind::Match, 2)],
+            )],
         );
         let mut cov = CoverageObserver::default();
         walk_bam(&path, &BamWalkFilter::for_coverage(), &mut [&mut cov]).unwrap();
@@ -880,7 +868,11 @@ mod tests {
         write_coverage_test_bam(
             &path,
             &[(b"chr1", 10)],
-            &[(0, 1, &[(Kind::Match, 2), (Kind::Deletion, 2), (Kind::Match, 2)])],
+            &[(
+                0,
+                1,
+                &[(Kind::Match, 2), (Kind::Deletion, 2), (Kind::Match, 2)],
+            )],
         );
         let mut cov = CoverageObserver::default();
         walk_bam(&path, &BamWalkFilter::for_coverage(), &mut [&mut cov]).unwrap();
@@ -916,17 +908,17 @@ mod tests {
         write_coverage_test_bam(
             &path,
             &[(b"chr1", 10), (b"chr2", 10), (b"chr3", 10)],
-            &[
-                (0, 1, &[(Kind::Match, 3)]),
-                (1, 5, &[(Kind::Match, 3)]),
-            ],
+            &[(0, 1, &[(Kind::Match, 3)]), (1, 5, &[(Kind::Match, 3)])],
         );
         let mut cov = CoverageObserver::default();
         walk_bam(&path, &BamWalkFilter::for_coverage(), &mut [&mut cov]).unwrap();
         let by_contig = cov.into_by_contig();
         assert_eq!(by_contig.len(), 2, "chr3 had no records, should be absent");
         assert_eq!(&by_contig.get("chr1").unwrap()[..4], &[1, 1, 1, 0]);
-        assert_eq!(&by_contig.get("chr2").unwrap()[..8], &[0, 0, 0, 0, 1, 1, 1, 0]);
+        assert_eq!(
+            &by_contig.get("chr2").unwrap()[..8],
+            &[0, 0, 0, 0, 1, 1, 1, 0]
+        );
     }
 
     #[test]
@@ -937,11 +929,7 @@ mod tests {
         use noodles::sam::alignment::record::cigar::op::Kind;
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("t.bam");
-        write_coverage_test_bam(
-            &path,
-            &[(b"chr1", 10)],
-            &[(0, 8, &[(Kind::Match, 6)])],
-        );
+        write_coverage_test_bam(&path, &[(b"chr1", 10)], &[(0, 8, &[(Kind::Match, 6)])]);
         let mut cov = CoverageObserver::default();
         walk_bam(&path, &BamWalkFilter::for_coverage(), &mut [&mut cov]).unwrap();
         let depths = cov.into_by_contig().remove("chr1").unwrap();

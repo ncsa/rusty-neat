@@ -1,10 +1,12 @@
-use thiserror::Error;
-use std::num::ParseIntError;
 use common::{
-    file_tools::{bed_reader::BedReaderError, fasta_stream::FastaStreamError, vcf_tools::VcfToolsError},
+    file_tools::{
+        bed_reader::BedReaderError, fasta_stream::FastaStreamError, vcf_tools::VcfToolsError,
+    },
     models::mutation_model::MutationModelError,
     structs::transition_matrix::TransitionMatrixError,
 };
+use std::num::ParseIntError;
+use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum GenMutationModelError {

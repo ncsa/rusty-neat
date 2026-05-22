@@ -6,8 +6,8 @@
 mod common;
 
 use common::{
-    fresh_workdir, h1n1_reference, read_gzip_fastq_lines, rneat, write_gen_seq_error_model_config,
-    write_synthetic_fastq_gz, write_iupac_fasta, GenReadsConfig,
+    GenReadsConfig, fresh_workdir, h1n1_reference, read_gzip_fastq_lines, rneat,
+    write_gen_seq_error_model_config, write_iupac_fasta, write_synthetic_fastq_gz,
 };
 use std::collections::HashSet;
 
@@ -21,7 +21,7 @@ fn qual_bytes_to_scores(line: &str) -> Vec<u8> {
 fn quality_lines(fastq_path: &std::path::Path) -> Vec<String> {
     let lines = read_gzip_fastq_lines(fastq_path);
     assert!(
-        lines.len() % 4 == 0,
+        lines.len().is_multiple_of(4),
         "FASTQ line count must be a multiple of 4, got {}",
         lines.len(),
     );
@@ -55,10 +55,15 @@ fn gen_reads_with_default_model_produces_well_formed_fastq() {
     assert_eq!(lines.len() % 4, 0, "incomplete record at FASTQ tail");
 
     for chunk in lines.chunks(4) {
-        assert!(chunk[0].starts_with('@'), "name line must start with @: {:?}", chunk[0]);
+        assert!(
+            chunk[0].starts_with('@'),
+            "name line must start with @: {:?}",
+            chunk[0]
+        );
         assert_eq!(chunk[2], "+", "third line must be '+': {:?}", chunk[2]);
         assert_eq!(
-            chunk[1].len(), chunk[3].len(),
+            chunk[1].len(),
+            chunk[3].len(),
             "seq/qual length mismatch in {chunk:?}",
         );
     }
@@ -141,8 +146,12 @@ fn gen_reads_with_iupac_reference_produces_no_iupac_in_output() {
     let iupac: HashSet<char> = "RYMKSWHBVDrymkswhbvd".chars().collect();
     for chunk in lines.chunks(4) {
         for c in chunk[1].chars() {
-            assert!(!iupac.contains(&c),
-                "IUPAC character {:?} leaked into read sequence: {:?}", c, chunk[1]);
+            assert!(
+                !iupac.contains(&c),
+                "IUPAC character {:?} leaked into read sequence: {:?}",
+                c,
+                chunk[1]
+            );
         }
     }
 }

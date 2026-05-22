@@ -1,15 +1,15 @@
-use log::*;
-use thiserror::Error;
-use std::{ 
-    collections::HashMap,
-    io::{self, BufReader, Lines, Read}, 
-    num::ParseIntError, 
-    path::PathBuf
-};
 use crate::{
-    file_tools::file_io::{read_gzip_lines, read_lines, is_gzipped_file},
-    structs::bed_record::{BedErrors, BedRecord}
+    file_tools::file_io::{is_gzipped_file, read_gzip_lines, read_lines},
+    structs::bed_record::{BedErrors, BedRecord},
 };
+use log::*;
+use std::{
+    collections::HashMap,
+    io::{self, BufReader, Lines, Read},
+    num::ParseIntError,
+    path::PathBuf,
+};
+use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum BedReaderError {
@@ -29,10 +29,10 @@ pub fn read_bed(
 ) -> Result<HashMap<String, Vec<BedRecord>>, BedReaderError> {
     if !bed_path.is_file() {
         return Err(BedReaderError::MalformedBed(format!(
-            "Input bed file does not exist: {:?}", 
+            "Input bed file does not exist: {:?}",
             bed_path
-        )))
-    } 
+        )));
+    }
     if is_gzipped_file(bed_path)? {
         process_gzip_bed(bed_path, mut_bed)
     } else {
@@ -40,17 +40,26 @@ pub fn read_bed(
     }
 }
 
-fn process_gzip_bed(filename: &PathBuf, mut_bed: bool) -> Result<HashMap<String, Vec<BedRecord>>, BedReaderError> {
+fn process_gzip_bed(
+    filename: &PathBuf,
+    mut_bed: bool,
+) -> Result<HashMap<String, Vec<BedRecord>>, BedReaderError> {
     let reader = read_gzip_lines(filename)?;
     read_open_bed(reader, mut_bed)
 }
 
-fn process_bed(filename: &PathBuf, mut_bed: bool) -> Result<HashMap<String, Vec<BedRecord>>, BedReaderError> {
+fn process_bed(
+    filename: &PathBuf,
+    mut_bed: bool,
+) -> Result<HashMap<String, Vec<BedRecord>>, BedReaderError> {
     let reader = read_lines(filename)?;
     read_open_bed(reader, mut_bed)
 }
-    
-fn read_open_bed<P: Read> (reader: Lines<BufReader<P>>, mut_bed: bool) -> Result<HashMap<String, Vec<BedRecord>>, BedReaderError> {
+
+fn read_open_bed<P: Read>(
+    reader: Lines<BufReader<P>>,
+    mut_bed: bool,
+) -> Result<HashMap<String, Vec<BedRecord>>, BedReaderError> {
     let mut file_records: HashMap<String, Vec<BedRecord>> = HashMap::new();
     for result in reader {
         let rec_str: String = result?;
@@ -58,10 +67,13 @@ fn read_open_bed<P: Read> (reader: Lines<BufReader<P>>, mut_bed: bool) -> Result
         let contig: String = fields[0].to_string();
         let start: isize = fields[1].parse()?;
         let end: isize = fields[2].parse()?;
-        if start < 0 || end < 0{
+        if start < 0 || end < 0 {
             // Skip this record
-            warn!("Skipped bed region with negative coordinates: {:?}", rec_str);
-            continue
+            warn!(
+                "Skipped bed region with negative coordinates: {:?}",
+                rec_str
+            );
+            continue;
         }
         let record = if mut_bed {
             // We only care about the "other" part in a mut_regions_bed
@@ -69,24 +81,16 @@ fn read_open_bed<P: Read> (reader: Lines<BufReader<P>>, mut_bed: bool) -> Result
             for remainder in &mut fields[3..] {
                 other = other + remainder + "\t";
             }
-            BedRecord::new_mut_region_record(
-                contig.clone(),
-                start as usize,
-                end as usize,
-                &other,
-            )?
+            BedRecord::new_mut_region_record(contig.clone(), start as usize, end as usize, &other)?
         } else {
-            BedRecord::new_bed_record(
-                contig.clone(),
-                start as usize,
-                end as usize,
-            )?
+            BedRecord::new_bed_record(contig.clone(), start as usize, end as usize)?
         };
         if !file_records.contains_key(&contig) {
             file_records.insert(contig.clone(), Vec::new());
         }
-        file_records.get_mut(&contig)
-            .expect(&format!("BUG: The contig was not found in file records {}", contig))
+        file_records
+            .get_mut(&contig)
+            .unwrap_or_else(|| panic!("BUG: The contig was not found in file records {}", contig))
             .push(record)
     }
     Ok(file_records)

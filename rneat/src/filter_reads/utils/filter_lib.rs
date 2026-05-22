@@ -1,16 +1,16 @@
-use std::collections::HashMap;
+use crate::filter_reads::errors::FilterReadsError;
+use common::structs::bed_record::BedRecord;
+use flate2::Compression;
+use flate2::read::GzDecoder;
+use flate2::write::GzEncoder;
 use log::*;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, Lines, Write};
 use std::path::PathBuf;
-use flate2::write::GzEncoder;
-use flate2::Compression;
-use common::structs::bed_record::BedRecord;
-use flate2::read::GzDecoder;
-use crate::filter_reads::errors::FilterReadsError;
 use thiserror::Error;
 
-use common::file_tools::file_io::{read_gzip_lines, read_lines, create_output_file};
+use common::file_tools::file_io::{create_output_file, read_gzip_lines, read_lines};
 /// The purpose of this module is to filter a rneat-generated fastq and vcf file, so that they only show regions
 /// of overlap with an input bed file.
 enum ReaderType {
@@ -18,13 +18,12 @@ enum ReaderType {
     NonZipReader(Lines<BufReader<File>>),
 }
 
-
 #[derive(Debug, Error)]
 enum FilterLibError {
     #[error("Possible Q score")]
     InvalidReadName,
     #[error("Line parsing was not understood: {0}")]
-    MalformedLine(String)
+    MalformedLine(String),
 }
 
 impl Iterator for ReaderType {
@@ -34,33 +33,27 @@ impl Iterator for ReaderType {
         match self {
             Self::GzipReader(iterator) => {
                 let next = iterator.next();
-                match next {
-                    Some(result) => {
-                        Some(result.expect("Error reading gzipped file."))
-                    },
-                    None => None,
-                }
-            },
+                next.map(|result| result.expect("Error reading gzipped file."))
+            }
             Self::NonZipReader(iterator) => {
                 let next = iterator.next();
-                match next {
-                    Some(result) => {
-                        Some(result.expect("Error reading non-zipped file."))
-                    },
-                    None => None,
-                }
-            },
+                next.map(|result| result.expect("Error reading non-zipped file."))
+            }
         }
     }
 }
 
-fn prep_files_for_filtering(file_in: &PathBuf, is_gzip: bool, file_out: &PathBuf) -> Result<(ReaderType, GzEncoder<File>), FilterReadsError> {
+fn prep_files_for_filtering(
+    file_in: &PathBuf,
+    is_gzip: bool,
+    file_out: &PathBuf,
+) -> Result<(ReaderType, GzEncoder<File>), FilterReadsError> {
     // Open file for reading.
     let lines: ReaderType = {
         if is_gzip {
-            open_gzipped(&file_in)
+            open_gzipped(file_in)
         } else {
-            open_unzipped(&file_in)
+            open_unzipped(file_in)
         }
     };
     let out_file = create_output_file(file_out, true)?;
@@ -69,11 +62,15 @@ fn prep_files_for_filtering(file_in: &PathBuf, is_gzip: bool, file_out: &PathBuf
 }
 
 fn open_gzipped(filename: &PathBuf) -> ReaderType {
-    ReaderType::GzipReader(read_gzip_lines(filename).expect("Error decompressing gzipped fastq file."))
+    ReaderType::GzipReader(
+        read_gzip_lines(filename).expect("Error decompressing gzipped fastq file."),
+    )
 }
 
 fn open_unzipped(filename: &PathBuf) -> ReaderType {
-    ReaderType::NonZipReader(read_lines(filename).expect("Error reading fastq file while filtering."))
+    ReaderType::NonZipReader(
+        read_lines(filename).expect("Error reading fastq file while filtering."),
+    )
 }
 
 fn parse_fastq_record_name(line: &str) -> Result<(String, usize, usize), FilterLibError> {
@@ -96,11 +93,11 @@ fn parse_fastq_record_name(line: &str) -> Result<(String, usize, usize), FilterL
 }
 
 pub fn filter_fastq(
-    bed_table: &HashMap<String, Vec<BedRecord>>, 
-    fastq_in: &PathBuf, 
+    bed_table: &HashMap<String, Vec<BedRecord>>,
+    fastq_in: &PathBuf,
     is_gzip: bool,
     fastq_out: &PathBuf,
-)-> Result<(), FilterReadsError> {
+) -> Result<(), FilterReadsError> {
     // bed_file: path to bed file to use for filtering
     // fastq_in: fastq ready for filtering, can be gzipped or not
     // is_gzip: whether the input file is gzipped or not
@@ -117,27 +114,29 @@ pub fn filter_fastq(
             let candidate_result = parse_fastq_record_name(&line);
             // It's possible that this is not a read name, but rather a quality score starting with @
             let (contig, start, end) = match candidate_result {
-                Ok(region) => {
-                    Some(region)
-                },
+                Ok(region) => Some(region),
                 Err(error) => {
                     // If this is a quality score and we need to write it, we do, then we run the next loop
                     debug!("Had a weird record: {line}");
                     match error {
                         FilterLibError::MalformedLine(line) => {
-                            return Err(FilterReadsError::FastqFilterError(format!("Filter error with line: {}", line)))
-                        },
+                            return Err(FilterReadsError::FastqFilterError(format!(
+                                "Filter error with line: {}",
+                                line
+                            )));
+                        }
                         FilterLibError::InvalidReadName => {
                             if include {
                                 out_file.write_all(line.as_bytes())?;
                                 out_file.write_all(b"\n")?;
                             }
-                        },
+                        }
                     }
                     // That line is processed and we can move on
-                    continue
-                },
-            }.unwrap(); // This unwrap will either continue us or be a region, so this is good to go.
+                    continue;
+                }
+            }
+            .unwrap(); // This unwrap will either continue us or be a region, so this is good to go.
             include = if let Some(records) = bed_table.get(&contig) {
                 let found = records.iter().any(|r| r.overlaps(&contig, start, end));
                 if found {
@@ -155,7 +154,7 @@ pub fn filter_fastq(
             //     +
             //     ?????????
             // where the name is unique and in our case contains coordinates of the read
-            // The second line is a sequence 
+            // The second line is a sequence
             // the third line is a literal plus sign spacer
             // the foruth line is an encoded ascii string of the quality scores (usually 1-42 once translated)
             // So once we find a name we want, we need to read in the next three lines or we messed up the read
@@ -170,10 +169,10 @@ pub fn filter_fastq(
 }
 
 pub fn filter_vcf(
-    bed_table: &HashMap<String, Vec<BedRecord>>, 
-    vcf_in: &PathBuf, 
+    bed_table: &HashMap<String, Vec<BedRecord>>,
+    vcf_in: &PathBuf,
     is_gzip: bool,
-    vcf_out: &PathBuf, 
+    vcf_out: &PathBuf,
 ) -> Result<(), FilterReadsError> {
     // Run prep for filtering to open vcf
     let (infile, mut outfile) = prep_files_for_filtering(vcf_in, is_gzip, vcf_out)?;
@@ -185,11 +184,11 @@ pub fn filter_vcf(
             let line_vec: Vec<&str> = line.split('\t').collect();
             let chrom = line_vec[0];
             let pos: usize = line_vec[1].parse()?;
-            if let Some(records) = bed_table.get(line_vec[0]) {
-                if records.iter().any(|r| r.contains(chrom, pos)) {
-                    outfile.write_all(line.as_bytes())?;
-                    outfile.write_all(b"\n")?;
-                }
+            if let Some(records) = bed_table.get(line_vec[0])
+                && records.iter().any(|r| r.contains(chrom, pos))
+            {
+                outfile.write_all(line.as_bytes())?;
+                outfile.write_all(b"\n")?;
             }
         }
     }
@@ -207,18 +206,17 @@ mod tests {
         let mut temp_file: PathBuf = PathBuf::from(temp_dir.path());
         temp_file.push("Test_data.txt\n");
         let mut file_obj = create_output_file(&temp_file, true).unwrap();
-        file_obj.write_all("Test data!\nThis is only a test\nPlease disregard all information within\nthe end".as_bytes()).unwrap();
+        file_obj
+            .write_all(
+                "Test data!\nThis is only a test\nPlease disregard all information within\nthe end"
+                    .as_bytes(),
+            )
+            .unwrap();
         file_obj.flush().unwrap();
         let mut outfile = PathBuf::from(temp_dir.path());
         outfile.push("test_data_filtered.txt");
-        let result = prep_files_for_filtering(
-            &temp_file, 
-            false, 
-            &outfile);
-        match result {
-            Ok(_tuple) => assert!(true),
-            Err(_error) => assert!(false),
-        }
+        prep_files_for_filtering(&temp_file, false, &outfile)
+            .expect("prep_files_for_filtering should succeed on a real input");
     }
 
     #[test]
@@ -260,7 +258,11 @@ mod tests {
             .unwrap()
             .map(|l| l.unwrap())
             .collect();
-        assert_eq!(lines.len(), 4, "Only the in-range read (4 lines) should be in output");
+        assert_eq!(
+            lines.len(),
+            4,
+            "Only the in-range read (4 lines) should be in output"
+        );
         assert!(lines[0].contains("0000001000"));
     }
 
@@ -291,7 +293,11 @@ mod tests {
             .map(|l| l.unwrap())
             .collect();
         let variant_lines: Vec<&String> = lines.iter().filter(|l| !l.starts_with('#')).collect();
-        assert_eq!(variant_lines.len(), 1, "Only the in-range variant should appear");
+        assert_eq!(
+            variant_lines.len(),
+            1,
+            "Only the in-range variant should appear"
+        );
         assert!(variant_lines[0].contains("1500"));
     }
 
@@ -315,7 +321,11 @@ mod tests {
             .unwrap()
             .map(|l| l.unwrap())
             .collect();
-        assert!(lines.is_empty(), "empty input should produce empty output, got: {:?}", lines);
+        assert!(
+            lines.is_empty(),
+            "empty input should produce empty output, got: {:?}",
+            lines
+        );
     }
 
     #[test]
@@ -381,7 +391,11 @@ mod tests {
         let headers: Vec<&String> = lines.iter().filter(|l| l.starts_with('#')).collect();
         let data: Vec<&String> = lines.iter().filter(|l| !l.starts_with('#')).collect();
         assert_eq!(headers.len(), 3, "all three header lines should survive");
-        assert!(data.is_empty(), "no data lines should be written: {:?}", data);
+        assert!(
+            data.is_empty(),
+            "no data lines should be written: {:?}",
+            data
+        );
     }
 
     #[test]
@@ -423,7 +437,15 @@ mod tests {
             .unwrap()
             .map(|l| l.unwrap())
             .collect();
-        assert_eq!(lines.len(), 4, "Only read C (straddles boundary) should be included");
-        assert!(lines[0].contains("0000000999"), "Expected read C in output, got: {}", lines[0]);
+        assert_eq!(
+            lines.len(),
+            4,
+            "Only read C (straddles boundary) should be included"
+        );
+        assert!(
+            lines[0].contains("0000000999"),
+            "Expected read C in output, got: {}",
+            lines[0]
+        );
     }
 }

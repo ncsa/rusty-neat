@@ -4,16 +4,13 @@
 //! as well, as I think it does the same thing.
 use crate::rng::NeatRngError;
 use log::debug;
-use thiserror::Error;
-use std::fmt::Debug;
-use serde::{
-    Deserialize, 
-    Serialize
-};
+use serde::{Deserialize, Serialize};
 use statrs::{
     distribution::{ContinuousCDF, Normal},
-    statistics::Distribution
+    statistics::Distribution,
 };
+use std::fmt::Debug;
+use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum DistributionErrors {
@@ -24,7 +21,7 @@ pub enum DistributionErrors {
     #[error("Requested a value vector from an index-only model")]
     VectorNotFound,
     #[error("Input values and weights vector must be of the same length")]
-    InputMismatchError
+    InputMismatchError,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,19 +33,19 @@ pub struct DiscreteDistribution<T> {
 impl<T: Clone + Debug + Serialize + for<'de> Deserialize<'de>> DiscreteDistribution<T> {
     pub fn new(w_vec: &Vec<f64>, v_vec: &Vec<T>) -> Result<Self, DistributionErrors> {
         if w_vec.len() != v_vec.len() {
-            return Err(DistributionErrors::InputMismatchError)
+            return Err(DistributionErrors::InputMismatchError);
         }
         let cumulative_probability = {
             let sum_weights: f64 = w_vec.iter().sum();
             if sum_weights > 0.0 {
                 let mut normalized_weights = Vec::with_capacity(w_vec.len());
                 // we no longer need the w_vec_64 after this, so we consume it
-                for weight in w_vec{
+                for weight in w_vec {
                     normalized_weights.push(weight / sum_weights);
                 }
                 cumulative_sum(&mut normalized_weights)?
             } else {
-                // Edge case. Really, this shouldn't be allowed in the data. We'll fix it when 
+                // Edge case. Really, this shouldn't be allowed in the data. We'll fix it when
                 // we rebuild the models.
                 vec![1.0_f64; w_vec.len()]
             }
@@ -94,13 +91,13 @@ impl<T: Clone + Debug + Serialize + for<'de> Deserialize<'de>> DiscreteDistribut
             // All right, the edge case in question is when the quaity array has no values, because the original quality array wasn't 100% filled
             // out. In the future, when we fix the quality arrays so that this doesn't happen, we will be able to remove this safety check, I think
             debug!("Errored on {:?}", self);
-            return Ok(self.values[0].clone())
+            return Ok(self.values[0].clone());
         }
         Ok(self.values[lo].clone())
     }
 }
 
-/// TODO: Figure out how to implement serialize and deserialize for normal. I think it should be easy 
+/// TODO: Figure out how to implement serialize and deserialize for normal. I think it should be easy
 /// enough to do, but I'm tired
 #[derive(Debug, Clone)]
 pub struct NormalDistribution {
@@ -114,13 +111,16 @@ impl NormalDistribution {
     // and no one has time for all that
     pub fn new(mean: f64, std_dev: f64) -> Result<Self, DistributionErrors> {
         Ok(NormalDistribution {
-            distribution: Normal::new(mean, std_dev).unwrap()
+            distribution: Normal::new(mean, std_dev).unwrap(),
         })
     }
 
     pub fn params(&self) -> Result<(f64, f64), DistributionErrors> {
         // returns the initiating parameters of the underlying distribution
-        Ok((self.distribution.mean().unwrap(), self.distribution.std_dev().unwrap()))
+        Ok((
+            self.distribution.mean().unwrap(),
+            self.distribution.std_dev().unwrap(),
+        ))
     }
 
     pub fn inverse_cdf(&self, x: f64) -> Result<f64, DistributionErrors> {
@@ -143,14 +143,14 @@ fn cumulative_sum(a: &mut Vec<f64>) -> Result<Vec<f64>, DistributionErrors> {
     for x in a {
         acc += *x;
         cumvec.push(acc);
-    };
+    }
     Ok(cumvec)
 }
 
 #[cfg(test)]
 mod test {
-    use crate::rng::NeatRng;
     use super::*;
+    use crate::rng::NeatRng;
 
     #[test]
     fn new_from_values() {
@@ -159,7 +159,10 @@ mod test {
         assert_eq!(l_vec.len(), w_vec.len());
         let distribution = DiscreteDistribution::new(&w_vec, &l_vec).unwrap();
         assert_eq!(distribution.values().unwrap(), l_vec);
-        assert_eq!(distribution.weights().unwrap(), vec![1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]);
+        assert_eq!(
+            distribution.weights().unwrap(),
+            vec![1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+        );
     }
 
     #[test]
@@ -171,7 +174,8 @@ mod test {
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),
-        ]).unwrap();
+        ])
+        .unwrap();
         let rand = rng.random().unwrap();
         let x = d.sample(rand).unwrap();
         assert_eq!(x, 6);
@@ -195,7 +199,8 @@ mod test {
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),
-        ]).unwrap();
+        ])
+        .unwrap();
         let rand = rng.random().unwrap();
         let x = d.sample(rand).unwrap();
         assert_eq!(x, 11);
@@ -232,7 +237,12 @@ mod test {
         let nd = NormalDistribution::new(0.0, 1.0).unwrap();
         for p in [0.001, 0.01, 0.1, 0.5, 0.9, 0.99, 0.999] {
             let val = nd.sample(p).unwrap();
-            assert!(val.abs() < 4.0, "sample({}) = {} is outside ±4 sigma", p, val);
+            assert!(
+                val.abs() < 4.0,
+                "sample({}) = {} is outside ±4 sigma",
+                p,
+                val
+            );
         }
     }
 
@@ -243,8 +253,8 @@ mod test {
     // in sample() is hot-path code shared by every model, so blanketing it with
     // randomized inputs is cheap insurance against off-by-one bugs.
 
-    use proptest::prelude::*;
     use proptest::collection::vec as prop_vec;
+    use proptest::prelude::*;
 
     /// Strategy: a (weights, values) pair with positive, well-formed weights. Length
     /// 2..=10 (small enough to keep tests fast but large enough to exercise the

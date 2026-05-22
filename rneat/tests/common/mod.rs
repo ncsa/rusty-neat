@@ -8,8 +8,8 @@
 #![allow(dead_code)]
 
 use assert_cmd::Command;
-use flate2::write::GzEncoder;
 use flate2::Compression;
+use flate2::write::GzEncoder;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
@@ -105,10 +105,7 @@ impl GenReadsConfig {
     /// Serialize to a temporary YAML file (returned as a `NamedTempFile` so the caller
     /// can hand its path to the binary). The file is deleted when the value is dropped.
     pub fn write_yaml(&self) -> tempfile::NamedTempFile {
-        let mut f = tempfile::Builder::new()
-            .suffix(".yml")
-            .tempfile()
-            .unwrap();
+        let mut f = tempfile::Builder::new().suffix(".yml").tempfile().unwrap();
         let pair_section = if self.paired_ended {
             "paired_ended: true\nfragment_mean: 200.0\nfragment_st_dev: 30.0\n"
         } else {
@@ -176,10 +173,7 @@ pub fn write_gen_seq_error_model_config(
     output_file: &Path,
     binned_quality_bins: Option<&[usize]>,
 ) -> tempfile::NamedTempFile {
-    let mut f = tempfile::Builder::new()
-        .suffix(".yml")
-        .tempfile()
-        .unwrap();
+    let mut f = tempfile::Builder::new().suffix(".yml").tempfile().unwrap();
     let bin_line = match binned_quality_bins {
         Some(bins) => format!(
             "binned_quality_bins: [{}]\n",

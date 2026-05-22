@@ -1,15 +1,12 @@
-use log::debug;
-use common::rng::NeatRng;
 use crate::{
     common::{
         models::mutation_model::MutationModel,
-        structs::{
-            sequence_block::SequenceBlock,
-            variants::Variant
-        }
+        structs::{sequence_block::SequenceBlock, variants::Variant},
     },
-    gen_reads::errors::GenerateReadsError
+    gen_reads::errors::GenerateReadsError,
 };
+use common::rng::NeatRng;
+use log::debug;
 
 /// Generates random variants for a contig.
 ///
@@ -42,28 +39,30 @@ pub fn generate_variants(
 
     for _ in 0..num_mutations {
         let target = rng.random()? * total_weight;
-        let seg_idx = cumulative.partition_point(|&c| c <= target)
+        let seg_idx = cumulative
+            .partition_point(|&c| c <= target)
             .min(rate_segments.len() - 1);
         let (seg_start, seg_end, seg_rate) = rate_segments[seg_idx];
-        let weight_before = if seg_idx > 0 { cumulative[seg_idx - 1] } else { 0.0 };
+        let weight_before = if seg_idx > 0 {
+            cumulative[seg_idx - 1]
+        } else {
+            0.0
+        };
         let weight_in_seg = (target - weight_before).max(0.0);
         let pos_in_seg = (weight_in_seg / seg_rate) as usize;
         let location = (seg_start + pos_in_seg).min(seg_end - 1);
 
         debug!("location: {}", location);
-        block_variants.push(
-            mutation_model.generate_mutation(
-                &sequence_block.sequence,
-                location,
-                ploidy,
-                rng,
-            )?
-        );
+        block_variants.push(mutation_model.generate_mutation(
+            &sequence_block.sequence,
+            location,
+            ploidy,
+            rng,
+        )?);
     }
 
     Ok(Some(block_variants))
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -72,8 +71,8 @@ mod tests {
         models::mutation_model::MutationModel,
         structs::sequence_block::{RegionType, SequenceBlock, SequenceMap},
     };
-    use common::structs::nucleotides::Nucleotide;
     use common::rng::NeatRng;
+    use common::structs::nucleotides::Nucleotide;
 
     fn make_block(len: usize) -> SequenceBlock {
         let sequence: Vec<Nucleotide> = (0..len)
@@ -98,7 +97,8 @@ mod tests {
             "Hello".to_string(),
             "Cruel".to_string(),
             "World".to_string(),
-        ]).unwrap()
+        ])
+        .unwrap()
     }
 
     #[test]
@@ -123,7 +123,11 @@ mod tests {
             .unwrap()
             .unwrap();
         for v in variants {
-            assert!(v.location < 200, "Variant location {} out of range", v.location);
+            assert!(
+                v.location < 200,
+                "Variant location {} out of range",
+                v.location
+            );
         }
     }
 
@@ -136,7 +140,10 @@ mod tests {
         let result = generate_variants(&block, &segments, &model, 5, 2, &mut rng)
             .unwrap()
             .unwrap();
-        assert!(result.is_empty(), "Empty segments should produce no variants");
+        assert!(
+            result.is_empty(),
+            "Empty segments should produce no variants"
+        );
     }
 
     #[test]
@@ -145,9 +152,11 @@ mod tests {
         let segments = vec![(0usize, 200usize, 1.0f64)];
         let model = MutationModel::default().unwrap();
         let result1 = generate_variants(&block, &segments, &model, 5, 2, &mut make_rng())
-            .unwrap().unwrap();
+            .unwrap()
+            .unwrap();
         let result2 = generate_variants(&block, &segments, &model, 5, 2, &mut make_rng())
-            .unwrap().unwrap();
+            .unwrap()
+            .unwrap();
         for (v1, v2) in result1.iter().zip(result2.iter()) {
             assert_eq!(v1.location, v2.location);
             assert_eq!(v1.variant_type, v2.variant_type);

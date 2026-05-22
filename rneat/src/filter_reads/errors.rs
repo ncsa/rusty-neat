@@ -1,6 +1,6 @@
-use thiserror::Error;
-use std::num::ParseIntError;
 use common::file_tools::bed_reader::BedReaderError;
+use std::num::ParseIntError;
+use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum FilterReadsError {

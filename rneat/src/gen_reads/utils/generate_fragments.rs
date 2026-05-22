@@ -701,11 +701,8 @@ mod tests {
 
     #[test]
     fn test_weighted_fragments_produces_fragments_for_valid_region() {
-        let sequence_block = make_sequence_block(
-            std::iter::repeat_n([A, C, G, T], 500)
-                .flatten()
-                .collect(),
-        );
+        let sequence_block =
+            make_sequence_block(std::iter::repeat_n([A, C, G, T], 500).flatten().collect());
         let fragment_model = FragmentLengthModel::default().unwrap();
         let mut rng = make_rng();
 
@@ -733,11 +730,8 @@ mod tests {
 
     #[test]
     fn test_weighted_fragments_all_within_bounds() {
-        let sequence_block = make_sequence_block(
-            std::iter::repeat_n([A, C, G, T], 1000)
-                .flatten()
-                .collect(),
-        );
+        let sequence_block =
+            make_sequence_block(std::iter::repeat_n([A, C, G, T], 1000).flatten().collect());
         let (region_start, region_end) = (200, 3800);
         let fragment_model = FragmentLengthModel::default().unwrap();
         let mut rng = make_rng();
@@ -776,11 +770,8 @@ mod tests {
 
     #[test]
     fn test_weighted_fragments_deterministic() {
-        let sequence_block = make_sequence_block(
-            std::iter::repeat_n([A, C, G, T], 500)
-                .flatten()
-                .collect(),
-        );
+        let sequence_block =
+            make_sequence_block(std::iter::repeat_n([A, C, G, T], 500).flatten().collect());
         let fragment_model = FragmentLengthModel::default().unwrap();
 
         let mut rng1 = make_rng();
@@ -823,11 +814,8 @@ mod tests {
     #[test]
     fn test_weighted_fragments_normalize_true_generates_more_than_false() {
         // 50% GC sequence; model mean weight ≈ 0.5 → normalize should roughly double count.
-        let sequence_block = make_sequence_block(
-            std::iter::repeat_n([A, C, G, T], 2500)
-                .flatten()
-                .collect(),
-        );
+        let sequence_block =
+            make_sequence_block(std::iter::repeat_n([A, C, G, T], 2500).flatten().collect());
         let mut weights = weights_with_value(0.0);
         weights[50] = 0.5;
         weights[100] = 1.0;
@@ -923,11 +911,8 @@ mod tests {
         // (many sampled fragments fall below read_length). The while-loop must retry
         // until num_frags fragments are placed, not stop early.
         let read_length = 200;
-        let sequence_block = make_sequence_block(
-            std::iter::repeat_n([A, C, G, T], 5000)
-                .flatten()
-                .collect(),
-        );
+        let sequence_block =
+            make_sequence_block(std::iter::repeat_n([A, C, G, T], 5000).flatten().collect());
         let (region_start, region_end) = (0, sequence_block.sequence.len());
         let coverage = 5;
         let region_len = region_end - region_start;

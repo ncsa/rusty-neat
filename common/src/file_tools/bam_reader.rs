@@ -315,13 +315,14 @@ impl RecordObserver for TransitionObserver {
                 CigarKind::Match | CigarKind::SequenceMatch | CigarKind::SequenceMismatch => {
                     for _ in 0..len {
                         if let Some(ref_b) = walker.next_alignment_base()
-                            && let Some(read_b) = sequence.get(read_pos) {
-                                let ri: usize = Nucleotide::from(ref_b as char).into();
-                                let wi: usize = Nucleotide::from(read_b as char).into();
-                                if ri < 4 && wi < 4 {
-                                    self.counts[ri][wi] += 1;
-                                }
+                            && let Some(read_b) = sequence.get(read_pos)
+                        {
+                            let ri: usize = Nucleotide::from(ref_b as char).into();
+                            let wi: usize = Nucleotide::from(read_b as char).into();
+                            if ri < 4 && wi < 4 {
+                                self.counts[ri][wi] += 1;
                             }
+                        }
                         read_pos += 1;
                     }
                 }

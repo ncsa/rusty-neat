@@ -602,6 +602,10 @@ impl RunConfiguration {
 }
 
 #[cfg(test)]
+// RunConfiguration has many fields; test setups touch only 2–4 of them, so
+// `let mut c = Default::default(); c.foo = ...;` reads better than the
+// struct-init form clippy suggests. Allow the lint for the whole test mod.
+#[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
 

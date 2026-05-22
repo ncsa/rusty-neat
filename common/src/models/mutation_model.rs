@@ -159,6 +159,9 @@ impl MutationModel {
         })
     }
 
+    // Returns Result because it deserializes an embedded model file; std::Default
+    // requires infallible `fn default() -> Self`, which doesn't fit.
+    #[allow(clippy::should_implement_trait)]
     pub fn default() -> Result<Self, MutationModelError> {
         // Creating the default model based on the default for the original NEAT.
         let reader = GzDecoder::new(DATA_FILE);

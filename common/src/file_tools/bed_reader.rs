@@ -90,8 +90,7 @@ fn read_open_bed<P: Read>(
         }
         file_records
             .get_mut(&contig)
-            .unwrap_or_else(|| panic!("BUG: The contig was not found in file records {}",
-                contig))
+            .unwrap_or_else(|| panic!("BUG: The contig was not found in file records {}", contig))
             .push(record)
     }
     Ok(file_records)

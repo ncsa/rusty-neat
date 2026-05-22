@@ -167,10 +167,10 @@ impl Nucleotide {
     }
 
     pub fn is_masked(&self) -> bool {
-        match self {
-            Self::Maskeda | Self::Maskedc | Self::Maskedg | Self::Maskedt | Self::X => true,
-            _ => false,
-        }
+        matches!(
+            self,
+            Self::Maskeda | Self::Maskedc | Self::Maskedg | Self::Maskedt | Self::X
+        )
     }
 
     pub fn get_masked(&self) -> Nucleotide {

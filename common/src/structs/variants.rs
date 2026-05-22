@@ -123,11 +123,7 @@ impl Variant {
         let genotype_str = {
             if format.contains(&String::from("GT")) {
                 debug!("Found genotype in vcf file");
-                let gt_pos = format
-                    .clone()
-                    .into_iter()
-                    .position(|x| x == "GT")
-                    .unwrap();
+                let gt_pos = format.clone().into_iter().position(|x| x == "GT").unwrap();
                 sample[gt_pos].to_string()
             } else {
                 return Err(VariantError::InvalidVcf(

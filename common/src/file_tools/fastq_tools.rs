@@ -122,11 +122,13 @@ pub fn write_block_fastq<T: Write, W: Write>(
                 reads1_flagged.push(var_pos);
             }
             if end > effective_read_len
-                && paired_ended && ((end - effective_read_len)..end).contains(pos) {
-                    let var_pos = (end - 1) - pos;
-                    read2_variants.insert(var_pos, variant);
-                    reads2_flagged.push(var_pos);
-                }
+                && paired_ended
+                && ((end - effective_read_len)..end).contains(pos)
+            {
+                let var_pos = (end - 1) - pos;
+                read2_variants.insert(var_pos, variant);
+                reads2_flagged.push(var_pos);
+            }
         }
 
         let ref_start = sequence_block.ref_start;
@@ -234,9 +236,10 @@ pub fn combine_temp_fastqs(
 ) -> Result<(), FastqToolsError> {
     stream_gzip_files(&files_r1, final_filename_r1)?;
     if let Some(filename_r2) = final_filename_r2
-        && !files_r2.is_empty() {
-            stream_gzip_files(&files_r2, filename_r2)?;
-        }
+        && !files_r2.is_empty()
+    {
+        stream_gzip_files(&files_r2, filename_r2)?;
+    }
     Ok(())
 }
 
@@ -253,6 +256,9 @@ fn stream_gzip_files(files: &[PathBuf], output: &PathBuf) -> Result<(), FastqToo
     Ok(())
 }
 
+// `cigar_ops.push('D')` runs in a loop per deletion-error base; pushing the
+// same byte N times is the entire CIGAR encoding, not a copy-paste mistake.
+#[allow(clippy::same_item_push)]
 fn generate_read(
     sequence: &[Nucleotide],
     flagged_positions: &[usize],

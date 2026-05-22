@@ -69,6 +69,9 @@ impl Index<&Nucleotide> for TransitionMatrix {
 }
 
 impl TransitionMatrix {
+    // Returns Result because it builds distributions that can fail; std::Default
+    // requires infallible `fn default() -> Self`, which doesn't fit.
+    #[allow(clippy::should_implement_trait)]
     pub fn default() -> Result<Self, TransitionMatrixError> {
         // Default transition matrix for mutations from the original NEAT 2.0
         Ok(Self {
@@ -151,10 +154,7 @@ impl TransitionMatrix {
         g_weights: [f64; 4],
         t_weights: [f64; 4],
     ) -> Result<Self, TransitionMatrixError> {
-        let weights_test = [a_weights,
-            c_weights,
-            g_weights,
-            t_weights];
+        let weights_test = [a_weights, c_weights, g_weights, t_weights];
         for vector in weights_test.iter() {
             if vector.len() != 4 {
                 return Err(TransitionMatrixError::UnequalWeightsError);

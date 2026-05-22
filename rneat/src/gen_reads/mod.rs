@@ -45,7 +45,7 @@ pub fn main(config: &PathBuf) -> Result<(), GenerateReadsError> {
     let mut rng: NeatRng =
         NeatRng::new_from_seed(&config.seed_vec).expect("Neat failed during rng creation!");
     // run the generate reads main script
-    let result = run_neat(&Box::new(config.clone()), &mut rng);
+    let result = run_neat(&config, &mut rng);
     match result {
         Ok(_) => {
             // Continue on for bed filtering
@@ -92,7 +92,7 @@ mod tests {
 
     fn run(config: RunConfiguration) {
         let mut rng = NeatRng::new_from_seed(&config.seed_vec).unwrap();
-        run_neat(&Box::new(config), &mut rng).unwrap();
+        run_neat(&config, &mut rng).unwrap();
     }
 
     /// Returns (ref_id, 0-based alignment start) for every record in the BAM.
@@ -678,10 +678,11 @@ mod tests {
             }
             let sequence = record.sequence();
             if let Some(base_byte) = sequence.get(offset)
-                && (base_byte as char).eq_ignore_ascii_case(&'T') {
-                    alt_seen = true;
-                    break;
-                }
+                && (base_byte as char).eq_ignore_ascii_case(&'T')
+            {
+                alt_seen = true;
+                break;
+            }
         }
 
         assert!(
@@ -729,7 +730,7 @@ mod tests {
         let reader = BufReader::new(GzDecoder::new(std::fs::File::open(&output_vcf).unwrap()));
         let found = reader
             .lines()
-            .filter_map(|l| l.ok())
+            .map_while(|l| l.ok())
             .filter(|l| !l.starts_with('#'))
             .any(|l| {
                 let cols: Vec<&str> = l.split('\t').collect();

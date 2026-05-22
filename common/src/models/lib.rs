@@ -24,7 +24,8 @@ where
     T: for<'de> Deserialize<'de>,
 {
     // This will take any serializable model and write it to file.
-    let filein = File::open(filename).unwrap_or_else(|_| panic!("Error opening file {:?}", &filename));
+    let filein =
+        File::open(filename).unwrap_or_else(|_| panic!("Error opening file {:?}", &filename));
     let reader = GzDecoder::new(BufReader::new(filein));
     let value: T = serde_json::from_reader(reader)?;
     Ok(value)
@@ -36,7 +37,8 @@ where
     T: for<'de> Deserialize<'de>,
 {
     // This will take any serializable model and write it to file.
-    let filein = File::open(filename).unwrap_or_else(|_| panic!("Error opening file {:?}", &filename));
+    let filein =
+        File::open(filename).unwrap_or_else(|_| panic!("Error opening file {:?}", &filename));
     let reader = BufReader::new(filein);
     let value: T = serde_json::from_reader(reader)?;
     Ok(value)

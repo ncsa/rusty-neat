@@ -142,7 +142,7 @@ lazy_static! {
             .values()
             .map(|s| s.convert())
             .collect();
-        
+
         frames.iter().unique().cloned().collect::<Vec<_>>()
     };
 
@@ -258,10 +258,12 @@ impl SnpTrinucModel {
             if let Some(&context) = alias_map.get(from_trinuc) {
                 let row: usize = from_trinuc[1].into();
                 let col: usize = to_trinuc[1].into();
-                if row < 4 && col < 4
-                    && let Some(matrix) = accum.get_mut(&context) {
-                        matrix[row][col] += prob;
-                    }
+                if row < 4
+                    && col < 4
+                    && let Some(matrix) = accum.get_mut(&context)
+                {
+                    matrix[row][col] += prob;
+                }
             }
         }
 
@@ -312,6 +314,9 @@ impl SnpTrinucModel {
         })
     }
 
+    // Returns Result because it deserializes an embedded model file; std::Default
+    // requires infallible `fn default() -> Self`, which doesn't fit.
+    #[allow(clippy::should_implement_trait)]
     pub fn default() -> Result<Self, SnpTrinucError> {
         // This default will read in data from the original NEAT trinuc model to create a more realistic trinuc
         // bias.
@@ -323,7 +328,7 @@ impl SnpTrinucModel {
 
     #[allow(unused)]
     /// we will write utilities to use this, eventually
-    fn from_file(&self, filename: &PathBuf) -> Result<Self, SnpTrinucError> {
+    fn from_file(filename: &PathBuf) -> Result<Self, SnpTrinucError> {
         // Uses the serde_json crate to read a quality model from file
         let data: SnpTrinucModel = model_reader(filename).unwrap();
         Ok(data)

@@ -58,6 +58,9 @@ impl IndelModel {
             del_dist,
         })
     }
+    // Returns Result because it deserializes an embedded model file; std::Default
+    // requires infallible `fn default() -> Self`, which doesn't fit.
+    #[allow(clippy::should_implement_trait)]
     pub fn default() -> Result<Self, IndelModelError> {
         // Default Indel model from the original NEAT, scaled by the lowest value and rounded.
         let reader = GzDecoder::new(DATA_FILE);

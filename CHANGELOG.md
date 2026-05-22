@@ -1,3 +1,20 @@
+5/22/2026
+=========
+## rneat v1.6.1
+
+### Maintenance / cleanup
+- Workspace-wide `cargo fmt` pass. `cargo fmt --check` now exits 0.
+- `cargo clippy --workspace --all-targets` now passes with no deny-level errors. Two pre-existing hard failures fixed: `absurd_extreme_comparisons` in `common::rng::range_i64` (`if max > i64::MAX` is always false — replaced with `if min > max` so the function actually validates its range) and `unused_io_amount` in `filter_reads::filter_lib` tests (switched `write(...)` to `write_all(...)`).
+- Idiomatic cleanups via `cargo clippy --fix` and a final manual pass: dropped redundant `.clone()` on Copy types, redundant `.into()` on identity conversions, redundant `&` on already-borrowed args; collapsed nested `if X { if Y { ... } }` into combined `if X && Y { ... }`; rewrote `(a + b - 1) / b` → `a.div_ceil(b)`; modernized `repeat(x).take(n)` → `repeat_n(x, n)`, `x >= a && x < b` → `(a..b).contains(&x)`, `x % 2 == 0` → `x.is_multiple_of(2)`; replaced three `assert!(true)` placeholders with `.expect(...)` calls; added a `Default` impl for `NucleotideSelector`; converted `impl Into<usize> for Nucleotide` to the canonical `impl From<Nucleotide> for usize` (same for `TrinucFrame`).
+- Six CLI dispatch arms in `main.rs` (filter-reads, gen-mut-model, gen-seq-error-model, gen-frag-length-model, gen-gc-bias-model + the previously-touched gen-reads) now use a single `if let Some((name, cmd)) = subcommand && cmd.contains_id("configuration_yaml")` form instead of two nested ifs. Drive-by: fixed a copy-paste log message in `gen-mut-model` that said "Running rneat filter-reads".
+- `gen-reads::run_neat` now takes `&RunConfiguration` instead of `&Box<RunConfiguration>`. Call sites no longer need to `Box::new(config.clone())`.
+- `gen-reads`'s test VCF reader uses `.map_while(|l| l.ok())` instead of `.filter_map(|l| l.ok())` so a misbehaving reader can't loop forever on repeated `Err`.
+- `gen-reads` config parser accepts `rng_seed` as either a YAML string (`"42 hello"`) or a bare integer (`42`); previously bare integers panicked with `ConfigReadError("rng_seed", "String")`. Two new tests pin both forms.
+- `BedRecord` now has an `is_empty()` companion to `len()`.
+- `SnpTrinucModel::from_file` no longer takes a dummy `&self` (it never used it).
+- `Nucleotide::is_masked` rewritten with `matches!` instead of a boolean-returning `match`.
+- Added explicit `#[allow(...)]` annotations for three cases where clippy's suggestion doesn't fit: `should_implement_trait` on the seven `default()` methods that return `Result` (can't implement infallible `std::Default`), `field_reassign_with_default` in the `gen_reads/utils/config.rs` test module (clearer than struct-init for sparse field overrides on a 30-field config), and `same_item_push` on `fastq_tools::generate_read` (pushing `'D'` N times is the CIGAR encoding, not a mistake).
+
 5/21/2026
 =========
 ## rneat v1.6.0

@@ -78,7 +78,7 @@ struct ProcessedContigData {
 }
 
 pub fn run_neat(
-    config: &Box<RunConfiguration>,
+    config: &RunConfiguration,
     rng: &mut NeatRng,
 ) -> Result<Vec<PathBuf>, GenerateReadsError> {
     let working_dir = tempfile::tempdir().unwrap();

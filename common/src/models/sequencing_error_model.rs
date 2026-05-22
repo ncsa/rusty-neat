@@ -54,6 +54,9 @@ pub struct SequencingErrorModel {
 }
 
 impl SequencingErrorModel {
+    // Returns Result because it builds distributions that can fail; std::Default
+    // requires infallible `fn default() -> Self`, which doesn't fit.
+    #[allow(clippy::should_implement_trait)]
     pub fn default() -> Result<Self, SeqModelError> {
         // This is the default sequencing error model employed by NEAT2
         // Note that this was originally in a file, and we could have done it the way we did

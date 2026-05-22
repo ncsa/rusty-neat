@@ -42,8 +42,7 @@ pub enum FragmentLengthModel {
     },
 }
 
-static DATA_FILE: &[u8] =
-    include_bytes!("model_data/default_fragment_length_model.json.gz");
+static DATA_FILE: &[u8] = include_bytes!("model_data/default_fragment_length_model.json.gz");
 
 impl FragmentLengthModel {
     pub fn new_discrete(
@@ -64,6 +63,9 @@ impl FragmentLengthModel {
         })
     }
 
+    // Returns Result because it deserializes an embedded model file; std::Default
+    // requires infallible `fn default() -> Self`, which doesn't fit.
+    #[allow(clippy::should_implement_trait)]
     pub fn default() -> Result<Self, FragmentModelError> {
         // The parameters of the default model from the original neat
         // The lengths range from 1 to 799, though it skips from 1 to 32 before counting up.
@@ -292,7 +294,9 @@ mod tests {
         let mut temp_file = PathBuf::from(temp_dir.path());
         let filename = "model_test.json";
         temp_file.push(filename);
-        model.write_file(&temp_file).expect("write_file should succeed");
+        model
+            .write_file(&temp_file)
+            .expect("write_file should succeed");
         let model2 = FragmentLengthModel::discrete_from_file(&temp_file).unwrap();
         assert_eq!(model.is_discrete(), model2.is_discrete());
         temp_dir.close().unwrap();

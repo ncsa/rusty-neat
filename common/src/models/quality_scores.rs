@@ -89,6 +89,9 @@ static DATA_FILE: &[u8] = include_bytes!("model_data/default_quality_score_model
 impl QualityScoreModel {
     // methods for QualityScoreModel objects
 
+    // Returns Result because it builds distributions that can fail; std::Default
+    // requires infallible `fn default() -> Self`, which doesn't fit.
+    #[allow(clippy::should_implement_trait)]
     pub fn default() -> Result<Self, QualityModelError> {
         // This generates the default quality score model based on the original NEAT default.
         // the parameters are sort of outdated now:

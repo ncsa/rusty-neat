@@ -55,6 +55,10 @@ impl BedRecord {
         self.end - self.start
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.end == self.start
+    }
+
     pub fn get_contig(&self) -> String {
         self.contig.to_owned()
     }

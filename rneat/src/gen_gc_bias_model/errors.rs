@@ -16,8 +16,6 @@ pub enum GenGcBiasModelError {
     BedReadError(#[from] BedReaderError),
     #[error("Error building GC bias model: {0}")]
     GcBiasModelError(#[from] GcBiasModelError),
-    #[error("Error parsing coverage file: {0}")]
-    CoverageParseError(String),
     #[error("Error reading FASTA: {0}")]
     FastaStreamError(#[from] FastaStreamError),
     #[error("Error reading BAM: {0}")]

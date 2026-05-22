@@ -1,3 +1,27 @@
+5/22/2026
+=========
+## rneat v1.7.0
+
+### `gen-bam-models`: unified single-pass model builder
+- New `rneat gen-bam-models` subcommand that walks a single BAM once and builds whichever subset of BAM-derived models the config requests. Currently supports `frag_length` and `gc_bias` sections; both are optional, at least one must be present. Saves a BAM iteration per additional model relative to running the per-tool commands separately.
+- Config is two optional sub-sections under one top-level `bam_file` / `min_mapq`:
+  ```yaml
+  bam_file: /path/to/aligned.bam
+  min_mapq: 0
+  frag_length:
+    output_file: /path/to/frag.json.gz
+    min_reads: 2
+  gc_bias:
+    reference: /path/to/reference.fa
+    output_file: /path/to/gc.json.gz
+    window_size: 100
+    window_stride: 100
+    min_windows_per_bin: 10
+  ```
+- `FragLengthObserver` is now self-filtering — it applies its own paired/first-in-pair/mate-mapped/same-ref/MAPQ checks internally regardless of the walker filter, so it remains correct when paired with `BamWalkFilter::for_coverage()` in the unified runner. The standalone `gen-frag-length-model` command continues to pass `for_frag_length()` to the walker; the observer's internal checks are then redundant no-ops, so behavior on that path is unchanged.
+- Internal refactor: `gen_frag_length_model::utils::runner::run_from_tlens` and `gen_gc_bias_model::utils::runner::run_from_coverage` are now public so the unified runner can call them with observer outputs from the shared BAM walk. The standalone runners are thin wrappers over the same helpers.
+- A parity test asserts the unified runner and the standalone `gen-frag-length-model` produce numerically identical fragment-length models against the same BAM.
+
 5/21/2026
 =========
 ## rneat v1.6.0

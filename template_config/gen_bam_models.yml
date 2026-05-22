@@ -1,0 +1,27 @@
+# Unified BAM-derived model builder. One BAM is walked once and feeds whichever
+# model sections you uncomment below. At least one of `frag_length` or
+# `gc_bias` must be present.
+bam_file: /path/to/aligned.bam
+
+# Walker-level MAPQ filter for the shared BAM pass. Observers may apply
+# stricter filters internally (FragLengthObserver always requires MAPQ > 10).
+# Default 0 matches `samtools depth` defaults.
+min_mapq: 0
+
+# Fragment-length model. Optional.
+frag_length:
+  output_file: /path/to/frag_length_model.json.gz
+  overwrite_output: false
+  # Drop fragment lengths observed in fewer than this many reads. Default 2.
+  min_reads: 2
+
+# GC bias model. Optional. Requires a reference FASTA.
+gc_bias:
+  reference: /path/to/reference.fa
+  output_file: /path/to/gc_bias_model.json.gz
+  overwrite_output: false
+  # Optional BED to restrict windowing to target regions; "." disables.
+  bed_file: .
+  window_size: 100
+  window_stride: 100
+  min_windows_per_bin: 10

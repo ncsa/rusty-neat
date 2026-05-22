@@ -95,6 +95,14 @@ impl CoverageData {
         Ok(Some(CoverageData { depths }))
     }
 
+    /// Builds a CoverageData directly from a pre-computed per-base depth array.
+    /// Used by the BAM input path, where coverage is accumulated in process via
+    /// `common::file_tools::bam_reader::CoverageObserver` rather than parsed from
+    /// a samtools-depth / bedtools-genomecov file.
+    pub fn from_depths(depths: Vec<u32>) -> Self {
+        Self { depths }
+    }
+
     /// Depth at a 0-based position. Returns 0 for positions beyond the stored range.
     #[inline]
     pub fn depth_at(&self, pos: usize) -> u32 {

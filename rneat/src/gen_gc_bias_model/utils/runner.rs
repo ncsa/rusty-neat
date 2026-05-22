@@ -1,8 +1,11 @@
-use std::path::PathBuf;
+use std::{collections::HashMap, path::PathBuf};
 use log::*;
 
 use common::{
-    file_tools::fasta_stream::{FastaStream, non_n_regions},
+    file_tools::{
+        bam_reader::{walk_bam, BamWalkFilter, CoverageObserver},
+        fasta_stream::{FastaStream, non_n_regions},
+    },
     models::gc_bias_model::GcBiasModel,
     structs::nucleotides::Nucleotide,
 };
@@ -14,11 +17,47 @@ use crate::gen_gc_bias_model::{
     },
 };
 
+/// Abstracts over the two coverage input modes so the window-sweep loop
+/// below doesn't have to know where the depths came from.
+enum CoverageSource {
+    /// Per-contig depth arrays accumulated from a BAM in process via
+    /// `CoverageObserver`. Contigs are consumed (removed from the map)
+    /// as the runner walks the reference, so peak memory drops as
+    /// processing advances.
+    BamObserved(HashMap<String, Vec<u32>>),
+    /// Legacy path: depths streamed from a samtools-depth /
+    /// bedtools-genomecov file via `CoverageReader`.
+    FromFile(CoverageReader),
+}
+
+impl CoverageSource {
+    fn get(&mut self, contig: &str) -> Result<Option<CoverageData>, GenGcBiasModelError> {
+        match self {
+            CoverageSource::BamObserved(map) => {
+                Ok(map.remove(contig).map(CoverageData::from_depths))
+            }
+            CoverageSource::FromFile(reader) => reader.get(contig),
+        }
+    }
+}
+
 pub fn runner(path: &PathBuf) -> Result<(), GenGcBiasModelError> {
     let config = RunConfiguration::from(path)?;
 
-    info!("Building coverage index from {:?}", config.coverage_file);
-    let mut cov_reader = CoverageReader::open(&config.coverage_file, config.coverage_format)?;
+    let mut cov_source = if let Some(bam_path) = &config.bam_file {
+        info!("Accumulating coverage from BAM {:?}", bam_path);
+        let mut obs = CoverageObserver::default();
+        let mut filter = BamWalkFilter::for_coverage();
+        filter.min_mapq = config.min_mapq;
+        walk_bam(bam_path, &filter, &mut [&mut obs])?;
+        CoverageSource::BamObserved(obs.into_by_contig())
+    } else {
+        // Config validation guarantees this branch has coverage_file + coverage_format set.
+        let coverage_file = config.coverage_file.as_ref().expect("config validated");
+        let coverage_format = config.coverage_format.expect("config validated");
+        info!("Building coverage index from {:?}", coverage_file);
+        CoverageSource::FromFile(CoverageReader::open(coverage_file, coverage_format)?)
+    };
 
     let mut gc_weight_sum = [0.0f64; 101];
     let mut gc_window_count = [0usize; 101];
@@ -41,7 +80,7 @@ pub fn runner(path: &PathBuf) -> Result<(), GenGcBiasModelError> {
             continue;
         }
 
-        let cov = match cov_reader.get(&contig_name)? {
+        let cov = match cov_source.get(&contig_name)? {
             Some(c) => c,
             None => {
                 debug!("No coverage data for {}, skipping", contig_name);
@@ -434,6 +473,210 @@ min_windows_per_bin: {}
         // High-GC bin (100%) is sparse → neutral weight 1.0
         let w_high = model.weight_for_gc_fraction(1.0);
         assert_eq!(w_high, 1.0, "Expected sparse high-GC bin to have neutral weight 1.0");
+    }
+
+    /// Writes a BAM where `depth` reads of length `read_len` are stacked at
+    /// position 1 on a single contig, producing uniform depth `depth` over
+    /// positions [0, read_len) and 0 elsewhere.
+    fn write_uniform_coverage_bam(
+        path: &std::path::PathBuf,
+        contig: &[u8],
+        contig_len: usize,
+        depth: usize,
+        read_len: usize,
+    ) {
+        use noodles::bam;
+        use noodles::core::Position;
+        use noodles::sam::{
+            self as sam,
+            alignment::{
+                RecordBuf,
+                io::Write as _,
+                record::{cigar::{op::Kind, Op}, Flags, MappingQuality},
+                record_buf::{Cigar, Sequence},
+            },
+            header::record::value::{Map, map::ReferenceSequence},
+        };
+
+        let header = sam::Header::builder()
+            .add_reference_sequence(
+                contig.to_vec(),
+                Map::<ReferenceSequence>::new(
+                    std::num::NonZero::<usize>::new(contig_len).unwrap(),
+                ),
+            )
+            .build();
+        let file = std::fs::File::create(path).unwrap();
+        let mut writer = bam::io::Writer::new(file);
+        writer.write_header(&header).unwrap();
+
+        let cigar: Cigar = [Op::new(Kind::Match, read_len)].into_iter().collect();
+        let seq = vec![b'A'; read_len];
+        for _ in 0..depth {
+            let mut record = RecordBuf::default();
+            *record.flags_mut() = Flags::empty();
+            *record.cigar_mut() = cigar.clone();
+            *record.reference_sequence_id_mut() = Some(0);
+            *record.alignment_start_mut() = Position::new(1);
+            *record.sequence_mut() = Sequence::from(seq.as_slice());
+            *record.mapping_quality_mut() = Some(MappingQuality::try_from(30u8).unwrap());
+            writer.write_alignment_record(&header, &record).unwrap();
+        }
+    }
+
+    #[test]
+    fn test_bam_input_uniform_coverage_matches_file_input() {
+        // 300 bp reference, 50% GC throughout. Stack 10 reads of length 300
+        // → uniform depth 10 → relative weights ~1.0 everywhere.
+        // Mirrors `test_uniform_coverage_produces_neutral_weights` but through
+        // the bam_file input path instead of coverage_file.
+        let seq: String = "ACGT".repeat(75);
+        let fasta_content = format!(">chr1\n{}\n", seq);
+        let ref_file = write_temp(&fasta_content);
+
+        let temp = tempfile::tempdir().unwrap();
+        let bam_path = temp.path().join("uniform.bam");
+        write_uniform_coverage_bam(&bam_path, b"chr1", 300, 10, 300);
+
+        let out = NamedTempFile::new().unwrap();
+        let out_path = out.path().to_path_buf();
+        drop(out);
+
+        let yaml = format!(
+            "reference: {}\nbam_file: {}\noutput_file: {}\noverwrite_output: true\n\
+             window_size: 100\nwindow_stride: 100\nmin_windows_per_bin: 1\n",
+            ref_file.path().display(),
+            bam_path.display(),
+            out_path.display(),
+        );
+        let config_file = write_temp(&yaml);
+
+        runner(&config_file.path().to_path_buf()).unwrap();
+
+        let model = GcBiasModel::from_file(&out_path).unwrap();
+        for gc_pct in 0..=100 {
+            let w = model.weight_for_gc_fraction(gc_pct as f64 / 100.0);
+            assert!(
+                (w - 1.0).abs() < 1e-6,
+                "Expected weight ~1.0 at GC {}%, got {}",
+                gc_pct,
+                w
+            );
+        }
+    }
+
+    #[test]
+    fn test_bam_input_parity_with_coverage_file() {
+        // Same scenario via both paths must yield numerically identical weights.
+        // Window A: 200 bp AT (0% GC) at depth 10; Window B: 200 bp GC (100% GC)
+        // at depth 30. Expect weight[0%] ~0.5 and weight[100%] ~1.5 under both
+        // input modes.
+        let seq = format!("{}{}", "AT".repeat(100), "GC".repeat(100));
+        let fasta_content = format!(">chr1\n{}\n", seq);
+        let ref_file = write_temp(&fasta_content);
+        let ref_path = ref_file.path().to_path_buf();
+
+        // BAM path: 10 reads of length 200 stacked at pos 1 → depth 10 over
+        // positions 0..200; then 30 reads of length 200 at pos 201 → depth 30
+        // over positions 200..400. Build manually.
+        let temp = tempfile::tempdir().unwrap();
+        let bam_path = temp.path().join("two_window.bam");
+        {
+            use noodles::bam;
+            use noodles::core::Position;
+            use noodles::sam::{
+                self as sam,
+                alignment::{
+                    RecordBuf,
+                    io::Write as _,
+                    record::{cigar::{op::Kind, Op}, Flags, MappingQuality},
+                    record_buf::{Cigar, Sequence},
+                },
+                header::record::value::{Map, map::ReferenceSequence},
+            };
+            let header = sam::Header::builder()
+                .add_reference_sequence(
+                    b"chr1".to_vec(),
+                    Map::<ReferenceSequence>::new(
+                        std::num::NonZero::<usize>::new(400).unwrap(),
+                    ),
+                )
+                .build();
+            let file = std::fs::File::create(&bam_path).unwrap();
+            let mut writer = bam::io::Writer::new(file);
+            writer.write_header(&header).unwrap();
+            let cigar: Cigar = [Op::new(Kind::Match, 200)].into_iter().collect();
+            let seq_bytes = vec![b'A'; 200];
+            for (start, n) in [(1usize, 10usize), (201, 30)] {
+                for _ in 0..n {
+                    let mut record = RecordBuf::default();
+                    *record.flags_mut() = Flags::empty();
+                    *record.cigar_mut() = cigar.clone();
+                    *record.reference_sequence_id_mut() = Some(0);
+                    *record.alignment_start_mut() = Position::new(start);
+                    *record.sequence_mut() = Sequence::from(seq_bytes.as_slice());
+                    *record.mapping_quality_mut() =
+                        Some(MappingQuality::try_from(30u8).unwrap());
+                    writer.write_alignment_record(&header, &record).unwrap();
+                }
+            }
+        }
+
+        // coverage_file equivalent: positions 1..200 at depth 10, 201..400 at depth 30.
+        let cov_lines: String = (1..=200)
+            .map(|i| format!("chr1\t{}\t10\n", i))
+            .chain((201..=400).map(|i| format!("chr1\t{}\t30\n", i)))
+            .collect();
+        let cov_file = write_temp(&cov_lines);
+
+        let out_bam = NamedTempFile::new().unwrap();
+        let out_bam_path = out_bam.path().to_path_buf();
+        drop(out_bam);
+        let out_file = NamedTempFile::new().unwrap();
+        let out_file_path = out_file.path().to_path_buf();
+        drop(out_file);
+
+        // Run BAM path
+        let yaml_bam = format!(
+            "reference: {}\nbam_file: {}\noutput_file: {}\noverwrite_output: true\n\
+             window_size: 200\nwindow_stride: 200\nmin_windows_per_bin: 1\n",
+            ref_path.display(),
+            bam_path.display(),
+            out_bam_path.display(),
+        );
+        let bam_config = write_temp(&yaml_bam);
+        runner(&bam_config.path().to_path_buf()).unwrap();
+
+        // Run coverage_file path
+        let yaml_file = format!(
+            "reference: {}\ncoverage_file: {}\ncoverage_format: samtools-depth\n\
+             output_file: {}\noverwrite_output: true\n\
+             window_size: 200\nwindow_stride: 200\nmin_windows_per_bin: 1\n",
+            ref_path.display(),
+            cov_file.path().display(),
+            out_file_path.display(),
+        );
+        let file_config = write_temp(&yaml_file);
+        runner(&file_config.path().to_path_buf()).unwrap();
+
+        let model_bam = GcBiasModel::from_file(&out_bam_path).unwrap();
+        let model_file = GcBiasModel::from_file(&out_file_path).unwrap();
+
+        for gc_pct in 0..=100 {
+            let frac = gc_pct as f64 / 100.0;
+            let w_bam = model_bam.weight_for_gc_fraction(frac);
+            let w_file = model_file.weight_for_gc_fraction(frac);
+            assert!(
+                (w_bam - w_file).abs() < 1e-9,
+                "BAM and coverage_file paths disagree at GC {}%: {} vs {}",
+                gc_pct,
+                w_bam,
+                w_file
+            );
+        }
+        // Also verify the expected absolute values to catch a both-paths-wrong drift.
+        assert!((model_bam.weight_for_gc_fraction(0.0) - 0.5).abs() < 1e-6);
+        assert!((model_bam.weight_for_gc_fraction(1.0) - 1.5).abs() < 1e-6);
     }
 
     #[test]

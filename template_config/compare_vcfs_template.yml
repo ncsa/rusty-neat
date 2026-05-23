@@ -7,13 +7,14 @@ golden_vcf:
 # Accepts .vcf or .vcf.gz.
 called_vcf:
 
-# Reference FASTA used for the simulation. Reserved for forward compatibility
-# with the Phase 2 equivalence-detection algorithm; in Phase 1 this is
-# path-checked but otherwise unused.
+# Reference FASTA used for the simulation. Streamed during the equivalence
+# sweep to apply candidate FP and FN sets within ±equivalence_window bp and
+# decide whether they're alternate spellings of the same edit.
 reference:
 
 # Directory where the comparison report will be written. Created if absent.
-# Files written: comparison_summary.json, comparison_summary.txt.
+# Files written: comparison_summary.json, comparison_summary.txt,
+# FN_with_reasons.vcf, and (when write_fp_vcf: true) FP.vcf.
 output_dir:
 
 # OPTIONAL PARAMS

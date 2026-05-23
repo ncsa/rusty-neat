@@ -166,7 +166,7 @@ fn optional_string_list(scrape: &HashMap<String, Value>, key: &str) -> Option<Ve
 fn reject_bcf(p: &Path) -> Result<(), CompareVcfsError> {
     if p.extension().and_then(|s| s.to_str()) == Some("bcf") {
         return Err(CompareVcfsError::ConfigurationError(format!(
-            "{} is a BCF; only .vcf and .vcf.gz are supported in Phase 1",
+            "{} is a BCF; only .vcf and .vcf.gz are supported",
             p.display()
         )));
     }

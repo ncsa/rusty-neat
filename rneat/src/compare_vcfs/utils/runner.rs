@@ -8,14 +8,16 @@
 //!   3. Per contig, key surviving variants by `(position, ref, alt)` into a
 //!      `HashSet<VariantKey>`. TP = golden ∩ called; FN = golden \ called;
 //!      FP = called \ golden.
-//!   4. (Phase 2) Unless `fast: true`, stream the reference FASTA and for
-//!      each contig with FPs, run [`equivalence::sweep`] to catch
-//!      denotation-different alternates. FNs consumed by the sweep are
-//!      promoted to TP; FPs consumed are removed from FP.
-//!   5. Aggregate per-contig and total counts, compute precision/recall/F1,
-//!      write `comparison_summary.{json,txt}`.
-//!
-//! NEAT-aware FN attribution is Phase 3; see issue #127.
+//!   4. Unless `fast: true`, stream the reference FASTA and for each contig
+//!      with FPs, run [`equivalence::sweep`] to catch denotation-different
+//!      alternates. FNs consumed by the sweep are promoted to TP; FPs
+//!      consumed are removed from FP.
+//!   5. Tag every surviving FN with one or more NEAT-aware attribution
+//!      reasons (outside_simulated_contigs / outside_mutation_bed /
+//!      outside_target_bed / unknown) via [`attribute_fns`].
+//!   6. Aggregate per-contig and total counts, compute precision/recall/F1,
+//!      write `comparison_summary.{json,txt}`, `FN_with_reasons.vcf`, and
+//!      optionally `FP.vcf`.
 use crate::compare_vcfs::{
     errors::CompareVcfsError,
     utils::{
@@ -65,6 +67,11 @@ impl From<&Variant> for VariantKey {
 /// the count, since the sweep cannot promote to or out of TP.
 struct ContigBuckets {
     tp_count: usize,
+    /// FNs on this contig that the equivalence sweep promoted to TP. Already
+    /// included in `tp_count`; tracked separately so per-contig and total
+    /// rollups can surface how many matches were rescued by denotation-aware
+    /// comparison.
+    equivalents_promoted: usize,
     fns: Vec<Variant>,
     fps: Vec<Variant>,
 }
@@ -127,15 +134,13 @@ pub fn runner(config: &RunConfiguration) -> Result<(), CompareVcfsError> {
     let raw_fp: usize = buckets.values().map(|b| b.fps.len()).sum();
     info!("Exact-match classification: TP={raw_tp} FN={raw_fn} FP={raw_fp}");
 
-    let promoted_total = if !config.fast {
-        run_equivalence_sweep(&mut buckets, &config.reference, config.equivalence_window)?
+    if !config.fast {
+        run_equivalence_sweep(&mut buckets, &config.reference, config.equivalence_window)?;
     } else {
         info!("Skipping equivalence sweep (fast mode)");
-        0
-    };
+    }
 
-    let (per_contig, mut totals) = aggregate(&buckets);
-    totals.equivalents_promoted = promoted_total;
+    let (per_contig, totals) = aggregate(&buckets);
     let metrics = Metrics::from_counts(totals.tp, totals.fn_, totals.fp);
     info!(
         "Final classification: TP={} (promoted={}) FN={} FP={}",
@@ -309,15 +314,14 @@ fn run_equivalence_sweep(
     buckets: &mut BTreeMap<String, ContigBuckets>,
     reference_path: &std::path::Path,
     window_bp: usize,
-) -> Result<usize, CompareVcfsError> {
+) -> Result<(), CompareVcfsError> {
     let need_reference = buckets.values().any(|b| !b.fps.is_empty());
     if !need_reference {
-        return Ok(0);
+        return Ok(());
     }
 
     let stream = FastaStream::open(&reference_path.to_path_buf())
         .map_err(|e| CompareVcfsError::ConfigurationError(format!("reference: {e}")))?;
-    let mut total_promoted = 0usize;
     for result in stream {
         let (contig, sequence) =
             result.map_err(|e| CompareVcfsError::ConfigurationError(format!("FASTA: {e}")))?;
@@ -345,10 +349,10 @@ fn run_equivalence_sweep(
             bucket.fns.swap_remove(i);
         }
         bucket.tp_count += promoted;
-        total_promoted += promoted;
+        bucket.equivalents_promoted += promoted;
         debug!("{contig}: {promoted} equivalents promoted by sweep");
     }
-    Ok(total_promoted)
+    Ok(())
 }
 
 /// Drops disqualified variants and tallies the reasons. The returned map keeps
@@ -439,6 +443,7 @@ fn classify(
             chrom.clone(),
             ContigBuckets {
                 tp_count: tp,
+                equivalents_promoted: 0,
                 fns,
                 fps,
             },
@@ -463,21 +468,14 @@ fn aggregate(
             tp: b.tp_count,
             fn_: b.fns.len(),
             fp: b.fps.len(),
-            // We don't currently track per-contig equivalents_promoted as a
-            // standalone counter; surface it at the rollup level via the
-            // difference between final TP and raw TP if needed in future.
-            equivalents_promoted: 0,
+            equivalents_promoted: b.equivalents_promoted,
         };
         totals.tp += cc.tp;
         totals.fn_ += cc.fn_;
         totals.fp += cc.fp;
+        totals.equivalents_promoted += cc.equivalents_promoted;
         per_contig.insert(chrom.clone(), cc);
     }
-    // totals.equivalents_promoted is computed in the runner from the sweep
-    // results — we'd lose it here. Instead, keep it as 0 in aggregate and
-    // let the caller patch it in. (Actually we don't need that: the runner
-    // already tracks per-bucket TP, which already includes promoted FNs;
-    // we just don't separately attribute. Set this at the caller.)
     (per_contig, totals)
 }
 

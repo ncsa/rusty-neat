@@ -2,10 +2,11 @@
 //! against a NEAT-simulated truth VCF (golden) and reports true positives,
 //! false negatives, and false positives.
 //!
-//! Phase 1 implements exact-match classification by `(position, ref, alt)` key
-//! plus a JSON / TXT rollup. Equivalence detection (denotation-different
-//! indels) and NEAT-aware FN attribution are planned for later phases — see
-//! issue #127.
+//! Pipeline: exact-match classification by `(position, ref, alt)` key →
+//! optional ±N bp equivalence sweep (catches denotation-different alternates
+//! like left- vs. right-aligned indels) → NEAT-aware FN attribution. Outputs
+//! `comparison_summary.{json,txt}`, `FN_with_reasons.vcf`, and (optionally)
+//! `FP.vcf`.
 pub mod errors;
 pub mod utils;
 

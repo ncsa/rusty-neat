@@ -59,3 +59,8 @@ mutation_bed: .
 # `target_bed` at load time. Use when your BEDs are in non-`chr` style but
 # the reference is, or vice versa. "." disables.
 chrom_aliases: .
+
+# Also write `<output_dir>/FP.vcf` listing every false positive call.
+# `<output_dir>/FN_with_reasons.vcf` is always written. FP VCFs can be
+# large on noisy callers so this is off by default. Default false.
+write_fp_vcf: false

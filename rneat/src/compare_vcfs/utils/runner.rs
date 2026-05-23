@@ -76,14 +76,20 @@ pub fn runner(config: &RunConfiguration) -> Result<(), CompareVcfsError> {
     let aliases = load_chrom_aliases(config.chrom_aliases.as_deref())?;
 
     let mut target_bed = match &config.target_bed {
-        Some(p) => Some(read_bed(p, false)?),
+        Some(p) => {
+            info!("Reading target BED: {}", p.display());
+            Some(read_bed(p, false)?)
+        }
         None => None,
     };
     if let Some(t) = target_bed.as_mut() {
         apply_aliases_to_beds(t, &aliases);
     }
     let mut mutation_bed = match &config.mutation_bed {
-        Some(p) => Some(read_bed(p, false)?),
+        Some(p) => {
+            info!("Reading mutation BED: {}", p.display());
+            Some(read_bed(p, false)?)
+        }
         None => None,
     };
     if let Some(m) = mutation_bed.as_mut() {

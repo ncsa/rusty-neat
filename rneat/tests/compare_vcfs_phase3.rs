@@ -16,6 +16,14 @@ fn write_fasta(path: &Path, contig: &str, sequence: &str) {
     writeln!(f, "{sequence}").unwrap();
 }
 
+fn write_multi_fasta(path: &Path, contigs: &[(&str, &str)]) {
+    let mut f = std::fs::File::create(path).unwrap();
+    for (name, seq) in contigs {
+        writeln!(f, ">{name}").unwrap();
+        writeln!(f, "{seq}").unwrap();
+    }
+}
+
 fn write_vcf(path: &Path, body_lines: &[&str]) {
     let mut f = std::fs::File::create(path).unwrap();
     writeln!(f, "##fileformat=VCFv4.2").unwrap();
@@ -291,6 +299,90 @@ fn chrom_naming_mismatch_warning_fires_even_when_target_bed_wipes_everything() {
     assert!(
         warnings.iter().any(|w| w["bed_label"] == "target_bed"),
         "expected target_bed warning, got: {warnings:?}"
+    );
+}
+
+/// Regression for the H1N1 single-typo scenario: BED has 8 H1N1 contigs,
+/// one of which is mistyped (`chr_MP` instead of `H1N1_MP`). The warning
+/// must fire and list `chr_MP` as the unmatched chrom — previously the
+/// seven correct rows silenced the eighth via the old "any overlap"
+/// short-circuit.
+#[test]
+fn chrom_naming_mismatch_warning_fires_on_single_typo_in_otherwise_correct_bed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fa = tmp.path().join("ref.fa");
+    let golden = tmp.path().join("golden.vcf");
+    let called = tmp.path().join("called.vcf");
+    let tbed = tmp.path().join("target.bed");
+    let out = tmp.path().join("report");
+    // H1N1 has 8 contigs in the FASTA; the user's variants are only in HA
+    // but the BED covers all 8 — with one mistyped. The reference set
+    // should be derived from the FASTA (all 8), not the VCFs (just HA), so
+    // the warning correctly singles out only the typo.
+    let seq = "A".repeat(2000);
+    write_multi_fasta(
+        &fa,
+        &[
+            ("H1N1_HA", &seq),
+            ("H1N1_MP", &seq),
+            ("H1N1_NA", &seq),
+            ("H1N1_NP", &seq),
+            ("H1N1_NS", &seq),
+            ("H1N1_PA", &seq),
+            ("H1N1_PB1", &seq),
+            ("H1N1_PB2", &seq),
+        ],
+    );
+    write_vcf(&golden, &["H1N1_HA\t100\t.\tA\tC\t60\tPASS\t.\tGT\t0/1"]);
+    write_vcf(&called, &["H1N1_HA\t100\t.\tA\tC\t60\tPASS\t.\tGT\t0/1"]);
+    write_bed(
+        &tbed,
+        &[
+            ("H1N1_HA", 0, 2000),
+            ("H1N1_NA", 0, 2000),
+            ("H1N1_NP", 0, 2000),
+            ("H1N1_NS", 0, 2000),
+            ("H1N1_PA", 0, 2000),
+            ("H1N1_PB1", 0, 2000),
+            ("H1N1_PB2", 0, 2000),
+            ("chr_MP", 0, 2000), // ← the typo
+        ],
+    );
+
+    let yaml = tmp.path().join("cfg.yml");
+    write_text(
+        &yaml,
+        &format!(
+            "golden_vcf: {}\ncalled_vcf: {}\nreference: {}\noutput_dir: {}\n\
+             overwrite_output: true\ntarget_bed: {}\n",
+            golden.display(),
+            called.display(),
+            fa.display(),
+            out.display(),
+            tbed.display(),
+        ),
+    );
+
+    rneat()
+        .args(["compare-vcfs", "-c"])
+        .arg(&yaml)
+        .assert()
+        .success();
+
+    let summary = load_summary(&out);
+    let warnings = summary["warnings"].as_array().expect("warnings array");
+    let typo_warning = warnings
+        .iter()
+        .find(|w| w["bed_label"] == "target_bed")
+        .expect("expected target_bed warning");
+    assert_eq!(
+        typo_warning["unmatched_chroms"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["chr_MP"]
     );
 }
 

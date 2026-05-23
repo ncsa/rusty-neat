@@ -159,12 +159,24 @@ pub fn runner(config: &RunConfiguration) -> Result<(), CompareVcfsError> {
         info!("FN attribution: {}", display.join(", "));
     }
 
-    // Detect BED-vs-reference chrom-naming mismatches. The reference set must
-    // come from the *raw* VCFs, not the post-filter maps: a BED with mismatched
-    // chrom names will drop every variant in `filter_vcf`, leaving the filtered
-    // maps empty and silencing the very warning that explains why. Using the
-    // raw VCFs preserves "what contigs the user actually has data for".
-    let reference_chroms = derive_reference_chroms(&golden_raw, &called_raw);
+    // Detect BED-vs-reference chrom-naming mismatches. The reference set
+    // should be the FASTA's full contig list, not the VCFs' — a BED can
+    // legitimately cover contigs that have no variants in the golden VCF
+    // (e.g., simulator ran on 8 contigs but only put variants in 1).
+    // Falls back to the VCF contig union if FASTA scanning fails for any
+    // reason, so the warning still has a chance to fire.
+    let reference_chroms =
+        match common::file_tools::fasta_stream::scan_fasta_lengths(&config.reference) {
+            Ok(pairs) => pairs.into_iter().map(|(name, _)| name).collect(),
+            Err(e) => {
+                warn!(
+                    "Could not scan reference FASTA contigs ({e}); falling back to VCF \
+                 contig union for chrom-naming-mismatch detection. Some warnings \
+                 may be missed."
+                );
+                derive_reference_chroms(&golden_raw, &called_raw)
+            }
+        };
     let warnings = collect_naming_warnings(
         target_bed.as_ref(),
         mutation_bed.as_ref(),

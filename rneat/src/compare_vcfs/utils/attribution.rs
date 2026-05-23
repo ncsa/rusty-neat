@@ -190,14 +190,21 @@ pub fn apply_aliases_to_beds(
 #[derive(Debug, Clone, Serialize)]
 pub struct ChromNamingWarning {
     pub bed_label: String,
-    pub bed_chroms_sample: Vec<String>,
+    /// Every BED chrom (post-alias) that did NOT match any reference contig.
+    /// On a clean run this list is empty and no warning is produced.
+    pub unmatched_chroms: Vec<String>,
+    /// Up to five reference contigs, alphabetical, for context in the warning.
     pub reference_chroms_sample: Vec<String>,
     pub message: String,
 }
 
-/// If a BED's contig set has *zero* overlap with the reference's contig set,
-/// every position lookup against it will say "outside" — almost always a
-/// `chr1` vs `1` issue. Surface this as a warning so the report can show it.
+/// Detect BED rows whose chrom doesn't match any contig in the reference set.
+///
+/// Fires when **any** BED chrom (post-alias) is absent from the reference's
+/// contigs — catches single-typo cases like `chr_MP` in an otherwise correct
+/// H1N1 BED. NEAT 4's original semantics (warn only on *zero* overlap) made
+/// the single-typo case silent because the seven correct rows would silence
+/// the eighth mistyped one.
 pub fn detect_chrom_naming_mismatch(
     bed_label: &str,
     beds: &HashMap<String, Vec<BedRecord>>,
@@ -206,25 +213,45 @@ pub fn detect_chrom_naming_mismatch(
     if beds.is_empty() || reference_chroms.is_empty() {
         return None;
     }
-    let bed_chroms: HashSet<&String> = beds.keys().collect();
-    let overlap = bed_chroms.iter().any(|c| reference_chroms.contains(*c));
-    if overlap {
+    let mut unmatched: Vec<String> = beds
+        .keys()
+        .filter(|c| !reference_chroms.contains(*c))
+        .cloned()
+        .collect();
+    if unmatched.is_empty() {
         return None;
     }
-    let mut bed_sample: Vec<String> = bed_chroms.iter().map(|s| (*s).clone()).collect();
-    bed_sample.sort();
-    bed_sample.truncate(5);
+    unmatched.sort();
+
     let mut ref_sample: Vec<String> = reference_chroms.iter().cloned().collect();
     ref_sample.sort();
     ref_sample.truncate(5);
-    let message = format!(
-        "{bed_label} chrom names don't overlap with the reference's. \
-         Attribution against this BED will report every FN as 'outside_{bed_label}'. \
-         Consider passing a chrom_aliases TSV."
-    );
+
+    let n_unmatched = unmatched.len();
+    let bed_chroms_count = beds.len();
+    let preview = unmatched
+        .iter()
+        .take(5)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    let message = if n_unmatched == bed_chroms_count {
+        format!(
+            "{bed_label} chrom names don't overlap with the reference's \
+             ({n_unmatched}/{bed_chroms_count} unmatched: {preview}). \
+             Attribution against this BED will report every FN as \
+             'outside_{bed_label}'. Consider passing a chrom_aliases TSV."
+        )
+    } else {
+        format!(
+            "{bed_label} has {n_unmatched}/{bed_chroms_count} unmatched chrom name(s): \
+             {preview}. These rows will not contribute to attribution and any \
+             variants in them will be misattributed."
+        )
+    };
     Some(ChromNamingWarning {
         bed_label: bed_label.to_string(),
-        bed_chroms_sample: bed_sample,
+        unmatched_chroms: unmatched,
         reference_chroms_sample: ref_sample,
         message,
     })
@@ -387,17 +414,48 @@ mod tests {
             .collect();
         let w = detect_chrom_naming_mismatch("target_bed", &beds, &reference).unwrap();
         assert_eq!(w.bed_label, "target_bed");
+        assert_eq!(w.unmatched_chroms, vec!["1".to_string()]);
+        // All-unmatched message variant mentions the aliases TSV.
         assert!(w.message.contains("chrom_aliases"));
     }
 
+    /// Single typo: BED has 8 H1N1 contigs, one of which is mistyped. The
+    /// old "any overlap silences" semantics swallowed this; the new
+    /// "any unmatched fires" semantics catches it.
     #[test]
-    fn naming_mismatch_silent_when_any_overlap() {
+    fn naming_mismatch_warning_when_one_chrom_is_mistyped() {
+        let mut beds = bed("H1N1_HA", 0, 100);
+        for good in ["H1N1_NA", "H1N1_NP", "H1N1_PA"] {
+            beds.insert(
+                good.to_string(),
+                vec![BedRecord::new_bed_record(good.to_string(), 0, 100).unwrap()],
+            );
+        }
+        beds.insert(
+            "chr_MP".to_string(),
+            vec![BedRecord::new_bed_record("chr_MP".to_string(), 0, 100).unwrap()],
+        );
+        let reference: HashSet<String> = ["H1N1_HA", "H1N1_MP", "H1N1_NA", "H1N1_NP", "H1N1_PA"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let w = detect_chrom_naming_mismatch("target_bed", &beds, &reference).unwrap();
+        assert_eq!(w.unmatched_chroms, vec!["chr_MP".to_string()]);
+        // Partial-mismatch message variant doesn't recommend aliases — it's
+        // probably a typo, not a convention difference.
+        assert!(w.message.contains("1/5 unmatched"));
+    }
+
+    #[test]
+    fn naming_mismatch_silent_when_all_match() {
         let mut beds = bed("chr1", 0, 100);
         beds.insert(
-            "weird_extra".to_string(),
-            vec![BedRecord::new_bed_record("weird_extra".to_string(), 0, 100).unwrap()],
+            "chr2".to_string(),
+            vec![BedRecord::new_bed_record("chr2".to_string(), 0, 100).unwrap()],
         );
-        let reference: HashSet<String> = ["chr1".to_string()].into_iter().collect();
+        let reference: HashSet<String> = ["chr1".to_string(), "chr2".to_string()]
+            .into_iter()
+            .collect();
         assert!(detect_chrom_naming_mismatch("target_bed", &beds, &reference).is_none());
     }
 }

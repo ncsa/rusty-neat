@@ -56,6 +56,7 @@ pub enum VariantType {
     Insertion,
     Deletion,
     Complex,
+    CNV,
 }
 
 impl From<usize> for VariantType {

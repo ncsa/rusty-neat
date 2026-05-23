@@ -165,7 +165,7 @@ pub fn runner(config: &RunConfiguration) -> Result<(), CompareVcfsError> {
     // (e.g., simulator ran on 8 contigs but only put variants in 1).
     // Falls back to the VCF contig union if FASTA scanning fails for any
     // reason, so the warning still has a chance to fire.
-    let reference_chroms =
+    let reference_chroms: HashSet<String> =
         match common::file_tools::fasta_stream::scan_fasta_lengths(&config.reference) {
             Ok(pairs) => pairs.into_iter().map(|(name, _)| name).collect(),
             Err(e) => {
@@ -177,10 +177,54 @@ pub fn runner(config: &RunConfiguration) -> Result<(), CompareVcfsError> {
                 derive_reference_chroms(&golden_raw, &called_raw)
             }
         };
+    // Log what we're about to compare so silent mismatches are debuggable.
+    {
+        let mut ref_sorted: Vec<&String> = reference_chroms.iter().collect();
+        ref_sorted.sort();
+        info!(
+            "Reference contigs ({}): [{}]",
+            reference_chroms.len(),
+            ref_sorted
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        if let Some(t) = target_bed.as_ref() {
+            let mut t_sorted: Vec<&String> = t.keys().collect();
+            t_sorted.sort();
+            info!(
+                "target_bed contigs ({}): [{}]",
+                t.len(),
+                t_sorted
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        if let Some(m) = mutation_bed.as_ref() {
+            let mut m_sorted: Vec<&String> = m.keys().collect();
+            m_sorted.sort();
+            info!(
+                "mutation_bed contigs ({}): [{}]",
+                m.len(),
+                m_sorted
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+    }
     let warnings = collect_naming_warnings(
         target_bed.as_ref(),
         mutation_bed.as_ref(),
         &reference_chroms,
+    );
+    info!(
+        "chrom-naming-mismatch check produced {} warning(s)",
+        warnings.len()
     );
 
     let summary = ComparisonSummary {

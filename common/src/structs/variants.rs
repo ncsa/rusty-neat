@@ -135,6 +135,7 @@ impl Variant {
         };
 
         let mut variant_type = VariantType::SNP;
+        // todo refactor this to look for CNVs. We may need to adjust the signature of the variant struct for the alt field specifically. Make it something other than a vec
         if vcf_reference.len() > 1 {
             if vcf_alternate.len() > 1 {
                 variant_type = VariantType::Complex;

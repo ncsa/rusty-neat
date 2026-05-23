@@ -19,6 +19,10 @@
 use crate::compare_vcfs::{
     errors::CompareVcfsError,
     utils::{
+        attribution::{
+            ChromNamingWarning, apply_aliases_to_beds, attribute_fns, detect_chrom_naming_mismatch,
+            load_chrom_aliases,
+        },
         config::RunConfiguration,
         equivalence,
         report::{
@@ -67,10 +71,24 @@ struct ContigBuckets {
 pub fn runner(config: &RunConfiguration) -> Result<(), CompareVcfsError> {
     fs::create_dir_all(&config.output_dir)?;
 
-    let target_bed = match &config.target_bed {
+    // Load chrom aliases once and apply them to every BED at load time so
+    // downstream `contains(chrom, pos)` calls use reference-canonical names.
+    let aliases = load_chrom_aliases(config.chrom_aliases.as_deref())?;
+
+    let mut target_bed = match &config.target_bed {
         Some(p) => Some(read_bed(p, false)?),
         None => None,
     };
+    if let Some(t) = target_bed.as_mut() {
+        apply_aliases_to_beds(t, &aliases);
+    }
+    let mut mutation_bed = match &config.mutation_bed {
+        Some(p) => Some(read_bed(p, false)?),
+        None => None,
+    };
+    if let Some(m) = mutation_bed.as_mut() {
+        apply_aliases_to_beds(m, &aliases);
+    }
     let simulated_set = config
         .contigs_simulated
         .as_ref()
@@ -117,6 +135,98 @@ pub fn runner(config: &RunConfiguration) -> Result<(), CompareVcfsError> {
         totals.tp, totals.equivalents_promoted, totals.fn_, totals.fp
     );
 
+    // Attribute every remaining FN (post-sweep). Contigs in the bucket map
+    // line up with the surviving FNs after `swap_remove` in
+    // `run_equivalence_sweep`.
+    let mut fn_pairs: Vec<(&str, &Variant)> = Vec::new();
+    for (chrom, b) in &buckets {
+        for v in &b.fns {
+            fn_pairs.push((chrom.as_str(), v));
+        }
+    }
+    let attribution_result = attribute_fns(
+        &fn_pairs,
+        simulated_set.as_ref(),
+        mutation_bed.as_ref(),
+        target_bed.as_ref(),
+    );
+    if !attribution_result.counts.is_empty() {
+        let display: Vec<String> = attribution_result
+            .counts
+            .iter()
+            .map(|(r, c)| format!("{}={c}", r.as_str()))
+            .collect();
+        info!("FN attribution: {}", display.join(", "));
+    }
+
+    // Detect BED-vs-reference chrom-naming mismatches. The reference set
+    // should be the FASTA's full contig list, not the VCFs' — a BED can
+    // legitimately cover contigs that have no variants in the golden VCF
+    // (e.g., simulator ran on 8 contigs but only put variants in 1).
+    // Falls back to the VCF contig union if FASTA scanning fails for any
+    // reason, so the warning still has a chance to fire.
+    let reference_chroms: HashSet<String> =
+        match common::file_tools::fasta_stream::scan_fasta_lengths(&config.reference) {
+            Ok(pairs) => pairs.into_iter().map(|(name, _)| name).collect(),
+            Err(e) => {
+                warn!(
+                    "Could not scan reference FASTA contigs ({e}); falling back to VCF \
+                 contig union for chrom-naming-mismatch detection. Some warnings \
+                 may be missed."
+                );
+                derive_reference_chroms(&golden_raw, &called_raw)
+            }
+        };
+    // Log what we're about to compare so silent mismatches are debuggable.
+    {
+        let mut ref_sorted: Vec<&String> = reference_chroms.iter().collect();
+        ref_sorted.sort();
+        info!(
+            "Reference contigs ({}): [{}]",
+            reference_chroms.len(),
+            ref_sorted
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        if let Some(t) = target_bed.as_ref() {
+            let mut t_sorted: Vec<&String> = t.keys().collect();
+            t_sorted.sort();
+            info!(
+                "target_bed contigs ({}): [{}]",
+                t.len(),
+                t_sorted
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        if let Some(m) = mutation_bed.as_ref() {
+            let mut m_sorted: Vec<&String> = m.keys().collect();
+            m_sorted.sort();
+            info!(
+                "mutation_bed contigs ({}): [{}]",
+                m.len(),
+                m_sorted
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+    }
+    let warnings = collect_naming_warnings(
+        target_bed.as_ref(),
+        mutation_bed.as_ref(),
+        &reference_chroms,
+    );
+    info!(
+        "chrom-naming-mismatch check produced {} warning(s)",
+        warnings.len()
+    );
+
     let summary = ComparisonSummary {
         schema_version: SCHEMA_VERSION,
         inputs: SummaryInputs {
@@ -129,12 +239,16 @@ pub fn runner(config: &RunConfiguration) -> Result<(), CompareVcfsError> {
             include_filtered: config.include_filtered,
             equivalence_window: config.equivalence_window,
             fast: config.fast,
+            mutation_bed: config.mutation_bed.clone(),
+            chrom_aliases: config.chrom_aliases.clone(),
         },
         totals,
         metrics,
         per_contig,
         skipped_golden,
         skipped_called,
+        fn_attribution: attribution_result.counts,
+        warnings,
     };
 
     let json_path = write_json(&summary, &config.output_dir, config.overwrite_output)?;
@@ -322,6 +436,39 @@ fn aggregate(
     // already tracks per-bucket TP, which already includes promoted FNs;
     // we just don't separately attribute. Set this at the caller.)
     (per_contig, totals)
+}
+
+/// Compose the reference's "known contig set" from the two VCFs. Used only
+/// to detect chrom-naming mismatches against BEDs — if every BED-named
+/// contig is absent from both VCFs, the BED is almost certainly using a
+/// different naming convention than the reference.
+fn derive_reference_chroms(
+    golden: &HashMap<String, Vec<Variant>>,
+    called: &HashMap<String, Vec<Variant>>,
+) -> HashSet<String> {
+    let mut out: HashSet<String> = HashSet::new();
+    out.extend(golden.keys().cloned());
+    out.extend(called.keys().cloned());
+    out
+}
+
+fn collect_naming_warnings(
+    target_bed: Option<&HashMap<String, Vec<common::structs::bed_record::BedRecord>>>,
+    mutation_bed: Option<&HashMap<String, Vec<common::structs::bed_record::BedRecord>>>,
+    reference_chroms: &HashSet<String>,
+) -> Vec<ChromNamingWarning> {
+    let mut out = Vec::new();
+    if let Some(t) = target_bed
+        && let Some(w) = detect_chrom_naming_mismatch("target_bed", t, reference_chroms)
+    {
+        out.push(w);
+    }
+    if let Some(m) = mutation_bed
+        && let Some(w) = detect_chrom_naming_mismatch("mutation_bed", m, reference_chroms)
+    {
+        out.push(w);
+    }
+    out
 }
 
 #[cfg(test)]

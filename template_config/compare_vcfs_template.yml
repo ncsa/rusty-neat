@@ -47,3 +47,15 @@ equivalence_window: 50
 # true, only exact (position, ref, alt) matches count as TP — denotation-
 # different alternates show up as FP + FN pairs. Default false.
 fast: false
+
+# Mutation regions BED used by the simulator. Used only for false-negative
+# attribution — FNs whose position falls outside these regions get tagged
+# `outside_mutation_bed` in the report. Distinct from `target_bed`, which
+# restricts what gets counted. "." disables.
+mutation_bed: .
+
+# Two-column TSV remapping BED chrom names to the reference's canonical
+# names (e.g. `1<TAB>chr1`). Applied to both `mutation_bed` and
+# `target_bed` at load time. Use when your BEDs are in non-`chr` style but
+# the reference is, or vice versa. "." disables.
+chrom_aliases: .

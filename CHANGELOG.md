@@ -1,4 +1,4 @@
-5/22/2026
+5/23/2026
 =========
 ## rneat v1.8.0
 
@@ -24,6 +24,9 @@
 - `cargo fmt --check` drift in `gen-bam-models` + `main.rs` (carried in from a merge resolution) is fixed; workspace formatting is once again clean.
 - `gen-bam-models` template config / README explicitly call out that the unified `min_mapq` gates *both* observers — surfaced during the v1.7.0 chr22 shakeout when the standalone `gen-frag-length-model` (which hard-codes MAPQ > 10) couldn't be matched with a unified `min_mapq: 20` config.
 
+5/22/2026
+=========
+## rneat v1.7.0
 
 ### `gen-bam-models`: unified single-pass model builder
 - New `rneat gen-bam-models` subcommand that walks a single BAM once and builds whichever subset of BAM-derived models the config requests. Currently supports `frag_length` and `gc_bias` sections; both are optional, at least one must be present. Saves a BAM iteration per additional model relative to running the per-tool commands separately.

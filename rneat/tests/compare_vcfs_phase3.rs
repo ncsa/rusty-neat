@@ -237,6 +237,63 @@ fn chrom_aliases_remap_bed_names_for_attribution() {
     );
 }
 
+/// Regression for the case where a wrong-contig `target_bed` filters out
+/// every variant, leaving the post-filter contig set empty. The warning
+/// must still fire — the reference contig set is derived from the raw
+/// VCFs precisely so this signal is preserved.
+#[test]
+fn chrom_naming_mismatch_warning_fires_even_when_target_bed_wipes_everything() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fa = tmp.path().join("ref.fa");
+    let golden = tmp.path().join("golden.vcf");
+    let called = tmp.path().join("called.vcf");
+    let tbed = tmp.path().join("target.bed");
+    let out = tmp.path().join("report");
+    write_fasta(&fa, "H1N1_HA", &"A".repeat(2000));
+    // Both VCFs use the H1N1_* convention.
+    write_vcf(&golden, &["H1N1_HA\t100\t.\tA\tC\t60\tPASS\t.\tGT\t0/1"]);
+    write_vcf(&called, &["H1N1_HA\t100\t.\tA\tC\t60\tPASS\t.\tGT\t0/1"]);
+    // target_bed uses the wrong convention (`chr_HA`), so every variant
+    // gets filtered out before classification.
+    write_bed(&tbed, &[("chr_HA", 0, 2000)]);
+
+    let yaml = tmp.path().join("cfg.yml");
+    write_text(
+        &yaml,
+        &format!(
+            "golden_vcf: {}\ncalled_vcf: {}\nreference: {}\noutput_dir: {}\n\
+             overwrite_output: true\ntarget_bed: {}\n",
+            golden.display(),
+            called.display(),
+            fa.display(),
+            out.display(),
+            tbed.display(),
+        ),
+    );
+
+    rneat()
+        .args(["compare-vcfs", "-c"])
+        .arg(&yaml)
+        .assert()
+        .success();
+
+    let summary = load_summary(&out);
+    // Every variant got dropped by the bad BED.
+    assert_eq!(summary["totals"]["tp"], 0);
+    assert_eq!(summary["totals"]["fn_"], 0);
+    assert_eq!(summary["totals"]["fp"], 0);
+    assert_eq!(summary["skipped_golden"]["outside_target_bed"], 1);
+    assert_eq!(summary["skipped_called"]["outside_target_bed"], 1);
+    // But the warning MUST still fire — that's the whole point of having it.
+    let warnings = summary["warnings"]
+        .as_array()
+        .expect("warnings array present");
+    assert!(
+        warnings.iter().any(|w| w["bed_label"] == "target_bed"),
+        "expected target_bed warning, got: {warnings:?}"
+    );
+}
+
 /// Without aliases, a BED whose chroms don't overlap the VCFs should
 /// surface a chrom_naming_mismatch warning in the report.
 #[test]

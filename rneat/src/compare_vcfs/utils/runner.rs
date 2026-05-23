@@ -159,11 +159,12 @@ pub fn runner(config: &RunConfiguration) -> Result<(), CompareVcfsError> {
         info!("FN attribution: {}", display.join(", "));
     }
 
-    // Detect BED-vs-reference chrom-naming mismatches. We use the reference's
-    // FASTA index if available, otherwise the union of contigs in the two
-    // VCFs (covers the common case where the reference contains every contig
-    // both VCFs touch).
-    let reference_chroms = derive_reference_chroms(&golden_by_contig, &called_by_contig);
+    // Detect BED-vs-reference chrom-naming mismatches. The reference set must
+    // come from the *raw* VCFs, not the post-filter maps: a BED with mismatched
+    // chrom names will drop every variant in `filter_vcf`, leaving the filtered
+    // maps empty and silencing the very warning that explains why. Using the
+    // raw VCFs preserves "what contigs the user actually has data for".
+    let reference_chroms = derive_reference_chroms(&golden_raw, &called_raw);
     let warnings = collect_naming_warnings(
         target_bed.as_ref(),
         mutation_bed.as_ref(),

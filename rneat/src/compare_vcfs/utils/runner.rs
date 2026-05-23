@@ -76,14 +76,20 @@ pub fn runner(config: &RunConfiguration) -> Result<(), CompareVcfsError> {
     let aliases = load_chrom_aliases(config.chrom_aliases.as_deref())?;
 
     let mut target_bed = match &config.target_bed {
-        Some(p) => Some(read_bed(p, false)?),
+        Some(p) => {
+            info!("Reading target BED: {}", p.display());
+            Some(read_bed(p, false)?)
+        }
         None => None,
     };
     if let Some(t) = target_bed.as_mut() {
         apply_aliases_to_beds(t, &aliases);
     }
     let mut mutation_bed = match &config.mutation_bed {
-        Some(p) => Some(read_bed(p, false)?),
+        Some(p) => {
+            info!("Reading mutation BED: {}", p.display());
+            Some(read_bed(p, false)?)
+        }
         None => None,
     };
     if let Some(m) = mutation_bed.as_mut() {
@@ -177,11 +183,14 @@ pub fn runner(config: &RunConfiguration) -> Result<(), CompareVcfsError> {
                 derive_reference_chroms(&golden_raw, &called_raw)
             }
         };
-    // Log what we're about to compare so silent mismatches are debuggable.
-    {
+    // Diagnostic logging for the chrom-naming-mismatch check: emitted at
+    // debug level so users can `--log-level debug` to see exactly what the
+    // detector is comparing when a warning fails to fire (or fires
+    // unexpectedly).
+    if log_enabled!(log::Level::Debug) {
         let mut ref_sorted: Vec<&String> = reference_chroms.iter().collect();
         ref_sorted.sort();
-        info!(
+        debug!(
             "Reference contigs ({}): [{}]",
             reference_chroms.len(),
             ref_sorted
@@ -193,7 +202,7 @@ pub fn runner(config: &RunConfiguration) -> Result<(), CompareVcfsError> {
         if let Some(t) = target_bed.as_ref() {
             let mut t_sorted: Vec<&String> = t.keys().collect();
             t_sorted.sort();
-            info!(
+            debug!(
                 "target_bed contigs ({}): [{}]",
                 t.len(),
                 t_sorted
@@ -206,7 +215,7 @@ pub fn runner(config: &RunConfiguration) -> Result<(), CompareVcfsError> {
         if let Some(m) = mutation_bed.as_ref() {
             let mut m_sorted: Vec<&String> = m.keys().collect();
             m_sorted.sort();
-            info!(
+            debug!(
                 "mutation_bed contigs ({}): [{}]",
                 m.len(),
                 m_sorted
@@ -222,7 +231,7 @@ pub fn runner(config: &RunConfiguration) -> Result<(), CompareVcfsError> {
         mutation_bed.as_ref(),
         &reference_chroms,
     );
-    info!(
+    debug!(
         "chrom-naming-mismatch check produced {} warning(s)",
         warnings.len()
     );

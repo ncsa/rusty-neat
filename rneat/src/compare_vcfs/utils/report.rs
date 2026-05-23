@@ -11,7 +11,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-pub const SCHEMA_VERSION: &str = "1.1.0";
+pub const SCHEMA_VERSION: &str = "1.2.0";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ContigCounts {
@@ -88,6 +88,20 @@ pub struct ComparisonSummary {
     /// chrom-naming mismatches.
     #[serde(default)]
     pub warnings: Vec<ChromNamingWarning>,
+    /// Absolute paths to every artifact this run wrote. Lets downstream
+    /// tooling locate sibling files without re-deriving them from the
+    /// output_dir layout.
+    pub outputs: SummaryOutputs,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SummaryOutputs {
+    pub comparison_summary_json: PathBuf,
+    pub comparison_summary_txt: PathBuf,
+    pub fn_with_reasons_vcf: PathBuf,
+    /// `None` when `write_fp_vcf` was false.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fp_vcf: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -273,6 +287,23 @@ fn render_txt(s: &ComparisonSummary) -> String {
         }
     }
 
+    out.push_str("\nOutputs\n-------\n");
+    out.push_str(&format!(
+        "  Summary (JSON): {}\n",
+        s.outputs.comparison_summary_json.display()
+    ));
+    out.push_str(&format!(
+        "  Summary (TXT):  {}\n",
+        s.outputs.comparison_summary_txt.display()
+    ));
+    out.push_str(&format!(
+        "  Annotated FNs:  {}\n",
+        s.outputs.fn_with_reasons_vcf.display()
+    ));
+    if let Some(p) = &s.outputs.fp_vcf {
+        out.push_str(&format!("  False positives:{}\n", p.display()));
+    }
+
     out
 }
 
@@ -332,6 +363,12 @@ mod tests {
             skipped_called: SkipCounts::default(),
             fn_attribution: BTreeMap::new(),
             warnings: Vec::new(),
+            outputs: SummaryOutputs {
+                comparison_summary_json: PathBuf::from("/out.json"),
+                comparison_summary_txt: PathBuf::from("/out.txt"),
+                fn_with_reasons_vcf: PathBuf::from("/out_fn.vcf"),
+                fp_vcf: None,
+            },
         };
         let txt = render_txt(&s);
         assert!(txt.contains("True positives  (TP): 7"));
@@ -369,11 +406,17 @@ mod tests {
             skipped_called: SkipCounts::default(),
             fn_attribution: BTreeMap::new(),
             warnings: Vec::new(),
+            outputs: SummaryOutputs {
+                comparison_summary_json: PathBuf::from("/out.json"),
+                comparison_summary_txt: PathBuf::from("/out.txt"),
+                fn_with_reasons_vcf: PathBuf::from("/out_fn.vcf"),
+                fp_vcf: None,
+            },
         };
         let path = write_json(&s, dir.path(), false).unwrap();
         let raw = fs::read_to_string(&path).unwrap();
         let val: serde_json::Value = serde_json::from_str(&raw).unwrap();
-        assert_eq!(val["schema_version"], "1.1.0");
+        assert_eq!(val["schema_version"], "1.2.0");
         assert_eq!(val["totals"]["tp"], 3);
     }
 
@@ -409,6 +452,12 @@ mod tests {
             skipped_called: SkipCounts::default(),
             fn_attribution: BTreeMap::new(),
             warnings: Vec::new(),
+            outputs: SummaryOutputs {
+                comparison_summary_json: PathBuf::from("/out.json"),
+                comparison_summary_txt: PathBuf::from("/out.txt"),
+                fn_with_reasons_vcf: PathBuf::from("/out_fn.vcf"),
+                fp_vcf: None,
+            },
         };
         let err = write_json(&s, dir.path(), false).unwrap_err();
         assert!(matches!(err, CompareVcfsError::OverwriteFileError(_)));

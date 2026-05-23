@@ -32,6 +32,10 @@ pub struct RunConfiguration {
     /// canonical names (e.g. `1\tchr1`). Applied to both `mutation_bed`
     /// and `target_bed` at load time. None when not configured.
     pub chrom_aliases: Option<PathBuf>,
+    /// Also write `<output_dir>/FP.vcf` listing every false-positive call.
+    /// Off by default — FP sets can be large on noisy callers and the
+    /// `comparison_summary.json`/`.txt` already report counts.
+    pub write_fp_vcf: bool,
 }
 
 impl RunConfiguration {
@@ -83,6 +87,10 @@ impl RunConfiguration {
             .unwrap_or(false);
         let mutation_bed = optional_path(&scrape, "mutation_bed")?;
         let chrom_aliases = optional_path(&scrape, "chrom_aliases")?;
+        let write_fp_vcf = scrape
+            .get("write_fp_vcf")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         Ok(RunConfiguration {
             golden_vcf,
@@ -98,6 +106,7 @@ impl RunConfiguration {
             fast,
             mutation_bed,
             chrom_aliases,
+            write_fp_vcf,
         })
     }
 }

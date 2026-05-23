@@ -27,8 +27,9 @@ use crate::compare_vcfs::{
         equivalence,
         report::{
             ComparisonSummary, ContigCounts, Metrics, SCHEMA_VERSION, SkipCounts, SummaryInputs,
-            write_json, write_txt,
+            SummaryOutputs, write_json, write_txt,
         },
+        vcf_writer::{write_fn_with_reasons, write_fp_vcf},
     },
 };
 use common::{
@@ -236,6 +237,33 @@ pub fn runner(config: &RunConfiguration) -> Result<(), CompareVcfsError> {
         warnings.len()
     );
 
+    // Write per-record VCF artifacts before the JSON/TXT report so the
+    // report's `outputs` section can name them. FN_with_reasons.vcf is
+    // always written; FP.vcf is gated on the config flag.
+    let fn_vcf_path = write_fn_with_reasons(
+        &attribution_result,
+        &config.output_dir,
+        config.overwrite_output,
+    )?;
+    info!("Wrote {}", fn_vcf_path.display());
+
+    let fp_vcf_path = if config.write_fp_vcf {
+        let mut fp_pairs: Vec<(String, &Variant)> = Vec::new();
+        for (chrom, b) in &buckets {
+            for v in &b.fps {
+                fp_pairs.push((chrom.clone(), v));
+            }
+        }
+        let p = write_fp_vcf(&fp_pairs, &config.output_dir, config.overwrite_output)?;
+        info!("Wrote {}", p.display());
+        Some(p)
+    } else {
+        None
+    };
+
+    let json_path = config.output_dir.join("comparison_summary.json");
+    let txt_path = config.output_dir.join("comparison_summary.txt");
+
     let summary = ComparisonSummary {
         schema_version: SCHEMA_VERSION,
         inputs: SummaryInputs {
@@ -258,12 +286,18 @@ pub fn runner(config: &RunConfiguration) -> Result<(), CompareVcfsError> {
         skipped_called,
         fn_attribution: attribution_result.counts,
         warnings,
+        outputs: SummaryOutputs {
+            comparison_summary_json: json_path.clone(),
+            comparison_summary_txt: txt_path.clone(),
+            fn_with_reasons_vcf: fn_vcf_path.clone(),
+            fp_vcf: fp_vcf_path.clone(),
+        },
     };
 
-    let json_path = write_json(&summary, &config.output_dir, config.overwrite_output)?;
-    let txt_path = write_txt(&summary, &config.output_dir, config.overwrite_output)?;
-    info!("Wrote {}", json_path.display());
-    info!("Wrote {}", txt_path.display());
+    let written_json = write_json(&summary, &config.output_dir, config.overwrite_output)?;
+    let written_txt = write_txt(&summary, &config.output_dir, config.overwrite_output)?;
+    info!("Wrote {}", written_json.display());
+    info!("Wrote {}", written_txt.display());
     Ok(())
 }
 

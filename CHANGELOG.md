@@ -23,7 +23,8 @@
 ### Minor
 - `cargo fmt --check` drift in `gen-bam-models` + `main.rs` (carried in from a merge resolution) is fixed; workspace formatting is once again clean.
 - `gen-bam-models` template config / README explicitly call out that the unified `min_mapq` gates *both* observers — surfaced during the v1.7.0 chr22 shakeout when the standalone `gen-frag-length-model` (which hard-codes MAPQ > 10) couldn't be matched with a unified `min_mapq: 20` config.
-
+- Added HPC friendly binaries to the auto workflow for releases.
+- 
 5/22/2026
 =========
 ## rneat v1.7.0

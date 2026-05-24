@@ -131,6 +131,13 @@ fn apply_variants(
         if offset + ref_len > result.len() {
             continue;
         }
+        // filter_vcf strips symbolic ALTs into the `symbolic` skip bucket before
+        // they reach the equivalence sweep, so anything here must be literal.
+        debug_assert!(
+            v.alternate.is_literal(),
+            "symbolic ALT reached apply_variants at location {}",
+            v.location
+        );
         let alt_bytes: Vec<u8> = v
             .alternate
             .as_literal()

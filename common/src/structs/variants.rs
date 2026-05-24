@@ -758,6 +758,59 @@ mod tests {
     }
 
     #[test]
+    fn parse_sv_info_tolerates_empty_entries_and_trailing_semicolons() {
+        // Real-world VCFs sometimes carry trailing semicolons or doubled
+        // separators (`END=200;;SVLEN=-50`). The parser should treat each
+        // empty entry as a no-op and still pick up the surrounding fields
+        // rather than dropping the variant or panicking on `split_once`.
+        let parsed = parse_sv_info("END=200;;SVLEN=-50;");
+        assert_eq!(parsed.end, Some(200));
+        assert_eq!(parsed.svlen, Some(-50));
+    }
+
+    #[test]
+    fn parse_sv_info_last_value_wins_on_duplicate_keys() {
+        // Spec-violating but real: some upstream tools emit the same key
+        // twice. Lock in last-value-wins so a future refactor doesn't
+        // silently flip to first-value-wins and break round-tripping.
+        let parsed = parse_sv_info("END=100;END=999;CN=2");
+        assert_eq!(parsed.end, Some(999));
+        assert_eq!(parsed.copy_number, Some(2));
+    }
+
+    #[test]
+    fn from_file_literal_complex_with_end_info_stays_literal() {
+        // A literal-base Complex variant (multi-base REF *and* literal multi-
+        // base ALT) is unusual but legal. parse_sv_info is gated on the ALT
+        // being symbolic, so an `END=` field on a literal Complex record must
+        // NOT promote it to Symbolic — the AlternateType stays Literal and the
+        // raw INFO string is preserved verbatim for the writer. Locks in that
+        // the two paths don't bleed.
+        let v = Variant::from_file(
+            42,
+            ".",
+            "PASS",
+            "END=999;SVLEN=-3",
+            "ACG",
+            "TTT",
+            60,
+            vec!["GT".to_string()],
+            vec!["0/1".to_string()],
+        )
+        .unwrap();
+        assert_eq!(v.variant_type, VariantType::Complex);
+        assert!(v.alternate.is_literal());
+        assert!(v.alternate.as_symbolic().is_none());
+        assert_eq!(
+            v.alternate.as_literal().unwrap(),
+            &[Nucleotide::T, Nucleotide::T, Nucleotide::T][..]
+        );
+        // INFO survives verbatim for the writer to round-trip; nothing has
+        // re-interpreted END/SVLEN on a literal record.
+        assert_eq!(v.info.as_deref(), Some("END=999;SVLEN=-3"));
+    }
+
+    #[test]
     fn sv_type_matches_svtype_strict_and_unknown_passthrough() {
         // Exact match (case-insensitive)
         assert!(sv_type_matches_svtype(SvType::Del, "DEL"));

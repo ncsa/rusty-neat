@@ -82,6 +82,18 @@ pub fn runner(
         };
 
         for variant in matching_variants {
+            // Symbolic / structural ALTs (`<DEL>`, `<DUP>`, ...) have no literal
+            // base content for the trinucleotide / indel-length stats to consume,
+            // and rneat doesn't yet model SV generation from a trained model.
+            // Skip them before they reach any per-base accounting (including the
+            // homozygous_count tally) so the model isn't biased by their presence.
+            if variant.alternate.is_symbolic() {
+                debug!(
+                    "Skipping symbolic / structural variant at {}:{} for mutation-model training",
+                    contig_name, variant.location
+                );
+                continue;
+            }
             match variant.variant_type {
                 VariantType::SNP => {
                     snp_count += 1;
@@ -116,6 +128,10 @@ pub fn runner(
                         continue;
                     }
                     let ref_frame = TrinucFrame::from((n0, n1, n2));
+                    debug_assert!(
+                        variant.alternate.is_literal(),
+                        "symbolic ALT reached SNP arm in gen_mut_model"
+                    );
                     let alt = variant.alternate.as_literal().unwrap();
                     let alt_frame = TrinucFrame::from((n0, alt[0], n2));
                     *trinuc_transition_count
@@ -126,11 +142,21 @@ pub fn runner(
                         .or_default() += 1;
                 }
                 VariantType::Insertion => {
-                    let variant_len = variant.alternate.as_literal().unwrap().len() - variant.reference.len();
+                    debug_assert!(
+                        variant.alternate.is_literal(),
+                        "symbolic ALT reached Insertion arm in gen_mut_model"
+                    );
+                    let variant_len =
+                        variant.alternate.as_literal().unwrap().len() - variant.reference.len();
                     *insertion_count.entry(variant_len).or_default() += 1;
                 }
                 VariantType::Deletion => {
-                    let variant_len = variant.reference.len() - variant.alternate.as_literal().unwrap().len();
+                    debug_assert!(
+                        variant.alternate.is_literal(),
+                        "symbolic ALT reached Deletion arm in gen_mut_model"
+                    );
+                    let variant_len =
+                        variant.reference.len() - variant.alternate.as_literal().unwrap().len();
                     *deletion_count.entry(variant_len).or_default() += 1;
                 }
                 _ => debug!("Unknown variant type, skipping for this analysis."),
@@ -420,6 +446,48 @@ H1N1_HA\t25\t.\tA\tG\t60\tPASS\t.\tGT\t0/1\n",
             model.mutation_rate > 0.01,
             "BED-constrained rate should exceed 0.01, got {}",
             model.mutation_rate
+        );
+    }
+
+    #[test]
+    fn test_runner_skips_symbolic_variants_without_panicking() {
+        // A mixed input VCF (literal SNP + symbolic <DEL>) used to risk a panic
+        // at as_literal().unwrap() if a symbolic record ever reached the SNP /
+        // Insertion / Deletion arms. They're tagged VariantType::Complex today
+        // so the match arm wouldn't fire, but the homozygous_count tally would
+        // still count them and bias the model. The explicit symbolic-skip at
+        // the top of the loop must drop them before any per-base accounting.
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let reference = PathBuf::from(format!("{}/test_data/references/H1N1.fa", manifest_dir));
+        let out_dir = tempdir().unwrap();
+
+        let vcf_path = out_dir.path().join("mixed_sv.vcf");
+        std::fs::write(
+            &vcf_path,
+            "##fileformat=VCFv4.2\n\
+##INFO=<ID=END,Number=1,Type=Integer,Description=\"End position\">\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n\
+H1N1_HA\t22\t.\tC\tT\t60\tPASS\t.\tGT\t0/1\n\
+H1N1_HA\t100\t.\tA\t<DEL>\t60\tPASS\tEND=500\tGT\t1/1\n\
+H1N1_HA\t600\t.\tT\t<DUP>\t60\tPASS\tEND=700\tGT\t1/1\n",
+        )
+        .unwrap();
+
+        let mutations = read_vcf(vcf_path).unwrap();
+        let output_file = out_dir.path().join("mixed_sv_model.json.gz");
+        // Must not panic — symbolic records skip past the as_literal().unwrap()
+        // sites and never reach the homozygous_count tally.
+        runner(&reference, mutations, HashMap::new(), &output_file, None).unwrap();
+        assert!(output_file.exists());
+        let model = MutationModel::from_file(&output_file).unwrap();
+        // Only the SNP contributes — and it's heterozygous, so homozygous_count
+        // stays at 0 and the model falls back to the tiny default frequency
+        // (0.001 / allowed_variant_count) rather than picking up the symbolic homs.
+        assert!(model.mutation_rate > 0.0);
+        assert!(
+            model.homozygous_frequency < 0.5,
+            "symbolic homozygous SVs must not be counted as homozygous SNPs; got {}",
+            model.homozygous_frequency
         );
     }
 }

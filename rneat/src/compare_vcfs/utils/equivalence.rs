@@ -133,7 +133,7 @@ fn apply_variants(
         }
         let alt_bytes: Vec<u8> = v
             .alternate
-            .get_vec()
+            .as_literal()
             .unwrap()
             .iter()
             .map(|n| Into::<char>::into(*n) as u8)

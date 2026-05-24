@@ -19,6 +19,8 @@ pub enum VariantError {
     GenoStringError,
     #[error("Invalid Vcf Input: {0}")]
     InvalidVcf(String),
+    #[error("Complex variants are not yet supported.")]
+    ComplexNotSupported,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
@@ -82,10 +84,10 @@ pub enum AlternateType {
 }
 
 impl AlternateType {
-    pub fn get_vec(&self) -> Option<Vec<Nucleotide>> {
+    pub fn as_literal(&self) -> Option<&[Nucleotide]> {
         match self {
-            AlternateType::Literal(vector) => Some(vector.clone()),
-            _ => None,
+            AlternateType::Literal(vector) => Some(vector),
+            AlternateType::Symbolic(_) => None,
         }
     }
 }
@@ -207,7 +209,7 @@ impl Variant {
                 }
             }
             _ => {
-                panic!("Complex variants not yet supported.")
+                return Err(VariantError::ComplexNotSupported);
             }
         }
 
@@ -257,8 +259,9 @@ fn parse_alternate(reference: &str, alt: &str) -> Result<VariantType, VariantErr
         )));
     }
     // Symbolic / structural ALTs (e.g. <DUP:TANDEM>, <DEL>, <INS:ME:ALU>, breakends
-    // like `G]17:198982]`) are valid per VCF 4.2 but not yet representable by
-    // VariantType. Surface them as an InvalidVcf rather than silently coercing.
+    // like `G]17:198982]`) are valid per VCF 4.2 but not yet wired through
+    // AlternateType::Symbolic — downstream code assumes literal bases. Surface
+    // them as an InvalidVcf rather than silently coercing.
     if !is_acgtn(alt) {
         return Err(VariantError::InvalidVcf(format!(
             "symbolic / structural ALT not yet supported: {alt}"
@@ -450,6 +453,20 @@ mod tests {
         // VCF 4.2 breakend notation like `G]17:198982]` or `]13:123456]T`.
         let err = parse_alternate("G", "G]17:198982]").unwrap_err();
         assert!(matches!(err, VariantError::InvalidVcf(_)));
+    }
+
+    #[test]
+    fn alternate_type_literal_as_literal_returns_slice() {
+        let alt = AlternateType::Literal(vec![Nucleotide::A, Nucleotide::C]);
+        assert_eq!(alt.as_literal(), Some(&[Nucleotide::A, Nucleotide::C][..]));
+    }
+
+    #[test]
+    fn alternate_type_symbolic_as_literal_returns_none() {
+        let alt = AlternateType::Symbolic(SvData {
+            alternate: "<DUP:TANDEM>".to_string(),
+        });
+        assert!(alt.as_literal().is_none());
     }
 
     #[test]

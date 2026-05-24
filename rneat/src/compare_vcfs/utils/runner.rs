@@ -57,7 +57,7 @@ impl From<&Variant> for VariantKey {
         VariantKey {
             location: v.location,
             reference: v.reference.clone(),
-            alternate: v.alternate.get_vec().unwrap(), }
+            alternate: v.alternate.as_literal().unwrap().to_vec(), }
     }
 }
 
@@ -374,7 +374,7 @@ fn filter_vcf(
             continue;
         }
         for v in variants {
-            if !include_homs && v.reference == v.alternate.get_vec().unwrap() {
+            if !include_homs && v.reference.as_slice() == v.alternate.as_literal().unwrap() {
                 skipped.homozygous_ref += 1;
                 continue;
             }

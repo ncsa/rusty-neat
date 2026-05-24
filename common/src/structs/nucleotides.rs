@@ -251,7 +251,7 @@ impl From<&str> for AminoAcid {
     }
 }
 
-pub fn sequence_array_to_string(input_array: &Vec<Nucleotide>) -> String {
+pub fn sequence_array_to_string(input_array: &[Nucleotide]) -> String {
     // Converts a sequence vector into a string representing the DNA sequence
     let mut return_string = String::with_capacity(input_array.len());
     for nuc in input_array {

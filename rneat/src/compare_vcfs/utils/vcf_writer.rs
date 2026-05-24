@@ -85,7 +85,7 @@ fn check_overwrite(path: &Path, allow: bool) -> Result<(), CompareVcfsError> {
 fn format_record(chrom: &str, v: &Variant, reasons: Option<&[Reason]>) -> String {
     let id = v.id.as_deref().unwrap_or(".");
     let ref_str = sequence_array_to_string(&v.reference);
-    let alt_str = sequence_array_to_string(&v.alternate.get_vec().unwrap());
+    let alt_str = sequence_array_to_string(v.alternate.as_literal().unwrap());
     let qual = match v.quality_score {
         Some(q) => q.to_string(),
         None => ".".to_string(),

@@ -16,7 +16,7 @@ use crate::file_tools::file_io::{
 };
 use crate::structs::mutated_map::MutatedMap;
 use crate::structs::nucleotides::sequence_array_to_string;
-use crate::structs::variants::{AlternateType, Variant, VariantError, VariantType};
+use crate::structs::variants::{Variant, VariantError};
 
 #[derive(Debug, Error)]
 pub enum VcfToolsError {
@@ -89,7 +89,7 @@ pub fn write_vcf(
                     contig,
                     position + 1,
                     sequence_array_to_string(&variant.reference),
-                    sequence_array_to_string(&variant.alternate.get_vec().unwrap()),
+                    sequence_array_to_string(variant.alternate.as_literal().unwrap()),
                     variant.genotype_str,
                 );
                 writeln!(&mut buffer, "{}", line)?;

@@ -25,7 +25,7 @@ use crate::structs::nucleotides::Nucleotide;
 use crate::structs::nucleotides::Nucleotide::N;
 use crate::structs::read_record::ReadRecord;
 use crate::structs::sequence_block::{SequenceBlock, SequenceBlockError};
-use crate::structs::variants::{AlternateType, Genotype, Variant};
+use crate::structs::variants::{Genotype, Variant};
 
 #[derive(Error, Debug)]
 pub enum FastqToolsError {
@@ -305,10 +305,11 @@ fn generate_read(
             if (variant.genotype == Genotype::Homozygous) || (rng.random()? < 0.5) {
                 base_to_write = match read_strand {
                     Strand::Forward => variant.alternate
-                        .get_vec()
-                        .unwrap(),
+                        .as_literal()
+                        .unwrap()
+                        .to_vec(),
                     Strand::Reverse => variant.alternate
-                        .get_vec()
+                        .as_literal()
                         .unwrap()
                         .iter()
                         .map(|b| b.complement())

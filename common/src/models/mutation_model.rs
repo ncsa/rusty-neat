@@ -401,7 +401,7 @@ mod tests {
         let seq = vec![A, C, G, T, A, C, G, T, A, C, G, T, A, C, G, T, A, C, G, T];
         let variant = model.generate_mutation(&seq, 5, 2, &mut rng).unwrap();
         // alternate must differ from reference
-        assert_ne!(variant.reference, variant.alternate.get_vec().unwrap());
+        assert_ne!(variant.reference.as_slice(), variant.alternate.as_literal().unwrap());
         assert_eq!(variant.location, 5);
     }
 

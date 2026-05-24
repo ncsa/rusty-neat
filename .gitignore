@@ -12,3 +12,9 @@
 
 # Runtime log
 *.log
+
+# AI junk
+.mcp.json
+.gitnexus
+CLAUDE.md
+AGENTS.md

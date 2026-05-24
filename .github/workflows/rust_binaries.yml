@@ -8,6 +8,12 @@ on:
 jobs:
   build:
     strategy:
+      # Don't cancel sibling jobs when one target fails — a Linux build
+      # failure shouldn't take out the macOS / Windows / aarch64 binaries
+      # that are otherwise ready to ship. Each target stands or falls on
+      # its own merits, and the release just attaches whichever ones
+      # succeeded.
+      fail-fast: false
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
@@ -35,7 +41,12 @@ jobs:
       - name: Install build dependencies (RHEL container)
         if: matrix.container != ''
         run: |
-          dnf install -y gcc gcc-c++ make curl git openssl-devel pkgconfig perl
+          # `cmake` is required by the libz-ng-sys build script (transitive
+          # dependency via flate2's zlib-ng feature). GitHub-hosted Linux,
+          # macOS, and Windows runners all ship cmake by default, but the
+          # rockylinux:8 container does not — the v1.9.0 release build
+          # failed here with "is `cmake` not installed?".
+          dnf install -y gcc gcc-c++ make cmake curl git openssl-devel pkgconfig perl
 
       - name: Checkout code
         uses: actions/checkout@v4

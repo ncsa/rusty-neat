@@ -13,6 +13,7 @@ use crate::models::{
     quality_scores::QualityModelError,
     sequencing_error_model::SeqModelError,
     snp_trinuc_model::{SnpTrinucError, SnpTrinucModel},
+    sv_model_defaults::default_sv_model,
 };
 use crate::{
     models::snp_trinuc_model::TrinucFrame,
@@ -178,8 +179,17 @@ impl MutationModel {
     pub fn default() -> Result<Self, MutationModelError> {
         // Creating the default model based on the default for the original NEAT.
         let reader = GzDecoder::new(DATA_FILE);
-        let data: MutationModel =
+        let mut data: MutationModel =
             serde_json::from_reader(reader).map_err(MutationModelError::SerdeError)?;
+        // Attach the bundled default SV model in code rather than baking it
+        // into `default_mutation_model.json.gz` — keeps the SV defaults
+        // auditable in `sv_model_defaults.rs` instead of buried in a
+        // gzipped blob, and means a parameter tweak doesn't require
+        // regenerating the embedded file. `sv_rate_scale` defaults to
+        // 0.0 in `RunConfiguration`, so generation stays opt-in.
+        if data.sv_model.is_none() {
+            data.sv_model = Some(default_sv_model());
+        }
         Ok(data)
     }
 

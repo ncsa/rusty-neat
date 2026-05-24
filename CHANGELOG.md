@@ -1,5 +1,21 @@
 5/24/2026
 =========
+## rneat v1.10.0
+
+### De novo CNV / SV generation from a learned model (#105)
+- **New `SvModel` on `MutationModel`.** Optional field carrying five learned distributions: `per_base_rate` (Poisson λ per base), `type_probabilities` over `<DEL>` / `<DUP>` / `<CNV>`, per-type log-normal `length_log_normal` parameters, `cnv_copy_number_distribution`, and `homozygous_frequency`. Marked `#[serde(default)]` so v1.9 mutation-model JSON files load unchanged with `sv_model = None`.
+- **`gen-mut-model` fits the SV component.** Symbolic ALTs in the training VCF feed a parallel accumulator; after the SNP/indel pass completes, `SvModel::fit_from_observations` returns `Some(SvModel)` if any type cleared the 2-observation per-type fit bar, else `None`. Filter chain (each stage logs a count): non-symbolic ALTs ignored → `<INV>` / breakends / unknown tags dropped (v1 only generates `<DEL>` / `<DUP>` / `<CNV>`) → records with no derivable span dropped → spans below 50bp dropped (they're indels, not SVs) → types with < 2 surviving samples dropped from the model.
+- **`gen-reads` samples and emits SVs.** Per-contig Poisson draw → weighted type pick → log-normal length (rejected outside `[MIN_SV_LENGTH_BP, contig_len / 4]`) → uniform anchor with overlap and N-gap rejection → `INFO/CN` draw for `<CNV>` → Bernoulli for genotype using the trained homozygous fraction. De novo records merge with `input_vcf` SVs and flow through the existing depth-modulation path, so simulated coverage and the golden VCF round-trip behave identically for both sources.
+- **`sv_rate_scale` config knob, default `0.0`.** De novo SV generation is **opt-in** — v1.9 users see no behavior change. `1.0` reproduces the rate of the trained corpus; larger values scale proportionally for stress testing.
+- **Bundled default `SvModel`.** `MutationModel::default()` (the embedded "no model file supplied" path) now attaches a hand-rolled SV model with approximate gnomAD-SV v2.1 parameters (DEL/DUP/CNV proportions, per-type log-normal length, CN distribution, homozygous fraction). Parameter provenance is documented inline in `common/src/models/sv_model_defaults.rs`. Users doing serious benchmarking should retrain via `gen-mut-model` against the SV-rich VCF of their choice; the default exists for tire-kicking.
+
+### Known limitations
+- The bundled default model is **literature-derived**, not refit on the actual gnomAD VCFs. Users who care about distribution fidelity should retrain.
+- `<INV>` and breakends still aren't generated — neither the read-content nor the junction modeling for them has landed.
+- The sampler's overlap rejection retries up to `10 × n` times; very high `sv_rate_scale` values may saturate retries and warn-and-stop with fewer SVs than the Poisson draw requested.
+
+5/24/2026
+=========
 ## rneat v1.9.0
 
 ### Symbolic / structural variant support: input → depth modulation → output round-trip (#105, #106, #107)

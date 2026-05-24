@@ -131,8 +131,17 @@ fn apply_variants(
         if offset + ref_len > result.len() {
             continue;
         }
+        // filter_vcf strips symbolic ALTs into the `symbolic` skip bucket before
+        // they reach the equivalence sweep, so anything here must be literal.
+        debug_assert!(
+            v.alternate.is_literal(),
+            "symbolic ALT reached apply_variants at location {}",
+            v.location
+        );
         let alt_bytes: Vec<u8> = v
             .alternate
+            .as_literal()
+            .unwrap()
             .iter()
             .map(|n| Into::<char>::into(*n) as u8)
             .collect();
@@ -159,6 +168,7 @@ mod tests {
         nucleotides::Nucleotide,
         variants::{Genotype, VariantType},
     };
+    use common::structs::variants::AlternateType;
 
     fn variant(
         loc: usize,
@@ -170,7 +180,7 @@ mod tests {
             variant_type: vt,
             location: loc,
             reference: ref_seq.to_vec(),
-            alternate: alt_seq.to_vec(),
+            alternate: AlternateType::Literal(alt_seq.to_vec()),
             genotype_str: "0/1".to_string(),
             genotype: Genotype::Heterozygous,
             id: None,

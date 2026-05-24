@@ -16,7 +16,7 @@ use crate::file_tools::file_io::{
 };
 use crate::structs::mutated_map::MutatedMap;
 use crate::structs::nucleotides::sequence_array_to_string;
-use crate::structs::variants::{Variant, VariantError};
+use crate::structs::variants::{AlternateType, Variant, VariantError};
 
 #[derive(Debug, Error)]
 pub enum VcfToolsError {
@@ -84,12 +84,37 @@ pub fn write_vcf(
                 // Format the output line. Any fields without data will be a simple period. Quality
                 // is set to 37 for all these variants, to indicate in the golden vcf that these are
                 // the generated variants.
+                let alt_str = match &variant.alternate {
+                    AlternateType::Literal(bases) => sequence_array_to_string(bases),
+                    AlternateType::Symbolic(sv) => sv.raw_alt.clone(),
+                };
                 let line = format!(
                     "{}\t{}\t.\t{}\t{}\t37\tPASS\t.\tGT\t{}",
                     contig,
                     position + 1,
                     sequence_array_to_string(&variant.reference),
-                    sequence_array_to_string(&variant.alternate),
+                    alt_str,
+                    variant.genotype_str,
+                );
+                writeln!(&mut buffer, "{}", line)?;
+            }
+            // Symbolic / structural variants are tracked separately on the map
+            // so they don't flag per-base mutation positions during read gen.
+            // Preserve the original INFO field verbatim so SVLEN / END / CN
+            // round-trip from input VCF to output VCF.
+            for variant in &block_map.sv_records {
+                let alt_str = match &variant.alternate {
+                    AlternateType::Literal(bases) => sequence_array_to_string(bases),
+                    AlternateType::Symbolic(sv) => sv.raw_alt.clone(),
+                };
+                let info_str = variant.info.as_deref().unwrap_or(".");
+                let line = format!(
+                    "{}\t{}\t.\t{}\t{}\t37\tPASS\t{}\tGT\t{}",
+                    contig,
+                    variant.location + 1,
+                    sequence_array_to_string(&variant.reference),
+                    alt_str,
+                    info_str,
                     variant.genotype_str,
                 );
                 writeln!(&mut buffer, "{}", line)?;
@@ -207,7 +232,7 @@ mod tests {
     use super::*;
     use crate::structs::{
         nucleotides::Nucleotide,
-        variants::{Variant, VariantType},
+        variants::{Genotype, SvData, SvType, Variant, VariantType},
     };
     use std::io::Write;
 
@@ -413,24 +438,129 @@ chr1\t200\t.\tG\tC\t60\tPASS\t.\tGT\t0/1\n";
     }
 
     #[test]
-    fn test_read_vcf_structural_variant_alt_parses_without_panic() {
-        // `<DEL>`-style ALT strings aren't bcf-style SVs we know how to simulate; today the
-        // parser doesn't filter them, so each `<`/`D`/`E`/`L`/`>` char becomes Nucleotide::N
-        // and the record is stored as an Insertion-typed variant. We don't endorse that — but
-        // we lock in "doesn't panic" so future stricter handling is an explicit choice, not a
-        // silent regression.
+    fn test_read_vcf_symbolic_del_parses_to_symbolic_with_info() {
+        // A `<DEL>` ALT becomes AlternateType::Symbolic carrying the parsed
+        // INFO fields (SVTYPE / END), with the raw ALT preserved verbatim so
+        // the writer can round-trip it.
         let vcf_content = "\
 ##fileformat=VCFv4.1\n\
 #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n\
 chr1\t100\t.\tA\t<DEL>\t60\tPASS\tSVTYPE=DEL;END=200\tGT\t0/1\n";
         let mut tmp = tempfile::Builder::new().suffix(".vcf").tempfile().unwrap();
         write!(tmp, "{}", vcf_content).unwrap();
-        let result = read_vcf(tmp.path().to_path_buf());
+        let records = read_vcf(tmp.path().to_path_buf()).unwrap();
+        let variants = records.get("chr1").expect("chr1 not parsed");
+        assert_eq!(variants.len(), 1);
+        let sv = variants[0]
+            .alternate
+            .as_symbolic()
+            .expect("symbolic ALT should classify as Symbolic");
+        assert_eq!(sv.raw_alt, "<DEL>");
+        assert_eq!(sv.sv_type, SvType::Del);
+        assert_eq!(sv.end, Some(200));
+    }
+
+    #[test]
+    fn test_read_vcf_symbolic_dup_with_cn_and_svlen() {
+        // <DUP> with both SVLEN and CN should populate the corresponding
+        // SvData fields. svlen is signed and stored as-is.
+        let vcf_content = "\
+##fileformat=VCFv4.1\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n\
+chr1\t1000\t.\tT\t<DUP:TANDEM>\t60\tPASS\tSVTYPE=DUP;SVLEN=500;CN=3\tGT\t0/1\n";
+        let mut tmp = tempfile::Builder::new().suffix(".vcf").tempfile().unwrap();
+        write!(tmp, "{}", vcf_content).unwrap();
+        let records = read_vcf(tmp.path().to_path_buf()).unwrap();
+        let sv = records.get("chr1").unwrap()[0]
+            .alternate
+            .as_symbolic()
+            .unwrap();
+        assert_eq!(sv.sv_type, SvType::Dup);
+        assert_eq!(sv.raw_alt, "<DUP:TANDEM>");
+        assert_eq!(sv.svlen, Some(500));
+        assert_eq!(sv.copy_number, Some(3));
+        // END wasn't supplied, so it stays None.
+        assert!(sv.end.is_none());
+    }
+
+    #[test]
+    fn test_read_vcf_symbolic_cnv() {
+        let vcf_content = "\
+##fileformat=VCFv4.1\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n\
+chr1\t500\t.\tA\t<CNV>\t60\tPASS\tSVTYPE=CNV;END=2500;CN=4\tGT\t0/1\n";
+        let mut tmp = tempfile::Builder::new().suffix(".vcf").tempfile().unwrap();
+        write!(tmp, "{}", vcf_content).unwrap();
+        let records = read_vcf(tmp.path().to_path_buf()).unwrap();
+        let v = &records.get("chr1").unwrap()[0];
+        assert_eq!(v.variant_type, VariantType::Complex);
+        let sv = v.alternate.as_symbolic().unwrap();
+        assert_eq!(sv.sv_type, SvType::Cnv);
+        assert_eq!(sv.end, Some(2500));
+        assert_eq!(sv.copy_number, Some(4));
+        // span() = END - POS + 1 = 2500 - 500 + 1 = 2001
+        assert_eq!(sv.span(500), Some(2001));
+    }
+
+    #[test]
+    fn test_read_vcf_symbolic_round_trip_through_writer() {
+        // End-to-end: a symbolic ALT read from input survives through the
+        // writer back to a verbatim ALT string — read + write together,
+        // driving the real reader path (the companion writer-only test below
+        // stubs in a synthetic Variant).
+        let vcf_content = "\
+##fileformat=VCFv4.1\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n\
+chr1\t150\t.\tG\t<DEL>\t60\tPASS\tSVTYPE=DEL;END=300\tGT\t1/1\n";
+        let mut tmp = tempfile::Builder::new().suffix(".vcf").tempfile().unwrap();
+        write!(tmp, "{}", vcf_content).unwrap();
+        let records = read_vcf(tmp.path().to_path_buf()).unwrap();
+        let v = records.get("chr1").unwrap()[0].clone();
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let map = MutatedMap::from_interval(0, 1000, vec![v]).unwrap();
+        let mut maps = HashMap::new();
+        maps.insert("chr1".to_string(), vec![map]);
+        let output = temp_dir.path().join("rt.vcf");
+        write_vcf(
+            &maps,
+            &vec!["chr1".to_string()],
+            &HashMap::from([("chr1".to_string(), 1000usize)]),
+            &PathBuf::from("ref.fa"),
+            false,
+            &output,
+        )
+        .unwrap();
+        let body: Vec<String> = crate::file_tools::file_io::read_gzip_lines(&output)
+            .unwrap()
+            .map(|l| l.unwrap())
+            .collect();
+        // The ALT column survives verbatim through the read+write cycle.
         assert!(
-            result.is_ok(),
-            "SV ALT must not error the whole parse: {:?}",
-            result
+            body.iter().any(|l| l.contains("\tG\t<DEL>\t")),
+            "expected <DEL> ALT to round-trip; got: {:?}",
+            body
         );
+    }
+
+    #[test]
+    fn test_read_vcf_symbolic_svtype_disagreement_still_parses() {
+        // If SVTYPE conflicts with the ALT tag, we trust the ALT and warn.
+        // The variant is still produced (we don't drop the record).
+        let vcf_content = "\
+##fileformat=VCFv4.1\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n\
+chr1\t100\t.\tA\t<DEL>\t60\tPASS\tSVTYPE=DUP;END=200\tGT\t0/1\n";
+        let mut tmp = tempfile::Builder::new().suffix(".vcf").tempfile().unwrap();
+        write!(tmp, "{}", vcf_content).unwrap();
+        let records = read_vcf(tmp.path().to_path_buf()).unwrap();
+        let sv = records.get("chr1").unwrap()[0]
+            .alternate
+            .as_symbolic()
+            .unwrap();
+        // ALT wins.
+        assert_eq!(sv.sv_type, SvType::Del);
+        assert_eq!(sv.raw_alt, "<DEL>");
     }
 
     #[test]
@@ -526,5 +656,51 @@ chr1\t100\t.\tA\tT\t60\tPASS\t.\tDP:GQ\t30:99\n";
         let result = read_vcf(tmp.path().to_path_buf());
         assert!(result.is_ok(), "Expected Ok (skip), got {:?}", result);
         assert!(result.unwrap().is_empty(), "Expected no variants parsed");
+    }
+
+    #[test]
+    fn test_write_vcf_symbolic_alt_round_trips_raw_string() {
+        // Writer contract: an AlternateType::Symbolic payload serializes
+        // verbatim via SvData.raw_alt. Driven from a synthetic Variant
+        // (not the reader) so the writer is exercised in isolation —
+        // the reader+writer round-trip is covered separately.
+        let temp_dir = tempfile::tempdir().unwrap();
+        let sv = Variant {
+            variant_type: VariantType::Complex,
+            location: 99, // 0-based; will appear as POS=100 in output
+            reference: vec![Nucleotide::A],
+            alternate: super::AlternateType::Symbolic(SvData::new("<DEL>", SvType::Del)),
+            genotype_str: "0/1".to_string(),
+            genotype: Genotype::Heterozygous,
+            id: None,
+            quality_score: None,
+            filter: None,
+            info: None,
+            format: Vec::new(),
+            sample: Vec::new(),
+        };
+        let mutated_map =
+            MutatedMap::from_interval(0, 200, vec![sv]).unwrap();
+        let mut mutated_maps = HashMap::new();
+        mutated_maps.insert("chr1".to_string(), vec![mutated_map]);
+        let output_path = temp_dir.path().join("sv_round_trip.vcf");
+        write_vcf(
+            &mutated_maps,
+            &vec!["chr1".to_string()],
+            &HashMap::from([("chr1".to_string(), 200usize)]),
+            &PathBuf::from("ref.fa"),
+            false,
+            &output_path,
+        )
+        .unwrap();
+        let lines: Vec<String> = crate::file_tools::file_io::read_gzip_lines(&output_path)
+            .unwrap()
+            .map(|l| l.unwrap())
+            .collect();
+        assert!(
+            lines.iter().any(|l| l == "chr1\t100\t.\tA\t<DEL>\t37\tPASS\t.\tGT\t0/1"),
+            "expected symbolic ALT to round-trip as `<DEL>`; got: {:?}",
+            lines
+        );
     }
 }

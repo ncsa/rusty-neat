@@ -1,4 +1,4 @@
-//! Phase 2 integration tests: equivalence sweep on synthetic indels.
+//! Integration tests for `rneat compare-vcfs`: equivalence sweep on synthetic indels.
 //!
 //! Each test writes a tiny custom FASTA and a golden + called VCF pair where
 //! the called VCF intentionally uses a different denotation of the same edit.

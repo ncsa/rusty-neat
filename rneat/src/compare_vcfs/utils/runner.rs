@@ -54,10 +54,20 @@ struct VariantKey {
 
 impl From<&Variant> for VariantKey {
     fn from(v: &Variant) -> Self {
+        // filter_vcf removes symbolic ALTs (`<DEL>`, `<DUP>`, ...) into the
+        // `symbolic` skip bucket before any VariantKey is built, so by the
+        // time we get here the ALT must be literal. Assert it in debug builds
+        // so a future regression fails loudly with context instead of a bare
+        // `unwrap()` panic in release.
+        debug_assert!(
+            v.alternate.is_literal(),
+            "symbolic ALT reached VariantKey::from at location {}",
+            v.location
+        );
         VariantKey {
             location: v.location,
             reference: v.reference.clone(),
-            alternate: v.alternate.clone(),
+            alternate: v.alternate.as_literal().unwrap().to_vec(),
         }
     }
 }
@@ -375,7 +385,15 @@ fn filter_vcf(
             continue;
         }
         for v in variants {
-            if !include_homs && v.reference == v.alternate {
+            // Symbolic / structural ALTs (`<DEL>`, `<DUP>`, `<CNV>`, ...) have
+            // no comparable byte sequence — compare-vcfs is built on byte-wise
+            // REF/ALT identity (and an equivalence sweep that splices literal
+            // bases). Skip them before anything calls `.as_literal()`.
+            if v.alternate.is_symbolic() {
+                skipped.symbolic += 1;
+                continue;
+            }
+            if !include_homs && v.reference.as_slice() == v.alternate.as_literal().unwrap() {
                 skipped.homozygous_ref += 1;
                 continue;
             }
@@ -515,14 +533,14 @@ fn collect_naming_warnings(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use common::structs::variants::{Genotype, VariantType};
+    use common::structs::variants::{AlternateType, Genotype, VariantType};
 
     fn snp(loc: usize, ref_b: Nucleotide, alt_b: Nucleotide, filter: Option<&str>) -> Variant {
         Variant {
             variant_type: VariantType::SNP,
             location: loc,
             reference: vec![ref_b],
-            alternate: vec![alt_b],
+            alternate: AlternateType::Literal(vec![alt_b]),
             genotype_str: "0/1".to_string(),
             genotype: Genotype::Heterozygous,
             id: None,
@@ -653,5 +671,38 @@ mod tests {
         assert!(kept.contains_key("chr1"));
         assert!(!kept.contains_key("chr2"));
         assert_eq!(skipped.outside_simulated_contigs, 1);
+    }
+
+    #[test]
+    fn filter_skips_symbolic_alts_without_panicking() {
+        use common::structs::variants::{SvData, SvType};
+        let sv = Variant {
+            variant_type: VariantType::Complex,
+            location: 100,
+            reference: vec![Nucleotide::A],
+            alternate: AlternateType::Symbolic(SvData::new("<DEL>", SvType::Del)),
+            genotype_str: "1/1".to_string(),
+            genotype: Genotype::Homozygous,
+            id: None,
+            quality_score: None,
+            filter: Some("PASS".to_string()),
+            info: None,
+            format: Vec::new(),
+            sample: Vec::new(),
+        };
+        let mut raw = HashMap::new();
+        raw.insert(
+            "chr1".into(),
+            vec![
+                sv,
+                snp(50, Nucleotide::A, Nucleotide::C, Some("PASS")),
+            ],
+        );
+        // Pre-Phase-3, this call would have panicked at `as_literal().unwrap()`
+        // on the symbolic record. It must now skip it and count it.
+        let (kept, skipped) = filter_vcf(&raw, None, None, false, false);
+        assert_eq!(kept.get("chr1").map(|v| v.len()), Some(1));
+        assert_eq!(kept["chr1"][0].location, 50);
+        assert_eq!(skipped.symbolic, 1);
     }
 }

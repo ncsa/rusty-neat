@@ -190,13 +190,33 @@ input_vcf: /path/to/variants.vcf.gz
 | SNP | REF and ALT both single base | Yes |
 | Insertion | single-base REF, multi-base ALT | Yes |
 | Deletion | multi-base REF, single-base ALT | Yes |
-| Complex | multi-base REF **and** multi-base ALT | **No** — skipped with warning |
+| Symbolic SV | ALT is `<DEL>` / `<DUP>` / `<CNV>` / `<INS>` / `<INV>` / breakend / other `<TAG>` | Yes — see "Symbolic / structural variants" below |
+| Literal complex | multi-base REF **and** multi-base ALT (literal bases) | **No** — skipped with warning |
+
+**Symbolic / structural variants**
+
+Symbolic ALTs (VCF 4.2 §1.4) are accepted and round-tripped to the output VCF verbatim, with `INFO/END`, `INFO/SVLEN`, and `INFO/CN` preserved. The simulator does not yet *generate* SVs de novo from a model — only user-supplied ones flow through.
+
+| SV | Effect on read depth | Effect on read sequence |
+|----|----------------------|-------------------------|
+| `<DEL>` | hom → ×0, het → ×(ploidy−1)/ploidy; or ×CN/ploidy if `INFO/CN` is set | none — bases in the deleted span just stop producing reads |
+| `<DUP>` | hom → ×2, het → ×(ploidy+1)/ploidy; or ×CN/ploidy if `INFO/CN` is set | none — extra reads come from the forward-strand reference |
+| `<CNV>` | ×CN/ploidy when `INFO/CN` is set; otherwise warned and passed through with no depth change | none |
+| `<INS>` | none (insertion at a single anchor base — no span to modulate) | none — the inserted sequence is not synthesized |
+| `<INV>` | none in this release | **not modeled** — reads come from the forward-strand reference, not the inverted sequence |
+| Breakends, unknown `<TAG>` | none | none — round-tripped only |
+
+DEL anchor convention: for `<DEL>`, POS is the unaffected base immediately before the deletion (per VCF 4.2), so the modulated span is `[POS+1, END]` in 1-based coords. For `<DUP>` / `<CNV>` / `<INV>`, POS is the first base of the affected region, so the span is `[POS, END]`.
+
+When an SV zeroes out coverage (hom `<DEL>` or `INFO/CN=0`), the mutation rate over the same span is also zeroed so de-novo SNPs don't pollute the output VCF with variants that never appear in reads.
 
 **Current caveats**
 
-- *Multi-allelic records*: only the first ALT allele is used; additional alleles are silently ignored. Split multi-allelic records with `bcftools norm -m -` before passing to `rneat`.
+- *Multi-allelic records*: only the first ALT allele is used; additional alleles are silently ignored. Split multi-allelic records with `bcftools norm -m -` before passing to `rneat`. (This is true for both literal and symbolic ALTs — `<DEL>,<DUP>` on the same line is treated as the first ALT only.)
 - *REF allele verification*: `rneat` does not check that the REF field matches the reference sequence at that position. Mismatches will produce biologically incorrect output without any warning.
-- *Structural variants / breakends*: records whose REF and ALT are both multi-base strings (complex variants) are skipped with a logged warning and do not appear in the output.
+- *Literal complex variants*: records whose REF and ALT are both multi-base strings (and the ALT is literal bases, not a `<TAG>`) are skipped with a logged warning and do not appear in the output.
+- *`<INV>` orientation not modeled*: reads from inversion spans still come from the forward-strand reference. The `<INV>` record round-trips to the output VCF but the read content does not reflect the inversion.
+- *Breakends*: round-tripped only; no junction-read or mate-locus modeling.
 
 FASTQ Shuffling
 ===============
@@ -642,7 +662,7 @@ write_fp_vcf: false       # also produce FP.vcf
 
 The run produces four files under `output_dir`:
 
-- `comparison_summary.json` — schema-versioned (currently `1.2.0`), machine-readable. Includes TP/FN/FP totals + per-contig breakdown, precision / recall / F1, the FN attribution roll-up (`outside_simulated_contigs`, `outside_mutation_bed`, `outside_target_bed`, `unknown`), and any chrom-naming-mismatch warnings.
+- `comparison_summary.json` — schema-versioned (currently `1.3.0`), machine-readable. Includes TP/FN/FP totals + per-contig breakdown, precision / recall / F1, the FN attribution roll-up (`outside_simulated_contigs`, `outside_mutation_bed`, `outside_target_bed`, `unknown`), per-VCF skip counters (`multiallelic`, `homozygous_ref`, `filtered`, `outside_target_bed`, `outside_simulated_contigs`, `symbolic`), and any chrom-naming-mismatch warnings. Symbolic / structural ALTs (`<DEL>`, `<DUP>`, `<CNV>`, ...) are byte-incomparable, so they're counted into `skipped.symbolic` and excluded from TP/FN/FP classification.
 - `comparison_summary.txt` — same content, human-readable.
 - `FN_with_reasons.vcf` — every surviving FN, annotated with a `NEAT_REASON` INFO tag listing the attribution reasons.
 - `FP.vcf` (optional) — every surviving FP, as-is. Off by default; enable with `write_fp_vcf: true`.

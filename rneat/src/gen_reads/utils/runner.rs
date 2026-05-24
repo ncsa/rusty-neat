@@ -1,6 +1,6 @@
 use common::file_tools::file_io::create_output_file;
 use common::rng::NeatRng;
-use common::structs::variants::VariantType;
+use common::structs::variants::{Genotype, SvType, VariantType};
 use log::{debug, error, info, warn};
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
@@ -419,6 +419,10 @@ fn process_contig(
 
     let block_end = contig_len;
     let mut block_variants: Vec<Variant> = Vec::new();
+    // Symbolic / structural input variants live in their own bucket: they
+    // don't consume mutation budget or flag positions, but they do drive
+    // per-region coverage modulation below and round-trip to the output VCF.
+    let mut sv_variants: Vec<Variant> = Vec::new();
     if let Some(iv) = ctx.input_variants
         && let Some(vs) = iv.get(&contig_name)
     {
@@ -430,6 +434,12 @@ fn process_contig(
                 continue;
             }
             let local_pos = v.location - 1;
+            let mut v2 = v.clone();
+            v2.location = local_pos;
+            if v.alternate.is_symbolic() {
+                sv_variants.push(v2);
+                continue;
+            }
             if seen.insert(local_pos) {
                 let rate = rate_at(&rate_segments, local_pos);
                 if rate > 0.0 {
@@ -437,8 +447,6 @@ fn process_contig(
                     excluded.push(local_pos);
                 }
             }
-            let mut v2 = v.clone();
-            v2.location = local_pos;
             block_variants.push(v2);
         }
         if !excluded.is_empty() {
@@ -446,6 +454,27 @@ fn process_contig(
             rate_segments = exclude_positions(rate_segments, &excluded);
         }
     }
+
+    let coverage_multipliers =
+        build_coverage_multipliers(&sv_variants, ctx.config.ploidy, block_end);
+    // Where coverage drops to zero (e.g., a homozygous <DEL>), the bases
+    // aren't actually there — sampling de-novo SNPs in that span would only
+    // pollute the golden VCF with variants that produce no reads. Override
+    // the mutation rate to 0 over those segments and recompute the budget.
+    let mut zeroed = false;
+    for &(s, e, mult) in &coverage_multipliers {
+        if mult == 0.0 && s < e {
+            rate_segments = apply_rate_override(rate_segments, s, e, 0.0);
+            zeroed = true;
+        }
+    }
+    if zeroed {
+        num_mutations_sum = rate_segments
+            .iter()
+            .map(|&(s, e, r)| (e - s) as f64 * r)
+            .sum();
+    }
+
     debug!(
         "Seeded {} user variant(s) into contig {}",
         block_variants.len(),
@@ -485,42 +514,55 @@ fn process_contig(
 
     let block_fragments: Vec<(usize, usize)> = {
         let mut block_frags = Vec::new();
-        for (frag_start, frag_end) in regions_of_interest.into_iter().map(|r| (r.start, r.end)) {
-            let frags = if ctx.gc_bias_model.is_uniform() {
-                generate_fragments(
-                    frag_end - frag_start,
-                    ctx.config.read_len,
-                    max_del_len,
-                    frag_start,
-                    ctx.config.coverage,
-                    ctx.config.paired_ended,
-                    ctx.config.long_reads,
-                    ctx.fragment_length_model,
-                    &mut rng,
-                )?
-            } else {
-                generate_weighted_fragments(
-                    &current_block,
-                    frag_start,
-                    frag_end,
-                    ctx.config.read_len,
-                    max_del_len,
-                    ctx.config.coverage,
-                    ctx.gc_bias_model,
-                    ctx.fragment_length_model,
-                    ctx.config.gc_bias_normalize_coverage,
-                    ctx.config.paired_ended,
-                    ctx.config.long_reads,
-                    &mut rng,
-                )?
-            };
-            if !frags.is_empty() {
-                block_frags.extend_from_slice(&frags);
+        for (region_start, region_end) in
+            regions_of_interest.into_iter().map(|r| (r.start, r.end))
+        {
+            for (sub_start, sub_end, mult) in
+                split_region_by_multipliers(region_start, region_end, &coverage_multipliers)
+            {
+                let scaled = scale_coverage(ctx.config.coverage, mult);
+                if scaled == 0 {
+                    continue;
+                }
+                let frags = if ctx.gc_bias_model.is_uniform() {
+                    generate_fragments(
+                        sub_end - sub_start,
+                        ctx.config.read_len,
+                        max_del_len,
+                        sub_start,
+                        scaled,
+                        ctx.config.paired_ended,
+                        ctx.config.long_reads,
+                        ctx.fragment_length_model,
+                        &mut rng,
+                    )?
+                } else {
+                    generate_weighted_fragments(
+                        &current_block,
+                        sub_start,
+                        sub_end,
+                        ctx.config.read_len,
+                        max_del_len,
+                        scaled,
+                        ctx.gc_bias_model,
+                        ctx.fragment_length_model,
+                        ctx.config.gc_bias_normalize_coverage,
+                        ctx.config.paired_ended,
+                        ctx.config.long_reads,
+                        &mut rng,
+                    )?
+                };
+                if !frags.is_empty() {
+                    block_frags.extend_from_slice(&frags);
+                }
             }
         }
         block_frags
     };
 
+    // Re-fold symbolic SVs into the variant set so they round-trip to the
+    // output VCF; MutatedMap routes them to sv_records (no per-base flag).
+    block_variants.extend(sv_variants);
     let mutated_map = MutatedMap::from_interval(0, block_end, block_variants)?;
 
     let mut contig_files_r1: Vec<PathBuf> = Vec::new();
@@ -665,14 +707,17 @@ fn collect_contig_result(
     }
 }
 
-/// Removes Complex variants from the input map, emitting a warning for each one.
-/// SNPs, insertions, and deletions are kept as-is.
+/// Removes literal multi-base Complex variants from the input map, emitting a
+/// warning for each one. SNPs, insertions, and deletions are kept as-is.
+/// Symbolic / structural variants (`<DEL>`, `<DUP>`, `<CNV>`, ...) are also
+/// kept — gen_reads uses them downstream to modulate coverage and to round-
+/// trip into the output VCF; they never go through per-base mutation.
 fn filter_input_vcf(raw: HashMap<String, Vec<Variant>>) -> HashMap<String, Vec<Variant>> {
     let mut out: HashMap<String, Vec<Variant>> = HashMap::new();
     for (contig, variants) in raw {
         let mut kept = Vec::new();
         for v in variants {
-            if v.variant_type == VariantType::Complex {
+            if v.variant_type == VariantType::Complex && v.alternate.is_literal() {
                 warn!(
                     "Skipping complex variant at {}:{} (multi-base REF and ALT that is not \
                      a simple indel) — not yet supported",
@@ -759,6 +804,186 @@ fn exclude_positions(
     result
 }
 
+/// Builds a sorted, contiguous list of `(start, end, multiplier)` coverage
+/// segments spanning `[0, block_end)`. Default multiplier is `1.0`; each
+/// symbolic SV multiplies the multiplier in its span (overlapping SVs compose
+/// multiplicatively). SVs without a usable span (no END / SVLEN) or with a
+/// multiplier of `1.0` are skipped silently.
+fn build_coverage_multipliers(
+    sv_variants: &[Variant],
+    ploidy: usize,
+    block_end: usize,
+) -> Vec<(usize, usize, f64)> {
+    let mut segments: Vec<(usize, usize, f64)> = if block_end > 0 {
+        vec![(0, block_end, 1.0)]
+    } else {
+        Vec::new()
+    };
+    for v in sv_variants {
+        let sv = match v.alternate.as_symbolic() {
+            Some(s) => s,
+            None => continue,
+        };
+        // Convert the 0-based-stored location back to the VCF's 1-based POS
+        // so SvData::span() (which expects 1-based) returns the right count.
+        let pos_1based = v.location.saturating_add(1);
+        let span_bases = match sv.span(pos_1based) {
+            Some(n) if n > 0 => n,
+            _ => {
+                warn!(
+                    "Symbolic SV at 1-based POS {} has no END/SVLEN — skipping coverage modulation",
+                    pos_1based
+                );
+                continue;
+            }
+        };
+        let mult = match coverage_multiplier_for(sv.sv_type, sv.copy_number, &v.genotype, ploidy) {
+            Some(m) => m,
+            None => {
+                warn!(
+                    "CNV at 1-based POS {} has no INFO/CN — cannot determine copy number; \
+                     skipping coverage modulation",
+                    pos_1based
+                );
+                continue;
+            }
+        };
+        if (mult - 1.0).abs() < f64::EPSILON {
+            continue;
+        }
+        let (mod_start, mod_end) = sv_modulation_range(v.location, sv.sv_type, span_bases, block_end);
+        if mod_start >= mod_end {
+            continue;
+        }
+        segments = apply_coverage_factor(segments, mod_start, mod_end, mult);
+    }
+    segments
+}
+
+/// Returns the 0-based half-open coordinate range over which a symbolic SV
+/// modulates coverage, given the variant's 0-based stored `location` (= VCF
+/// POS − 1) and the `span_bases` reported by [`SvData::span`].
+///
+/// VCF convention for `<DEL>`: POS is the anchor base immediately *before*
+/// the deletion (still present in the reference), and the deleted bases run
+/// from POS+1 to END (1-based, inclusive). So a DEL modulates `[POS, END)`
+/// in 0-based half-open coords, which is `[location + 1, location + span)`.
+///
+/// `<DUP>`, `<CNV>`, `<INV>`: POS is conventionally *inside* the affected
+/// region (the duplicated / inverted block starts at POS itself). Those
+/// modulate `[POS − 1, END)` in 0-based half-open coords, i.e.
+/// `[location, location + span)`.
+fn sv_modulation_range(
+    location_0based: usize,
+    sv_type: SvType,
+    span_bases: usize,
+    block_end: usize,
+) -> (usize, usize) {
+    let raw_end = location_0based.saturating_add(span_bases);
+    let end = raw_end.min(block_end);
+    let start = match sv_type {
+        SvType::Del => location_0based.saturating_add(1).min(block_end),
+        _ => location_0based.min(block_end),
+    };
+    (start, end)
+}
+
+/// Returns the coverage multiplier for a single symbolic SV given its type,
+/// optional `INFO/CN`, genotype, and ploidy. Returns `None` only for `<CNV>`
+/// records that have no copy number — those need an explicit CN, so we skip
+/// rather than guess. Non-depth-modulating SV types (`<INS>`, `<INV>`,
+/// breakends, `<...>` unknown tags) return `Some(1.0)`.
+fn coverage_multiplier_for(
+    sv_type: SvType,
+    copy_number: Option<u32>,
+    genotype: &Genotype,
+    ploidy: usize,
+) -> Option<f64> {
+    let ploidy_f = (ploidy.max(1)) as f64;
+    if let Some(cn) = copy_number {
+        return Some(cn as f64 / ploidy_f);
+    }
+    match sv_type {
+        SvType::Del => Some(match genotype {
+            Genotype::Homozygous => 0.0,
+            Genotype::Heterozygous => ((ploidy.saturating_sub(1)) as f64) / ploidy_f,
+        }),
+        SvType::Dup => Some(match genotype {
+            // Homozygous DUP without CN: assume one extra copy per haplotype
+            // (total ploidy * 2 copies) → multiplier = 2.0.
+            Genotype::Homozygous => (ploidy_f + ploidy_f) / ploidy_f,
+            // Heterozygous DUP without CN: one extra copy on a single haplotype
+            // → multiplier = (ploidy + 1) / ploidy.
+            Genotype::Heterozygous => (ploidy_f + 1.0) / ploidy_f,
+        }),
+        SvType::Cnv => None,
+        SvType::Ins | SvType::Inv | SvType::Bnd | SvType::Unknown => Some(1.0),
+    }
+}
+
+/// Multiplies the coverage factor in `[ovr_start, ovr_end)` by `factor`,
+/// splitting segment boundaries as needed. Behaves like `apply_rate_override`
+/// except composition is multiplicative instead of replacement.
+fn apply_coverage_factor(
+    segments: Vec<(usize, usize, f64)>,
+    ovr_start: usize,
+    ovr_end: usize,
+    factor: f64,
+) -> Vec<(usize, usize, f64)> {
+    let mut result = Vec::with_capacity(segments.len() + 2);
+    for (s, e, mult) in segments {
+        if ovr_end <= s || ovr_start >= e {
+            result.push((s, e, mult));
+            continue;
+        }
+        let isect_s = s.max(ovr_start);
+        let isect_e = e.min(ovr_end);
+        if s < isect_s {
+            result.push((s, isect_s, mult));
+        }
+        result.push((isect_s, isect_e, mult * factor));
+        if isect_e < e {
+            result.push((isect_e, e, mult));
+        }
+    }
+    result
+}
+
+/// Intersects `[region_start, region_end)` with the multiplier segments,
+/// returning the sub-regions clipped to the region in coordinate order.
+/// Sub-regions outside any segment (which shouldn't happen because the
+/// segments span `[0, block_end)`) implicitly get multiplier 1.0 only if
+/// `coverage_multipliers` is empty — in which case the whole region is
+/// returned as one piece.
+fn split_region_by_multipliers(
+    region_start: usize,
+    region_end: usize,
+    segments: &[(usize, usize, f64)],
+) -> Vec<(usize, usize, f64)> {
+    if segments.is_empty() {
+        return vec![(region_start, region_end, 1.0)];
+    }
+    let mut out = Vec::new();
+    for &(s, e, m) in segments {
+        let lo = s.max(region_start);
+        let hi = e.min(region_end);
+        if lo < hi {
+            out.push((lo, hi, m));
+        }
+    }
+    out
+}
+
+/// Scales a base coverage value by a non-negative multiplier, rounding to the
+/// nearest integer and clamping at 0. Returns 0 for non-finite or negative
+/// inputs (defensive; build_coverage_multipliers shouldn't produce either).
+fn scale_coverage(base: usize, multiplier: f64) -> usize {
+    if !multiplier.is_finite() || multiplier <= 0.0 {
+        return 0;
+    }
+    (base as f64 * multiplier).round() as usize
+}
+
 /// Intersects a set of non-N regions (block-local coordinates) with BED records
 /// (global contig coordinates) and returns only the overlapping sub-intervals,
 /// still expressed in block-local coordinates.
@@ -794,6 +1019,7 @@ mod tests {
     use super::*;
     use common::structs::bed_record::BedRecord;
     use common::structs::sequence_block::{RegionType, SequenceMap};
+    use common::structs::variants::AlternateType;
 
     #[test]
     fn test_intersect_with_bed() {
@@ -833,7 +1059,7 @@ mod tests {
         let v1 = Variant {
             location: 100,
             reference: vec![Nucleotide::A],
-            alternate: vec![Nucleotide::T],
+            alternate: AlternateType::Literal(vec![Nucleotide::T]),
             variant_type: VariantType::SNP,
             genotype: Genotype::Homozygous,
             genotype_str: "1/1".to_string(),
@@ -847,7 +1073,7 @@ mod tests {
         let v2 = Variant {
             location: 200,
             reference: vec![Nucleotide::A, Nucleotide::T],
-            alternate: vec![Nucleotide::C, Nucleotide::G],
+            alternate: AlternateType::Literal(vec![Nucleotide::C, Nucleotide::G]),
             variant_type: VariantType::Complex,
             genotype: Genotype::Homozygous,
             genotype_str: "1/1".to_string(),
@@ -858,12 +1084,305 @@ mod tests {
             format: vec![],
             sample: vec![],
         };
-        raw.insert("chr1".to_string(), vec![v1.clone(), v2]);
+        // Symbolic SV — tagged Complex but must NOT be dropped by
+        // filter_input_vcf: gen_reads uses it downstream for coverage
+        // modulation and round-trips the raw ALT to the output VCF.
+        use common::structs::variants::{SvData, SvType};
+        let v3 = Variant {
+            location: 500,
+            reference: vec![Nucleotide::A],
+            alternate: AlternateType::Symbolic(SvData::new("<DEL>", SvType::Del)),
+            variant_type: VariantType::Complex,
+            genotype: Genotype::Homozygous,
+            genotype_str: "1/1".to_string(),
+            id: None,
+            quality_score: None,
+            filter: None,
+            info: None,
+            format: vec![],
+            sample: vec![],
+        };
+        raw.insert("chr1".to_string(), vec![v1.clone(), v2, v3]);
 
         let filtered = filter_input_vcf(raw);
         assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered["chr1"].len(), 1);
-        assert_eq!(filtered["chr1"][0].location, 100);
+        // Literal Complex (v2) is dropped; SNP (v1) and symbolic <DEL> (v3) are kept.
+        assert_eq!(filtered["chr1"].len(), 2);
+        let locs: Vec<usize> = filtered["chr1"].iter().map(|v| v.location).collect();
+        assert!(locs.contains(&100));
+        assert!(locs.contains(&500));
+    }
+
+    fn sv_variant_with_span(
+        location_0based: usize,
+        end_1based: usize,
+        sv_type: SvType,
+        genotype: Genotype,
+        copy_number: Option<u32>,
+    ) -> Variant {
+        use common::structs::nucleotides::Nucleotide;
+        use common::structs::variants::SvData;
+        let mut sv = SvData::new(
+            match sv_type {
+                SvType::Del => "<DEL>",
+                SvType::Dup => "<DUP>",
+                SvType::Cnv => "<CNV>",
+                SvType::Ins => "<INS>",
+                SvType::Inv => "<INV>",
+                _ => "<UNKNOWN>",
+            },
+            sv_type,
+        );
+        sv.end = Some(end_1based);
+        sv.copy_number = copy_number;
+        let genotype_str = match genotype {
+            Genotype::Homozygous => "1/1".to_string(),
+            Genotype::Heterozygous => "0/1".to_string(),
+        };
+        Variant {
+            location: location_0based,
+            reference: vec![Nucleotide::A],
+            alternate: AlternateType::Symbolic(sv),
+            variant_type: VariantType::Complex,
+            genotype,
+            genotype_str,
+            id: None,
+            quality_score: None,
+            filter: None,
+            info: None,
+            format: vec![],
+            sample: vec![],
+        }
+    }
+
+    #[test]
+    fn test_sv_modulation_range_del_skips_anchor() {
+        // POS=101 (1-based) → location_0based=100. END=200 (1-based incl) so
+        // span = 100. DEL anchor (POS, 0-based 100) is NOT deleted: range
+        // starts at 101. End is 200 (= POS + span - 1 + 1 = 0-based half-open).
+        assert_eq!(
+            sv_modulation_range(100, SvType::Del, 100, 1000),
+            (101, 200)
+        );
+        // Single-base DEL where span_bases==1 collapses to empty (just the
+        // anchor) — caller must skip via mod_start >= mod_end.
+        let (s, e) = sv_modulation_range(100, SvType::Del, 1, 1000);
+        assert!(s >= e, "expected empty range for span==1 DEL, got [{s}, {e})");
+    }
+
+    #[test]
+    fn test_sv_modulation_range_dup_cnv_inv_include_anchor() {
+        // For DUP / CNV / INV, POS is conventionally inside the affected
+        // region — range starts at the anchor.
+        assert_eq!(
+            sv_modulation_range(100, SvType::Dup, 100, 1000),
+            (100, 200)
+        );
+        assert_eq!(
+            sv_modulation_range(100, SvType::Cnv, 100, 1000),
+            (100, 200)
+        );
+        assert_eq!(
+            sv_modulation_range(100, SvType::Inv, 100, 1000),
+            (100, 200)
+        );
+    }
+
+    #[test]
+    fn test_sv_modulation_range_clipped_to_block_end() {
+        // SV running past block_end gets clipped on both ends.
+        assert_eq!(
+            sv_modulation_range(95, SvType::Del, 100, 110),
+            (96, 110)
+        );
+        assert_eq!(
+            sv_modulation_range(95, SvType::Dup, 100, 110),
+            (95, 110)
+        );
+        // Start clipped above block_end → empty range.
+        let (s, e) = sv_modulation_range(150, SvType::Del, 50, 100);
+        assert!(s >= e);
+    }
+
+    #[test]
+    fn test_coverage_multiplier_for() {
+        // DEL without CN: hom = 0, het = (ploidy-1)/ploidy
+        assert_eq!(
+            coverage_multiplier_for(SvType::Del, None, &Genotype::Homozygous, 2),
+            Some(0.0)
+        );
+        assert_eq!(
+            coverage_multiplier_for(SvType::Del, None, &Genotype::Heterozygous, 2),
+            Some(0.5)
+        );
+
+        // DUP without CN: hom = 2.0, het = 1.5 on diploid
+        assert_eq!(
+            coverage_multiplier_for(SvType::Dup, None, &Genotype::Homozygous, 2),
+            Some(2.0)
+        );
+        assert_eq!(
+            coverage_multiplier_for(SvType::Dup, None, &Genotype::Heterozygous, 2),
+            Some(1.5)
+        );
+
+        // CN-driven (any type, but most useful for CNV): multiplier = CN / ploidy
+        assert_eq!(
+            coverage_multiplier_for(SvType::Cnv, Some(4), &Genotype::Homozygous, 2),
+            Some(2.0)
+        );
+        assert_eq!(
+            coverage_multiplier_for(SvType::Cnv, Some(1), &Genotype::Heterozygous, 2),
+            Some(0.5)
+        );
+        assert_eq!(
+            coverage_multiplier_for(SvType::Cnv, Some(0), &Genotype::Homozygous, 2),
+            Some(0.0)
+        );
+
+        // CNV without CN: None — caller must skip and warn
+        assert_eq!(
+            coverage_multiplier_for(SvType::Cnv, None, &Genotype::Homozygous, 2),
+            None
+        );
+
+        // Non-depth-modulating SVs: 1.0
+        for t in [SvType::Ins, SvType::Inv, SvType::Bnd, SvType::Unknown] {
+            assert_eq!(
+                coverage_multiplier_for(t, None, &Genotype::Heterozygous, 2),
+                Some(1.0)
+            );
+        }
+    }
+
+    #[test]
+    fn test_apply_coverage_factor_composes_multiplicatively() {
+        // Whole-block default segment, halve [20, 50) -> still gives 1.0 outside.
+        let segs = vec![(0usize, 100usize, 1.0f64)];
+        let halved = apply_coverage_factor(segs, 20, 50, 0.5);
+        assert_eq!(halved, vec![(0, 20, 1.0), (20, 50, 0.5), (50, 100, 1.0)]);
+
+        // Apply a 2× factor on a sub-range that already has 0.5: composes to 1.0.
+        let doubled = apply_coverage_factor(halved, 30, 40, 2.0);
+        assert_eq!(
+            doubled,
+            vec![
+                (0, 20, 1.0),
+                (20, 30, 0.5),
+                (30, 40, 1.0),
+                (40, 50, 0.5),
+                (50, 100, 1.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_build_coverage_multipliers_hom_del_zeros_span() {
+        // <DEL> at 1-based POS=101 (0-based location=100), END=200 (1-based inclusive).
+        // VCF semantics: POS (base at index 100) is the anchor and is NOT deleted;
+        // bases POS+1..=END are. So modulation runs over 0-based [101, 200).
+        let svs = vec![sv_variant_with_span(
+            100,
+            200,
+            SvType::Del,
+            Genotype::Homozygous,
+            None,
+        )];
+        let segs = build_coverage_multipliers(&svs, 2, 500);
+        assert_eq!(
+            segs,
+            vec![(0, 101, 1.0), (101, 200, 0.0), (200, 500, 1.0)]
+        );
+    }
+
+    #[test]
+    fn test_build_coverage_multipliers_het_dup_inflates_span() {
+        // <DUP> heterozygous on diploid → multiplier 1.5.
+        let svs = vec![sv_variant_with_span(
+            50,
+            149,
+            SvType::Dup,
+            Genotype::Heterozygous,
+            None,
+        )];
+        // span = 149 - 51 + 1 = 99; range = [50, 50 + 99) = [50, 149).
+        let segs = build_coverage_multipliers(&svs, 2, 300);
+        assert_eq!(
+            segs,
+            vec![(0, 50, 1.0), (50, 149, 1.5), (149, 300, 1.0)]
+        );
+    }
+
+    #[test]
+    fn test_build_coverage_multipliers_cnv_uses_cn() {
+        // <CNV> with INFO/CN=4 on diploid → multiplier 2.0.
+        let svs = vec![sv_variant_with_span(
+            0,
+            99,
+            SvType::Cnv,
+            Genotype::Homozygous,
+            Some(4),
+        )];
+        // span = 99 - 1 + 1 = 99; range = [0, 99).
+        let segs = build_coverage_multipliers(&svs, 2, 200);
+        assert_eq!(segs, vec![(0, 99, 2.0), (99, 200, 1.0)]);
+    }
+
+    #[test]
+    fn test_build_coverage_multipliers_cnv_without_cn_is_skipped() {
+        let svs = vec![sv_variant_with_span(
+            0,
+            99,
+            SvType::Cnv,
+            Genotype::Homozygous,
+            None,
+        )];
+        let segs = build_coverage_multipliers(&svs, 2, 200);
+        assert_eq!(segs, vec![(0, 200, 1.0)]);
+    }
+
+    #[test]
+    fn test_build_coverage_multipliers_ins_inv_unchanged() {
+        let svs = vec![
+            sv_variant_with_span(10, 19, SvType::Ins, Genotype::Heterozygous, None),
+            sv_variant_with_span(50, 99, SvType::Inv, Genotype::Homozygous, None),
+        ];
+        let segs = build_coverage_multipliers(&svs, 2, 200);
+        // Both should be skipped (multiplier == 1.0), leaving the default segment.
+        assert_eq!(segs, vec![(0, 200, 1.0)]);
+    }
+
+    #[test]
+    fn test_split_region_by_multipliers_intersects_correctly() {
+        let segs = vec![(0usize, 100usize, 1.0f64), (100, 200, 0.5), (200, 300, 1.0)];
+        // Region fully inside one segment.
+        let r1 = split_region_by_multipliers(120, 150, &segs);
+        assert_eq!(r1, vec![(120, 150, 0.5)]);
+        // Region spanning two segments — split at the boundary.
+        let r2 = split_region_by_multipliers(80, 180, &segs);
+        assert_eq!(r2, vec![(80, 100, 1.0), (100, 180, 0.5)]);
+        // Region outside any segment yields nothing (when segs are non-empty).
+        let r3 = split_region_by_multipliers(400, 500, &segs);
+        assert!(r3.is_empty());
+        // Empty segments → return the whole region with multiplier 1.0.
+        let r4 = split_region_by_multipliers(10, 20, &[]);
+        assert_eq!(r4, vec![(10, 20, 1.0)]);
+    }
+
+    #[test]
+    fn test_scale_coverage_rounds_and_clamps() {
+        assert_eq!(scale_coverage(10, 0.0), 0);
+        assert_eq!(scale_coverage(10, 0.5), 5);
+        assert_eq!(scale_coverage(10, 1.5), 15);
+        assert_eq!(scale_coverage(10, 2.0), 20);
+        // Negative / non-finite → 0.
+        assert_eq!(scale_coverage(10, -1.0), 0);
+        assert_eq!(scale_coverage(10, f64::NAN), 0);
+        assert_eq!(scale_coverage(10, f64::INFINITY), 0);
+        // 0.49 * 10 = 4.9 → rounds to 5.
+        assert_eq!(scale_coverage(10, 0.49), 5);
+        // 0.04 * 10 = 0.4 → rounds to 0.
+        assert_eq!(scale_coverage(10, 0.04), 0);
     }
 
     #[test]

@@ -20,6 +20,11 @@ pub struct MutatedMap {
     pub flagged_positions: Vec<usize>,
     pub block_interval: (usize, usize),
     pub variant_map: HashMap<usize, Variant>,
+    // Symbolic / structural variants (CNV, DEL, DUP, INS, INV, BND, ...) live here
+    // separately from variant_map: they shouldn't flag positions for per-base
+    // mutation during read generation (their ALT is a tag like `<DEL>`, not a
+    // literal base sequence), but they still need to round-trip to the output VCF.
+    pub sv_records: Vec<Variant>,
 }
 
 impl MutatedMap {
@@ -30,7 +35,12 @@ impl MutatedMap {
     ) -> Result<Self, MutatedMapError> {
         let mut variant_map: HashMap<usize, Variant> = HashMap::new();
         let mut flagged_positions: Vec<usize> = Vec::new();
+        let mut sv_records: Vec<Variant> = Vec::new();
         for variant in variant_vec {
+            if variant.alternate.is_symbolic() {
+                sv_records.push(variant);
+                continue;
+            }
             let location = variant.get_loc()?;
             if variant_map.contains_key(&location) {
                 debug!(
@@ -46,6 +56,7 @@ impl MutatedMap {
             flagged_positions,
             block_interval: (start, end),
             variant_map,
+            sv_records,
         })
     }
 
@@ -62,13 +73,22 @@ impl MutatedMap {
         position: usize,
         rng: &mut NeatRng,
     ) -> Result<Vec<Nucleotide>, MutatedMapError> {
-        match self.variant_map[&position].genotype {
-            Genotype::Homozygous => Ok(self.variant_map[&position].alternate.clone()),
+        let variant = &self.variant_map[&position];
+        // Defensive: symbolic / structural ALTs shouldn't be in variant_map
+        // (from_interval routes them to sv_records), so mutate_position should
+        // never be called for one. If a future change leaks one through, fall
+        // back to emitting the reference instead of panicking on as_literal().
+        let alt_bases = match variant.alternate.as_literal() {
+            Some(bases) => bases.to_vec(),
+            None => return Ok(variant.reference.clone()),
+        };
+        match variant.genotype {
+            Genotype::Homozygous => Ok(alt_bases),
             Genotype::Heterozygous => {
                 if rng.gen_bool(0.5).unwrap() {
-                    Ok(self.variant_map[&position].reference.clone())
+                    Ok(variant.reference.clone())
                 } else {
-                    Ok(self.variant_map[&position].alternate.clone())
+                    Ok(alt_bases)
                 }
             }
         }
@@ -134,5 +154,66 @@ mod tests {
         }
         assert!(saw_ref, "expected at least one ref result in 20 trials");
         assert!(saw_alt, "expected at least one alt result in 20 trials");
+    }
+
+    #[test]
+    fn test_from_interval_routes_symbolic_to_sv_records() {
+        use crate::structs::variants::{AlternateType, SvData, SvType};
+        let snp =
+            Variant::new(VariantType::SNP, 50, &vec![A], &vec![G], &mut vec![1, 1]).unwrap();
+        let sv = Variant {
+            variant_type: VariantType::Complex,
+            location: 100,
+            reference: vec![A],
+            alternate: AlternateType::Symbolic(SvData::new("<DEL>", SvType::Del)),
+            genotype_str: "1/1".to_string(),
+            genotype: Genotype::Homozygous,
+            id: None,
+            quality_score: None,
+            filter: None,
+            info: None,
+            format: Vec::new(),
+            sample: Vec::new(),
+        };
+        let map = MutatedMap::from_interval(0, 200, vec![snp, sv]).unwrap();
+        // SNP flags position 50; symbolic SV does NOT flag position 100.
+        assert!(map.is_flagged(&50));
+        assert!(!map.is_flagged(&100));
+        assert_eq!(map.variant_map.len(), 1);
+        assert_eq!(map.sv_records.len(), 1);
+        assert_eq!(map.sv_records[0].location, 100);
+    }
+
+    #[test]
+    fn test_mutate_position_returns_reference_for_symbolic_leak() {
+        // Defensive: from_interval routes symbolic ALTs to sv_records, but if
+        // a future change leaks one into variant_map, mutate_position must not
+        // panic on as_literal().unwrap() — it should fall back to reference.
+        use crate::structs::variants::{AlternateType, SvData, SvType};
+        use std::collections::HashMap;
+        let sv = Variant {
+            variant_type: VariantType::Complex,
+            location: 75,
+            reference: vec![A],
+            alternate: AlternateType::Symbolic(SvData::new("<DUP>", SvType::Dup)),
+            genotype_str: "1/1".to_string(),
+            genotype: Genotype::Homozygous,
+            id: None,
+            quality_score: None,
+            filter: None,
+            info: None,
+            format: Vec::new(),
+            sample: Vec::new(),
+        };
+        let mut variant_map = HashMap::new();
+        variant_map.insert(75usize, sv);
+        let map = MutatedMap {
+            flagged_positions: vec![75],
+            block_interval: (0, 200),
+            variant_map,
+            sv_records: Vec::new(),
+        };
+        let mut rng = NeatRng::new_from_seed(&vec!["test".to_string()]).unwrap();
+        assert_eq!(map.mutate_position(75, &mut rng).unwrap(), vec![A]);
     }
 }

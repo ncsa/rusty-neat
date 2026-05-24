@@ -1,4 +1,4 @@
-//! Phase 4 integration tests: FN_with_reasons.vcf and optional FP.vcf writers.
+//! Integration tests for `rneat compare-vcfs`: FN_with_reasons.vcf and optional FP.vcf writers.
 
 mod common;
 

@@ -1,4 +1,4 @@
-//! Integration tests for `rneat compare-vcfs` Phase 1.
+//! Integration tests for `rneat compare-vcfs`: exact-match classification.
 //!
 //! Exercises the binary against tiny hand-crafted golden + called VCF pairs
 //! and asserts the parsed `comparison_summary.json` contents match expected
@@ -77,7 +77,7 @@ fn compare_vcfs_perfect_match_yields_all_tp() {
         .success();
 
     let summary = load_summary(&out_dir);
-    assert_eq!(summary["schema_version"], "1.2.0");
+    assert_eq!(summary["schema_version"], "1.3.0");
     assert_eq!(summary["totals"]["tp"], 2);
     assert_eq!(summary["totals"]["fn_"], 0);
     assert_eq!(summary["totals"]["fp"], 0);
@@ -166,7 +166,7 @@ fn compare_vcfs_writes_txt_report_alongside_json() {
 
     let txt = std::fs::read_to_string(out_dir.join("comparison_summary.txt")).unwrap();
     assert!(txt.contains("True positives  (TP): 1"));
-    assert!(txt.contains("Schema version: 1.2.0"));
+    assert!(txt.contains("Schema version: 1.3.0"));
 }
 
 #[test]

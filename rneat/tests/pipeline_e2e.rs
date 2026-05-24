@@ -161,6 +161,10 @@ fn gen_reads_with_symbolic_del_modulates_depth_and_round_trips_to_vcf() {
     config.coverage = 50;
     config.produce_vcf = true;
     config.input_vcf = Some(input_vcf);
+    // Drive enough de-novo mutations across the contig that, pre-fix, several
+    // would have been sampled inside the DEL span. Post-fix: zero — the rate
+    // is zeroed over hom-DEL spans before generate_variants runs.
+    config.mutation_rate = Some(0.05);
     let yaml = config.write_yaml();
     rneat()
         .args(["gen-reads", "-c"])
@@ -185,6 +189,25 @@ fn gen_reads_with_symbolic_del_modulates_depth_and_round_trips_to_vcf() {
     assert!(
         del_line.contains("END=1500"),
         "expected INFO/END to round-trip; got: {del_line}"
+    );
+    // No de-novo SNPs should be sampled inside the deleted span: the mutation
+    // rate over [POS+1, END] in 1-based (= [501, 1500]) is zeroed for hom DEL.
+    let snps_inside_del: Vec<&String> = vcf_lines
+        .iter()
+        .filter(|l| !l.starts_with('#'))
+        .filter(|l| l.starts_with("H1N1_HA\t"))
+        .filter(|l| !l.contains("<DEL>"))
+        .filter(|l| {
+            let cols: Vec<&str> = l.split('\t').collect();
+            cols.get(1)
+                .and_then(|p| p.parse::<usize>().ok())
+                .map(|p| (501..=1500).contains(&p))
+                .unwrap_or(false)
+        })
+        .collect();
+    assert!(
+        snps_inside_del.is_empty(),
+        "expected no de-novo SNPs inside the hom <DEL> span [501, 1500]; got: {snps_inside_del:?}"
     );
 
     // (b) Depth modulation — count read start positions on H1N1_HA. Names look

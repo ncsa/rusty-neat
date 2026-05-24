@@ -454,6 +454,27 @@ fn process_contig(
             rate_segments = exclude_positions(rate_segments, &excluded);
         }
     }
+
+    let coverage_multipliers =
+        build_coverage_multipliers(&sv_variants, ctx.config.ploidy, block_end);
+    // Where coverage drops to zero (e.g., a homozygous <DEL>), the bases
+    // aren't actually there — sampling de-novo SNPs in that span would only
+    // pollute the golden VCF with variants that produce no reads. Override
+    // the mutation rate to 0 over those segments and recompute the budget.
+    let mut zeroed = false;
+    for &(s, e, mult) in &coverage_multipliers {
+        if mult == 0.0 && s < e {
+            rate_segments = apply_rate_override(rate_segments, s, e, 0.0);
+            zeroed = true;
+        }
+    }
+    if zeroed {
+        num_mutations_sum = rate_segments
+            .iter()
+            .map(|&(s, e, r)| (e - s) as f64 * r)
+            .sum();
+    }
+
     debug!(
         "Seeded {} user variant(s) into contig {}",
         block_variants.len(),
@@ -490,9 +511,6 @@ fn process_contig(
             }
         }
     }
-
-    let coverage_multipliers =
-        build_coverage_multipliers(&sv_variants, ctx.config.ploidy, block_end);
 
     let block_fragments: Vec<(usize, usize)> = {
         let mut block_frags = Vec::new();
@@ -833,14 +851,41 @@ fn build_coverage_multipliers(
         if (mult - 1.0).abs() < f64::EPSILON {
             continue;
         }
-        let mod_start = v.location.min(block_end);
-        let mod_end = v.location.saturating_add(span_bases).min(block_end);
+        let (mod_start, mod_end) = sv_modulation_range(v.location, sv.sv_type, span_bases, block_end);
         if mod_start >= mod_end {
             continue;
         }
         segments = apply_coverage_factor(segments, mod_start, mod_end, mult);
     }
     segments
+}
+
+/// Returns the 0-based half-open coordinate range over which a symbolic SV
+/// modulates coverage, given the variant's 0-based stored `location` (= VCF
+/// POS − 1) and the `span_bases` reported by [`SvData::span`].
+///
+/// VCF convention for `<DEL>`: POS is the anchor base immediately *before*
+/// the deletion (still present in the reference), and the deleted bases run
+/// from POS+1 to END (1-based, inclusive). So a DEL modulates `[POS, END)`
+/// in 0-based half-open coords, which is `[location + 1, location + span)`.
+///
+/// `<DUP>`, `<CNV>`, `<INV>`: POS is conventionally *inside* the affected
+/// region (the duplicated / inverted block starts at POS itself). Those
+/// modulate `[POS − 1, END)` in 0-based half-open coords, i.e.
+/// `[location, location + span)`.
+fn sv_modulation_range(
+    location_0based: usize,
+    sv_type: SvType,
+    span_bases: usize,
+    block_end: usize,
+) -> (usize, usize) {
+    let raw_end = location_0based.saturating_add(span_bases);
+    let end = raw_end.min(block_end);
+    let start = match sv_type {
+        SvType::Del => location_0based.saturating_add(1).min(block_end),
+        _ => location_0based.min(block_end),
+    };
+    (start, end)
 }
 
 /// Returns the coverage multiplier for a single symbolic SV given its type,
@@ -1110,6 +1155,55 @@ mod tests {
     }
 
     #[test]
+    fn test_sv_modulation_range_del_skips_anchor() {
+        // POS=101 (1-based) → location_0based=100. END=200 (1-based incl) so
+        // span = 100. DEL anchor (POS, 0-based 100) is NOT deleted: range
+        // starts at 101. End is 200 (= POS + span - 1 + 1 = 0-based half-open).
+        assert_eq!(
+            sv_modulation_range(100, SvType::Del, 100, 1000),
+            (101, 200)
+        );
+        // Single-base DEL where span_bases==1 collapses to empty (just the
+        // anchor) — caller must skip via mod_start >= mod_end.
+        let (s, e) = sv_modulation_range(100, SvType::Del, 1, 1000);
+        assert!(s >= e, "expected empty range for span==1 DEL, got [{s}, {e})");
+    }
+
+    #[test]
+    fn test_sv_modulation_range_dup_cnv_inv_include_anchor() {
+        // For DUP / CNV / INV, POS is conventionally inside the affected
+        // region — range starts at the anchor.
+        assert_eq!(
+            sv_modulation_range(100, SvType::Dup, 100, 1000),
+            (100, 200)
+        );
+        assert_eq!(
+            sv_modulation_range(100, SvType::Cnv, 100, 1000),
+            (100, 200)
+        );
+        assert_eq!(
+            sv_modulation_range(100, SvType::Inv, 100, 1000),
+            (100, 200)
+        );
+    }
+
+    #[test]
+    fn test_sv_modulation_range_clipped_to_block_end() {
+        // SV running past block_end gets clipped on both ends.
+        assert_eq!(
+            sv_modulation_range(95, SvType::Del, 100, 110),
+            (96, 110)
+        );
+        assert_eq!(
+            sv_modulation_range(95, SvType::Dup, 100, 110),
+            (95, 110)
+        );
+        // Start clipped above block_end → empty range.
+        let (s, e) = sv_modulation_range(150, SvType::Del, 50, 100);
+        assert!(s >= e);
+    }
+
+    #[test]
     fn test_coverage_multiplier_for() {
         // DEL without CN: hom = 0, het = (ploidy-1)/ploidy
         assert_eq!(
@@ -1184,8 +1278,8 @@ mod tests {
     #[test]
     fn test_build_coverage_multipliers_hom_del_zeros_span() {
         // <DEL> at 1-based POS=101 (0-based location=100), END=200 (1-based inclusive).
-        // Span = 200 - 101 + 1 = 100 bases. Modulation range in 0-based half-open:
-        // [100, 100 + 100) = [100, 200).
+        // VCF semantics: POS (base at index 100) is the anchor and is NOT deleted;
+        // bases POS+1..=END are. So modulation runs over 0-based [101, 200).
         let svs = vec![sv_variant_with_span(
             100,
             200,
@@ -1196,7 +1290,7 @@ mod tests {
         let segs = build_coverage_multipliers(&svs, 2, 500);
         assert_eq!(
             segs,
-            vec![(0, 100, 1.0), (100, 200, 0.0), (200, 500, 1.0)]
+            vec![(0, 101, 1.0), (101, 200, 0.0), (200, 500, 1.0)]
         );
     }
 

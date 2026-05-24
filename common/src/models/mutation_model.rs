@@ -19,6 +19,7 @@ use crate::{
     structs::{
         distributions::{DiscreteDistribution, DistributionErrors},
         nucleotides::{Nucleotide, allowed_vec},
+        sv_model::SvModel,
         transition_matrix::{TransitionMatrix, TransitionMatrixError},
         variants::{Variant, VariantError, VariantType},
     },
@@ -85,6 +86,15 @@ pub struct MutationModel {
     pub variant_dist: DiscreteDistribution<VariantType>,
     // These hold all the statistical model data we need to apply the mutations with this model
     statistical_models: StatisticalModels,
+    // Optional learned model for symbolic / structural variants
+    // (`<DEL>` / `<DUP>` / `<CNV>`). `None` when the training VCF had no
+    // usable SV observations, or when this model was deserialized from a
+    // pre-v1.10 JSON file (the field is missing → defaults to `None`).
+    // `gen-reads` consults this in tandem with the `sv_rate_scale` knob;
+    // when both are present and non-zero, de novo SVs are sampled and
+    // emitted through the existing v1.9.0 depth-modulation path.
+    #[serde(default)]
+    pub sv_model: Option<SvModel>,
     // Store a reference to the NeatRng for this run
 }
 
@@ -156,6 +166,10 @@ impl MutationModel {
             variant_dist: variant_distribution,
             homozygous_frequency,
             statistical_models,
+            // SV training fills this in via a separate code path on the
+            // gen-mut-model side; constructors that don't see SV data
+            // start it as None (callers can mutate the field after).
+            sv_model: None,
         })
     }
 
@@ -447,5 +461,84 @@ mod tests {
         );
         let model = result.unwrap();
         assert_eq!(model.mutation_rate, 0.001);
+    }
+
+    #[test]
+    fn from_raw_data_leaves_sv_model_none() {
+        // `from_raw_data` is the SNP/indel-only training path. SV stats
+        // come through a separate channel on `gen-mut-model::runner`, so
+        // the constructor must start with `sv_model: None`. Callers that
+        // observed SVs assign the field after construction.
+        let snp_trans = HashMap::from([
+            ((Nucleotide::A, Nucleotide::C), 0.25),
+            ((Nucleotide::A, Nucleotide::G), 0.5),
+            ((Nucleotide::A, Nucleotide::T), 0.25),
+        ]);
+        let model = MutationModel::from_raw_data(
+            0.001,
+            0.5,
+            vec![1.0, 0.0, 0.0],
+            snp_trans,
+            HashMap::new(),
+            HashMap::new(),
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            None,
+        )
+        .unwrap();
+        assert!(model.sv_model.is_none());
+    }
+
+    #[test]
+    fn pre_v1_10_model_json_without_sv_field_loads_with_sv_model_none() {
+        // Back-compat contract: a MutationModel JSON written by v1.9 has
+        // no `sv_model` key. The `#[serde(default)]` attribute must
+        // populate `None` so existing model files keep loading after the
+        // schema bump. Round-trip through serde to lock this in.
+        let original = MutationModel::default().unwrap();
+        let mut as_value = serde_json::to_value(&original).unwrap();
+        // Strip the new field to simulate a v1.9-era file.
+        as_value
+            .as_object_mut()
+            .unwrap()
+            .remove("sv_model");
+        assert!(
+            !as_value.as_object().unwrap().contains_key("sv_model"),
+            "test setup: sv_model should be absent after strip"
+        );
+        let reloaded: MutationModel = serde_json::from_value(as_value).unwrap();
+        assert!(reloaded.sv_model.is_none());
+        // Other fields must still be intact — i.e., the strip didn't
+        // mangle anything else and the load wasn't lenient about extra
+        // missing fields.
+        assert_eq!(reloaded.mutation_rate, original.mutation_rate);
+        assert_eq!(reloaded.homozygous_frequency, original.homozygous_frequency);
+    }
+
+    #[test]
+    fn populated_sv_model_round_trips_through_mutation_model_json() {
+        // End-to-end JSON round-trip with a non-empty SvModel attached.
+        // Catches accidental `#[serde(skip)]` on the field or any
+        // misconfiguration that would silently drop SV data on write.
+        use crate::structs::sv_model::SvModel;
+        use crate::structs::variants::SvType;
+
+        let mut model = MutationModel::default().unwrap();
+        let mut sv = SvModel::default();
+        sv.per_base_rate = 1.5e-7;
+        sv.homozygous_frequency = 0.4;
+        sv.type_probabilities.insert(SvType::Del, 0.7);
+        sv.type_probabilities.insert(SvType::Dup, 0.3);
+        sv.length_log_normal.insert(SvType::Del, (7.0, 1.5));
+        model.sv_model = Some(sv);
+
+        let json = serde_json::to_string(&model).unwrap();
+        let back: MutationModel = serde_json::from_str(&json).unwrap();
+        let back_sv = back.sv_model.expect("sv_model dropped on round-trip");
+        assert!((back_sv.per_base_rate - 1.5e-7).abs() < 1e-12);
+        assert_eq!(back_sv.type_probabilities.get(&SvType::Del), Some(&0.7));
+        assert_eq!(back_sv.length_log_normal.get(&SvType::Del), Some(&(7.0, 1.5)));
     }
 }

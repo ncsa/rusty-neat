@@ -79,6 +79,12 @@ pub struct RunConfiguration {
     // when true, fragments shorter than read_len are kept and produce truncated reads
     // (long-read platforms); when false, such fragments are discarded (short-read default)
     pub long_reads: bool,
+    // Scale applied to the SvModel's per-base SV rate at generation time.
+    // 0.0 (default) disables de novo SV generation entirely — only SVs
+    // from `input_vcf` flow through. Values > 0 enable sampling from
+    // `MutationModel.sv_model` (if present); 1.0 reproduces the trained
+    // corpus rate, larger values stress-test SV handling.
+    pub sv_rate_scale: f64,
 }
 
 impl Default for RunConfiguration {
@@ -116,6 +122,7 @@ impl Default for RunConfiguration {
             gc_bias_normalize_coverage: true,
             num_threads: None,
             long_reads: false,
+            sv_rate_scale: 0.0,
         }
     }
 }
@@ -449,6 +456,14 @@ impl RunConfiguration {
                             )
                         })?;
                     }
+                    "sv_rate_scale" => {
+                        config.sv_rate_scale = value.as_f64().ok_or_else(|| {
+                            GenerateReadsError::ConfigReadError(
+                                "sv_rate_scale".to_string(),
+                                "float".to_string(),
+                            )
+                        })?;
+                    }
                     _ => continue,
                 },
             }
@@ -644,6 +659,7 @@ mod tests {
             gc_bias_normalize_coverage: true,
             num_threads: None,
             long_reads: false,
+            sv_rate_scale: 0.0,
         };
 
         println!("{:?}", test_configuration);
@@ -792,6 +808,25 @@ mod tests {
         assert_eq!(config.coverage, 10);
         assert!(!config.paired_ended);
         assert!(config.produce_fastq);
+        // sv_rate_scale defaults to 0.0 — de novo SV generation is opt-in.
+        // A v1.9 upgrader with no YAML change must see identical
+        // behavior to v1.9 (no SVs emitted).
+        assert_eq!(config.sv_rate_scale, 0.0);
+    }
+
+    #[test]
+    fn test_yaml_parses_sv_rate_scale() {
+        let dir = tempfile::tempdir().unwrap();
+        let yaml = dir.path().join("c.yml");
+        std::fs::write(
+            &yaml,
+            "reference: test_data/references/H1N1.fa\n\
+             output_dir: ./\n\
+             sv_rate_scale: 0.75\n",
+        )
+        .unwrap();
+        let cfg = RunConfiguration::from_yaml_file(&yaml).unwrap();
+        assert!((cfg.sv_rate_scale - 0.75).abs() < 1e-12);
     }
 
     #[test]

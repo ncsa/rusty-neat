@@ -163,10 +163,17 @@ impl SvData {
 
     /// Compute the reference span (in bases) of this SV, given the variant's
     /// 1-based start `location`. Prefers `END` (span = end - location + 1);
-    /// falls back to `|SVLEN|`. Returns `None` if neither is set.
+    /// falls back to `|SVLEN|`. Returns `None` if neither is set, or if `END`
+    /// is present but `< location` — defense-in-depth against an upstream
+    /// caller that constructed `SvData` directly with a malformed `END`.
+    /// (`Variant::from_file` already drops invalid `END` values at parse
+    /// time with a warning, so this branch normally never fires.)
     pub fn span(&self, location: usize) -> Option<usize> {
         if let Some(end) = self.end {
-            return Some(end.saturating_sub(location).saturating_add(1));
+            if end < location {
+                return None;
+            }
+            return Some(end - location + 1);
         }
         if let Some(svlen) = self.svlen {
             return Some(svlen.unsigned_abs() as usize);
@@ -297,7 +304,22 @@ impl Variant {
                         sv_data.raw_alt
                     );
                 }
-                sv_data.end = parsed_info.end;
+                // Drop an INFO/END that's before POS — keeping it would let
+                // span() silently produce a bogus 1-base modulation range for
+                // <DUP>/<CNV>/<INV> (the <DEL> path masks the bug via an
+                // empty-range check downstream). Fall back to SVLEN if the
+                // user supplied that too, otherwise the record passes through
+                // with no depth modulation and gen_reads logs a "no span" warn.
+                sv_data.end = match parsed_info.end {
+                    Some(end) if end < location => {
+                        warn!(
+                            "INFO/END={end} is before POS={location} for ALT {} — ignoring END",
+                            sv_data.raw_alt
+                        );
+                        None
+                    }
+                    other => other,
+                };
                 sv_data.svlen = parsed_info.svlen;
                 sv_data.copy_number = parsed_info.copy_number;
                 // Symbolic SVs share the `Complex` variant_type with literal
@@ -933,6 +955,59 @@ mod tests {
     fn sv_data_span_none_when_neither_set() {
         let sv = SvData::new("<DEL>", SvType::Del);
         assert!(sv.span(100).is_none());
+    }
+
+    #[test]
+    fn sv_data_span_returns_none_when_end_before_location() {
+        // INFO/END < POS is malformed (typo, swapped fields, etc.). The old
+        // implementation used saturating_sub and silently produced Some(1),
+        // which then gave <DUP>/<CNV>/<INV> records a bogus 1-base modulation
+        // range. span() must now return None so downstream callers warn and
+        // skip coverage modulation instead of acting on garbage.
+        let mut sv = SvData::new("<DEL>", SvType::Del);
+        sv.end = Some(50);
+        assert!(sv.span(100).is_none());
+
+        // Equality is allowed — END == POS means a degenerate 1-base span,
+        // which is still semantically meaningful for DUP/INV (and gets
+        // collapsed to empty for DEL by sv_modulation_range downstream).
+        sv.end = Some(100);
+        assert_eq!(sv.span(100), Some(1));
+    }
+
+    #[test]
+    fn sv_data_span_invalid_end_does_not_fall_back_to_svlen() {
+        // If END is present but malformed (< location), treat the whole record
+        // as un-spannable rather than silently substituting SVLEN. The user
+        // should fix their VCF; Variant::from_file already drops invalid END
+        // at parse time with a warn, so this branch is defense-in-depth for
+        // anything constructing SvData directly.
+        let mut sv = SvData::new("<DEL>", SvType::Del);
+        sv.end = Some(50);
+        sv.svlen = Some(-200);
+        assert!(sv.span(100).is_none());
+    }
+
+    #[test]
+    fn from_file_invalid_end_is_dropped_and_falls_back_to_svlen() {
+        // POS=100, END=50 (malformed) but SVLEN=-30 — Variant::from_file
+        // clears the bad END, span() then falls back to |SVLEN|.
+        let v = Variant::from_file(
+            100,
+            ".",
+            "PASS",
+            "SVTYPE=DEL;END=50;SVLEN=-30",
+            "A",
+            "<DEL>",
+            60,
+            vec!["GT".to_string()],
+            vec!["1/1".to_string()],
+        )
+        .unwrap();
+        let sv = v.alternate.as_symbolic().unwrap();
+        assert!(sv.end.is_none(), "invalid END should be cleared");
+        assert_eq!(sv.svlen, Some(-30));
+        assert_eq!(sv.span(100), Some(30));
     }
 
     #[test]

@@ -1,9 +1,30 @@
 //! This contains only one function at the moment, a general opener and reader
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Lines, Read, Result, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use flate2::read::GzDecoder;
+
+/// Errors with `ErrorKind::AlreadyExists` if `path` is an existing regular
+/// file and `allow_overwrite` is false. `label` is the human-facing name of
+/// the field that produced `path` (e.g. `"frag_length.output_file"`) and is
+/// embedded in the error message so the user can locate the offending
+/// config entry.
+///
+/// Each subcommand's config parser typically wraps the returned `io::Error`
+/// into its own module error via `.map_err(...)`.
+pub fn check_overwrite(label: &str, path: &Path, allow_overwrite: bool) -> Result<()> {
+    if !allow_overwrite && path.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            format!(
+                "{label} already exists and overwrite_output is false: {}",
+                path.display()
+            ),
+        ));
+    }
+    Ok(())
+}
 
 pub fn read_lines(filename: &PathBuf) -> Result<Lines<BufReader<File>>> {
     // This opens file and creates a buffer to read lines

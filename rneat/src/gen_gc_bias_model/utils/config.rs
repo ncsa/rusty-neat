@@ -2,29 +2,45 @@
 // various side functions. It is build with a ConfigurationBuilder, which can take either a
 // config yaml file or command line arguments and turn them into the configuration.
 use crate::gen_gc_bias_model::errors::GenGcBiasModelError;
-use common::{file_tools::bed_reader::read_bed, structs::bed_record::BedRecord};
+use common::{
+    file_tools::{bed_reader::read_bed, file_io::check_overwrite},
+    structs::bed_record::BedRecord,
+};
 use serde_yml::Value;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
+/// Parameters consumed by `run_from_coverage` — the FASTA-sweep + model-write
+/// stage. Does not carry BAM/walker state because `run_from_coverage` works
+/// from pre-computed per-contig coverage and never reads the BAM itself.
+///
+/// Both the standalone CLI path (which fills these from a YAML
+/// `RunConfiguration`) and the unified `gen-bam-models` runner (which fills
+/// these from its own `GcBiasSection` after one shared BAM walk) construct
+/// this directly.
 #[derive(Debug, Clone)]
-pub struct RunConfiguration {
-    // This struct holds all the parameters for running GC Bias modeling.
-    // It is built from user-supplied input in the form of a configuration yaml file.
+pub struct GcBiasModelParams {
     pub reference: PathBuf,
-    /// Aligned BAM. Coverage is accumulated in process via
-    /// `common::file_tools::bam_reader::CoverageObserver`.
-    pub bam_file: PathBuf,
-    /// Minimum mapping quality applied while accumulating coverage from `bam_file`.
-    /// Default 0 matches `samtools depth` defaults.
-    pub min_mapq: u8,
     pub bed_table: HashMap<String, Vec<BedRecord>>,
     pub output_file: PathBuf,
     pub overwrite_output: bool,
     pub window_size: usize,
     pub window_stride: usize,
     pub min_windows_per_bin: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct RunConfiguration {
+    // This struct holds all the parameters for running GC Bias modeling
+    // from a standalone YAML config: BAM walker inputs + model params.
+    /// Aligned BAM. Coverage is accumulated in process via
+    /// `common::file_tools::bam_reader::CoverageObserver`.
+    pub bam_file: PathBuf,
+    /// Minimum mapping quality applied while accumulating coverage from `bam_file`.
+    /// Default 0 matches `samtools depth` defaults.
+    pub min_mapq: u8,
+    pub model: GcBiasModelParams,
 }
 
 impl RunConfiguration {
@@ -89,12 +105,8 @@ impl RunConfiguration {
                 GenGcBiasModelError::ConfigError("Missing output_file".to_string())
             })?);
 
-        if !overwrite_output && output_file.is_file() {
-            return Err(GenGcBiasModelError::ConfigError(format!(
-                "Attempting to overwrite existing file {:?}",
-                output_file
-            )));
-        }
+        check_overwrite("output_file", &output_file, overwrite_output)
+            .map_err(|e| GenGcBiasModelError::ConfigError(e.to_string()))?;
 
         let window_size = scrape_config
             .get("window_size")
@@ -132,15 +144,17 @@ impl RunConfiguration {
             .unwrap_or(10) as usize;
 
         Ok(RunConfiguration {
-            reference,
             bam_file,
             min_mapq,
-            bed_table,
-            output_file,
-            overwrite_output,
-            window_size,
-            window_stride,
-            min_windows_per_bin,
+            model: GcBiasModelParams {
+                reference,
+                bed_table,
+                output_file,
+                overwrite_output,
+                window_size,
+                window_stride,
+                min_windows_per_bin,
+            },
         })
     }
 }
@@ -197,15 +211,15 @@ min_windows_per_bin: 10
 
         let config = RunConfiguration::from(&config_file.path().to_path_buf()).unwrap();
 
-        assert_eq!(config.reference, reference.path());
+        assert_eq!(config.model.reference, reference.path());
         assert_eq!(config.bam_file, bam.path());
         assert_eq!(config.min_mapq, 0);
-        assert!(config.bed_table.is_empty());
-        assert_eq!(config.output_file, output_path);
-        assert!(config.overwrite_output);
-        assert_eq!(config.window_size, 100);
-        assert_eq!(config.window_stride, 100);
-        assert_eq!(config.min_windows_per_bin, 10);
+        assert!(config.model.bed_table.is_empty());
+        assert_eq!(config.model.output_file, output_path);
+        assert!(config.model.overwrite_output);
+        assert_eq!(config.model.window_size, 100);
+        assert_eq!(config.model.window_stride, 100);
+        assert_eq!(config.model.min_windows_per_bin, 10);
     }
 
     #[test]
@@ -225,10 +239,10 @@ min_windows_per_bin: 10
         let config_file = write_config(&yaml);
         let config = RunConfiguration::from(&config_file.path().to_path_buf()).unwrap();
 
-        assert!(config.bed_table.is_empty());
-        assert_eq!(config.window_size, 100);
-        assert_eq!(config.window_stride, 100);
-        assert_eq!(config.min_windows_per_bin, 10);
+        assert!(config.model.bed_table.is_empty());
+        assert_eq!(config.model.window_size, 100);
+        assert_eq!(config.model.window_stride, 100);
+        assert_eq!(config.model.min_windows_per_bin, 10);
         assert_eq!(config.min_mapq, 0);
     }
 
@@ -271,6 +285,7 @@ min_windows_per_bin: 10
         let config = RunConfiguration::from(&config_file.path().to_path_buf()).unwrap();
 
         let chr1_records = config
+            .model
             .bed_table
             .get("chr1")
             .expect("Expected chr1 BED records");
@@ -419,7 +434,7 @@ min_windows_per_bin: 10
         );
         let config_file = write_config(&yaml);
         let config = RunConfiguration::from(&config_file.path().to_path_buf()).unwrap();
-        assert_eq!(config.window_stride, 100);
+        assert_eq!(config.model.window_stride, 100);
     }
 
     #[test]
@@ -452,7 +467,7 @@ min_windows_per_bin: 10
         );
         let config_file = write_config(&yaml);
         let config = RunConfiguration::from(&config_file.path().to_path_buf()).unwrap();
-        assert_eq!(config.output_file, output.path());
-        assert!(config.overwrite_output);
+        assert_eq!(config.model.output_file, output.path());
+        assert!(config.model.overwrite_output);
     }
 }

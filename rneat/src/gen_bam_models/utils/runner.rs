@@ -13,7 +13,7 @@ use crate::gen_bam_models::{
     utils::config::{GcBiasSection, RunConfiguration},
 };
 use crate::gen_frag_length_model::utils::runner::run_from_tlens;
-use crate::gen_gc_bias_model::utils::config::RunConfiguration as GcBiasRunConfig;
+use crate::gen_gc_bias_model::utils::config::GcBiasModelParams;
 use crate::gen_gc_bias_model::utils::runner::run_from_coverage as gc_bias_run_from_coverage;
 
 pub fn runner(config_path: &PathBuf) -> Result<(), GenBamModelsError> {
@@ -54,22 +54,19 @@ pub fn runner(config_path: &PathBuf) -> Result<(), GenBamModelsError> {
 
     if let Some(gc) = &config.gc_bias {
         info!("Building GC bias model");
-        let gc_config = build_gc_bias_run_config(&config.bam_file, gc);
-        gc_bias_run_from_coverage(&gc_config, cov_obs.into_by_contig())?;
+        let gc_params = build_gc_bias_model_params(gc);
+        gc_bias_run_from_coverage(&gc_params, cov_obs.into_by_contig())?;
     }
 
     Ok(())
 }
 
-/// Adapts a unified `GcBiasSection` into the standalone gc-bias `RunConfiguration`
-/// shape. The standalone struct carries `bam_file` and `min_mapq` for its own
-/// walk path, but `run_from_coverage` ignores both — we just pass the unified
-/// BAM path through to keep the struct happy.
-fn build_gc_bias_run_config(bam_file: &PathBuf, gc: &GcBiasSection) -> GcBiasRunConfig {
-    GcBiasRunConfig {
+/// Adapts a unified `GcBiasSection` into a `GcBiasModelParams` for the
+/// shared sweep + model-write stage. No walker fields are involved because
+/// the unified runner has already done the BAM walk by the time we get here.
+fn build_gc_bias_model_params(gc: &GcBiasSection) -> GcBiasModelParams {
+    GcBiasModelParams {
         reference: gc.reference.clone(),
-        bam_file: bam_file.clone(),
-        min_mapq: 0,
         bed_table: gc.bed_table.clone(),
         output_file: gc.output_file.clone(),
         overwrite_output: gc.overwrite_output,

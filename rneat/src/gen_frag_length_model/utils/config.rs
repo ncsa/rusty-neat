@@ -1,4 +1,5 @@
 use crate::gen_frag_length_model::errors::GenFragLengthModelError;
+use common::file_tools::file_io::check_overwrite;
 use serde_yml::Value;
 use std::collections::HashMap;
 use std::fs;
@@ -62,12 +63,8 @@ impl RunConfiguration {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        if !overwrite_output && output_file.is_file() {
-            return Err(GenFragLengthModelError::ConfigurationError(format!(
-                "output_file already exists and overwrite_output is false: {:?}",
-                output_file
-            )));
-        }
+        check_overwrite("output_file", &output_file, overwrite_output)
+            .map_err(|e| GenFragLengthModelError::ConfigurationError(e.to_string()))?;
 
         let min_reads = scrape_config
             .get("min_reads")

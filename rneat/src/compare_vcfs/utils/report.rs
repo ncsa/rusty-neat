@@ -11,7 +11,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-pub const SCHEMA_VERSION: &str = "1.2.0";
+pub const SCHEMA_VERSION: &str = "1.3.0";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ContigCounts {
@@ -68,6 +68,12 @@ pub struct SkipCounts {
     pub filtered: usize,
     pub outside_target_bed: usize,
     pub outside_simulated_contigs: usize,
+    /// Symbolic / structural ALTs (`<DEL>`, `<DUP>`, `<CNV>`, `<INS>`, `<INV>`,
+    /// breakends, ...) — compare-vcfs is byte-wise REF/ALT comparison and has
+    /// no notion of equivalent symbolic edits, so these are counted and
+    /// excluded from classification.
+    #[serde(default)]
+    pub symbolic: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -258,6 +264,10 @@ fn render_txt(s: &ComparisonSummary) -> String {
         "  Outside simulated contigs:   {} / {}\n",
         s.skipped_golden.outside_simulated_contigs, s.skipped_called.outside_simulated_contigs
     ));
+    out.push_str(&format!(
+        "  Symbolic / structural ALT:   {} / {}\n",
+        s.skipped_golden.symbolic, s.skipped_called.symbolic
+    ));
 
     out.push_str("\nFN attribution\n--------------\n");
     if s.fn_attribution.is_empty() {
@@ -416,7 +426,7 @@ mod tests {
         let path = write_json(&s, dir.path(), false).unwrap();
         let raw = fs::read_to_string(&path).unwrap();
         let val: serde_json::Value = serde_json::from_str(&raw).unwrap();
-        assert_eq!(val["schema_version"], "1.2.0");
+        assert_eq!(val["schema_version"], "1.3.0");
         assert_eq!(val["totals"]["tp"], 3);
     }
 

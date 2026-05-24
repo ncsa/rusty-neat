@@ -119,6 +119,135 @@ fn train_binned_model_then_gen_reads_emits_only_bin_qualities() {
 }
 
 #[test]
+fn gen_reads_with_symbolic_del_modulates_depth_and_round_trips_to_vcf() {
+    // Phase 3 contract: a symbolic <DEL> in the input VCF must (a) be preserved
+    // verbatim in the output golden VCF (Phase 1+3 round-trip), and (b) drive
+    // per-region depth modulation in gen_reads (Phase 3 fragment splitting).
+    // We park a homozygous <DEL> at H1N1_HA:500-1500 (1-based, inclusive),
+    // which corresponds to 0-based half-open [499, 1500). At a hom DEL the
+    // multiplier is 0, so zero reads should start in that span; reads outside
+    // it should still be generated at full coverage.
+    use std::io::Write as _;
+
+    let (_dir, work) = fresh_workdir();
+
+    // Phase 3 only consumes input VCFs that already define the SV's span via
+    // INFO/END, so include it here.
+    let input_vcf = work.join("input_sv.vcf");
+    {
+        let mut f = std::fs::File::create(&input_vcf).unwrap();
+        writeln!(f, "##fileformat=VCFv4.2").unwrap();
+        writeln!(f, "##ALT=<ID=DEL,Description=\"Deletion\">").unwrap();
+        writeln!(
+            f,
+            "##INFO=<ID=END,Number=1,Type=Integer,Description=\"End position\">"
+        )
+        .unwrap();
+        writeln!(
+            f,
+            "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">"
+        )
+        .unwrap();
+        writeln!(f, "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS").unwrap();
+        // Homozygous <DEL> at H1N1_HA, 1-based POS=500, END=1500.
+        writeln!(
+            f,
+            "H1N1_HA\t500\t.\tA\t<DEL>\t60\tPASS\tEND=1500\tGT\t1/1"
+        )
+        .unwrap();
+    }
+
+    let mut config = GenReadsConfig::new(h1n1_reference(), work.clone(), "sv_run");
+    config.coverage = 50;
+    config.produce_vcf = true;
+    config.input_vcf = Some(input_vcf);
+    // Drive enough de-novo mutations across the contig that, pre-fix, several
+    // would have been sampled inside the DEL span. Post-fix: zero — the rate
+    // is zeroed over hom-DEL spans before generate_variants runs.
+    config.mutation_rate = Some(0.05);
+    let yaml = config.write_yaml();
+    rneat()
+        .args(["gen-reads", "-c"])
+        .arg(yaml.path())
+        .assert()
+        .success();
+
+    // (a) Output VCF round-trip — the <DEL> should appear verbatim, with the
+    // original INFO field preserved (END=1500).
+    let out_vcf_gz = work.join("sv_run.vcf.gz");
+    assert!(out_vcf_gz.exists(), "output VCF not produced: {out_vcf_gz:?}");
+    let vcf_lines: Vec<String> = {
+        use flate2::read::MultiGzDecoder;
+        use std::io::{BufRead, BufReader};
+        let r = BufReader::new(MultiGzDecoder::new(std::fs::File::open(&out_vcf_gz).unwrap()));
+        r.lines().map(|l| l.unwrap()).collect()
+    };
+    let del_line = vcf_lines
+        .iter()
+        .find(|l| l.starts_with("H1N1_HA\t500\t") && l.contains("<DEL>"))
+        .unwrap_or_else(|| panic!("expected <DEL> record in output VCF; got: {vcf_lines:?}"));
+    assert!(
+        del_line.contains("END=1500"),
+        "expected INFO/END to round-trip; got: {del_line}"
+    );
+    // No de-novo SNPs should be sampled inside the deleted span: the mutation
+    // rate over [POS+1, END] in 1-based (= [501, 1500]) is zeroed for hom DEL.
+    let snps_inside_del: Vec<&String> = vcf_lines
+        .iter()
+        .filter(|l| !l.starts_with('#'))
+        .filter(|l| l.starts_with("H1N1_HA\t"))
+        .filter(|l| !l.contains("<DEL>"))
+        .filter(|l| {
+            let cols: Vec<&str> = l.split('\t').collect();
+            cols.get(1)
+                .and_then(|p| p.parse::<usize>().ok())
+                .map(|p| (501..=1500).contains(&p))
+                .unwrap_or(false)
+        })
+        .collect();
+    assert!(
+        snps_inside_del.is_empty(),
+        "expected no de-novo SNPs inside the hom <DEL> span [501, 1500]; got: {snps_inside_del:?}"
+    );
+
+    // (b) Depth modulation — count read start positions on H1N1_HA. Names look
+    // like `@RNEAT_generated_{contig}_{abs_start:010}_{abs_end:010}`.
+    let fastq = work.join("sv_run_r1.fastq.gz");
+    let lines = read_gzip_fastq_lines(&fastq);
+    let mut inside_del = 0usize;
+    let mut outside_del = 0usize;
+    for chunk in lines.chunks(4) {
+        let name = &chunk[0];
+        if !name.starts_with("@RNEAT_generated_H1N1_HA_") {
+            continue;
+        }
+        // Strip leading '@' and prefix; the remainder is "{start}_{end}".
+        let rest = name.trim_start_matches("@RNEAT_generated_H1N1_HA_");
+        let abs_start: usize = rest
+            .split('_')
+            .next()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or_else(|| panic!("unparseable read name: {name}"));
+        // DEL span (0-based half-open): [499, 1500). Use inset margins so a
+        // single-base off-by-one in coverage modulation wouldn't pass.
+        if (500..1450).contains(&abs_start) {
+            inside_del += 1;
+        } else if abs_start < 449 || abs_start >= 1550 {
+            outside_del += 1;
+        }
+    }
+    assert_eq!(
+        inside_del, 0,
+        "expected ZERO reads starting inside the hom <DEL> span; got {inside_del}"
+    );
+    assert!(
+        outside_del > 200,
+        "expected plenty of reads outside the DEL span at coverage=50 over ~675 unaffected \
+         bases of H1N1_HA; got only {outside_del}"
+    );
+}
+
+#[test]
 fn gen_reads_with_iupac_reference_produces_no_iupac_in_output() {
     // Regression test: a reference containing IUPAC ambiguity codes (R/Y/M/K/S/W/H/B/V/D)
     // must be processed without crashing and must not leak any IUPAC letter into output

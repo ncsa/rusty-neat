@@ -264,13 +264,14 @@ mod tests {
         nucleotides::Nucleotide,
         variants::{Genotype, Variant, VariantType},
     };
+    use common::structs::variants::AlternateType;
 
     fn snp(loc: usize) -> Variant {
         Variant {
             variant_type: VariantType::SNP,
             location: loc,
             reference: vec![Nucleotide::A],
-            alternate: vec![Nucleotide::G],
+            alternate: AlternateType::Literal(vec![Nucleotide::G]),
             genotype_str: "0/1".to_string(),
             genotype: Genotype::Heterozygous,
             id: None,

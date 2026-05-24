@@ -16,7 +16,7 @@ use crate::file_tools::file_io::{
 };
 use crate::structs::mutated_map::MutatedMap;
 use crate::structs::nucleotides::sequence_array_to_string;
-use crate::structs::variants::{Variant, VariantError};
+use crate::structs::variants::{AlternateType, Variant, VariantError};
 
 #[derive(Debug, Error)]
 pub enum VcfToolsError {
@@ -84,12 +84,16 @@ pub fn write_vcf(
                 // Format the output line. Any fields without data will be a simple period. Quality
                 // is set to 37 for all these variants, to indicate in the golden vcf that these are
                 // the generated variants.
+                let alt_str = match &variant.alternate {
+                    AlternateType::Literal(bases) => sequence_array_to_string(bases),
+                    AlternateType::Symbolic(sv) => sv.raw_alt.clone(),
+                };
                 let line = format!(
                     "{}\t{}\t.\t{}\t{}\t37\tPASS\t.\tGT\t{}",
                     contig,
                     position + 1,
                     sequence_array_to_string(&variant.reference),
-                    sequence_array_to_string(&variant.alternate),
+                    alt_str,
                     variant.genotype_str,
                 );
                 writeln!(&mut buffer, "{}", line)?;
@@ -207,7 +211,7 @@ mod tests {
     use super::*;
     use crate::structs::{
         nucleotides::Nucleotide,
-        variants::{Variant, VariantType},
+        variants::{Genotype, SvData, SvType, Variant, VariantType},
     };
     use std::io::Write;
 
@@ -526,5 +530,51 @@ chr1\t100\t.\tA\tT\t60\tPASS\t.\tDP:GQ\t30:99\n";
         let result = read_vcf(tmp.path().to_path_buf());
         assert!(result.is_ok(), "Expected Ok (skip), got {:?}", result);
         assert!(result.unwrap().is_empty(), "Expected no variants parsed");
+    }
+
+    #[test]
+    fn test_write_vcf_symbolic_alt_round_trips_raw_string() {
+        // Phase 1 contract: even though Variant::from_file still rejects
+        // symbolic ALTs, the writer must serialize an AlternateType::Symbolic
+        // payload verbatim via SvData.raw_alt. This locks in the round-trip
+        // shape that Phase 2's reader will rely on.
+        let temp_dir = tempfile::tempdir().unwrap();
+        let sv = Variant {
+            variant_type: VariantType::Complex,
+            location: 99, // 0-based; will appear as POS=100 in output
+            reference: vec![Nucleotide::A],
+            alternate: super::AlternateType::Symbolic(SvData::new("<DEL>", SvType::Del)),
+            genotype_str: "0/1".to_string(),
+            genotype: Genotype::Heterozygous,
+            id: None,
+            quality_score: None,
+            filter: None,
+            info: None,
+            format: Vec::new(),
+            sample: Vec::new(),
+        };
+        let mutated_map =
+            MutatedMap::from_interval(0, 200, vec![sv]).unwrap();
+        let mut mutated_maps = HashMap::new();
+        mutated_maps.insert("chr1".to_string(), vec![mutated_map]);
+        let output_path = temp_dir.path().join("sv_round_trip.vcf");
+        write_vcf(
+            &mutated_maps,
+            &vec!["chr1".to_string()],
+            &HashMap::from([("chr1".to_string(), 200usize)]),
+            &PathBuf::from("ref.fa"),
+            false,
+            &output_path,
+        )
+        .unwrap();
+        let lines: Vec<String> = crate::file_tools::file_io::read_gzip_lines(&output_path)
+            .unwrap()
+            .map(|l| l.unwrap())
+            .collect();
+        assert!(
+            lines.iter().any(|l| l == "chr1\t100\t.\tA\t<DEL>\t37\tPASS\t.\tGT\t0/1"),
+            "expected symbolic ALT to round-trip as `<DEL>`; got: {:?}",
+            lines
+        );
     }
 }

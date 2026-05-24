@@ -116,20 +116,21 @@ pub fn runner(
                         continue;
                     }
                     let ref_frame = TrinucFrame::from((n0, n1, n2));
-                    let alt_frame = TrinucFrame::from((n0, variant.alternate[0], n2));
+                    let alt = variant.alternate.as_literal().unwrap();
+                    let alt_frame = TrinucFrame::from((n0, alt[0], n2));
                     *trinuc_transition_count
                         .entry((ref_frame, alt_frame))
                         .or_default() += 1;
                     *snp_transition_count
-                        .entry((variant.reference[0], variant.alternate[0]))
+                        .entry((variant.reference[0], alt[0]))
                         .or_default() += 1;
                 }
                 VariantType::Insertion => {
-                    let variant_len = variant.alternate.len() - variant.reference.len();
+                    let variant_len = variant.alternate.as_literal().unwrap().len() - variant.reference.len();
                     *insertion_count.entry(variant_len).or_default() += 1;
                 }
                 VariantType::Deletion => {
-                    let variant_len = variant.reference.len() - variant.alternate.len();
+                    let variant_len = variant.reference.len() - variant.alternate.as_literal().unwrap().len();
                     *deletion_count.entry(variant_len).or_default() += 1;
                 }
                 _ => debug!("Unknown variant type, skipping for this analysis."),

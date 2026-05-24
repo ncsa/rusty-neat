@@ -304,8 +304,16 @@ fn generate_read(
             let variant = variant_map[&fragment_position];
             if (variant.genotype == Genotype::Homozygous) || (rng.random()? < 0.5) {
                 base_to_write = match read_strand {
-                    Strand::Forward => variant.alternate.clone(),
-                    Strand::Reverse => variant.alternate.iter().map(|b| b.complement()).collect(),
+                    Strand::Forward => variant.alternate
+                        .as_literal()
+                        .unwrap()
+                        .to_vec(),
+                    Strand::Reverse => variant.alternate
+                        .as_literal()
+                        .unwrap()
+                        .iter()
+                        .map(|b| b.complement())
+                        .collect(),
                 };
             }
         } else {

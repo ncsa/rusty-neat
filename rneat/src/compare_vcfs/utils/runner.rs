@@ -698,8 +698,10 @@ mod tests {
                 snp(50, Nucleotide::A, Nucleotide::C, Some("PASS")),
             ],
         );
-        // Pre-Phase-3, this call would have panicked at `as_literal().unwrap()`
-        // on the symbolic record. It must now skip it and count it.
+        // filter_vcf must route the symbolic record into `skipped.symbolic`
+        // rather than calling `.as_literal().unwrap()` on it — that path
+        // previously panicked when a round-tripped <DEL> reached the
+        // byte-wise REF/ALT comparison.
         let (kept, skipped) = filter_vcf(&raw, None, None, false, false);
         assert_eq!(kept.get("chr1").map(|v| v.len()), Some(1));
         assert_eq!(kept["chr1"][0].location, 50);

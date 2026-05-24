@@ -36,6 +36,8 @@ pub enum GenMutationModelError {
     VcfReaderError(#[from] VcfToolsError),
     #[error("Error generating trinucleotide counts: {0}")]
     TrinucCountError(String),
+    #[error("Training VCF has no SNP / insertion / deletion observations: {0}")]
+    NoLiteralVariants(String),
     #[error("Error streaming FASTA file: {0}")]
     FastaStreamError(#[from] FastaStreamError),
     #[error("Variant location did not match reference: {0}")]

@@ -1,3 +1,30 @@
+5/23/2026
+=========
+## rneat v1.8.0
+
+### `compare-vcfs`: new subcommand for validating a downstream caller against a NEAT golden VCF
+- New `rneat compare-vcfs` subcommand. Classifies every variant in the called VCF as TP, FN, or FP relative to a NEAT-simulated golden VCF; produces `comparison_summary.json`, `comparison_summary.txt`, `FN_with_reasons.vcf`, and (optional) `FP.vcf`. Pure-Rust port of NEAT 2.1's `vcf_compare.py` algorithm plus NEAT 4's FN-attribution layer — no `hap.py` / pysam / Python subprocess required.
+- **Exact-match classification.** Per contig, variants are keyed by `(position, ref, alt)`. Intersection → TP; golden-only → FN; called-only → FP. Per-VCF skip counters surface in the report so multi-allelic / hom-ref / non-PASS / outside-target-bed / outside-simulated-contigs records aren't silently lost.
+- **Equivalence sweep** (ported from NEAT 2.1, default on). For each FP, take a ±`equivalence_window` bp window of the reference and apply both the FP set and FN set within it. If the resulting byte sequences match (case-insensitive), the two sets are denotation-different spellings of the same edit — every consumed FN is promoted to TP, every consumed FP is dropped. Catches left/right-aligned indels, compound SNPs vs single multi-base substitution, and other denotation differences exact matching would mis-classify. Disable with `fast: true`.
+- **NEAT-aware FN attribution** (ported from NEAT 4). Every surviving FN gets one or more reason tags: `outside_simulated_contigs` (reported alone; BED checks are skipped since they presuppose simulation), `outside_mutation_bed`, `outside_target_bed`, `unknown`. Counts roll up into `fn_attribution` in the report; `FN_with_reasons.vcf` annotates each FN with a `NEAT_REASON` INFO tag.
+- **Chrom aliases.** Optional two-column TSV (`bed_chrom\treference_chrom`) remaps BED chrom names at load time so users can compare against a reference using one convention (e.g., `chr1`) when their BED uses another (e.g., `1`). Applied to both `mutation_bed` and `target_bed`.
+- **Chrom-naming-mismatch warnings.** Surfaced in `comparison_summary.warnings` when any BED chrom (post-alias) is absent from the reference's FASTA contig list. Catches single-typo BEDs (`chr_MP` in an otherwise correct H1N1 BED) that would otherwise silently misattribute every variant on that contig. Distinct from NEAT 4's "zero overlap" semantics, which would swallow the single-typo case.
+- Report shape is schema-versioned at `1.2.0`. Outputs section enumerates every artifact path; precision / recall / F1 derived from TP/FN/FP counts (with `null` returned for undefined ratios). New `equivalents_promoted` counter in totals so users can see how many TPs were rescued by the sweep.
+- See README → "Comparing a downstream caller's VCF against the golden VCF" for the end-to-end runbook; `template_config/compare_vcfs_template.yml` is the canonical config.
+
+### Model-parity regression suite + release shakeout
+- New `rneat/tests/model_parity.rs` integration suite. Builds each of the four data-driven models (`gen-mut-model`, `gen-seq-error-model`, `gen-frag-length-model`, `gen-gc-bias-model`) from fixed inputs and compares the gzipped JSON output against checked-in canonical baselines under `rneat/test_data/baseline_models/`. Also covers `gen-bam-models` GC-bias byte-equality vs the standalone runner (complements the in-tree fragment-length parity test which only covered frag-length).
+- Cross-process stability is achieved by canonicalizing the parsed JSON before comparison: object keys are sorted via `serde_json::Map`'s BTreeMap backing, and arrays of tuple-key pairs (the shape serde produces for `HashMap<(K1,K2), V>` fields like `MutationModel::statistical_models`) are sorted by serialized key. Neutralizes Rust's per-process HashMap hasher randomization.
+- Baselines are gzipped (~120 KB total). Re-bless with `BLESS_BASELINES=1 cargo test --test model_parity` or via `scripts/regenerate_model_baselines.sh` — only when an intentional algorithmic change is being made.
+- Added `scripts/release_shakeout.sh` — full-size hg38 chr22 manual shakeout runbook for pre-publish QA. Not run in CI. Trains each model on real chr22 data, asserts byte-parity between the unified `gen-bam-models` and the standalone runners (one config per output, since the unified `min_mapq` gates both observers), runs `gen-reads` end-to-end with the trained models, and reports peak RSS + elapsed time per step for cross-release comparison.
+- Added `scripts/RELEASE_CHECKLIST.md` — tickable gate-list for the publish workflow (lint, full test suite, shakeout, cross-version determinism, tag + GitHub release).
+- Cross-version determinism verified for v1.7.0 → v1.8.0 on H1N1 paired-end with a fixed seed: byte-identical FASTQ multiset hashes across binaries built from each branch. The new `compare-vcfs` work doesn't touch any `gen-reads` code paths, so this remains true.
+
+### Minor
+- `cargo fmt --check` drift in `gen-bam-models` + `main.rs` (carried in from a merge resolution) is fixed; workspace formatting is once again clean.
+- `gen-bam-models` template config / README explicitly call out that the unified `min_mapq` gates *both* observers — surfaced during the v1.7.0 chr22 shakeout when the standalone `gen-frag-length-model` (which hard-codes MAPQ > 10) couldn't be matched with a unified `min_mapq: 20` config.
+- Added HPC friendly binaries to the auto workflow for releases.
+- 
 5/22/2026
 =========
 ## rneat v1.7.0

@@ -1,0 +1,67 @@
+# REQUIRED PARAMS
+# NEAT-simulated truth VCF (typically <prefix>_golden.vcf.gz from gen-reads).
+# Accepts .vcf or .vcf.gz.
+golden_vcf:
+
+# Downstream variant caller's VCF produced from the simulated reads.
+# Accepts .vcf or .vcf.gz.
+called_vcf:
+
+# Reference FASTA used for the simulation. Streamed during the equivalence
+# sweep to apply candidate FP and FN sets within ±equivalence_window bp and
+# decide whether they're alternate spellings of the same edit.
+reference:
+
+# Directory where the comparison report will be written. Created if absent.
+# Files written: comparison_summary.json, comparison_summary.txt,
+# FN_with_reasons.vcf, and (when write_fp_vcf: true) FP.vcf.
+output_dir:
+
+# OPTIONAL PARAMS
+# Overwrite existing report files in output_dir. Default false.
+overwrite_output: false
+
+# Restrict comparison to variants inside these BED regions. "." disables.
+target_bed: .
+
+# Comma-separated list of contigs to consider, e.g. "chr1,chr2,chrX".
+# Variants on contigs not in this list are dropped from both VCFs before
+# classification (matches NEAT 4 behavior — un-simulated contigs do not
+# contribute to FN). "." treats every contig present in the golden VCF
+# as simulated.
+contigs_simulated: .
+
+# Include homozygous-reference calls (ALT == "." or ALT == REF). Default false.
+include_homs: false
+
+# Include calls whose FILTER column is anything other than PASS / ".".
+# Default false.
+include_filtered: false
+
+# Half-width of the ±N bp window used for equivalence detection. The sweep
+# catches FPs and FNs that are denotation-different spellings of the same
+# edit (e.g., a left-aligned indel in the called VCF versus the same indel
+# right-aligned in the golden). Default 50, matching NEAT 2.1's EV_BPRANGE.
+equivalence_window: 50
+
+# Skip the equivalence sweep entirely. Matches NEAT 2.1's `--fast`. When
+# true, only exact (position, ref, alt) matches count as TP — denotation-
+# different alternates show up as FP + FN pairs. Default false.
+fast: false
+
+# Mutation regions BED used by the simulator. Used only for false-negative
+# attribution — FNs whose position falls outside these regions get tagged
+# `outside_mutation_bed` in the report. Distinct from `target_bed`, which
+# restricts what gets counted. "." disables.
+mutation_bed: .
+
+# Two-column TSV remapping BED chrom names to the reference's canonical
+# names (e.g. `1<TAB>chr1`). Applied to both `mutation_bed` and
+# `target_bed` at load time. Use when your BEDs are in non-`chr` style but
+# the reference is, or vice versa. "." disables.
+chrom_aliases: .
+
+# Also write `<output_dir>/FP.vcf` listing every false positive call.
+# `<output_dir>/FN_with_reasons.vcf` is always written. FP VCFs can be
+# large on noisy callers so this is off by default. Default false.
+write_fp_vcf: false

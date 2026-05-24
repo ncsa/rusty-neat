@@ -12,14 +12,31 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
+            suffix: ''
           - target: x86_64-apple-darwin
             os: macos-latest
+            suffix: ''
           - target: x86_64-pc-windows-msvc
             os: windows-latest
+            suffix: ''
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            container: rockylinux:8
+            suffix: -rhel8
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+            container: rockylinux:8
+            suffix: -rhel8
 
     runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
 
     steps:
+      - name: Install build dependencies (RHEL container)
+        if: matrix.container != ''
+        run: |
+          dnf install -y gcc gcc-c++ make curl git openssl-devel pkgconfig perl
+
       - name: Checkout code
         uses: actions/checkout@v4
 
@@ -36,14 +53,14 @@ jobs:
         run: |
           mkdir -p release
           if [[ "${{ matrix.target }}" == *"windows"* ]]; then
-            cp target/${{ matrix.target }}/release/rneat.exe release/rneat-${{ matrix.target }}.exe
+            cp target/${{ matrix.target }}/release/rneat.exe release/rneat-${{ matrix.target }}${{ matrix.suffix }}.exe
           else
-            cp target/${{ matrix.target }}/release/rneat release/rneat-${{ matrix.target }}
+            cp target/${{ matrix.target }}/release/rneat release/rneat-${{ matrix.target }}${{ matrix.suffix }}
           fi
 
       - name: Upload release asset
         uses: softprops/action-gh-release@v2
         with:
-          files: release/rneat-${{ matrix.target }}*
+          files: release/rneat-${{ matrix.target }}${{ matrix.suffix }}*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

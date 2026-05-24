@@ -794,6 +794,7 @@ mod tests {
     use super::*;
     use common::structs::bed_record::BedRecord;
     use common::structs::sequence_block::{RegionType, SequenceMap};
+    use common::structs::variants::AlternateType;
 
     #[test]
     fn test_intersect_with_bed() {
@@ -833,7 +834,7 @@ mod tests {
         let v1 = Variant {
             location: 100,
             reference: vec![Nucleotide::A],
-            alternate: vec![Nucleotide::T],
+            alternate: AlternateType::Literal(vec![Nucleotide::T]),
             variant_type: VariantType::SNP,
             genotype: Genotype::Homozygous,
             genotype_str: "1/1".to_string(),
@@ -847,7 +848,7 @@ mod tests {
         let v2 = Variant {
             location: 200,
             reference: vec![Nucleotide::A, Nucleotide::T],
-            alternate: vec![Nucleotide::C, Nucleotide::G],
+            alternate: AlternateType::Literal(vec![Nucleotide::C, Nucleotide::G]),
             variant_type: VariantType::Complex,
             genotype: Genotype::Homozygous,
             genotype_str: "1/1".to_string(),

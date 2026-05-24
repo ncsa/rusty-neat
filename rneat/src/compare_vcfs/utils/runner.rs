@@ -57,8 +57,7 @@ impl From<&Variant> for VariantKey {
         VariantKey {
             location: v.location,
             reference: v.reference.clone(),
-            alternate: v.alternate.clone(),
-        }
+            alternate: v.alternate.get_vec().unwrap(), }
     }
 }
 
@@ -375,7 +374,7 @@ fn filter_vcf(
             continue;
         }
         for v in variants {
-            if !include_homs && v.reference == v.alternate {
+            if !include_homs && v.reference == v.alternate.get_vec().unwrap() {
                 skipped.homozygous_ref += 1;
                 continue;
             }
@@ -515,14 +514,14 @@ fn collect_naming_warnings(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use common::structs::variants::{Genotype, VariantType};
+    use common::structs::variants::{AlternateType, Genotype, VariantType};
 
     fn snp(loc: usize, ref_b: Nucleotide, alt_b: Nucleotide, filter: Option<&str>) -> Variant {
         Variant {
             variant_type: VariantType::SNP,
             location: loc,
             reference: vec![ref_b],
-            alternate: vec![alt_b],
+            alternate: AlternateType::Literal(vec![alt_b]),
             genotype_str: "0/1".to_string(),
             genotype: Genotype::Heterozygous,
             id: None,

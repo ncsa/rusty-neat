@@ -133,6 +133,8 @@ fn apply_variants(
         }
         let alt_bytes: Vec<u8> = v
             .alternate
+            .get_vec()
+            .unwrap()
             .iter()
             .map(|n| Into::<char>::into(*n) as u8)
             .collect();
@@ -159,6 +161,7 @@ mod tests {
         nucleotides::Nucleotide,
         variants::{Genotype, VariantType},
     };
+    use common::structs::variants::AlternateType;
 
     fn variant(
         loc: usize,
@@ -170,7 +173,7 @@ mod tests {
             variant_type: vt,
             location: loc,
             reference: ref_seq.to_vec(),
-            alternate: alt_seq.to_vec(),
+            alternate: AlternateType::Literal(alt_seq.to_vec()),
             genotype_str: "0/1".to_string(),
             genotype: Genotype::Heterozygous,
             id: None,

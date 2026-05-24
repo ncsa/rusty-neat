@@ -63,12 +63,12 @@ impl MutatedMap {
         rng: &mut NeatRng,
     ) -> Result<Vec<Nucleotide>, MutatedMapError> {
         match self.variant_map[&position].genotype {
-            Genotype::Homozygous => Ok(self.variant_map[&position].alternate.clone()),
+            Genotype::Homozygous => Ok(self.variant_map[&position].alternate.get_vec().unwrap().clone()),
             Genotype::Heterozygous => {
                 if rng.gen_bool(0.5).unwrap() {
                     Ok(self.variant_map[&position].reference.clone())
                 } else {
-                    Ok(self.variant_map[&position].alternate.clone())
+                    Ok(self.variant_map[&position].alternate.get_vec().unwrap().clone())
                 }
             }
         }

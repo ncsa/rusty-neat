@@ -71,6 +71,26 @@ impl From<usize> for VariantType {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Hash)]
+pub struct SvData {
+    pub alternate: String
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Hash)]
+pub enum AlternateType {
+    Literal(Vec<Nucleotide>),
+    Symbolic(SvData),
+}
+
+impl AlternateType {
+    pub fn get_vec(&self) -> Option<Vec<Nucleotide>> {
+        match self {
+            AlternateType::Literal(vector) => Some(vector.clone()),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Hash)]
 pub struct Variant {
     // This is a basic holder for a variant. There are several aspects of the variant that we
     // don't need to store, such as which ploid the variant appears on and the context sequence,
@@ -84,10 +104,16 @@ pub struct Variant {
     pub location: usize,
     // The reference allele of interest. This is either one base or several bases for a deletion.
     pub reference: Vec<Nucleotide>,
+<<<<<<< Updated upstream
     // The alternate allele of interest. This is either one base or several bases for an insertion.
     // For complex variants, we may need to make this an Option. Nones indicate special cases.
     // or add another enum for alternate types
     pub alternate: Vec<Nucleotide>,
+=======
+    // The alternate allele of interest. This is either one base or several bases for an indel, or
+    // it is a key string from the vcf spec indicating a complex variant.
+    pub alternate: AlternateType,
+>>>>>>> Stashed changes
     // the genotype string is for writing in the vcf.
     pub genotype_str: String,
     // The genotype is either heterozygous (not on all alleles) or homozygous (on all alleles)
@@ -149,7 +175,7 @@ impl Variant {
             variant_type,
             location,
             reference,
-            alternate,
+            alternate: AlternateType::Literal(alternate),
             genotype_str,
             genotype,
             id: Some(id.to_string()),
@@ -204,7 +230,7 @@ impl Variant {
             variant_type,
             location,
             reference: reference.clone(),
-            alternate: alternate.clone(),
+            alternate: AlternateType::Literal(alternate.clone()),
             genotype_str: genotype_to_string(genotype)?,
             genotype: genotype_label,
             id: None,
@@ -282,7 +308,7 @@ mod tests {
             variant_type: SNP,
             location: 222,
             reference: vec![Nucleotide::A, Nucleotide::C, Nucleotide::T, Nucleotide::G],
-            alternate: vec![Nucleotide::A],
+            alternate: AlternateType::Literal(vec![Nucleotide::A]),
             genotype_str: "1/1/1".to_string(),
             genotype: Genotype::Homozygous,
             id: None,

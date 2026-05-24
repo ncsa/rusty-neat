@@ -455,6 +455,32 @@ fn process_contig(
         }
     }
 
+    // De novo SV generation from the learned SvModel, gated by the
+    // config knob. Default `sv_rate_scale` is 0.0, so unless the user
+    // explicitly opts in, this branch is a no-op and behavior is
+    // identical to v1.9.x.
+    if ctx.config.sv_rate_scale > 0.0
+        && let Some(sv_model) = ctx.mutation_model.sv_model.as_ref()
+        && sv_model.is_usable()
+    {
+        let de_novo = sv_model.sample_variants(
+            block_end,
+            &sv_variants,
+            &current_block.sequence,
+            ctx.config.ploidy,
+            ctx.config.sv_rate_scale,
+            &mut rng,
+        );
+        if !de_novo.is_empty() {
+            debug!(
+                "Sampled {} de novo SV(s) on contig {}",
+                de_novo.len(),
+                contig_name
+            );
+        }
+        sv_variants.extend(de_novo);
+    }
+
     let coverage_multipliers =
         build_coverage_multipliers(&sv_variants, ctx.config.ploidy, block_end);
     // Where coverage drops to zero (e.g., a homozygous <DEL>), the bases

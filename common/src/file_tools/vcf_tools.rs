@@ -417,24 +417,129 @@ chr1\t200\t.\tG\tC\t60\tPASS\t.\tGT\t0/1\n";
     }
 
     #[test]
-    fn test_read_vcf_structural_variant_alt_parses_without_panic() {
-        // `<DEL>`-style ALT strings aren't bcf-style SVs we know how to simulate; today the
-        // parser doesn't filter them, so each `<`/`D`/`E`/`L`/`>` char becomes Nucleotide::N
-        // and the record is stored as an Insertion-typed variant. We don't endorse that — but
-        // we lock in "doesn't panic" so future stricter handling is an explicit choice, not a
-        // silent regression.
+    fn test_read_vcf_symbolic_del_parses_to_symbolic_with_info() {
+        // Phase 2: a `<DEL>` ALT becomes AlternateType::Symbolic carrying the
+        // parsed INFO fields (SVTYPE / END), with the raw ALT preserved
+        // verbatim so the writer can round-trip it.
         let vcf_content = "\
 ##fileformat=VCFv4.1\n\
 #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n\
 chr1\t100\t.\tA\t<DEL>\t60\tPASS\tSVTYPE=DEL;END=200\tGT\t0/1\n";
         let mut tmp = tempfile::Builder::new().suffix(".vcf").tempfile().unwrap();
         write!(tmp, "{}", vcf_content).unwrap();
-        let result = read_vcf(tmp.path().to_path_buf());
+        let records = read_vcf(tmp.path().to_path_buf()).unwrap();
+        let variants = records.get("chr1").expect("chr1 not parsed");
+        assert_eq!(variants.len(), 1);
+        let sv = variants[0]
+            .alternate
+            .as_symbolic()
+            .expect("symbolic ALT should classify as Symbolic");
+        assert_eq!(sv.raw_alt, "<DEL>");
+        assert_eq!(sv.sv_type, SvType::Del);
+        assert_eq!(sv.end, Some(200));
+    }
+
+    #[test]
+    fn test_read_vcf_symbolic_dup_with_cn_and_svlen() {
+        // <DUP> with both SVLEN and CN should populate the corresponding
+        // SvData fields. svlen is signed and stored as-is.
+        let vcf_content = "\
+##fileformat=VCFv4.1\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n\
+chr1\t1000\t.\tT\t<DUP:TANDEM>\t60\tPASS\tSVTYPE=DUP;SVLEN=500;CN=3\tGT\t0/1\n";
+        let mut tmp = tempfile::Builder::new().suffix(".vcf").tempfile().unwrap();
+        write!(tmp, "{}", vcf_content).unwrap();
+        let records = read_vcf(tmp.path().to_path_buf()).unwrap();
+        let sv = records.get("chr1").unwrap()[0]
+            .alternate
+            .as_symbolic()
+            .unwrap();
+        assert_eq!(sv.sv_type, SvType::Dup);
+        assert_eq!(sv.raw_alt, "<DUP:TANDEM>");
+        assert_eq!(sv.svlen, Some(500));
+        assert_eq!(sv.copy_number, Some(3));
+        // END wasn't supplied, so it stays None.
+        assert!(sv.end.is_none());
+    }
+
+    #[test]
+    fn test_read_vcf_symbolic_cnv() {
+        let vcf_content = "\
+##fileformat=VCFv4.1\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n\
+chr1\t500\t.\tA\t<CNV>\t60\tPASS\tSVTYPE=CNV;END=2500;CN=4\tGT\t0/1\n";
+        let mut tmp = tempfile::Builder::new().suffix(".vcf").tempfile().unwrap();
+        write!(tmp, "{}", vcf_content).unwrap();
+        let records = read_vcf(tmp.path().to_path_buf()).unwrap();
+        let v = &records.get("chr1").unwrap()[0];
+        assert_eq!(v.variant_type, VariantType::Complex);
+        let sv = v.alternate.as_symbolic().unwrap();
+        assert_eq!(sv.sv_type, SvType::Cnv);
+        assert_eq!(sv.end, Some(2500));
+        assert_eq!(sv.copy_number, Some(4));
+        // span() = END - POS + 1 = 2500 - 500 + 1 = 2001
+        assert_eq!(sv.span(500), Some(2001));
+    }
+
+    #[test]
+    fn test_read_vcf_symbolic_round_trip_through_writer() {
+        // End-to-end: a symbolic ALT read from input survives through the
+        // writer back to a verbatim ALT string. This is the Phase 2 contract
+        // — read + write together. The Phase 1 writer test stubbed in a
+        // synthetic Variant; this one drives the real reader path.
+        let vcf_content = "\
+##fileformat=VCFv4.1\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n\
+chr1\t150\t.\tG\t<DEL>\t60\tPASS\tSVTYPE=DEL;END=300\tGT\t1/1\n";
+        let mut tmp = tempfile::Builder::new().suffix(".vcf").tempfile().unwrap();
+        write!(tmp, "{}", vcf_content).unwrap();
+        let records = read_vcf(tmp.path().to_path_buf()).unwrap();
+        let v = records.get("chr1").unwrap()[0].clone();
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let map = MutatedMap::from_interval(0, 1000, vec![v]).unwrap();
+        let mut maps = HashMap::new();
+        maps.insert("chr1".to_string(), vec![map]);
+        let output = temp_dir.path().join("rt.vcf");
+        write_vcf(
+            &maps,
+            &vec!["chr1".to_string()],
+            &HashMap::from([("chr1".to_string(), 1000usize)]),
+            &PathBuf::from("ref.fa"),
+            false,
+            &output,
+        )
+        .unwrap();
+        let body: Vec<String> = crate::file_tools::file_io::read_gzip_lines(&output)
+            .unwrap()
+            .map(|l| l.unwrap())
+            .collect();
+        // The ALT column survives verbatim through the read+write cycle.
         assert!(
-            result.is_ok(),
-            "SV ALT must not error the whole parse: {:?}",
-            result
+            body.iter().any(|l| l.contains("\tG\t<DEL>\t")),
+            "expected <DEL> ALT to round-trip; got: {:?}",
+            body
         );
+    }
+
+    #[test]
+    fn test_read_vcf_symbolic_svtype_disagreement_still_parses() {
+        // If SVTYPE conflicts with the ALT tag, we trust the ALT and warn.
+        // The variant is still produced (we don't drop the record).
+        let vcf_content = "\
+##fileformat=VCFv4.1\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n\
+chr1\t100\t.\tA\t<DEL>\t60\tPASS\tSVTYPE=DUP;END=200\tGT\t0/1\n";
+        let mut tmp = tempfile::Builder::new().suffix(".vcf").tempfile().unwrap();
+        write!(tmp, "{}", vcf_content).unwrap();
+        let records = read_vcf(tmp.path().to_path_buf()).unwrap();
+        let sv = records.get("chr1").unwrap()[0]
+            .alternate
+            .as_symbolic()
+            .unwrap();
+        // ALT wins.
+        assert_eq!(sv.sv_type, SvType::Del);
+        assert_eq!(sv.raw_alt, "<DEL>");
     }
 
     #[test]

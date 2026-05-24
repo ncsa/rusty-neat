@@ -272,21 +272,45 @@ impl Variant {
             }
         };
 
-        let variant_type = parse_alternate(vcf_reference, vcf_alternate)?;
         let mut reference = Vec::new();
         for char in vcf_reference.chars() {
             reference.push(Nucleotide::from(char))
         }
-        let mut alternate = Vec::new();
-        for char in vcf_alternate.chars() {
-            alternate.push(Nucleotide::from(char))
-        }
+        let (variant_type, alternate) = match parse_alternate(vcf_reference, vcf_alternate)? {
+            ParsedAlt::Literal(vt) => {
+                let alt_bases: Vec<Nucleotide> =
+                    vcf_alternate.chars().map(Nucleotide::from).collect();
+                (vt, AlternateType::Literal(alt_bases))
+            }
+            ParsedAlt::Symbolic { sv_type, raw_alt } => {
+                let mut sv_data = SvData::new(raw_alt, sv_type);
+                let parsed_info = parse_sv_info(info_field);
+                // If SVTYPE is present and disagrees with the ALT tag, trust
+                // the ALT (it's the more canonical signal) but warn so the
+                // user can clean up their VCF.
+                if let Some(svtype_str) = &parsed_info.svtype
+                    && !sv_type_matches_svtype(sv_type, svtype_str)
+                {
+                    warn!(
+                        "INFO/SVTYPE={svtype_str} disagrees with ALT {} at position {location} — trusting ALT",
+                        sv_data.raw_alt
+                    );
+                }
+                sv_data.end = parsed_info.end;
+                sv_data.svlen = parsed_info.svlen;
+                sv_data.copy_number = parsed_info.copy_number;
+                // Phase 2 tags symbolic SVs as Complex so the existing
+                // gen_reads filter (filter_input_vcf) drops them along with
+                // other complex variants until Phase 3 adds depth modulation.
+                (VariantType::Complex, AlternateType::Symbolic(sv_data))
+            }
+        };
         let genotype = gt_from_str(&genotype_str);
         Ok(Variant {
             variant_type,
             location,
             reference,
-            alternate: AlternateType::Literal(alternate),
+            alternate,
             genotype_str,
             genotype,
             id: Some(id.to_string()),
@@ -358,7 +382,22 @@ impl Variant {
     }
 }
 
-fn parse_alternate(reference: &str, alt: &str) -> Result<VariantType, VariantError> {
+/// Classification of a parsed VCF ALT field.
+///
+/// Returned by [`parse_alternate`] so callers can branch on whether the
+/// record should be built as an `AlternateType::Literal` (with base content)
+/// or an `AlternateType::Symbolic` (with parsed SV metadata).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParsedAlt {
+    /// Literal-base ALT (SNP / Insertion / Deletion / Complex multi-base).
+    /// The caller still constructs the `Vec<Nucleotide>` from the raw string.
+    Literal(VariantType),
+    /// Symbolic / structural / breakend ALT. The `raw_alt` field is the
+    /// original VCF ALT string, preserved verbatim for round-trip output.
+    Symbolic { sv_type: SvType, raw_alt: String },
+}
+
+fn parse_alternate(reference: &str, alt: &str) -> Result<ParsedAlt, VariantError> {
     if reference.is_empty() {
         return Err(VariantError::InvalidVcf(
             "REF field in vcf with empty ref. Invalid VCF.".to_string(),
@@ -374,21 +413,99 @@ fn parse_alternate(reference: &str, alt: &str) -> Result<VariantType, VariantErr
             "REF must contain only A/C/G/T/N; got {reference}"
         )));
     }
-    // Symbolic / structural ALTs (e.g. <DUP:TANDEM>, <DEL>, <INS:ME:ALU>, breakends
-    // like `G]17:198982]`) are valid per VCF 4.2 but not yet wired through
-    // AlternateType::Symbolic — downstream code assumes literal bases. Surface
-    // them as an InvalidVcf rather than silently coercing.
+    // Symbolic / structural / breakend ALTs (e.g. <DUP:TANDEM>, <DEL>,
+    // <INS:ME:ALU>, `G]17:198982]`) are classified here but not yet
+    // generatable — gen_reads will filter them along with other Complex
+    // variants until Phase 3 lands the depth-modulation pipeline.
     if !is_acgtn(alt) {
-        return Err(VariantError::InvalidVcf(format!(
-            "symbolic / structural ALT not yet supported: {alt}"
-        )));
+        return match SvType::from_alt_string(alt) {
+            Some(sv_type) => Ok(ParsedAlt::Symbolic {
+                sv_type,
+                raw_alt: alt.to_string(),
+            }),
+            None => Err(VariantError::InvalidVcf(format!(
+                "ALT is neither literal bases nor a recognized symbolic / breakend form: {alt}"
+            ))),
+        };
     }
-    match (reference.len(), alt.len()) {
-        (1, 1) => Ok(VariantType::SNP),
-        (1, _) => Ok(VariantType::Insertion),
-        (_, 1) => Ok(VariantType::Deletion),
-        (_, _) => Ok(VariantType::Complex),
+    Ok(ParsedAlt::Literal(match (reference.len(), alt.len()) {
+        (1, 1) => VariantType::SNP,
+        (1, _) => VariantType::Insertion,
+        (_, 1) => VariantType::Deletion,
+        (_, _) => VariantType::Complex,
+    }))
+}
+
+/// Parsed fields lifted from the VCF INFO column for a structural variant
+/// record. All fields are optional — callers should treat absence as
+/// "not specified" rather than as a hard error.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ParsedSvInfo {
+    pub end: Option<usize>,
+    pub svlen: Option<i64>,
+    pub copy_number: Option<u32>,
+    /// The `SVTYPE=` value verbatim (e.g. `DEL`, `DUP`, `CNV`). Phase 2's
+    /// `Variant::from_file` uses this only to log a warning if it disagrees
+    /// with the symbolic ALT tag — the ALT is the source of truth.
+    pub svtype: Option<String>,
+}
+
+/// Scan an INFO column for the structural-variant-related fields
+/// (`END`, `SVLEN`, `CN`, `SVTYPE`). The INFO column is a `;`-separated
+/// list of `KEY=VALUE` (or bare-flag) pairs per VCF 4.2 §1.6.1.
+///
+/// Malformed values for a known key are logged at warn level and dropped
+/// (the field stays `None`) — a bad `SVLEN=` shouldn't lose the entire
+/// variant. Unknown keys are silently ignored.
+pub fn parse_sv_info(info_field: &str) -> ParsedSvInfo {
+    let mut out = ParsedSvInfo::default();
+    if info_field == "." || info_field.is_empty() {
+        return out;
     }
+    for entry in info_field.split(';') {
+        let (key, value) = match entry.split_once('=') {
+            Some(kv) => kv,
+            None => continue, // bare flag like IMPRECISE
+        };
+        match key {
+            "END" => match value.parse::<usize>() {
+                Ok(n) => out.end = Some(n),
+                Err(e) => warn!("Skipping malformed INFO/END={value}: {e}"),
+            },
+            "SVLEN" => match value.parse::<i64>() {
+                Ok(n) => out.svlen = Some(n),
+                Err(e) => warn!("Skipping malformed INFO/SVLEN={value}: {e}"),
+            },
+            "CN" => match value.parse::<u32>() {
+                Ok(n) => out.copy_number = Some(n),
+                Err(e) => warn!("Skipping malformed INFO/CN={value}: {e}"),
+            },
+            "SVTYPE" => out.svtype = Some(value.to_string()),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Cross-check a [`SvType`] (derived from the ALT tag) against the textual
+/// `SVTYPE=` value (lifted from INFO). Returns `true` if they describe the
+/// same kind of SV, `false` if they disagree. An `Unknown` ALT tag is
+/// treated as compatible with anything (we can't contradict a tag we
+/// didn't recognize).
+fn sv_type_matches_svtype(sv_type: SvType, svtype_str: &str) -> bool {
+    if matches!(sv_type, SvType::Unknown) {
+        return true;
+    }
+    let expected = match sv_type {
+        SvType::Del => "DEL",
+        SvType::Dup => "DUP",
+        SvType::Cnv => "CNV",
+        SvType::Ins => "INS",
+        SvType::Inv => "INV",
+        SvType::Bnd => "BND",
+        SvType::Unknown => return true,
+    };
+    svtype_str.eq_ignore_ascii_case(expected)
 }
 
 fn genotype_to_string(genotype: &mut Vec<usize>) -> Result<String, VariantError> {
@@ -498,37 +615,46 @@ mod tests {
         assert!(matches!(result, Err(VariantError::MalformedAlt)));
     }
 
+    fn assert_literal(parsed: ParsedAlt, expected: VariantType) {
+        match parsed {
+            ParsedAlt::Literal(vt) => assert_eq!(vt, expected),
+            ParsedAlt::Symbolic { sv_type, raw_alt } => {
+                panic!("expected Literal({expected:?}), got Symbolic({sv_type:?}, {raw_alt})")
+            }
+        }
+    }
+
     #[test]
     fn parse_alternate_snp() {
-        assert_eq!(parse_alternate("A", "C").unwrap(), SNP);
+        assert_literal(parse_alternate("A", "C").unwrap(), SNP);
     }
 
     #[test]
     fn parse_alternate_insertion() {
-        assert_eq!(parse_alternate("A", "ACGT").unwrap(), Insertion);
+        assert_literal(parse_alternate("A", "ACGT").unwrap(), Insertion);
     }
 
     #[test]
     fn parse_alternate_deletion() {
-        assert_eq!(parse_alternate("ACGT", "A").unwrap(), Deletion);
+        assert_literal(parse_alternate("ACGT", "A").unwrap(), Deletion);
     }
 
     #[test]
     fn parse_alternate_complex_multibase_substitution() {
-        assert_eq!(parse_alternate("AC", "GT").unwrap(), Complex);
+        assert_literal(parse_alternate("AC", "GT").unwrap(), Complex);
     }
 
     #[test]
     fn parse_alternate_complex_unequal_length() {
         // Both > 1 but different lengths is still Complex (e.g., 2bp ref → 3bp alt).
-        assert_eq!(parse_alternate("AC", "GTA").unwrap(), Complex);
+        assert_literal(parse_alternate("AC", "GTA").unwrap(), Complex);
     }
 
     #[test]
     fn parse_alternate_accepts_lowercase_and_n() {
         // Soft-masked bases and N should still classify as literal-base variants.
-        assert_eq!(parse_alternate("a", "n").unwrap(), SNP);
-        assert_eq!(parse_alternate("A", "acgN").unwrap(), Insertion);
+        assert_literal(parse_alternate("a", "n").unwrap(), SNP);
+        assert_literal(parse_alternate("A", "acgN").unwrap(), Insertion);
     }
 
     #[test]
@@ -550,25 +676,97 @@ mod tests {
     }
 
     #[test]
-    fn parse_alternate_symbolic_alt_is_invalid_vcf() {
-        // VCF 4.2 symbolic ALTs aren't representable as a Vec<Nucleotide> yet.
-        for alt in ["<DUP:TANDEM>", "<DEL>", "<INS:ME:ALU>", "<CNV>"] {
-            let err = parse_alternate("A", alt).unwrap_err();
-            match err {
-                VariantError::InvalidVcf(msg) => assert!(
-                    msg.contains("symbolic") || msg.contains("structural"),
-                    "expected symbolic/structural message for {alt}, got: {msg}"
-                ),
-                other => panic!("expected InvalidVcf for {alt}, got {other:?}"),
+    fn parse_alternate_symbolic_alts_round_trip_with_correct_type() {
+        // Phase 2: VCF 4.2 symbolic ALTs now classify into ParsedAlt::Symbolic
+        // with the correct SvType derived from the tag. The raw_alt string
+        // is preserved verbatim so the writer can round-trip the original.
+        let cases = [
+            ("<DUP:TANDEM>", SvType::Dup),
+            ("<DEL>", SvType::Del),
+            ("<INS:ME:ALU>", SvType::Ins),
+            ("<CNV>", SvType::Cnv),
+            ("<INV>", SvType::Inv),
+        ];
+        for (alt, expected) in cases {
+            match parse_alternate("A", alt).unwrap() {
+                ParsedAlt::Symbolic { sv_type, raw_alt } => {
+                    assert_eq!(sv_type, expected, "wrong SvType for {alt}");
+                    assert_eq!(raw_alt, alt, "raw_alt should be verbatim");
+                }
+                ParsedAlt::Literal(vt) => panic!("expected Symbolic for {alt}, got Literal({vt:?})"),
             }
         }
     }
 
     #[test]
-    fn parse_alternate_breakend_alt_is_invalid_vcf() {
-        // VCF 4.2 breakend notation like `G]17:198982]` or `]13:123456]T`.
-        let err = parse_alternate("G", "G]17:198982]").unwrap_err();
+    fn parse_alternate_breakend_alt_classifies_as_bnd() {
+        // VCF 4.2 breakend notation like `G]17:198982]` or `]13:123456]T`
+        // routes through SvType::from_alt_string's breakend branch.
+        match parse_alternate("G", "G]17:198982]").unwrap() {
+            ParsedAlt::Symbolic { sv_type, raw_alt } => {
+                assert_eq!(sv_type, SvType::Bnd);
+                assert_eq!(raw_alt, "G]17:198982]");
+            }
+            ParsedAlt::Literal(vt) => panic!("expected Symbolic(Bnd), got Literal({vt:?})"),
+        }
+    }
+
+    #[test]
+    fn parse_alternate_unrecognized_nonliteral_alt_is_invalid_vcf() {
+        // A non-IUPAC ALT that's neither symbolic nor breakend should still
+        // be rejected — e.g. a malformed bracket-only string.
+        let err = parse_alternate("A", "<broken").unwrap_err();
         assert!(matches!(err, VariantError::InvalidVcf(_)));
+    }
+
+    #[test]
+    fn parse_sv_info_extracts_all_known_fields() {
+        let info = "SVTYPE=DEL;END=200;SVLEN=-50;CN=1;IMPRECISE;NS=1";
+        let parsed = parse_sv_info(info);
+        assert_eq!(parsed.svtype.as_deref(), Some("DEL"));
+        assert_eq!(parsed.end, Some(200));
+        assert_eq!(parsed.svlen, Some(-50));
+        assert_eq!(parsed.copy_number, Some(1));
+    }
+
+    #[test]
+    fn parse_sv_info_dot_or_empty_returns_default() {
+        // Bare "." (the "no info" sentinel) and "" both produce all-None.
+        assert_eq!(parse_sv_info("."), ParsedSvInfo::default());
+        assert_eq!(parse_sv_info(""), ParsedSvInfo::default());
+    }
+
+    #[test]
+    fn parse_sv_info_ignores_unknown_keys_and_bare_flags() {
+        let info = "DP=30;IMPRECISE;END=500;NS=42";
+        let parsed = parse_sv_info(info);
+        assert_eq!(parsed.end, Some(500));
+        assert!(parsed.svtype.is_none());
+        assert!(parsed.svlen.is_none());
+        assert!(parsed.copy_number.is_none());
+    }
+
+    #[test]
+    fn parse_sv_info_malformed_values_warn_and_drop() {
+        // Malformed numeric values for known keys should produce None (not
+        // a panic, not a returned error). Other fields still parse.
+        let info = "END=not_a_number;SVLEN=10;CN=oops";
+        let parsed = parse_sv_info(info);
+        assert!(parsed.end.is_none());
+        assert_eq!(parsed.svlen, Some(10));
+        assert!(parsed.copy_number.is_none());
+    }
+
+    #[test]
+    fn sv_type_matches_svtype_strict_and_unknown_passthrough() {
+        // Exact match (case-insensitive)
+        assert!(sv_type_matches_svtype(SvType::Del, "DEL"));
+        assert!(sv_type_matches_svtype(SvType::Del, "del"));
+        assert!(sv_type_matches_svtype(SvType::Cnv, "CNV"));
+        // Disagreement
+        assert!(!sv_type_matches_svtype(SvType::Del, "DUP"));
+        // Unknown tag is permissive (we can't contradict what we didn't recognize)
+        assert!(sv_type_matches_svtype(SvType::Unknown, "WHATEVER"));
     }
 
     #[test]

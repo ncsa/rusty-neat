@@ -9,5 +9,6 @@ pub mod mutated_map;
 pub mod nucleotides;
 pub mod read_record;
 pub mod sequence_block;
+pub mod sv_model;
 pub mod transition_matrix;
 pub mod variants;

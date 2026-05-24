@@ -1,6 +1,6 @@
 //! These enums and structs help us keep track of variants added to the reference
 //! It stores all the necessary data to write a variant out.
-use crate::structs::nucleotides::Nucleotide;
+use crate::structs::nucleotides::{Nucleotide, is_acgtn};
 use log::*;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -56,7 +56,6 @@ pub enum VariantType {
     Insertion,
     Deletion,
     Complex,
-    CNV,
 }
 
 impl From<usize> for VariantType {
@@ -86,8 +85,10 @@ pub struct Variant {
     // The reference allele of interest. This is either one base or several bases for a deletion.
     pub reference: Vec<Nucleotide>,
     // The alternate allele of interest. This is either one base or several bases for an insertion.
+    // For complex variants, we may need to make this an Option. Nones indicate special cases.
+    // or add another enum for alternate types
     pub alternate: Vec<Nucleotide>,
-    // the genotype string is feor writing in the vcf.
+    // the genotype string is for writing in the vcf.
     pub genotype_str: String,
     // The genotype is either heterozygous (not on all alleles) or homozygous (on all alleles)
     pub genotype: Genotype,
@@ -134,29 +135,7 @@ impl Variant {
             }
         };
 
-        let mut variant_type = VariantType::SNP;
-        // todo refactor this to look for CNVs. We may need to adjust the signature of the variant struct for the alt field specifically. Make it something other than a vec
-        if vcf_reference.len() > 1 {
-            if vcf_alternate.len() > 1 {
-                variant_type = VariantType::Complex;
-            } else if vcf_alternate.len() == 1 {
-                variant_type = VariantType::Deletion
-            } else {
-                return Err(VariantError::InvalidVcf(
-                    "ALT field in vcf with empty alt. Invalid VCF.".to_string(),
-                ));
-            }
-        } else if vcf_reference.len() == 1 {
-            if vcf_alternate.len() > 1 {
-                variant_type = VariantType::Insertion;
-            } else {
-                // snp
-            }
-        } else {
-            return Err(VariantError::InvalidVcf(
-                "REF field in vcf with empty ref. Invalid VCF.".to_string(),
-            ));
-        }
+        let variant_type = parse_alternate(vcf_reference, vcf_alternate)?;
         let mut reference = Vec::new();
         for char in vcf_reference.chars() {
             reference.push(Nucleotide::from(char))
@@ -242,6 +221,38 @@ impl Variant {
     }
 }
 
+fn parse_alternate(reference: &str, alt: &str) -> Result<VariantType, VariantError> {
+    if reference.is_empty() {
+        return Err(VariantError::InvalidVcf(
+            "REF field in vcf with empty ref. Invalid VCF.".to_string(),
+        ));
+    }
+    if alt.is_empty() {
+        return Err(VariantError::InvalidVcf(
+            "ALT field in vcf with empty alt. Invalid VCF.".to_string(),
+        ));
+    }
+    if !is_acgtn(reference) {
+        return Err(VariantError::InvalidVcf(format!(
+            "REF must contain only A/C/G/T/N; got {reference}"
+        )));
+    }
+    // Symbolic / structural ALTs (e.g. <DUP:TANDEM>, <DEL>, <INS:ME:ALU>, breakends
+    // like `G]17:198982]`) are valid per VCF 4.2 but not yet representable by
+    // VariantType. Surface them as an InvalidVcf rather than silently coercing.
+    if !is_acgtn(alt) {
+        return Err(VariantError::InvalidVcf(format!(
+            "symbolic / structural ALT not yet supported: {alt}"
+        )));
+    }
+    match (reference.len(), alt.len()) {
+        (1, 1) => Ok(VariantType::SNP),
+        (1, _) => Ok(VariantType::Insertion),
+        (_, 1) => Ok(VariantType::Deletion),
+        (_, _) => Ok(VariantType::Complex),
+    }
+}
+
 fn genotype_to_string(genotype: &mut Vec<usize>) -> Result<String, VariantError> {
     // Converts a vector of 0s and 1s representing genotype to a standard
     // vcf genotype string.
@@ -262,7 +273,7 @@ fn genotype_to_string(genotype: &mut Vec<usize>) -> Result<String, VariantError>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::structs::variants::VariantType::{Deletion, Insertion, SNP};
+    use crate::structs::variants::VariantType::{Complex, Deletion, Insertion, SNP};
 
     #[test]
     fn test_variant_creation() {
@@ -347,5 +358,88 @@ mod tests {
     fn test_empty_alternate_returns_malformed_alt() {
         let result = Variant::new(SNP, 0, &vec![Nucleotide::A], &vec![], &mut vec![1, 1]);
         assert!(matches!(result, Err(VariantError::MalformedAlt)));
+    }
+
+    #[test]
+    fn parse_alternate_snp() {
+        assert_eq!(parse_alternate("A", "C").unwrap(), SNP);
+    }
+
+    #[test]
+    fn parse_alternate_insertion() {
+        assert_eq!(parse_alternate("A", "ACGT").unwrap(), Insertion);
+    }
+
+    #[test]
+    fn parse_alternate_deletion() {
+        assert_eq!(parse_alternate("ACGT", "A").unwrap(), Deletion);
+    }
+
+    #[test]
+    fn parse_alternate_complex_multibase_substitution() {
+        assert_eq!(parse_alternate("AC", "GT").unwrap(), Complex);
+    }
+
+    #[test]
+    fn parse_alternate_complex_unequal_length() {
+        // Both > 1 but different lengths is still Complex (e.g., 2bp ref → 3bp alt).
+        assert_eq!(parse_alternate("AC", "GTA").unwrap(), Complex);
+    }
+
+    #[test]
+    fn parse_alternate_accepts_lowercase_and_n() {
+        // Soft-masked bases and N should still classify as literal-base variants.
+        assert_eq!(parse_alternate("a", "n").unwrap(), SNP);
+        assert_eq!(parse_alternate("A", "acgN").unwrap(), Insertion);
+    }
+
+    #[test]
+    fn parse_alternate_empty_reference_is_invalid_vcf() {
+        let err = parse_alternate("", "A").unwrap_err();
+        match err {
+            VariantError::InvalidVcf(msg) => assert!(msg.contains("REF")),
+            other => panic!("expected InvalidVcf, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_alternate_empty_alt_is_invalid_vcf() {
+        let err = parse_alternate("A", "").unwrap_err();
+        match err {
+            VariantError::InvalidVcf(msg) => assert!(msg.contains("ALT")),
+            other => panic!("expected InvalidVcf, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_alternate_symbolic_alt_is_invalid_vcf() {
+        // VCF 4.2 symbolic ALTs aren't representable as a Vec<Nucleotide> yet.
+        for alt in ["<DUP:TANDEM>", "<DEL>", "<INS:ME:ALU>", "<CNV>"] {
+            let err = parse_alternate("A", alt).unwrap_err();
+            match err {
+                VariantError::InvalidVcf(msg) => assert!(
+                    msg.contains("symbolic") || msg.contains("structural"),
+                    "expected symbolic/structural message for {alt}, got: {msg}"
+                ),
+                other => panic!("expected InvalidVcf for {alt}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn parse_alternate_breakend_alt_is_invalid_vcf() {
+        // VCF 4.2 breakend notation like `G]17:198982]` or `]13:123456]T`.
+        let err = parse_alternate("G", "G]17:198982]").unwrap_err();
+        assert!(matches!(err, VariantError::InvalidVcf(_)));
+    }
+
+    #[test]
+    fn parse_alternate_non_iupac_ref_is_invalid_vcf() {
+        // REF must be literal bases — a stray bracket here means a malformed VCF row.
+        let err = parse_alternate("A<", "C").unwrap_err();
+        match err {
+            VariantError::InvalidVcf(msg) => assert!(msg.contains("REF")),
+            other => panic!("expected InvalidVcf, got {other:?}"),
+        }
     }
 }

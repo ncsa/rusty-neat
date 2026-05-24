@@ -26,6 +26,18 @@ pub fn allowed_usize() -> Vec<usize> {
     Vec::from(ALLOWED_USIZE)
 }
 
+/// True when every byte of `s` is one of A/C/G/T/N (any case). Useful for
+/// distinguishing literal-base VCF REF/ALT fields from symbolic / structural
+/// alleles (e.g. `<DUP:TANDEM>`, `<DEL>`, breakends like `G]17:198982]`).
+pub fn is_acgtn(s: &str) -> bool {
+    s.bytes().all(|b| {
+        matches!(
+            b,
+            b'A' | b'C' | b'G' | b'T' | b'N' | b'a' | b'c' | b'g' | b't' | b'n'
+        )
+    })
+}
+
 pub struct NucleotideSelector {
     // Struct for selecting a random nucleotide
     distribution: DiscreteDistribution<Nucleotide>,

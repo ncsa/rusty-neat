@@ -16,6 +16,19 @@
 
 5/24/2026
 =========
+## rneat v1.9.1
+
+### Patch release on top of v1.9.0
+- **Cargo workspace version catchup.** v1.9.0 shipped with `Cargo.toml`'s `workspace.version` still at `1.8.1` — anything inspecting `cargo` metadata or the compiled binary's reported version read the old value. Bumped to `1.9.1` so the package metadata matches the release.
+- **Hardened `.as_literal().unwrap()` sites against future symbolic-ALT leaks (#169).** Added `debug_assert!(v.alternate.is_literal(), ...)` guards at the four call sites in `gen_mut_model::runner`, `fastq_tools::generate_read`, `compare_vcfs::equivalence::apply_variants`, and `compare_vcfs::runner::VariantKey::from`. Also added an explicit `is_symbolic()` skip at the top of `gen_mut_model::runner`'s variant loop — symbolic records were already falling into the `_` arm of the `variant_type` match, but the loop still incremented `homozygous_count` for them, biasing the trained model.
+- **Fixed `SvData::span` silently accepting `INFO/END < POS` (#170).** Used to compute `end.saturating_sub(location).saturating_add(1)`, so a malformed `END` strictly less than `POS` silently produced `Some(1)`. The `<DEL>` path masked this via a downstream empty-range check, but `<DUP>` / `<CNV>` / `<INV>` got a bogus 1-base coverage modulation instead of warn-and-skip. `span()` now returns `None` for `end < location`; `Variant::from_file` also clears the bad `END` at parse time with a `warn!` naming both `POS` and `END`.
+- **Fixed `gen-mut-model` NaN-poisoning on training VCFs with no literal variants.** A training VCF containing only symbolic SVs (zero SNPs / insertions / deletions) NaN-divided the SNP-frequency math (`0/0`), which then serialized to JSON as `null` and failed to deserialize on re-read. The runner now returns `GenMutationModelError::NoLiteralVariants` with a clear message and writes no output file. Real training corpora always carry literal variants alongside SVs, so this is an edge-case hardening rather than a fix for an observed user incident.
+- **Comment and test-file cleanup.**
+    - Scrubbed all remaining iterative-development "Phase N" references in source and test comments (most of them landed alongside #169, with one straggler in `compare_vcfs::runner` cleared up in this release).
+    - Renamed `compare_vcfs_phase{1,2,3,4}.rs` integration test files to descriptive names (`compare_vcfs_exact_match.rs`, `compare_vcfs_equivalence.rs`, `compare_vcfs_attribution.rs`, `compare_vcfs_reasons_vcf.rs`) matching the doc comments already inside them.
+
+5/24/2026
+=========
 ## rneat v1.9.0
 
 ### Symbolic / structural variant support: input → depth modulation → output round-trip (#105, #106, #107)

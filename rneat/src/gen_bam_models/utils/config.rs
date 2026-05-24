@@ -7,7 +7,10 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
-use common::{file_tools::bed_reader::read_bed, structs::bed_record::BedRecord};
+use common::{
+    file_tools::{bed_reader::read_bed, file_io::check_overwrite},
+    structs::bed_record::BedRecord,
+};
 
 use crate::gen_bam_models::errors::GenBamModelsError;
 
@@ -108,12 +111,8 @@ fn parse_frag_length_section(v: &Value) -> Result<FragLengthSection, GenBamModel
         GenBamModelsError::ConfigError("frag_length.output_file is required".to_string())
     })?);
     let overwrite_output = get_bool("overwrite_output").unwrap_or(false);
-    if !overwrite_output && output_file.is_file() {
-        return Err(GenBamModelsError::ConfigError(format!(
-            "frag_length.output_file already exists and overwrite_output is false: {:?}",
-            output_file
-        )));
-    }
+    check_overwrite("frag_length.output_file", &output_file, overwrite_output)
+        .map_err(|e| GenBamModelsError::ConfigError(e.to_string()))?;
     let min_reads = get_u64("min_reads").unwrap_or(2) as usize;
 
     Ok(FragLengthSection {
@@ -155,12 +154,8 @@ fn parse_gc_bias_section(v: &Value) -> Result<GcBiasSection, GenBamModelsError> 
         GenBamModelsError::ConfigError("gc_bias.output_file is required".to_string())
     })?);
     let overwrite_output = get_bool("overwrite_output").unwrap_or(false);
-    if !overwrite_output && output_file.is_file() {
-        return Err(GenBamModelsError::ConfigError(format!(
-            "gc_bias.output_file already exists and overwrite_output is false: {:?}",
-            output_file
-        )));
-    }
+    check_overwrite("gc_bias.output_file", &output_file, overwrite_output)
+        .map_err(|e| GenBamModelsError::ConfigError(e.to_string()))?;
 
     let window_size = get_u64("window_size").unwrap_or(100) as usize;
     if window_size == 0 {

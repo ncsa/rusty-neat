@@ -1,7 +1,10 @@
 use log::*;
 use std::{collections::HashMap, path::PathBuf};
 
-use crate::gen_gc_bias_model::{errors::GenGcBiasModelError, utils::config::RunConfiguration};
+use crate::gen_gc_bias_model::{
+    errors::GenGcBiasModelError,
+    utils::config::{GcBiasModelParams, RunConfiguration},
+};
 use common::{
     file_tools::{
         bam_reader::{BamWalkFilter, CoverageObserver, walk_bam},
@@ -19,17 +22,16 @@ pub fn runner(path: &PathBuf) -> Result<(), GenGcBiasModelError> {
     let mut filter = BamWalkFilter::for_coverage();
     filter.min_mapq = config.min_mapq;
     walk_bam(&config.bam_file, &filter, &mut [&mut obs])?;
-    run_from_coverage(&config, obs.into_by_contig())
+    run_from_coverage(&config.model, obs.into_by_contig())
 }
 
 /// Builds and writes a GC bias model from a pre-computed per-contig coverage
 /// map (e.g. produced by `CoverageObserver` during a shared BAM walk in the
 /// unified `gen-bam-models` runner). Reads the reference FASTA, sweeps
 /// windows, accumulates GC% vs mean-coverage, and writes the gzipped JSON
-/// model to `config.output_file`. `config.bam_file` and `config.min_mapq`
-/// are ignored on this path.
+/// model to `config.output_file`.
 pub fn run_from_coverage(
-    config: &RunConfiguration,
+    config: &GcBiasModelParams,
     mut cov_by_contig: HashMap<String, Vec<u32>>,
 ) -> Result<(), GenGcBiasModelError> {
     let mut gc_weight_sum = [0.0f64; 101];

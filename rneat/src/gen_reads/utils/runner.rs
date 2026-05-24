@@ -1084,8 +1084,9 @@ mod tests {
             format: vec![],
             sample: vec![],
         };
-        // Symbolic SV — tagged Complex like Phase 2 but must NOT be dropped:
-        // Phase 3 needs it downstream for coverage modulation.
+        // Symbolic SV — tagged Complex but must NOT be dropped by
+        // filter_input_vcf: gen_reads uses it downstream for coverage
+        // modulation and round-trips the raw ALT to the output VCF.
         use common::structs::variants::{SvData, SvType};
         let v3 = Variant {
             location: 500,

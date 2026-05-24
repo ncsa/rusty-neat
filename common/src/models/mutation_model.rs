@@ -87,12 +87,11 @@ pub struct MutationModel {
     // These hold all the statistical model data we need to apply the mutations with this model
     statistical_models: StatisticalModels,
     // Optional learned model for symbolic / structural variants
-    // (`<DEL>` / `<DUP>` / `<CNV>`). `None` when the training VCF had no
-    // usable SV observations, or when this model was deserialized from a
-    // pre-v1.10 JSON file (the field is missing → defaults to `None`).
-    // `gen-reads` consults this in tandem with the `sv_rate_scale` knob;
-    // when both are present and non-zero, de novo SVs are sampled and
-    // emitted through the existing v1.9.0 depth-modulation path.
+    // (`<DEL>` / `<DUP>` / `<CNV>`). Populated by `gen-mut-model` when
+    // the training VCF carries enough symbolic-SV observations to fit;
+    // `None` otherwise, and `None` whenever this model was deserialized
+    // from a JSON file that predates the field (the `#[serde(default)]`
+    // attribute handles the missing-field case).
     #[serde(default)]
     pub sv_model: Option<SvModel>,
     // Store a reference to the NeatRng for this run

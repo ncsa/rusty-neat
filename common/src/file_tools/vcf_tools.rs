@@ -174,10 +174,11 @@ fn read_open_vcf<P: Read>(
                     let info_field = split_line[7];
                     let mut format: Vec<String> = Vec::new();
                     let mut sample: Vec<String> = Vec::new();
-                    if split_line.len() > 8 {
+                    if split_line.len() > 9 {
                         let fmt = split_line[8];
                         let smp = split_line[9];
-                        // "." means no FORMAT/SAMPLE data — GT will be absent and cause an error below
+                        // "." means no FORMAT/SAMPLE data — handled by the
+                        // sites-only fallback below.
                         if fmt != "." && smp != "." {
                             let format_split: Vec<&str> = fmt.split(":").collect();
                             let sample_split: Vec<&str> = smp.split(":").collect();
@@ -196,6 +197,18 @@ fn read_open_vcf<P: Read>(
                     }
                     if split_line.len() > 10 {
                         warn!("Currently rneat can only read one sample per record")
+                    }
+                    // Sites-only VCFs (gnomAD-SV, dbSNP, etc.) have no
+                    // FORMAT / SAMPLE columns at all. Without a genotype
+                    // we can't tell hom from het, but rejecting the record
+                    // outright would drop all of gnomAD-SV. Default to
+                    // heterozygous ("0/1") — the trainer will then report
+                    // `homozygous_frequency = 0` for the corpus, which is
+                    // an honest "we don't know" rather than a synthesized
+                    // 50/50 split.
+                    if !format.iter().any(|f| f == "GT") {
+                        format.push("GT".to_string());
+                        sample.push("0/1".to_string());
                     }
                     let variant = match Variant::from_file(
                         location,
@@ -644,18 +657,45 @@ chr1\t200\t.\tG\tC\t60\tPASS\t.\tGT\t0|1\n";
     }
 
     #[test]
-    fn test_read_vcf_missing_gt_skips_variant() {
-        // Variants without GT in FORMAT are skipped with a warning (not a hard error)
-        // so that real-world VCFs with mixed FORMAT fields can still be processed.
+    fn test_read_vcf_missing_gt_defaults_to_heterozygous() {
+        // Records whose FORMAT lacks GT (e.g. only DP:GQ) used to be silently
+        // dropped. v1.10 instead defaults them to heterozygous so sites-only
+        // and partial-FORMAT VCFs train without losing every record. The
+        // trainer's homozygous_frequency will then be 0 for the corpus —
+        // an honest "we don't know" rather than a synthesized 50/50 split.
         let vcf_content = "\
 ##fileformat=VCFv4.1\n\
 #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n\
 chr1\t100\t.\tA\tT\t60\tPASS\t.\tDP:GQ\t30:99\n";
         let mut tmp = tempfile::Builder::new().suffix(".vcf").tempfile().unwrap();
         write!(tmp, "{}", vcf_content).unwrap();
-        let result = read_vcf(tmp.path().to_path_buf());
-        assert!(result.is_ok(), "Expected Ok (skip), got {:?}", result);
-        assert!(result.unwrap().is_empty(), "Expected no variants parsed");
+        let records = read_vcf(tmp.path().to_path_buf()).unwrap();
+        let variants = records.get("chr1").expect("chr1 should have one variant");
+        assert_eq!(variants.len(), 1);
+        assert_eq!(variants[0].genotype_str, "0/1");
+        assert!(matches!(
+            variants[0].genotype,
+            crate::structs::variants::Genotype::Heterozygous
+        ));
+    }
+
+    #[test]
+    fn test_read_vcf_sites_only_record_defaults_to_heterozygous() {
+        // gnomAD-SV (and other sites-only callsets) carry only 8 columns —
+        // no FORMAT, no SAMPLE. The reader must still produce a Variant per
+        // record so the SV trainer can fit a model from a sites-only VCF.
+        let vcf_content = "\
+##fileformat=VCFv4.2\n\
+##INFO=<ID=END,Number=1,Type=Integer,Description=\"End\">\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n\
+chr1\t100\t.\tN\t<DEL>\t60\tPASS\tSVTYPE=DEL;END=500\n";
+        let mut tmp = tempfile::Builder::new().suffix(".vcf").tempfile().unwrap();
+        write!(tmp, "{}", vcf_content).unwrap();
+        let records = read_vcf(tmp.path().to_path_buf()).unwrap();
+        let variants = records.get("chr1").expect("chr1 should have one variant");
+        assert_eq!(variants.len(), 1);
+        assert!(variants[0].alternate.is_symbolic());
+        assert_eq!(variants[0].genotype_str, "0/1");
     }
 
     #[test]

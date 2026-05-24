@@ -98,6 +98,27 @@ pub fn write_vcf(
                 );
                 writeln!(&mut buffer, "{}", line)?;
             }
+            // Symbolic / structural variants are tracked separately on the map
+            // so they don't flag per-base mutation positions during read gen.
+            // Preserve the original INFO field verbatim so SVLEN / END / CN
+            // round-trip from input VCF to output VCF.
+            for variant in &block_map.sv_records {
+                let alt_str = match &variant.alternate {
+                    AlternateType::Literal(bases) => sequence_array_to_string(bases),
+                    AlternateType::Symbolic(sv) => sv.raw_alt.clone(),
+                };
+                let info_str = variant.info.as_deref().unwrap_or(".");
+                let line = format!(
+                    "{}\t{}\t.\t{}\t{}\t37\tPASS\t{}\tGT\t{}",
+                    contig,
+                    variant.location + 1,
+                    sequence_array_to_string(&variant.reference),
+                    alt_str,
+                    info_str,
+                    variant.genotype_str,
+                );
+                writeln!(&mut buffer, "{}", line)?;
+            }
         }
     }
     Ok(())

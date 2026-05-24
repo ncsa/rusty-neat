@@ -72,9 +72,106 @@ impl From<usize> for VariantType {
     }
 }
 
+/// Classifies a symbolic / structural ALT (VCF 4.2 §1.4.1 — §1.4.5).
+///
+/// `Unknown` is the catch-all for symbolic ALTs we recognize as symbolic but
+/// can't classify — e.g. a tag like `<NOVEL_THING>` that isn't in the spec. We
+/// still round-trip the raw ALT string verbatim from `SvData::raw_alt`.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub enum SvType {
+    Del,
+    Dup,
+    Cnv,
+    Ins,
+    Inv,
+    Bnd,
+    Unknown,
+}
+
+impl SvType {
+    /// Parse a VCF symbolic / breakend ALT string into a coarse type tag.
+    /// Returns `None` for literal-base ALTs (callers should not invoke this
+    /// on `AlternateType::Literal` payloads).
+    ///
+    /// Recognizes:
+    ///   - `<DEL>`, `<DEL:...>` → Del
+    ///   - `<DUP>`, `<DUP:TANDEM>`, `<DUP:...>` → Dup
+    ///   - `<CNV>`, `<CNV:...>` → Cnv
+    ///   - `<INS>`, `<INS:ME:ALU>`, `<INS:...>` → Ins
+    ///   - `<INV>` → Inv
+    ///   - Breakend notation (`G]17:198982]`, `]13:123456]T`, etc.) → Bnd
+    ///   - Other `<TAG>` forms → Unknown
+    pub fn from_alt_string(alt: &str) -> Option<Self> {
+        if alt.is_empty() {
+            return None;
+        }
+        if alt.starts_with('<') && alt.ends_with('>') {
+            let body = &alt[1..alt.len() - 1];
+            let head = body.split(':').next().unwrap_or(body);
+            return Some(match head {
+                "DEL" => SvType::Del,
+                "DUP" => SvType::Dup,
+                "CNV" => SvType::Cnv,
+                "INS" => SvType::Ins,
+                "INV" => SvType::Inv,
+                _ => SvType::Unknown,
+            });
+        }
+        // Breakend notation contains `[` or `]` and a `:`-separated mate locus.
+        if (alt.contains('[') || alt.contains(']')) && alt.contains(':') {
+            return Some(SvType::Bnd);
+        }
+        None
+    }
+}
+
+/// Parsed payload for a symbolic / structural ALT.
+///
+/// Stores the original ALT string for verbatim round-trip, plus optional
+/// INFO-derived fields (`END=`, `SVLEN=`, `CN=`). The Phase 2 reader will
+/// populate the optional fields from the VCF INFO column; today, anything
+/// constructing an `SvData` must fill them in itself.
 #[derive(Debug, PartialEq, Eq, Clone, Hash)]
 pub struct SvData {
-    pub alternate: String
+    /// The original ALT field, verbatim — used to round-trip back to the
+    /// output VCF without re-synthesizing the angle-bracket notation.
+    pub raw_alt: String,
+    pub sv_type: SvType,
+    /// 1-based inclusive end coordinate from `INFO/END`, if present.
+    pub end: Option<usize>,
+    /// `INFO/SVLEN` if present. Signed per VCF 4.2: negative for deletions,
+    /// positive for insertions/duplications.
+    pub svlen: Option<i64>,
+    /// `INFO/CN` if present. Total copy number for `<CNV>` / `<DUP>` records.
+    pub copy_number: Option<u32>,
+}
+
+impl SvData {
+    /// Construct an `SvData` with only the raw ALT and type tag populated.
+    /// Optional INFO fields default to `None` — set them on the returned
+    /// value if available.
+    pub fn new(raw_alt: impl Into<String>, sv_type: SvType) -> Self {
+        SvData {
+            raw_alt: raw_alt.into(),
+            sv_type,
+            end: None,
+            svlen: None,
+            copy_number: None,
+        }
+    }
+
+    /// Compute the reference span (in bases) of this SV, given the variant's
+    /// 1-based start `location`. Prefers `END` (span = end - location + 1);
+    /// falls back to `|SVLEN|`. Returns `None` if neither is set.
+    pub fn span(&self, location: usize) -> Option<usize> {
+        if let Some(end) = self.end {
+            return Some(end.saturating_sub(location).saturating_add(1));
+        }
+        if let Some(svlen) = self.svlen {
+            return Some(svlen.unsigned_abs() as usize);
+        }
+        None
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Hash)]
@@ -84,11 +181,30 @@ pub enum AlternateType {
 }
 
 impl AlternateType {
+    /// Returns the literal base sequence if this is a `Literal` variant,
+    /// or `None` for symbolic / structural ALTs.
     pub fn as_literal(&self) -> Option<&[Nucleotide]> {
         match self {
             AlternateType::Literal(vector) => Some(vector),
             AlternateType::Symbolic(_) => None,
         }
+    }
+
+    /// Returns the parsed symbolic payload if this is a `Symbolic` variant,
+    /// or `None` for literal-base ALTs.
+    pub fn as_symbolic(&self) -> Option<&SvData> {
+        match self {
+            AlternateType::Symbolic(sv) => Some(sv),
+            AlternateType::Literal(_) => None,
+        }
+    }
+
+    pub fn is_literal(&self) -> bool {
+        matches!(self, AlternateType::Literal(_))
+    }
+
+    pub fn is_symbolic(&self) -> bool {
+        matches!(self, AlternateType::Symbolic(_))
     }
 }
 
@@ -463,10 +579,106 @@ mod tests {
 
     #[test]
     fn alternate_type_symbolic_as_literal_returns_none() {
-        let alt = AlternateType::Symbolic(SvData {
-            alternate: "<DUP:TANDEM>".to_string(),
-        });
+        let alt = AlternateType::Symbolic(SvData::new("<DUP:TANDEM>", SvType::Dup));
         assert!(alt.as_literal().is_none());
+        // The dispatcher round-trip: symbolic ALTs go through as_symbolic().
+        assert!(alt.is_symbolic());
+        assert_eq!(alt.as_symbolic().unwrap().raw_alt, "<DUP:TANDEM>");
+        assert_eq!(alt.as_symbolic().unwrap().sv_type, SvType::Dup);
+    }
+
+    #[test]
+    fn alternate_type_literal_helpers() {
+        let alt = AlternateType::Literal(vec![Nucleotide::A]);
+        assert!(alt.is_literal());
+        assert!(!alt.is_symbolic());
+        assert!(alt.as_symbolic().is_none());
+    }
+
+    #[test]
+    fn sv_type_from_alt_string_recognizes_standard_tags() {
+        assert_eq!(SvType::from_alt_string("<DEL>"), Some(SvType::Del));
+        assert_eq!(SvType::from_alt_string("<DEL:ME>"), Some(SvType::Del));
+        assert_eq!(SvType::from_alt_string("<DUP>"), Some(SvType::Dup));
+        assert_eq!(SvType::from_alt_string("<DUP:TANDEM>"), Some(SvType::Dup));
+        assert_eq!(SvType::from_alt_string("<CNV>"), Some(SvType::Cnv));
+        assert_eq!(SvType::from_alt_string("<INS>"), Some(SvType::Ins));
+        assert_eq!(SvType::from_alt_string("<INS:ME:ALU>"), Some(SvType::Ins));
+        assert_eq!(SvType::from_alt_string("<INV>"), Some(SvType::Inv));
+    }
+
+    #[test]
+    fn sv_type_from_alt_string_breakend() {
+        // VCF 4.2 breakend forms — any of these should be tagged Bnd.
+        assert_eq!(
+            SvType::from_alt_string("G]17:198982]"),
+            Some(SvType::Bnd)
+        );
+        assert_eq!(
+            SvType::from_alt_string("]13:123456]T"),
+            Some(SvType::Bnd)
+        );
+        assert_eq!(
+            SvType::from_alt_string("[2:321682[A"),
+            Some(SvType::Bnd)
+        );
+    }
+
+    #[test]
+    fn sv_type_from_alt_string_unknown_tag() {
+        // Angle-bracket form we don't have a dedicated variant for —
+        // still classified as symbolic (Unknown), not literal.
+        assert_eq!(
+            SvType::from_alt_string("<NOVEL_THING>"),
+            Some(SvType::Unknown)
+        );
+    }
+
+    #[test]
+    fn sv_type_from_alt_string_literal_returns_none() {
+        // Literal-base ALTs shouldn't pass through this parser at all;
+        // callers gate it on AlternateType, but defend the contract.
+        assert_eq!(SvType::from_alt_string("A"), None);
+        assert_eq!(SvType::from_alt_string("ACGT"), None);
+        assert_eq!(SvType::from_alt_string(""), None);
+    }
+
+    #[test]
+    fn sv_data_span_from_end_field() {
+        // END is 1-based inclusive — for a deletion at POS=100, END=109
+        // covers 10 bases (100..=109).
+        let mut sv = SvData::new("<DEL>", SvType::Del);
+        sv.end = Some(109);
+        assert_eq!(sv.span(100), Some(10));
+    }
+
+    #[test]
+    fn sv_data_span_falls_back_to_svlen() {
+        // SVLEN is signed per VCF 4.2: negative for deletions, positive
+        // for insertions/duplications. span() takes the absolute value.
+        let mut sv = SvData::new("<DEL>", SvType::Del);
+        sv.svlen = Some(-50);
+        assert_eq!(sv.span(100), Some(50));
+
+        let mut sv = SvData::new("<DUP>", SvType::Dup);
+        sv.svlen = Some(200);
+        assert_eq!(sv.span(100), Some(200));
+    }
+
+    #[test]
+    fn sv_data_span_prefers_end_over_svlen() {
+        // If both are populated and disagree, END wins (it's the more
+        // authoritative coordinate in VCF 4.2).
+        let mut sv = SvData::new("<DEL>", SvType::Del);
+        sv.end = Some(109);
+        sv.svlen = Some(-999);
+        assert_eq!(sv.span(100), Some(10));
+    }
+
+    #[test]
+    fn sv_data_span_none_when_neither_set() {
+        let sv = SvData::new("<DEL>", SvType::Del);
+        assert!(sv.span(100).is_none());
     }
 
     #[test]

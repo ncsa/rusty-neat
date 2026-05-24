@@ -14,7 +14,10 @@
 //! need it can re-create from the reference FASTA.
 use crate::compare_vcfs::errors::CompareVcfsError;
 use crate::compare_vcfs::utils::attribution::{AttributionResult, Reason};
-use common::structs::{nucleotides::sequence_array_to_string, variants::Variant};
+use common::structs::{
+    nucleotides::sequence_array_to_string,
+    variants::{AlternateType, Variant},
+};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -85,7 +88,10 @@ fn check_overwrite(path: &Path, allow: bool) -> Result<(), CompareVcfsError> {
 fn format_record(chrom: &str, v: &Variant, reasons: Option<&[Reason]>) -> String {
     let id = v.id.as_deref().unwrap_or(".");
     let ref_str = sequence_array_to_string(&v.reference);
-    let alt_str = sequence_array_to_string(v.alternate.as_literal().unwrap());
+    let alt_str = match &v.alternate {
+        AlternateType::Literal(bases) => sequence_array_to_string(bases),
+        AlternateType::Symbolic(sv) => sv.raw_alt.clone(),
+    };
     let qual = match v.quality_score {
         Some(q) => q.to_string(),
         None => ".".to_string(),

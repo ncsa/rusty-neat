@@ -23,6 +23,7 @@
 ### Internal refactors (no user-visible behavior change)
 - **Split `gen-gc-bias-model` `RunConfiguration` into walker params + `GcBiasModelParams` (#148).** `run_from_coverage` now takes only the FASTA-sweep / model-write fields it actually uses (`reference`, `bed_table`, `output_file`, `overwrite_output`, `window_size`, `window_stride`, `min_windows_per_bin`). The standalone CLI keeps `bam_file` and `min_mapq` for its own walk and embeds the model params as `config.model`. The unified `gen-bam-models` runner now constructs `GcBiasModelParams` directly from its `GcBiasSection` — no more dummy `bam_file` clone or hard-coded `min_mapq: 0`.
 - **Factor `check_overwrite` into `common::file_tools::file_io` (#149).** Replaces four duplicated "output already exists and `overwrite_output` is false" checks in `gen_bam_models` (frag_length + gc_bias sub-sections), `gen_frag_length_model`, `gen_seq_error_model`, and `gen_gc_bias_model`. Standalone error messages are uniform; each module wraps the returned `io::Error` into its own error type.
+
 5/22/2026
 =========
 ## rneat v1.8.0

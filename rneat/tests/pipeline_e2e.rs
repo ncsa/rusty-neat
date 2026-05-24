@@ -283,3 +283,200 @@ fn gen_reads_with_iupac_reference_produces_no_iupac_in_output() {
         }
     }
 }
+
+#[test]
+fn gen_reads_with_trained_sv_model_emits_de_novo_symbolic_svs() {
+    // Phase 4 e2e: train a custom SV-rich mutation model with
+    // `gen-mut-model`, then run `gen-reads` against the H1N1 reference
+    // with `sv_rate_scale: 10.0` and the trained model. The output VCF
+    // must contain at least one de novo symbolic record carrying both
+    // INFO/SVTYPE and INFO/END, and that record's POS must NOT match
+    // any of the input training records (which aren't part of the
+    // generation run at all — the trained model is its own input).
+    use std::io::Write as _;
+
+    let (_dir, work) = fresh_workdir();
+
+    // Synthetic training VCF: multiple DELs and DUPs spread across the
+    // H1N1 contigs. Lengths are small (60-180bp) so the resulting
+    // log-normal fit produces SVs that comfortably fit inside the
+    // largest H1N1 contig (HA at ~1700bp; sampler upper-bound is
+    // contig_len / 4 ≈ 425bp). Also includes a literal SNP so the
+    // SNP/indel side of the trainer math doesn't divide by zero
+    // (caught by v1.9.1's NoLiteralVariants guard).
+    let train_vcf = work.join("sv_train.vcf");
+    {
+        let mut f = std::fs::File::create(&train_vcf).unwrap();
+        writeln!(f, "##fileformat=VCFv4.2").unwrap();
+        writeln!(
+            f,
+            "##INFO=<ID=END,Number=1,Type=Integer,Description=\"End position\">"
+        )
+        .unwrap();
+        writeln!(
+            f,
+            "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">"
+        )
+        .unwrap();
+        writeln!(f, "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS").unwrap();
+        // Literal SNP — keeps the SNP/indel denominator non-zero.
+        writeln!(f, "H1N1_HA\t22\t.\tC\tT\t60\tPASS\t.\tGT\t0/1").unwrap();
+        // Small DELs: 60, 80, 90, 120bp. Mean ~88bp → log-normal μ ≈ ln(88) ≈ 4.5.
+        writeln!(f, "H1N1_HA\t100\t.\tA\t<DEL>\t60\tPASS\tEND=160\tGT\t0/1").unwrap();
+        writeln!(f, "H1N1_HA\t300\t.\tA\t<DEL>\t60\tPASS\tEND=380\tGT\t1/1").unwrap();
+        writeln!(f, "H1N1_HA\t500\t.\tA\t<DEL>\t60\tPASS\tEND=590\tGT\t0/1").unwrap();
+        writeln!(f, "H1N1_HA\t700\t.\tA\t<DEL>\t60\tPASS\tEND=820\tGT\t0/1").unwrap();
+        // Small DUPs: 80, 100, 130, 150bp.
+        writeln!(f, "H1N1_HA\t900\t.\tT\t<DUP>\t60\tPASS\tEND=980\tGT\t0/1").unwrap();
+        writeln!(f, "H1N1_HA\t1100\t.\tT\t<DUP>\t60\tPASS\tEND=1200\tGT\t1/1").unwrap();
+        writeln!(f, "H1N1_HA\t1300\t.\tT\t<DUP>\t60\tPASS\tEND=1430\tGT\t0/1").unwrap();
+        writeln!(f, "H1N1_HA\t1500\t.\tT\t<DUP>\t60\tPASS\tEND=1650\tGT\t0/1").unwrap();
+    }
+
+    // gen-mut-model needs a tiny YAML config pointing at the reference,
+    // VCF, and output path.
+    let trained_model = work.join("trained_sv.json.gz");
+    let train_yaml = work.join("train.yml");
+    std::fs::write(
+        &train_yaml,
+        format!(
+            "reference: {ref_}\n\
+             vcf_file: {vcf}\n\
+             output_file: {out}\n\
+             overwrite_output: true\n",
+            ref_ = h1n1_reference().display(),
+            vcf = train_vcf.display(),
+            out = trained_model.display(),
+        ),
+    )
+    .unwrap();
+    rneat()
+        .args(["gen-mut-model", "-c"])
+        .arg(&train_yaml)
+        .assert()
+        .success();
+    assert!(trained_model.exists(), "gen-mut-model didn't write output");
+
+    // Now drive gen-reads with the trained model and a high
+    // sv_rate_scale so de novo sampling fires reliably.
+    let mut config = GenReadsConfig::new(h1n1_reference(), work.clone(), "sv_sampled");
+    config.coverage = 25;
+    config.produce_vcf = true;
+    config.mutation_model = Some(trained_model);
+    config.sv_rate_scale = Some(10.0);
+    let yaml = config.write_yaml();
+    rneat()
+        .args(["gen-reads", "-c"])
+        .arg(yaml.path())
+        .assert()
+        .success();
+
+    // Inspect the output VCF for symbolic records. At least one DEL or
+    // DUP must appear, and each must carry both SVTYPE and END so the
+    // round-trip downstream (compare-vcfs, depth modulation, etc.)
+    // recognizes it.
+    let out_vcf = work.join("sv_sampled.vcf.gz");
+    assert!(out_vcf.exists(), "gen-reads did not produce output VCF");
+    let vcf_lines: Vec<String> = {
+        use flate2::read::MultiGzDecoder;
+        use std::io::{BufRead, BufReader};
+        let r = BufReader::new(MultiGzDecoder::new(std::fs::File::open(&out_vcf).unwrap()));
+        r.lines().map(|l| l.unwrap()).collect()
+    };
+    let symbolic_records: Vec<&String> = vcf_lines
+        .iter()
+        .filter(|l| !l.starts_with('#'))
+        .filter(|l| l.contains("<DEL>") || l.contains("<DUP>") || l.contains("<CNV>"))
+        .collect();
+    assert!(
+        !symbolic_records.is_empty(),
+        "expected at least one de novo symbolic SV in output; got VCF lines: {vcf_lines:#?}"
+    );
+    for line in &symbolic_records {
+        assert!(
+            line.contains("SVTYPE="),
+            "symbolic record missing INFO/SVTYPE: {line}"
+        );
+        assert!(
+            line.contains("END="),
+            "symbolic record missing INFO/END: {line}"
+        );
+    }
+}
+
+#[test]
+fn gen_reads_with_sv_rate_scale_zero_emits_no_de_novo_svs() {
+    // Inverse of the sampling test: the same trained model + the same
+    // contig, but `sv_rate_scale: 0.0` (the default) must produce zero
+    // symbolic records. Locks in the opt-in semantics — a v1.9 upgrader
+    // who doesn't touch their YAML can't suddenly see SVs.
+    use std::io::Write as _;
+
+    let (_dir, work) = fresh_workdir();
+    let train_vcf = work.join("svs.vcf");
+    {
+        let mut f = std::fs::File::create(&train_vcf).unwrap();
+        writeln!(f, "##fileformat=VCFv4.2").unwrap();
+        writeln!(
+            f,
+            "##INFO=<ID=END,Number=1,Type=Integer,Description=\"End position\">"
+        )
+        .unwrap();
+        writeln!(
+            f,
+            "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">"
+        )
+        .unwrap();
+        writeln!(f, "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS").unwrap();
+        writeln!(f, "H1N1_HA\t22\t.\tC\tT\t60\tPASS\t.\tGT\t0/1").unwrap();
+        writeln!(f, "H1N1_HA\t100\t.\tA\t<DEL>\t60\tPASS\tEND=160\tGT\t0/1").unwrap();
+        writeln!(f, "H1N1_HA\t300\t.\tA\t<DEL>\t60\tPASS\tEND=380\tGT\t1/1").unwrap();
+    }
+    let trained_model = work.join("m.json.gz");
+    let train_yaml = work.join("train.yml");
+    std::fs::write(
+        &train_yaml,
+        format!(
+            "reference: {r}\nvcf_file: {v}\noutput_file: {o}\noverwrite_output: true\n",
+            r = h1n1_reference().display(),
+            v = train_vcf.display(),
+            o = trained_model.display(),
+        ),
+    )
+    .unwrap();
+    rneat()
+        .args(["gen-mut-model", "-c"])
+        .arg(&train_yaml)
+        .assert()
+        .success();
+
+    let mut config = GenReadsConfig::new(h1n1_reference(), work.clone(), "no_svs");
+    config.coverage = 25;
+    config.produce_vcf = true;
+    config.mutation_model = Some(trained_model);
+    // Default behavior — sv_rate_scale left at None (= absent from YAML
+    // = 0.0 in RunConfiguration::default()).
+    let yaml = config.write_yaml();
+    rneat()
+        .args(["gen-reads", "-c"])
+        .arg(yaml.path())
+        .assert()
+        .success();
+
+    let out_vcf = work.join("no_svs.vcf.gz");
+    let vcf_lines: Vec<String> = {
+        use flate2::read::MultiGzDecoder;
+        use std::io::{BufRead, BufReader};
+        let r = BufReader::new(MultiGzDecoder::new(std::fs::File::open(&out_vcf).unwrap()));
+        r.lines().map(|l| l.unwrap()).collect()
+    };
+    let symbolic: Vec<&String> = vcf_lines
+        .iter()
+        .filter(|l| !l.starts_with('#'))
+        .filter(|l| l.contains("<DEL>") || l.contains("<DUP>") || l.contains("<CNV>"))
+        .collect();
+    assert!(
+        symbolic.is_empty(),
+        "sv_rate_scale=0 must produce no symbolic SVs; got: {symbolic:?}"
+    );
+}

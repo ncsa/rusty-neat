@@ -195,7 +195,7 @@ input_vcf: /path/to/variants.vcf.gz
 
 **Symbolic / structural variants**
 
-Symbolic ALTs (VCF 4.2 §1.4) are accepted and round-tripped to the output VCF verbatim, with `INFO/END`, `INFO/SVLEN`, and `INFO/CN` preserved. The simulator does not yet *generate* SVs de novo from a model — only user-supplied ones flow through.
+Symbolic ALTs (VCF 4.2 §1.4) are accepted and round-tripped to the output VCF verbatim, with `INFO/END`, `INFO/SVLEN`, and `INFO/CN` preserved. As of v1.10, `rneat` can also generate symbolic SVs *de novo* from a learned model — opt in by setting `sv_rate_scale: 1.0` (or higher) in your gen-reads YAML; see "De novo SV generation" below.
 
 | SV | Effect on read depth | Effect on read sequence |
 |----|----------------------|-------------------------|
@@ -217,6 +217,34 @@ When an SV zeroes out coverage (hom `<DEL>` or `INFO/CN=0`), the mutation rate o
 - *Literal complex variants*: records whose REF and ALT are both multi-base strings (and the ALT is literal bases, not a `<TAG>`) are skipped with a logged warning and do not appear in the output.
 - *`<INV>` orientation not modeled*: reads from inversion spans still come from the forward-strand reference. The `<INV>` record round-trips to the output VCF but the read content does not reflect the inversion.
 - *Breakends*: round-tripped only; no junction-read or mate-locus modeling.
+
+**De novo SV generation**
+
+`rneat` can sample symbolic SVs (`<DEL>`, `<DUP>`, `<CNV>`) directly from a learned `SvModel` rather than relying on user-supplied records. Generation is **off by default** (opt-in via `sv_rate_scale`) so v1.9 pipelines remain unchanged.
+
+To enable, add a single line to your gen-reads YAML:
+
+```yaml
+sv_rate_scale: 1.0
+```
+
+- `0.0` (the default) disables de novo SV generation entirely — only `input_vcf` records flow through.
+- `1.0` reproduces the rate from the trained model.
+- Larger values scale the rate proportionally for stress testing.
+
+When enabled, `rneat` consults `MutationModel.sv_model`:
+
+1. **If you trained your own model** with `rneat gen-mut-model -c <yaml>` against an SV-rich VCF (e.g. a gnomAD-SV slice), the model file includes a fitted SV component covering type / length / copy-number / homozygous frequencies. Pass it via `mutation_model: /path/to/your.json.gz` in the gen-reads YAML.
+2. **If you don't supply a model**, gen-reads loads the bundled default. The default carries **approximate** gnomAD-SV v2.1 parameters — useful for kicking the tires, but not a substitute for retraining on data that matches your downstream use case. See `common/src/models/sv_model_defaults.rs` for the parameter sources.
+
+Per-contig sampling: Poisson count from `per_base_rate × contig_len × sv_rate_scale` → weighted type pick → log-normal length (rejected outside `[50bp, contig_len / 4]`) → uniform anchor with overlap and N-gap rejection → `INFO/CN` draw for `<CNV>` → Bernoulli for genotype.
+
+De novo records merge with `input_vcf` SVs and flow through the same depth-modulation path, so simulated coverage and the golden VCF round-trip behave identically for both sources. `compare-vcfs` skips both into the `skipped.symbolic` bucket — symbolic ALTs aren't byte-comparable.
+
+Caveats:
+- The bundled default is a literature-derived approximation, not a refit on the actual gnomAD VCFs. Don't use it for distribution-faithful benchmarking — retrain.
+- `<INV>` and breakends are not generated (the read content for either isn't modeled yet).
+- A trained model's `sv_model` field is `None` if the training VCF lacked sufficient SV observations (< 2 per type after filtering). Loading that model with `sv_rate_scale > 0` is harmless — generation just no-ops.
 
 FASTQ Shuffling
 ===============

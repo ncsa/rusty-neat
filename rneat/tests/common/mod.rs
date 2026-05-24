@@ -84,6 +84,8 @@ pub struct GenReadsConfig {
     pub num_threads: Option<usize>,
     pub input_vcf: Option<PathBuf>,
     pub mutation_rate: Option<f64>,
+    pub mutation_model: Option<PathBuf>,
+    pub sv_rate_scale: Option<f64>,
 }
 
 impl GenReadsConfig {
@@ -103,6 +105,8 @@ impl GenReadsConfig {
             num_threads: None,
             input_vcf: None,
             mutation_rate: None,
+            mutation_model: None,
+            sv_rate_scale: None,
         }
     }
 
@@ -131,6 +135,14 @@ impl GenReadsConfig {
             Some(r) => format!("mutation_rate: {r}\n"),
             None => String::new(),
         };
+        let mutation_model_section = match &self.mutation_model {
+            Some(p) => format!("mutation_model: {}\n", p.display()),
+            None => String::new(),
+        };
+        let sv_rate_scale_section = match self.sv_rate_scale {
+            Some(s) => format!("sv_rate_scale: {s}\n"),
+            None => String::new(),
+        };
         write!(
             f,
             "reference: {ref_}\n\
@@ -143,7 +155,7 @@ impl GenReadsConfig {
              output_filename: {name}\n\
              overwrite_output: true\n\
              rng_seed: {seed}\n\
-             {pair}{model}{threads}{ivcf}{mrate}",
+             {pair}{model}{threads}{ivcf}{mrate}{mmodel}{svscale}",
             ref_ = self.reference.display(),
             rl = self.read_len,
             cov = self.coverage,
@@ -158,6 +170,8 @@ impl GenReadsConfig {
             threads = threads_section,
             ivcf = input_vcf_section,
             mrate = mutation_rate_section,
+            mmodel = mutation_model_section,
+            svscale = sv_rate_scale_section,
         )
         .unwrap();
         f

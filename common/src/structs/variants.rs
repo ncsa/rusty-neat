@@ -128,9 +128,10 @@ impl SvType {
 /// Parsed payload for a symbolic / structural ALT.
 ///
 /// Stores the original ALT string for verbatim round-trip, plus optional
-/// INFO-derived fields (`END=`, `SVLEN=`, `CN=`). The Phase 2 reader will
-/// populate the optional fields from the VCF INFO column; today, anything
-/// constructing an `SvData` must fill them in itself.
+/// INFO-derived fields (`END=`, `SVLEN=`, `CN=`). `Variant::from_file`
+/// populates the optional fields from the VCF INFO column via `parse_sv_info`;
+/// other constructors (e.g. `SvData::new`) start them as `None` and let the
+/// caller fill in whatever it has.
 #[derive(Debug, PartialEq, Eq, Clone, Hash)]
 pub struct SvData {
     /// The original ALT field, verbatim — used to round-trip back to the
@@ -299,9 +300,10 @@ impl Variant {
                 sv_data.end = parsed_info.end;
                 sv_data.svlen = parsed_info.svlen;
                 sv_data.copy_number = parsed_info.copy_number;
-                // Phase 2 tags symbolic SVs as Complex so the existing
-                // gen_reads filter (filter_input_vcf) drops them along with
-                // other complex variants until Phase 3 adds depth modulation.
+                // Symbolic SVs share the `Complex` variant_type with literal
+                // multi-base substitutions; downstream code distinguishes them
+                // by the `AlternateType` enum (literal vs symbolic), not by
+                // variant_type.
                 (VariantType::Complex, AlternateType::Symbolic(sv_data))
             }
         };
@@ -414,9 +416,10 @@ fn parse_alternate(reference: &str, alt: &str) -> Result<ParsedAlt, VariantError
         )));
     }
     // Symbolic / structural / breakend ALTs (e.g. <DUP:TANDEM>, <DEL>,
-    // <INS:ME:ALU>, `G]17:198982]`) are classified here but not yet
-    // generatable — gen_reads will filter them along with other Complex
-    // variants until Phase 3 lands the depth-modulation pipeline.
+    // <INS:ME:ALU>, `G]17:198982]`) classify into ParsedAlt::Symbolic with
+    // the raw ALT preserved verbatim. gen_reads uses the resulting SvData
+    // for per-region depth modulation and round-trips the raw ALT to the
+    // output VCF; rneat does not yet generate symbolic SVs de novo.
     if !is_acgtn(alt) {
         return match SvType::from_alt_string(alt) {
             Some(sv_type) => Ok(ParsedAlt::Symbolic {
@@ -444,7 +447,7 @@ pub struct ParsedSvInfo {
     pub end: Option<usize>,
     pub svlen: Option<i64>,
     pub copy_number: Option<u32>,
-    /// The `SVTYPE=` value verbatim (e.g. `DEL`, `DUP`, `CNV`). Phase 2's
+    /// The `SVTYPE=` value verbatim (e.g. `DEL`, `DUP`, `CNV`).
     /// `Variant::from_file` uses this only to log a warning if it disagrees
     /// with the symbolic ALT tag — the ALT is the source of truth.
     pub svtype: Option<String>,
@@ -677,9 +680,9 @@ mod tests {
 
     #[test]
     fn parse_alternate_symbolic_alts_round_trip_with_correct_type() {
-        // Phase 2: VCF 4.2 symbolic ALTs now classify into ParsedAlt::Symbolic
-        // with the correct SvType derived from the tag. The raw_alt string
-        // is preserved verbatim so the writer can round-trip the original.
+        // VCF 4.2 symbolic ALTs classify into ParsedAlt::Symbolic with the
+        // correct SvType derived from the tag. The raw_alt string is preserved
+        // verbatim so the writer can round-trip the original.
         let cases = [
             ("<DUP:TANDEM>", SvType::Dup),
             ("<DEL>", SvType::Del),
@@ -755,6 +758,59 @@ mod tests {
         assert!(parsed.end.is_none());
         assert_eq!(parsed.svlen, Some(10));
         assert!(parsed.copy_number.is_none());
+    }
+
+    #[test]
+    fn parse_sv_info_tolerates_empty_entries_and_trailing_semicolons() {
+        // Real-world VCFs sometimes carry trailing semicolons or doubled
+        // separators (`END=200;;SVLEN=-50`). The parser should treat each
+        // empty entry as a no-op and still pick up the surrounding fields
+        // rather than dropping the variant or panicking on `split_once`.
+        let parsed = parse_sv_info("END=200;;SVLEN=-50;");
+        assert_eq!(parsed.end, Some(200));
+        assert_eq!(parsed.svlen, Some(-50));
+    }
+
+    #[test]
+    fn parse_sv_info_last_value_wins_on_duplicate_keys() {
+        // Spec-violating but real: some upstream tools emit the same key
+        // twice. Lock in last-value-wins so a future refactor doesn't
+        // silently flip to first-value-wins and break round-tripping.
+        let parsed = parse_sv_info("END=100;END=999;CN=2");
+        assert_eq!(parsed.end, Some(999));
+        assert_eq!(parsed.copy_number, Some(2));
+    }
+
+    #[test]
+    fn from_file_literal_complex_with_end_info_stays_literal() {
+        // A literal-base Complex variant (multi-base REF *and* literal multi-
+        // base ALT) is unusual but legal. parse_sv_info is gated on the ALT
+        // being symbolic, so an `END=` field on a literal Complex record must
+        // NOT promote it to Symbolic — the AlternateType stays Literal and the
+        // raw INFO string is preserved verbatim for the writer. Locks in that
+        // the two paths don't bleed.
+        let v = Variant::from_file(
+            42,
+            ".",
+            "PASS",
+            "END=999;SVLEN=-3",
+            "ACG",
+            "TTT",
+            60,
+            vec!["GT".to_string()],
+            vec!["0/1".to_string()],
+        )
+        .unwrap();
+        assert_eq!(v.variant_type, VariantType::Complex);
+        assert!(v.alternate.is_literal());
+        assert!(v.alternate.as_symbolic().is_none());
+        assert_eq!(
+            v.alternate.as_literal().unwrap(),
+            &[Nucleotide::T, Nucleotide::T, Nucleotide::T][..]
+        );
+        // INFO survives verbatim for the writer to round-trip; nothing has
+        // re-interpreted END/SVLEN on a literal record.
+        assert_eq!(v.info.as_deref(), Some("END=999;SVLEN=-3"));
     }
 
     #[test]

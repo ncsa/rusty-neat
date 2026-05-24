@@ -439,9 +439,9 @@ chr1\t200\t.\tG\tC\t60\tPASS\t.\tGT\t0/1\n";
 
     #[test]
     fn test_read_vcf_symbolic_del_parses_to_symbolic_with_info() {
-        // Phase 2: a `<DEL>` ALT becomes AlternateType::Symbolic carrying the
-        // parsed INFO fields (SVTYPE / END), with the raw ALT preserved
-        // verbatim so the writer can round-trip it.
+        // A `<DEL>` ALT becomes AlternateType::Symbolic carrying the parsed
+        // INFO fields (SVTYPE / END), with the raw ALT preserved verbatim so
+        // the writer can round-trip it.
         let vcf_content = "\
 ##fileformat=VCFv4.1\n\
 #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n\
@@ -505,9 +505,9 @@ chr1\t500\t.\tA\t<CNV>\t60\tPASS\tSVTYPE=CNV;END=2500;CN=4\tGT\t0/1\n";
     #[test]
     fn test_read_vcf_symbolic_round_trip_through_writer() {
         // End-to-end: a symbolic ALT read from input survives through the
-        // writer back to a verbatim ALT string. This is the Phase 2 contract
-        // — read + write together. The Phase 1 writer test stubbed in a
-        // synthetic Variant; this one drives the real reader path.
+        // writer back to a verbatim ALT string — read + write together,
+        // driving the real reader path (the companion writer-only test below
+        // stubs in a synthetic Variant).
         let vcf_content = "\
 ##fileformat=VCFv4.1\n\
 #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n\
@@ -660,10 +660,10 @@ chr1\t100\t.\tA\tT\t60\tPASS\t.\tDP:GQ\t30:99\n";
 
     #[test]
     fn test_write_vcf_symbolic_alt_round_trips_raw_string() {
-        // Phase 1 contract: even though Variant::from_file still rejects
-        // symbolic ALTs, the writer must serialize an AlternateType::Symbolic
-        // payload verbatim via SvData.raw_alt. This locks in the round-trip
-        // shape that Phase 2's reader will rely on.
+        // Writer contract: an AlternateType::Symbolic payload serializes
+        // verbatim via SvData.raw_alt. Driven from a synthetic Variant
+        // (not the reader) so the writer is exercised in isolation —
+        // the reader+writer round-trip is covered separately.
         let temp_dir = tempfile::tempdir().unwrap();
         let sv = Variant {
             variant_type: VariantType::Complex,

@@ -1,4 +1,4 @@
-//! Integration tests for `rneat compare-vcfs` Phase 1.
+//! Integration tests for `rneat compare-vcfs`: exact-match classification.
 //!
 //! Exercises the binary against tiny hand-crafted golden + called VCF pairs
 //! and asserts the parsed `comparison_summary.json` contents match expected

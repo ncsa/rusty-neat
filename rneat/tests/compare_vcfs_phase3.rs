@@ -1,4 +1,4 @@
-//! Phase 3 integration tests: NEAT-aware FN attribution + chrom aliases.
+//! Integration tests for `rneat compare-vcfs`: NEAT-aware FN attribution and chrom aliases.
 //!
 //! Each test arranges golden + called VCFs so the surviving FN(s) hit a
 //! specific reason path, then asserts the JSON report's `fn_attribution`

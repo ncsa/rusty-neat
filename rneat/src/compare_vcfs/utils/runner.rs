@@ -54,10 +54,21 @@ struct VariantKey {
 
 impl From<&Variant> for VariantKey {
     fn from(v: &Variant) -> Self {
+        // filter_vcf removes symbolic ALTs (`<DEL>`, `<DUP>`, ...) into the
+        // `symbolic` skip bucket before any VariantKey is built, so by the
+        // time we get here the ALT must be literal. Assert it in debug builds
+        // so a future regression fails loudly with context instead of a bare
+        // `unwrap()` panic in release.
+        debug_assert!(
+            v.alternate.is_literal(),
+            "symbolic ALT reached VariantKey::from at location {}",
+            v.location
+        );
         VariantKey {
             location: v.location,
             reference: v.reference.clone(),
-            alternate: v.alternate.as_literal().unwrap().to_vec(), }
+            alternate: v.alternate.as_literal().unwrap().to_vec(),
+        }
     }
 }
 

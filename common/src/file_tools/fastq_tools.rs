@@ -302,6 +302,14 @@ fn generate_read(
             // Don't try to modify this base.
         } else if flagged_positions.contains(&fragment_position) {
             let variant = variant_map[&fragment_position];
+            // MutatedMap::from_interval routes symbolic / structural ALTs to
+            // sv_records, so anything in variant_map should be literal. Assert
+            // that invariant in debug builds — a regression here would otherwise
+            // panic at as_literal().unwrap() with no context.
+            debug_assert!(
+                variant.alternate.is_literal(),
+                "symbolic ALT reached generate_read at position {fragment_position}"
+            );
             if (variant.genotype == Genotype::Homozygous) || (rng.random()? < 0.5) {
                 base_to_write = match read_strand {
                     Strand::Forward => variant.alternate

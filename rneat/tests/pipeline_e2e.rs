@@ -120,19 +120,18 @@ fn train_binned_model_then_gen_reads_emits_only_bin_qualities() {
 
 #[test]
 fn gen_reads_with_symbolic_del_modulates_depth_and_round_trips_to_vcf() {
-    // Phase 3 contract: a symbolic <DEL> in the input VCF must (a) be preserved
-    // verbatim in the output golden VCF (Phase 1+3 round-trip), and (b) drive
-    // per-region depth modulation in gen_reads (Phase 3 fragment splitting).
-    // We park a homozygous <DEL> at H1N1_HA:500-1500 (1-based, inclusive),
-    // which corresponds to 0-based half-open [499, 1500). At a hom DEL the
-    // multiplier is 0, so zero reads should start in that span; reads outside
-    // it should still be generated at full coverage.
+    // End-to-end contract: a symbolic <DEL> in the input VCF must (a) be
+    // preserved verbatim in the output golden VCF, and (b) drive per-region
+    // depth modulation in gen_reads. We park a homozygous <DEL> at
+    // H1N1_HA:500-1500 (1-based, inclusive), which corresponds to 0-based
+    // half-open [499, 1500). At a hom DEL the multiplier is 0, so zero reads
+    // should start in that span; reads outside it should still be generated
+    // at full coverage.
     use std::io::Write as _;
 
     let (_dir, work) = fresh_workdir();
 
-    // Phase 3 only consumes input VCFs that already define the SV's span via
-    // INFO/END, so include it here.
+    // Coverage modulation needs the SV's span — supply it via INFO/END.
     let input_vcf = work.join("input_sv.vcf");
     {
         let mut f = std::fs::File::create(&input_vcf).unwrap();

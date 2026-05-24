@@ -82,6 +82,7 @@ pub struct GenReadsConfig {
     pub rng_seed: String,
     pub sequence_error_model: Option<PathBuf>,
     pub num_threads: Option<usize>,
+    pub input_vcf: Option<PathBuf>,
 }
 
 impl GenReadsConfig {
@@ -99,6 +100,7 @@ impl GenReadsConfig {
             rng_seed: "integration phase two".to_string(),
             sequence_error_model: None,
             num_threads: None,
+            input_vcf: None,
         }
     }
 
@@ -119,6 +121,10 @@ impl GenReadsConfig {
             Some(n) => format!("num_threads: {n}\n"),
             None => String::new(),
         };
+        let input_vcf_section = match &self.input_vcf {
+            Some(p) => format!("input_vcf: {}\n", p.display()),
+            None => String::new(),
+        };
         write!(
             f,
             "reference: {ref_}\n\
@@ -131,7 +137,7 @@ impl GenReadsConfig {
              output_filename: {name}\n\
              overwrite_output: true\n\
              rng_seed: {seed}\n\
-             {pair}{model}{threads}",
+             {pair}{model}{threads}{ivcf}",
             ref_ = self.reference.display(),
             rl = self.read_len,
             cov = self.coverage,
@@ -144,6 +150,7 @@ impl GenReadsConfig {
             pair = pair_section,
             model = model_section,
             threads = threads_section,
+            ivcf = input_vcf_section,
         )
         .unwrap();
         f

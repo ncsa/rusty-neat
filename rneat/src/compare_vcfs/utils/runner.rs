@@ -374,6 +374,14 @@ fn filter_vcf(
             continue;
         }
         for v in variants {
+            // Symbolic / structural ALTs (`<DEL>`, `<DUP>`, `<CNV>`, ...) have
+            // no comparable byte sequence — compare-vcfs is built on byte-wise
+            // REF/ALT identity (and an equivalence sweep that splices literal
+            // bases). Skip them before anything calls `.as_literal()`.
+            if v.alternate.is_symbolic() {
+                skipped.symbolic += 1;
+                continue;
+            }
             if !include_homs && v.reference.as_slice() == v.alternate.as_literal().unwrap() {
                 skipped.homozygous_ref += 1;
                 continue;
@@ -652,5 +660,38 @@ mod tests {
         assert!(kept.contains_key("chr1"));
         assert!(!kept.contains_key("chr2"));
         assert_eq!(skipped.outside_simulated_contigs, 1);
+    }
+
+    #[test]
+    fn filter_skips_symbolic_alts_without_panicking() {
+        use common::structs::variants::{SvData, SvType};
+        let sv = Variant {
+            variant_type: VariantType::Complex,
+            location: 100,
+            reference: vec![Nucleotide::A],
+            alternate: AlternateType::Symbolic(SvData::new("<DEL>", SvType::Del)),
+            genotype_str: "1/1".to_string(),
+            genotype: Genotype::Homozygous,
+            id: None,
+            quality_score: None,
+            filter: Some("PASS".to_string()),
+            info: None,
+            format: Vec::new(),
+            sample: Vec::new(),
+        };
+        let mut raw = HashMap::new();
+        raw.insert(
+            "chr1".into(),
+            vec![
+                sv,
+                snp(50, Nucleotide::A, Nucleotide::C, Some("PASS")),
+            ],
+        );
+        // Pre-Phase-3, this call would have panicked at `as_literal().unwrap()`
+        // on the symbolic record. It must now skip it and count it.
+        let (kept, skipped) = filter_vcf(&raw, None, None, false, false);
+        assert_eq!(kept.get("chr1").map(|v| v.len()), Some(1));
+        assert_eq!(kept["chr1"][0].location, 50);
+        assert_eq!(skipped.symbolic, 1);
     }
 }

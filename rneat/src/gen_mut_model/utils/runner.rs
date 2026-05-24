@@ -221,6 +221,25 @@ pub fn runner(
     let total_deletions: usize = deletion_count.values().sum();
     let allowed_variant_count = (snp_count + total_insertions + total_deletions) as f64;
 
+    // Guard the SNP/indel frequency math: without at least one literal
+    // SNP / insertion / deletion observation, every frequency below is
+    // 0/0 = NaN and the homozygous-frequency divides by zero. The
+    // resulting model serializes NaN as JSON `null`, which then fails to
+    // load back as f64. Surface this as a clear error instead.
+    if allowed_variant_count == 0.0 {
+        error!(
+            "Training VCF has no SNP / insertion / deletion observations \
+             (saw {} symbolic SV(s) but no literal variants). A mutation \
+             model needs at least one literal record.",
+            filtered_mutations.values().map(|v| v.len()).sum::<usize>()
+        );
+        return Err(GenMutationModelError::NoLiteralVariants(
+            "input VCF contained no literal SNP / insertion / deletion records — \
+             a mutation model cannot be fit from symbolic SVs alone"
+                .to_string(),
+        ));
+    }
+
     let average_snp_frequency = (snp_count as f64) / allowed_variant_count;
     let average_deletion_frequency = (total_deletions as f64) / allowed_variant_count;
     let average_insertion_frequency = (total_insertions as f64) / allowed_variant_count;
@@ -489,5 +508,40 @@ H1N1_HA\t600\t.\tT\t<DUP>\t60\tPASS\tEND=700\tGT\t1/1\n",
             "symbolic homozygous SVs must not be counted as homozygous SNPs; got {}",
             model.homozygous_frequency
         );
+    }
+
+    #[test]
+    fn test_runner_errors_on_vcf_with_only_symbolic_variants() {
+        // A VCF that's all symbolic SVs and zero SNP/indel records used
+        // to NaN-divide the SNP-frequency math (0/0), then serialize as
+        // JSON `null` that failed to deserialize on re-read. The runner
+        // now bails out with NoLiteralVariants before producing a
+        // poisoned model. Real training corpora always carry literal
+        // variants alongside SVs, so this affects only the malformed
+        // input case — and the error message names the problem clearly.
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let reference = PathBuf::from(format!("{}/test_data/references/H1N1.fa", manifest_dir));
+        let out_dir = tempdir().unwrap();
+
+        let vcf_path = out_dir.path().join("sv_only.vcf");
+        std::fs::write(
+            &vcf_path,
+            "##fileformat=VCFv4.2\n\
+##INFO=<ID=END,Number=1,Type=Integer,Description=\"End position\">\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n\
+H1N1_HA\t100\t.\tA\t<DEL>\t60\tPASS\tEND=500\tGT\t1/1\n\
+H1N1_HA\t600\t.\tT\t<DUP>\t60\tPASS\tEND=700\tGT\t1/1\n",
+        )
+        .unwrap();
+
+        let mutations = read_vcf(vcf_path).unwrap();
+        let output_file = out_dir.path().join("sv_only_model.json.gz");
+        let result = runner(&reference, mutations, HashMap::new(), &output_file, None);
+        match result {
+            Err(GenMutationModelError::NoLiteralVariants(_)) => { /* expected */ }
+            other => panic!("expected NoLiteralVariants error, got {:?}", other),
+        }
+        // No partial / poisoned model file should be written.
+        assert!(!output_file.exists());
     }
 }

@@ -104,16 +104,9 @@ pub struct Variant {
     pub location: usize,
     // The reference allele of interest. This is either one base or several bases for a deletion.
     pub reference: Vec<Nucleotide>,
-<<<<<<< Updated upstream
-    // The alternate allele of interest. This is either one base or several bases for an insertion.
-    // For complex variants, we may need to make this an Option. Nones indicate special cases.
-    // or add another enum for alternate types
-    pub alternate: Vec<Nucleotide>,
-=======
     // The alternate allele of interest. This is either one base or several bases for an indel, or
     // it is a key string from the vcf spec indicating a complex variant.
     pub alternate: AlternateType,
->>>>>>> Stashed changes
     // the genotype string is for writing in the vcf.
     pub genotype_str: String,
     // The genotype is either heterozygous (not on all alleles) or homozygous (on all alleles)

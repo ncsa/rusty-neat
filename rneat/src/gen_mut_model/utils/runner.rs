@@ -223,44 +223,48 @@ pub fn runner(
     let total_deletions: usize = deletion_count.values().sum();
     let allowed_variant_count = (snp_count + total_insertions + total_deletions) as f64;
 
-    // Guard the SNP/indel frequency math: without at least one literal
-    // SNP / insertion / deletion observation, every frequency below is
-    // 0/0 = NaN and the homozygous-frequency divides by zero. The
-    // resulting model serializes NaN as JSON `null`, which then fails to
-    // load back as f64. Surface this as a clear error instead.
-    if allowed_variant_count == 0.0 {
-        error!(
+    // Guard the SNP/indel frequency math: without literal variants every
+    // ratio is 0/0 = NaN, which then serializes as JSON `null` and fails
+    // to deserialize back as f64. Two paths through:
+    //   - corpus had literal variants → compute the real frequencies
+    //   - corpus is SV-only (e.g. gnomAD-SV) → emit a model with
+    //     mutation_rate = 0 and uniform-fallback variant_probs so the
+    //     SvModel fit downstream can still proceed. gen-reads loaded
+    //     with this model will generate zero SNPs/indels and rely
+    //     entirely on de novo SVs (via sv_rate_scale > 0) or
+    //     input_vcf records.
+    let sv_only_corpus = allowed_variant_count == 0.0;
+    if sv_only_corpus {
+        info!(
             "Training VCF has no SNP / insertion / deletion observations \
-             (saw {} symbolic SV(s) but no literal variants). A mutation \
-             model needs at least one literal record.",
+             (saw {} symbolic SV(s) only). Producing an SV-only model with \
+             mutation_rate=0 — gen-reads loaded with this model will generate \
+             zero SNPs/indels and rely entirely on SVs or input_vcf records.",
             filtered_mutations.values().map(|v| v.len()).sum::<usize>()
         );
-        return Err(GenMutationModelError::NoLiteralVariants(
-            "input VCF contained no literal SNP / insertion / deletion records — \
-             a mutation model cannot be fit from symbolic SVs alone"
-                .to_string(),
-        ));
     }
 
-    let average_snp_frequency = (snp_count as f64) / allowed_variant_count;
-    let average_deletion_frequency = (total_deletions as f64) / allowed_variant_count;
-    let average_insertion_frequency = (total_insertions as f64) / allowed_variant_count;
-    let variant_probs = vec![
-        average_snp_frequency,
-        average_insertion_frequency,
-        average_deletion_frequency,
-    ];
-
-    let homozygous_frequency = if homozygous_count > 0 {
-        (homozygous_count as f64) / allowed_variant_count
+    let (variant_probs, homozygous_frequency, average_mutation_rate) = if sv_only_corpus {
+        // Uniform fallback for variant_probs — `DiscreteDistribution::new`
+        // rejects all-zero weights, so we feed it 1/3 each. Doesn't
+        // matter at sample time because mutation_rate is 0.
+        (vec![1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0], 0.0, 0.0)
     } else {
-        0.001 / allowed_variant_count
-    };
-
-    let average_mutation_rate = if use_bed {
-        allowed_variant_count / (bed_track_len as f64)
-    } else {
-        allowed_variant_count / (total_reflen as f64)
+        let snp_freq = (snp_count as f64) / allowed_variant_count;
+        let del_freq = (total_deletions as f64) / allowed_variant_count;
+        let ins_freq = (total_insertions as f64) / allowed_variant_count;
+        let probs = vec![snp_freq, ins_freq, del_freq];
+        let hom_freq = if homozygous_count > 0 {
+            (homozygous_count as f64) / allowed_variant_count
+        } else {
+            0.001 / allowed_variant_count
+        };
+        let mut_rate = if use_bed {
+            allowed_variant_count / (bed_track_len as f64)
+        } else {
+            allowed_variant_count / (total_reflen as f64)
+        };
+        (probs, hom_freq, mut_rate)
     };
 
     let ins_lengths: Vec<usize> = insertion_count.keys().cloned().collect();
@@ -595,37 +599,52 @@ H1N1_HA\t5000\t.\tA\t<CNV>\t60\tPASS\tEND=5500;CN=0\tGT\t1/1\n",
     }
 
     #[test]
-    fn test_runner_errors_on_vcf_with_only_symbolic_variants() {
-        // A VCF that's all symbolic SVs and zero SNP/indel records used
-        // to NaN-divide the SNP-frequency math (0/0), then serialize as
-        // JSON `null` that failed to deserialize on re-read. The runner
-        // now bails out with NoLiteralVariants before producing a
-        // poisoned model. Real training corpora always carry literal
-        // variants alongside SVs, so this affects only the malformed
-        // input case — and the error message names the problem clearly.
+    fn test_runner_builds_sv_only_model_from_vcf_with_no_literals() {
+        // gnomAD-SV and similar SV-dedicated callsets carry symbolic SVs
+        // but zero literal SNPs/indels. v1.9.1 errored out on this path
+        // (NoLiteralVariants) defensively against NaN-poisoned models;
+        // v1.10 instead produces an SV-only model with mutation_rate=0
+        // and a populated sv_model, so the trainer is usable against
+        // real-world SV callsets.
         let manifest_dir = env!("CARGO_MANIFEST_DIR");
         let reference = PathBuf::from(format!("{}/test_data/references/H1N1.fa", manifest_dir));
         let out_dir = tempdir().unwrap();
 
+        // Two DELs (enough to clear the SvModel per-type fit bar of 2
+        // observations) and a DUP+CNV that fall below the bar and get
+        // dropped from the sv_model itself but still count as
+        // "observations seen". Fixture mimics gnomAD-SV shape (zero
+        // literal SNP/indel records).
         let vcf_path = out_dir.path().join("sv_only.vcf");
         std::fs::write(
             &vcf_path,
             "##fileformat=VCFv4.2\n\
 ##INFO=<ID=END,Number=1,Type=Integer,Description=\"End position\">\n\
 #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n\
-H1N1_HA\t100\t.\tA\t<DEL>\t60\tPASS\tEND=500\tGT\t1/1\n\
+H1N1_HA\t100\t.\tA\t<DEL>\t60\tPASS\tEND=200\tGT\t1/1\n\
+H1N1_HA\t300\t.\tA\t<DEL>\t60\tPASS\tEND=450\tGT\t0/1\n\
 H1N1_HA\t600\t.\tT\t<DUP>\t60\tPASS\tEND=700\tGT\t1/1\n",
         )
         .unwrap();
 
         let mutations = read_vcf(vcf_path).unwrap();
         let output_file = out_dir.path().join("sv_only_model.json.gz");
-        let result = runner(&reference, mutations, HashMap::new(), &output_file, None);
-        match result {
-            Err(GenMutationModelError::NoLiteralVariants(_)) => { /* expected */ }
-            other => panic!("expected NoLiteralVariants error, got {:?}", other),
-        }
-        // No partial / poisoned model file should be written.
-        assert!(!output_file.exists());
+        runner(&reference, mutations, HashMap::new(), &output_file, None).unwrap();
+        assert!(output_file.exists());
+
+        // Re-read the produced model — must deserialize cleanly (no NaN
+        // poisoning the JSON), have mutation_rate=0, homozygous_frequency=0,
+        // and a populated sv_model with the DEL fit.
+        let model = MutationModel::from_file(&output_file).unwrap();
+        assert_eq!(model.mutation_rate, 0.0);
+        assert_eq!(model.homozygous_frequency, 0.0);
+        let sv = model
+            .sv_model
+            .as_ref()
+            .expect("SV-only training must produce a populated sv_model");
+        assert!(sv.is_usable());
+        assert!(sv.type_probabilities.contains_key(&SvType::Del));
+        // DUP had only 1 observation → dropped from the model.
+        assert!(!sv.type_probabilities.contains_key(&SvType::Dup));
     }
 }

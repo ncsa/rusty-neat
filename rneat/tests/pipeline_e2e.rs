@@ -480,3 +480,160 @@ fn gen_reads_with_sv_rate_scale_zero_emits_no_de_novo_svs() {
         "sv_rate_scale=0 must produce no symbolic SVs; got: {symbolic:?}"
     );
 }
+
+// ── Stage 2 of #189: input-VCF-driven aneuploidy depth-modulation ────────
+//
+// These tests pin that `build_coverage_multipliers` and `coverage_multiplier_for`
+// produce the correct depth profile for whole-contig SVs (the proxy for whole-
+// chromosome aneuploidy events). The math is contig-length-independent — if it
+// works at H1N1_HA's 13,325 bp it works at chr1's 250 Mb because there are no
+// contig-size-dependent branches in the path.
+//
+// All four tests use the same shape:
+//   1. Run gen-reads with NO input VCF to establish a per-test baseline read
+//      count (RNG is seeded, so this is reproducible).
+//   2. Run gen-reads with an input VCF carrying a whole-contig <DEL> / <DUP> /
+//      <CNV> at the genotype / CN we want to exercise.
+//   3. Assert that the modulated count is in the expected ratio of baseline,
+//      within ±15% tolerance to absorb statistical variation (σ/N ~ 1/√N ≈
+//      0.9% at baseline ~13k reads; 15% leaves ample margin while still
+//      catching any sign / off-by-one error in the multiplier arithmetic).
+
+/// Count reads whose names start with `@RNEAT_generated_H1N1_HA_` (i.e., were
+/// emitted from the H1N1_HA contig). Other test fixtures might add reads from
+/// other contigs to the same FASTQ; this filter keeps the count contig-local.
+fn count_h1n1_reads(fastq: &std::path::Path) -> usize {
+    let lines = read_gzip_fastq_lines(fastq);
+    lines
+        .chunks(4)
+        .filter(|c| c[0].starts_with("@RNEAT_generated_H1N1_HA_"))
+        .count()
+}
+
+/// Write a one-record VCF carrying a single symbolic SV spanning the whole
+/// H1N1_HA contig. `pos_1based` / `end_1based` use VCF convention (1-based
+/// inclusive); for `<DEL>` the deleted span is `[pos+1, end]`, for `<DUP>` /
+/// `<CNV>` the affected span is `[pos, end]`.
+fn write_whole_contig_sv_vcf(
+    work: &std::path::Path,
+    pos_1based: usize,
+    end_1based: usize,
+    alt: &str,
+    info_extras: &str,
+    gt: &str,
+) -> std::path::PathBuf {
+    use std::io::Write as _;
+    let path = work.join("input_sv.vcf");
+    let mut f = std::fs::File::create(&path).unwrap();
+    writeln!(f, "##fileformat=VCFv4.2").unwrap();
+    writeln!(f, "##ALT=<ID=DEL,Description=\"Deletion\">").unwrap();
+    writeln!(f, "##ALT=<ID=DUP,Description=\"Duplication\">").unwrap();
+    writeln!(f, "##ALT=<ID=CNV,Description=\"Copy number variable\">").unwrap();
+    writeln!(
+        f,
+        "##INFO=<ID=END,Number=1,Type=Integer,Description=\"End position\">"
+    )
+    .unwrap();
+    writeln!(
+        f,
+        "##INFO=<ID=CN,Number=1,Type=Integer,Description=\"Copy number\">"
+    )
+    .unwrap();
+    writeln!(
+        f,
+        "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">"
+    )
+    .unwrap();
+    writeln!(f, "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS").unwrap();
+    let info = format!("END={end_1based}{info_extras}");
+    writeln!(f, "H1N1_HA\t{pos_1based}\t.\tA\t{alt}\t60\tPASS\t{info}\tGT\t{gt}").unwrap();
+    path
+}
+
+/// Run gen-reads at the harness defaults (coverage=50, single-ended, mutation
+/// rate disabled) with the optional `input_vcf`, returning the count of reads
+/// emitted on H1N1_HA. The mutation rate is zeroed so de-novo SNPs don't
+/// confound the read-count comparison — we're measuring the SV multiplier's
+/// effect on coverage, not the variant generator's.
+fn run_h1n1_reads(work: &std::path::Path, prefix: &str, input_vcf: Option<std::path::PathBuf>) -> usize {
+    let mut config = GenReadsConfig::new(h1n1_reference(), work.to_path_buf(), prefix);
+    config.coverage = 50;
+    config.mutation_rate = Some(0.0);
+    config.input_vcf = input_vcf;
+    let yaml = config.write_yaml();
+    rneat()
+        .args(["gen-reads", "-c"])
+        .arg(yaml.path())
+        .assert()
+        .success();
+    count_h1n1_reads(&work.join(format!("{prefix}_r1.fastq.gz")))
+}
+
+#[test]
+fn whole_contig_hom_del_zeroes_all_reads() {
+    // Aneuploidy-scale check #1: a homozygous <DEL> spanning the entire
+    // H1N1_HA contig must produce zero reads. The depth multiplier for hom
+    // <DEL> is 0.0 regardless of ploidy; the mut==0 override at runner.rs:486
+    // then suppresses de-novo SNPs in the span too, so the read count must
+    // be exactly zero.
+    let (_dir, work) = fresh_workdir();
+    let input_vcf = write_whole_contig_sv_vcf(&work, 1, 13325, "<DEL>", "", "1/1");
+    let modulated = run_h1n1_reads(&work, "hom_del", Some(input_vcf));
+    assert_eq!(
+        modulated, 0,
+        "homozygous <DEL> spanning whole H1N1_HA contig must produce zero reads; got {modulated}"
+    );
+}
+
+#[test]
+fn whole_contig_hom_dup_doubles_reads() {
+    // Aneuploidy-scale check #2: a homozygous <DUP> spanning the entire
+    // contig should produce ~2× the baseline read count. coverage_multiplier_for
+    // returns (ploidy_f + ploidy_f) / ploidy_f = 2.0 at any ploidy.
+    let (_dir, work) = fresh_workdir();
+    let baseline = run_h1n1_reads(&work, "dup_baseline", None);
+    assert!(baseline > 1000, "baseline H1N1 read count suspiciously low ({baseline})");
+    let input_vcf = write_whole_contig_sv_vcf(&work, 1, 13325, "<DUP>", "", "1/1");
+    let modulated = run_h1n1_reads(&work, "dup_hom", Some(input_vcf));
+    let ratio = modulated as f64 / baseline as f64;
+    assert!(
+        (1.7..=2.3).contains(&ratio),
+        "hom <DUP> ratio {ratio:.3} outside [1.7, 2.3] — expected ~2.0× baseline. \
+         baseline={baseline}, modulated={modulated}"
+    );
+}
+
+#[test]
+fn whole_contig_het_dup_yields_1_5x_reads() {
+    // Aneuploidy-scale check #3: heterozygous <DUP> at ploidy 2 should yield
+    // 1.5× baseline coverage_multiplier_for returns (ploidy + 1) / ploidy =
+    // 1.5 for het DUP at ploidy 2.
+    let (_dir, work) = fresh_workdir();
+    let baseline = run_h1n1_reads(&work, "het_dup_baseline", None);
+    let input_vcf = write_whole_contig_sv_vcf(&work, 1, 13325, "<DUP>", "", "0/1");
+    let modulated = run_h1n1_reads(&work, "het_dup", Some(input_vcf));
+    let ratio = modulated as f64 / baseline as f64;
+    assert!(
+        (1.3..=1.7).contains(&ratio),
+        "het <DUP> ratio {ratio:.3} outside [1.3, 1.7] — expected ~1.5× baseline. \
+         baseline={baseline}, modulated={modulated}"
+    );
+}
+
+#[test]
+fn whole_contig_cnv_cn6_triples_reads() {
+    // Aneuploidy-scale check #4: a <CNV> with INFO/CN=6 at ploidy 2 should
+    // yield 3× baseline. coverage_multiplier_for has an early return at
+    // sv_model_defaults.rs:929 — when CN is present it overrides the
+    // genotype-based default, returning CN / ploidy = 6 / 2 = 3.0.
+    let (_dir, work) = fresh_workdir();
+    let baseline = run_h1n1_reads(&work, "cnv_baseline", None);
+    let input_vcf = write_whole_contig_sv_vcf(&work, 1, 13325, "<CNV>", ";CN=6", "0/1");
+    let modulated = run_h1n1_reads(&work, "cnv_cn6", Some(input_vcf));
+    let ratio = modulated as f64 / baseline as f64;
+    assert!(
+        (2.7..=3.3).contains(&ratio),
+        "<CNV> CN=6 ratio {ratio:.3} outside [2.7, 3.3] — expected ~3.0× baseline. \
+         baseline={baseline}, modulated={modulated}"
+    );
+}

@@ -1,3 +1,21 @@
+5/25/2026
+=========
+## rneat v1.10.2
+
+### Patch release: documentation, CI maintenance, known-limitations cleanup
+- **Cancer simulator design doc.** Consolidated the plan that emerged from the cancer-modeling investigation (umbrella #129; cancer-MVP sub-tickets #183–#186; SV-gap tickets #187–#192) into a single reference at `docs/cancer_simulator.md`. Covers the orchestration-first architecture, GDC TCGA MAFs as the v1 training corpus, the SV gap analysis tiered by cancer relevance, and a staged roadmap. Establishes `docs/` as the convention for design notes that should survive past their originating issue threads.
+- **CI: bumped `actions/checkout@v4` → `@v5` (#175).** Node.js 20 actions are deprecated by GitHub Actions — forced upgrade June 2026, removal September 2026. `actions/checkout@v5` runs on Node.js 24. Two workflow files updated: `.github/workflows/rust_binaries.yml` (release-binary build, runs on `v*.*.*` tags) and `.github/workflows/rusty-neat-tests.yml` (PR test workflow).
+
+### Known limitations
+Restated for v1.10.2 (carried over from earlier releases unless marked otherwise):
+- **`<INV>` and `<BND>` records round-trip from input but do not yet drive read-orientation flipping or junction-read modeling.** Reads from inversion / breakend spans still come from the forward-strand reference. This is the single biggest gap for cancer simulation — tracked at **#187** (BND with junction reads) and **#188** (INV with read-strand flipping).
+- **Multi-allelic VCF records (`,`-separated ALTs) are skipped at the reader,** both literal and symbolic. Real somatic VCFs do contain multi-allelic indels; the cancer MVP works around this by training from MAF-derived bi-allelic VCFs.
+- **The SV sampler's overlap-rejection retry budget caps at 10 × n.** Very high `sv_rate_scale` values can saturate retries and warn-and-stop with fewer SVs than the Poisson draw requested. The full-genome gnomAD-derived defaults (`per_base_rate ≈ 4.8e-4`) at `sv_rate_scale = 1.0` are well below this ceiling; documented for users who push the rate substantially higher.
+- **The bundled `default_sv_model()` is germline-derived (gnomAD-SV v4.1).** A cancer-specific SvModel default trained against PCAWG SV consensus is a natural follow-up once **#187** / **#188** land. Until then, cancer simulations should override the default via an explicit `mutation_model:` config field.
+
+### Notes
+- **Phantom de-novo SNPs in `<DEL>` spans is no longer a limitation.** v1.10.0's depth-modulation work added a `mult == 0.0` override that zeroes the mutation rate over deleted spans before SNP sampling, and the fix is exercised by `pipeline_e2e::gen_reads_with_symbolic_del_modulates_depth_and_round_trips_to_vcf`. Mentioned here because the v1.9.0 known-limitations section flagged it explicitly and readers chasing that note will otherwise have to read code to confirm the resolution.
+
 5/24/2026
 =========
 ## rneat v1.10.1

@@ -1,5 +1,13 @@
 5/24/2026
 =========
+## rneat v1.10.1
+
+### Patch release: SV-model refinements from real-data validation
+- **`<CNV>` records sampled from a model with empty `cnv_copy_number_distribution` now carry a fallback CN.** Trained models that observed `<CNV>` records but had no `INFO/CN` (gnomAD-SV is the canonical case — per-sample CN lives in FORMAT) used to produce `<CNV>` outputs with `copy_number = None`, which `gen-reads` warn-and-skipped for coverage modulation, so every CNV in the output VCF was uninterpretable for downstream callers. `SvModel::sample_variants` now falls back to a hard-coded `FALLBACK_CN_DISTRIBUTION` (mirroring the bundled-default CN shape) when the trained distribution is empty but `Cnv` is in the type list. An `info!` log at sampler entry flags when the fallback is firing.
+- **Bundled `sv_model_defaults` refit from the chr22 gnomAD-SV v4.1 validation run.** The v1.10.0 defaults were eyeballed from published gnomAD figures and were off by meaningful margins (DEL/DUP/CNV ratio 60/30/10 vs. fitted 80.7/19.1/0.2; `per_base_rate` 3e-6 vs. fitted 8.9e-6; DUP median length 3 kb vs. fitted 735 bp). Replaced with the fitted values; `homozygous_frequency` and `cnv_copy_number_distribution` stay at literature-derived estimates (gnomAD-SV is sites-only with no GT, so neither can be fit from this corpus). `tools/validate_with_gnomad.sh` reproduces the chr22 run that generated these numbers.
+
+5/24/2026
+=========
 ## rneat v1.10.0
 
 ### De novo CNV / SV generation from a learned model (#105)

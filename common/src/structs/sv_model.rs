@@ -1,0 +1,1227 @@
+//! Statistical model for generating symbolic / structural variants
+//! (`<DEL>` / `<DUP>` / `<CNV>`) de novo from a learned distribution.
+//!
+//! `SvModel` is fit by [`SvModel::fit_from_observations`] (called from
+//! `gen-mut-model` after the SNP/indel pass completes) and lives on
+//! [`crate::models::mutation_model::MutationModel`] as
+//! `Option<SvModel>` — `None` whenever the training VCF didn't carry
+//! enough usable SV observations, or whenever the model JSON was
+//! written by a pre-v1.10 build (the field defaults to `None` via
+//! `#[serde(default)]`).
+//!
+//! Supported types in this release: `<DEL>` / `<DUP>` / `<CNV>`. `<INV>`
+//! and breakend records are dropped at fit time (logged with a count).
+//! `gen-reads` consumes the model via [`SvModel::sample_variants`],
+//! gated behind the `sv_rate_scale` config knob (default 0.0 — opt-in).
+
+use crate::rng::{NeatRng, NeatRngError};
+use crate::structs::distributions::NormalDistribution;
+use crate::structs::nucleotides::Nucleotide;
+use crate::structs::variants::{
+    AlternateType, Genotype, SvData, SvType, Variant, VariantType,
+};
+use log::{info, warn};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+/// Minimum SV length (in bases) treated as an SV rather than an indel.
+/// Matches the conventional cutoff used by Manta, DELLY, Lumpy, GRIDSS,
+/// and the rest of the SV-calling ecosystem.
+///
+/// [`SvModel::fit_from_observations`] drops training records below this
+/// span — they're indels, not SVs.
+pub const MIN_SV_LENGTH_BP: usize = 50;
+
+/// Per-type sample count required to fit a length distribution.
+/// Log-normal MLE on a single observation yields `sigma = 0` — a
+/// degenerate distribution. Types with fewer observations than this are
+/// dropped from the trained model rather than carrying a fake `sigma`.
+const MIN_OBS_FOR_LENGTH_FIT: usize = 2;
+
+/// Learned statistical model for symbolic-SV generation.
+///
+/// The five fields together specify everything a sampler needs: how
+/// many SVs per base (`per_base_rate`), which type each one is
+/// (`type_probabilities`), how long it is (`length_log_normal`, keyed
+/// by type), what copy number a `<CNV>` carries
+/// (`cnv_copy_number_distribution`), and whether it's homozygous
+/// (`homozygous_frequency`).
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SvModel {
+    /// Per-base SV rate across the training corpus
+    /// (= count of fit-eligible SVs / sum of training contig lengths
+    /// the trainer iterated over).
+    pub per_base_rate: f64,
+
+    /// Probability that a generated SV is of a given type. Keys are
+    /// limited to `SvType::Del` / `SvType::Dup` / `SvType::Cnv`;
+    /// probabilities sum to ~1.0 across present keys. A type with
+    /// fewer than [`MIN_OBS_FOR_LENGTH_FIT`] observations is dropped
+    /// from this map (its length distribution couldn't be fit), and
+    /// the remaining probabilities are renormalized.
+    pub type_probabilities: HashMap<SvType, f64>,
+
+    /// Length distribution per SV type — `(mu, sigma)` of a log-normal
+    /// in log-space, fit by maximum likelihood on `ln(span)`. Same
+    /// key set as `type_probabilities`.
+    ///
+    /// Conditioning length on type is the cheapest concession to
+    /// biological realism: DELs trend smaller than DUPs / CNVs, and a
+    /// single global length distribution would mis-bias whichever type
+    /// the training corpus had less of.
+    pub length_log_normal: HashMap<SvType, (f64, f64)>,
+
+    /// Empirical copy-number distribution observed on `<CNV>` records
+    /// (CN value → probability). Probabilities sum to ~1.0 if any
+    /// CNVs in the training corpus carried `INFO/CN`; empty otherwise.
+    pub cnv_copy_number_distribution: HashMap<u32, f64>,
+
+    /// Probability that a generated SV is homozygous (vs heterozygous),
+    /// estimated as the homozygous fraction across all fit-eligible
+    /// observations of all types.
+    pub homozygous_frequency: f64,
+}
+
+impl SvModel {
+    /// Returns `true` when the model has enough learned signal to drive
+    /// generation — at least one type probability and a positive
+    /// per-base rate. Guards against partially-constructed or
+    /// hand-rolled models reaching a sampler that would divide by zero
+    /// or call a weighted pick on an empty distribution.
+    pub fn is_usable(&self) -> bool {
+        self.per_base_rate > 0.0 && !self.type_probabilities.is_empty()
+    }
+
+    /// Fit an `SvModel` from a set of observed SV records.
+    ///
+    /// Returns `None` when there isn't enough signal to build a usable
+    /// model: zero in-scope observations, `total_reflen == 0`, or every
+    /// type fell below [`MIN_OBS_FOR_LENGTH_FIT`]. Callers should treat
+    /// `None` as "this corpus doesn't support de novo SV generation"
+    /// and leave `MutationModel.sv_model` unset.
+    ///
+    /// Filtering applied (in order):
+    ///   - records whose ALT isn't `AlternateType::Symbolic` are
+    ///     ignored;
+    ///   - `<INV>` / breakends / unknown tags are dropped (this release
+    ///     only generates `<DEL>` / `<DUP>` / `<CNV>`);
+    ///   - records with no derivable span (no `END`, no `SVLEN`) are
+    ///     dropped;
+    ///   - records below [`MIN_SV_LENGTH_BP`] are dropped (they're
+    ///     indels, not SVs);
+    ///   - types with fewer than [`MIN_OBS_FOR_LENGTH_FIT`] surviving
+    ///     observations are dropped from the model entirely, so the
+    ///     resulting `type_probabilities` and `length_log_normal` have
+    ///     the same key set.
+    ///
+    /// Each filter stage logs a count so a "why is my SV model None?"
+    /// debug is grep-able in the trainer output.
+    pub fn fit_from_observations(
+        observations: &[Variant],
+        total_reflen: usize,
+    ) -> Option<SvModel> {
+        if total_reflen == 0 {
+            warn!("SvModel: total_reflen is zero, cannot estimate per-base rate");
+            return None;
+        }
+
+        let mut dropped_non_symbolic = 0usize;
+        let mut dropped_unsupported_type = 0usize;
+        let mut dropped_no_span = 0usize;
+        let mut dropped_below_min_length = 0usize;
+
+        // Per-type accumulators of (span, &Variant) so we can pull CN
+        // and genotype back out without re-walking the source.
+        let mut by_type: HashMap<SvType, Vec<(usize, &Variant)>> = HashMap::new();
+
+        for v in observations {
+            let sv = match v.alternate.as_symbolic() {
+                Some(sv) => sv,
+                None => {
+                    dropped_non_symbolic += 1;
+                    continue;
+                }
+            };
+            match sv.sv_type {
+                SvType::Del | SvType::Dup | SvType::Cnv => {}
+                _ => {
+                    dropped_unsupported_type += 1;
+                    continue;
+                }
+            }
+            let span = match sv.span(v.location) {
+                Some(s) if s > 0 => s,
+                _ => {
+                    dropped_no_span += 1;
+                    continue;
+                }
+            };
+            if span < MIN_SV_LENGTH_BP {
+                dropped_below_min_length += 1;
+                continue;
+            }
+            by_type.entry(sv.sv_type).or_default().push((span, v));
+        }
+
+        // Drop types that don't have enough observations for a real
+        // length fit. Renormalization happens below over what's left.
+        let mut dropped_thin_types = 0usize;
+        by_type.retain(|_, obs| {
+            if obs.len() < MIN_OBS_FOR_LENGTH_FIT {
+                dropped_thin_types += obs.len();
+                false
+            } else {
+                true
+            }
+        });
+
+        if dropped_non_symbolic > 0 {
+            // Trainers should hand us symbolic-only records, but the
+            // fitter is tolerant — a stray SNP just gets ignored.
+            info!(
+                "SvModel: ignored {} non-symbolic observation(s) (literal-base ALTs)",
+                dropped_non_symbolic
+            );
+        }
+        if dropped_unsupported_type > 0 {
+            info!(
+                "SvModel: dropped {} <INV>/breakend/unknown record(s) — not yet generatable",
+                dropped_unsupported_type
+            );
+        }
+        if dropped_no_span > 0 {
+            info!(
+                "SvModel: dropped {} symbolic SV(s) with no INFO/END or INFO/SVLEN",
+                dropped_no_span
+            );
+        }
+        if dropped_below_min_length > 0 {
+            info!(
+                "SvModel: dropped {} symbolic SV(s) below {}bp (treated as indels, not SVs)",
+                dropped_below_min_length, MIN_SV_LENGTH_BP
+            );
+        }
+        if dropped_thin_types > 0 {
+            info!(
+                "SvModel: dropped {} observation(s) from types with <{} samples \
+                 (can't fit a length distribution)",
+                dropped_thin_types, MIN_OBS_FOR_LENGTH_FIT
+            );
+        }
+
+        if by_type.is_empty() {
+            warn!(
+                "SvModel: no SV type cleared the {}-observation fit bar; \
+                 returning None (MutationModel.sv_model stays unset)",
+                MIN_OBS_FOR_LENGTH_FIT
+            );
+            return None;
+        }
+
+        let total_usable: usize = by_type.values().map(|v| v.len()).sum();
+        let n = total_usable as f64;
+
+        let type_probabilities: HashMap<SvType, f64> = by_type
+            .iter()
+            .map(|(k, obs)| (*k, obs.len() as f64 / n))
+            .collect();
+
+        // Log-normal MLE: μ = mean(ln x), σ² = mean((ln x − μ)²).
+        let length_log_normal: HashMap<SvType, (f64, f64)> = by_type
+            .iter()
+            .map(|(sv_type, obs)| {
+                let log_lens: Vec<f64> =
+                    obs.iter().map(|(s, _)| (*s as f64).ln()).collect();
+                let mu = log_lens.iter().sum::<f64>() / log_lens.len() as f64;
+                let variance = log_lens.iter().map(|x| (x - mu).powi(2)).sum::<f64>()
+                    / log_lens.len() as f64;
+                (*sv_type, (mu, variance.sqrt()))
+            })
+            .collect();
+
+        // CN distribution from <CNV> records that carry INFO/CN.
+        let mut cn_counts: HashMap<u32, usize> = HashMap::new();
+        if let Some(cnv_obs) = by_type.get(&SvType::Cnv) {
+            for (_, v) in cnv_obs {
+                if let Some(sv) = v.alternate.as_symbolic()
+                    && let Some(cn) = sv.copy_number
+                {
+                    *cn_counts.entry(cn).or_default() += 1;
+                }
+            }
+        }
+        let cn_total: usize = cn_counts.values().sum();
+        let cnv_copy_number_distribution: HashMap<u32, f64> = if cn_total > 0 {
+            cn_counts
+                .iter()
+                .map(|(k, c)| (*k, *c as f64 / cn_total as f64))
+                .collect()
+        } else {
+            HashMap::new()
+        };
+
+        let hom_count = by_type
+            .values()
+            .flat_map(|obs| obs.iter())
+            .filter(|(_, v)| matches!(v.genotype, Genotype::Homozygous))
+            .count();
+        let homozygous_frequency = hom_count as f64 / n;
+
+        let per_base_rate = n / total_reflen as f64;
+
+        info!(
+            "SvModel: fit from {} observation(s) across {} type(s); \
+             per_base_rate = {:.3e}, homozygous_frequency = {:.3}",
+            total_usable,
+            by_type.len(),
+            per_base_rate,
+            homozygous_frequency
+        );
+
+        Some(SvModel {
+            per_base_rate,
+            type_probabilities,
+            length_log_normal,
+            cnv_copy_number_distribution,
+            homozygous_frequency,
+        })
+    }
+
+    /// Sample de novo symbolic-SV variants for a single contig, gated by
+    /// the caller-supplied `rate_scale`.
+    ///
+    /// Algorithm:
+    ///   1. Draw `n` from `Poisson(per_base_rate × contig_len × rate_scale)`.
+    ///   2. For each: weighted-pick `SvType`; draw `length` from the
+    ///      type's log-normal, rejecting draws outside
+    ///      `[MIN_SV_LENGTH_BP, contig_len / 4]`; uniform-pick an anchor
+    ///      position; sample `INFO/CN` for `<CNV>`; Bernoulli for
+    ///      genotype using `homozygous_frequency`.
+    ///   3. Reject candidates whose affected range overlaps any SV
+    ///      already in `existing_svs` or any previously-accepted draw
+    ///      in this batch — retry up to `10 × n` times then warn-and-stop.
+    ///
+    /// Returns an empty `Vec` when generation is disabled (any of:
+    /// `rate_scale ≤ 0`, model is not [`is_usable`](Self::is_usable),
+    /// or `contig_len < 2 × MIN_SV_LENGTH_BP`). Sampler failures
+    /// (Poisson runaway, log-normal parameter blowups, etc.) log a
+    /// `warn!` and return whatever was produced so far — gen-reads
+    /// should keep generating SNP/indel reads rather than abort on a
+    /// degenerate SV model.
+    ///
+    /// Variant positions and `SvData.end` are populated in the same
+    /// 0-based-location-with-1-based-END convention used by
+    /// `Variant::from_file` so the downstream `build_coverage_multipliers`
+    /// path treats user-supplied and de novo SVs identically.
+    ///
+    /// `sequence` supplies the reference bases used to fill each
+    /// generated record's `REF` field (one base, at the anchor for
+    /// `<DEL>` or the first affected base for `<DUP>` / `<CNV>`). If
+    /// the picked base is `N`, the record is rejected and re-drawn so
+    /// we don't anchor SVs inside reference gaps.
+    pub fn sample_variants(
+        &self,
+        contig_len: usize,
+        existing_svs: &[Variant],
+        sequence: &[Nucleotide],
+        ploidy: usize,
+        rate_scale: f64,
+        rng: &mut NeatRng,
+    ) -> Vec<Variant> {
+        if rate_scale <= 0.0 || !rate_scale.is_finite() {
+            return Vec::new();
+        }
+        if !self.is_usable() {
+            return Vec::new();
+        }
+        if contig_len < MIN_SV_LENGTH_BP.saturating_mul(2) {
+            return Vec::new();
+        }
+
+        let lambda = self.per_base_rate * contig_len as f64 * rate_scale;
+        if !lambda.is_finite() || lambda <= 0.0 {
+            return Vec::new();
+        }
+        let n_sv = match sample_poisson(lambda, rng) {
+            Ok(n) => n as usize,
+            Err(e) => {
+                warn!("SvModel: Poisson sampler error (λ={lambda}): {e}; no SVs emitted");
+                return Vec::new();
+            }
+        };
+        if n_sv == 0 {
+            return Vec::new();
+        }
+
+        // Sorted type list + cumulative weights for repeatable picking
+        // via NeatRng::random() (avoids depending on rand::WeightedIndex's
+        // RNG trait shape).
+        let mut types: Vec<SvType> = self.type_probabilities.keys().copied().collect();
+        types.sort_by_key(|t| *t as u8);
+        let type_weights: Vec<f64> = types
+            .iter()
+            .map(|t| self.type_probabilities[t].max(0.0))
+            .collect();
+        let type_cum = cumulative_normalized(&type_weights);
+        if type_cum.is_empty() {
+            return Vec::new();
+        }
+
+        let mut cn_values: Vec<u32> = self.cnv_copy_number_distribution.keys().copied().collect();
+        cn_values.sort_unstable();
+        let cn_cum = cumulative_normalized(
+            &cn_values
+                .iter()
+                .map(|c| self.cnv_copy_number_distribution[c].max(0.0))
+                .collect::<Vec<_>>(),
+        );
+
+        // Existing affected ranges seed the overlap set; new draws are
+        // appended as accepted.
+        let mut occupied: Vec<(usize, usize)> = existing_svs
+            .iter()
+            .filter_map(|v| affected_range_for_existing(v, contig_len))
+            .collect();
+
+        let upper_len = (contig_len / 4).max(MIN_SV_LENGTH_BP);
+        let max_retries = (n_sv.saturating_mul(10)).max(20);
+        let mut out: Vec<Variant> = Vec::with_capacity(n_sv);
+        let mut retries = 0usize;
+
+        while out.len() < n_sv && retries < max_retries {
+            retries += 1;
+
+            let sv_type = match weighted_pick_with(&types, &type_cum, rng) {
+                Some(t) => *t,
+                None => break,
+            };
+
+            let (mu, sigma) = match self.length_log_normal.get(&sv_type) {
+                Some(p) => *p,
+                None => continue, // type without a length fit shouldn't occur given fit_from_observations
+            };
+            let length = match sample_log_normal_usize(mu, sigma, rng) {
+                Ok(l) => l,
+                Err(_) => continue,
+            };
+            if length < MIN_SV_LENGTH_BP || length > upper_len {
+                continue;
+            }
+
+            let (affected_start, affected_end, anchor_0based, sv_end_1based) =
+                match place_sv(sv_type, length, contig_len, rng) {
+                    Some(p) => p,
+                    None => continue,
+                };
+
+            if occupied
+                .iter()
+                .any(|&(s, e)| ranges_overlap(affected_start, affected_end, s, e))
+            {
+                continue;
+            }
+
+            let anchor_base = match sequence.get(anchor_0based) {
+                Some(&b) if b != Nucleotide::N => b,
+                _ => continue, // anchor falls in an N gap; try again
+            };
+
+            let copy_number = if sv_type == SvType::Cnv && !cn_values.is_empty() {
+                weighted_pick_with(&cn_values, &cn_cum, rng).copied()
+            } else {
+                None
+            };
+
+            let genotype = match rng.gen_bool(self.homozygous_frequency.clamp(0.0, 1.0)) {
+                Ok(true) => Genotype::Homozygous,
+                Ok(false) => Genotype::Heterozygous,
+                Err(_) => Genotype::Heterozygous,
+            };
+            let genotype_str = genotype_string(&genotype, ploidy);
+
+            let raw_alt = match sv_type {
+                SvType::Del => "<DEL>",
+                SvType::Dup => "<DUP>",
+                SvType::Cnv => "<CNV>",
+                // sample_variants only emits the three supported types;
+                // others were excluded from type_probabilities at fit
+                // time. The match is exhaustive for the compiler.
+                _ => continue,
+            };
+            let mut sv_data = SvData::new(raw_alt, sv_type);
+            sv_data.end = Some(sv_end_1based);
+            sv_data.copy_number = copy_number;
+
+            let info_field = build_info_field(sv_type, sv_end_1based, copy_number);
+
+            occupied.push((affected_start, affected_end));
+            out.push(Variant {
+                variant_type: VariantType::Complex,
+                location: anchor_0based,
+                reference: vec![anchor_base],
+                alternate: AlternateType::Symbolic(sv_data),
+                genotype_str: genotype_str.clone(),
+                genotype,
+                id: None,
+                quality_score: None,
+                filter: None,
+                info: Some(info_field),
+                format: vec!["GT".to_string()],
+                sample: vec![genotype_str],
+            });
+        }
+
+        if out.len() < n_sv {
+            warn!(
+                "SvModel: requested {} de novo SV(s) but only placed {} after {} retries \
+                 (overlap rejection or N-anchor rejection saturated)",
+                n_sv,
+                out.len(),
+                retries
+            );
+        } else {
+            info!(
+                "SvModel: sampled {} de novo SV(s) on a {}bp contig (rate_scale={})",
+                out.len(),
+                contig_len,
+                rate_scale
+            );
+        }
+
+        out
+    }
+}
+
+/// Knuth's multiplicative Poisson sampler. Cheap and correct for the
+/// `λ ≲ 30` range we expect from per-base rates × realistic contig
+/// lengths × `sv_rate_scale ≤ ~5`. Returns an error if the loop appears
+/// to be runaway (defensive — `exp(-λ)` underflows to 0 around λ≈745).
+fn sample_poisson(lambda: f64, rng: &mut NeatRng) -> Result<u64, NeatRngError> {
+    if lambda <= 0.0 || !lambda.is_finite() {
+        return Ok(0);
+    }
+    let l = (-lambda).exp();
+    if l == 0.0 {
+        return Err(NeatRngError::SamplingError(format!(
+            "Poisson λ={lambda} too large (exp(-λ) underflowed to 0)"
+        )));
+    }
+    let mut k: u64 = 0;
+    let mut p: f64 = 1.0;
+    loop {
+        k += 1;
+        p *= rng.random()?;
+        if p < l {
+            return Ok(k - 1);
+        }
+        if k > 1_000_000 {
+            return Err(NeatRngError::SamplingError(format!(
+                "Poisson sampler exceeded 1e6 iterations at λ={lambda}"
+            )));
+        }
+    }
+}
+
+/// Sample `round(exp(N(mu, sigma)))` via inverse-CDF on a uniform draw.
+fn sample_log_normal_usize(
+    mu: f64,
+    sigma: f64,
+    rng: &mut NeatRng,
+) -> Result<usize, NeatRngError> {
+    if !mu.is_finite() || !sigma.is_finite() || sigma <= 0.0 {
+        return Err(NeatRngError::SamplingError(format!(
+            "log-normal parameters invalid: mu={mu} sigma={sigma}"
+        )));
+    }
+    let normal = NormalDistribution::new(mu, sigma)
+        .map_err(|e| NeatRngError::SamplingError(format!("{e:?}")))?;
+    // statrs's inverse_cdf saturates at the open-interval endpoints, so
+    // clamp the uniform draw away from the exact boundaries.
+    let u = rng.random()?.clamp(1e-9, 1.0 - 1e-9);
+    let normal_sample = normal
+        .sample(u)
+        .map_err(|e| NeatRngError::SamplingError(format!("{e:?}")))?;
+    let v = normal_sample.exp();
+    if !v.is_finite() || v <= 0.0 {
+        return Err(NeatRngError::SamplingError(format!(
+            "log-normal sample non-finite or non-positive: {v}"
+        )));
+    }
+    Ok(v.round().max(0.0) as usize)
+}
+
+/// Normalize a non-negative weight vector and produce its cumulative
+/// sum, suitable for inverse-CDF picking via a uniform `[0, 1)` draw.
+/// Returns an empty `Vec` if all weights are zero.
+fn cumulative_normalized(weights: &[f64]) -> Vec<f64> {
+    let total: f64 = weights.iter().filter(|w| w.is_finite() && **w >= 0.0).sum();
+    if total <= 0.0 || !total.is_finite() {
+        return Vec::new();
+    }
+    let mut out = Vec::with_capacity(weights.len());
+    let mut acc = 0.0;
+    for &w in weights {
+        let w = if w.is_finite() && w >= 0.0 { w } else { 0.0 };
+        acc += w / total;
+        out.push(acc);
+    }
+    out
+}
+
+/// Pick an element from a parallel `values` / `cum_weights` pair using
+/// inverse-CDF sampling. `cum_weights` is the normalized cumulative
+/// distribution produced by [`cumulative_normalized`].
+fn weighted_pick_with<'a, T>(
+    values: &'a [T],
+    cum_weights: &[f64],
+    rng: &mut NeatRng,
+) -> Option<&'a T> {
+    if values.is_empty() || cum_weights.len() != values.len() {
+        return None;
+    }
+    let u = rng.random().ok()?;
+    for (v, c) in values.iter().zip(cum_weights.iter()) {
+        if u < *c {
+            return Some(v);
+        }
+    }
+    values.last()
+}
+
+/// Pick an anchor for a candidate SV of `length` bases on a contig of
+/// `contig_len` bases. Returns `(affected_start, affected_end,
+/// anchor_0based, sv_end_1based)` or `None` if the contig is too small
+/// for the chosen length.
+///
+/// For `<DEL>`, the anchor (1-based POS) is the base immediately before
+/// the deletion and is NOT itself deleted — the affected range is
+/// `[POS+1, END]` 1-based inclusive, i.e. `[anchor_0based + 1,
+/// anchor_0based + 1 + length)` 0-based half-open. For `<DUP>` / `<CNV>`
+/// POS is the first affected base.
+fn place_sv(
+    sv_type: SvType,
+    length: usize,
+    contig_len: usize,
+    rng: &mut NeatRng,
+) -> Option<(usize, usize, usize, usize)> {
+    if length == 0 || length >= contig_len {
+        return None;
+    }
+    // For DEL we need an anchor BEFORE the deleted bases, so the max
+    // anchor is `contig_len - length - 1`. For DUP/CNV, the anchor IS
+    // the first affected base; max anchor is `contig_len - length`.
+    let max_anchor_inclusive = match sv_type {
+        SvType::Del => contig_len.checked_sub(length + 1)?,
+        _ => contig_len.checked_sub(length)?,
+    };
+    if max_anchor_inclusive == 0 {
+        return None;
+    }
+    let anchor = rng
+        .range_i64(0, max_anchor_inclusive as i64)
+        .ok()?
+        .max(0) as usize;
+    let (start, end, sv_end_1based) = match sv_type {
+        SvType::Del => {
+            let s = anchor + 1;
+            let e = s + length;
+            // 1-based END for SvData: span includes the anchor + deleted
+            // bases, so END_1based = anchor_1based + length = anchor + 1 + length.
+            (s, e, anchor + 1 + length)
+        }
+        _ => {
+            let s = anchor;
+            let e = s + length;
+            // 1-based END = POS_1based + length - 1 = (anchor + 1) + length - 1 = anchor + length.
+            (s, e, anchor + length)
+        }
+    };
+    Some((start, end, anchor, sv_end_1based))
+}
+
+/// Compute the 0-based half-open affected range of an existing symbolic
+/// SV, for the overlap-rejection check. Returns `None` if the record
+/// isn't symbolic or has no usable span.
+fn affected_range_for_existing(v: &Variant, block_end: usize) -> Option<(usize, usize)> {
+    let sv = v.alternate.as_symbolic()?;
+    let span = sv.span(v.location.saturating_add(1))?;
+    if span == 0 {
+        return None;
+    }
+    let raw_end = v.location.saturating_add(span).min(block_end);
+    let start = match sv.sv_type {
+        SvType::Del => v.location.saturating_add(1).min(block_end),
+        _ => v.location.min(block_end),
+    };
+    if start >= raw_end {
+        return None;
+    }
+    Some((start, raw_end))
+}
+
+fn ranges_overlap(a_start: usize, a_end: usize, b_start: usize, b_end: usize) -> bool {
+    a_start < b_end && b_start < a_end
+}
+
+/// Emit a single-line VCF `INFO` field carrying the structural-variant
+/// fields downstream readers expect, so de novo records round-trip
+/// through the writer with the same shape as user-supplied input.
+fn build_info_field(sv_type: SvType, end_1based: usize, copy_number: Option<u32>) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    let svtype = match sv_type {
+        SvType::Del => "DEL",
+        SvType::Dup => "DUP",
+        SvType::Cnv => "CNV",
+        SvType::Ins => "INS",
+        SvType::Inv => "INV",
+        SvType::Bnd => "BND",
+        SvType::Unknown => "UNKNOWN",
+    };
+    parts.push(format!("SVTYPE={svtype}"));
+    parts.push(format!("END={end_1based}"));
+    if let Some(cn) = copy_number {
+        parts.push(format!("CN={cn}"));
+    }
+    parts.join(";")
+}
+
+/// Format a VCF genotype string for `ploidy` haplotypes. Homozygous →
+/// all `1`s; heterozygous → one `1` and the rest `0`. Phased on `|`
+/// would be more standard, but the existing v1.9.0 writers use `/` for
+/// both unphased and phased records, so match that.
+fn genotype_string(genotype: &Genotype, ploidy: usize) -> String {
+    let n = ploidy.max(1);
+    let parts: Vec<&str> = match genotype {
+        Genotype::Homozygous => (0..n).map(|_| "1").collect(),
+        Genotype::Heterozygous => {
+            // One alt + (n-1) refs.
+            let mut v = vec!["0"; n.saturating_sub(1)];
+            v.push("1");
+            v
+        }
+    };
+    parts.join("/")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::structs::nucleotides::Nucleotide;
+    use crate::structs::variants::{AlternateType, SvData, VariantType};
+
+    #[test]
+    fn default_sv_model_is_not_usable() {
+        let m = SvModel::default();
+        assert!(!m.is_usable());
+        assert_eq!(m.per_base_rate, 0.0);
+        assert!(m.type_probabilities.is_empty());
+        assert!(m.length_log_normal.is_empty());
+        assert!(m.cnv_copy_number_distribution.is_empty());
+        assert_eq!(m.homozygous_frequency, 0.0);
+    }
+
+    #[test]
+    fn min_sv_length_is_the_industry_50bp_cutoff() {
+        // Lock in the constant — downstream samplers and the trainer
+        // both key off it; a silent change would shift the entire
+        // SV/indel boundary across the pipeline.
+        assert_eq!(MIN_SV_LENGTH_BP, 50);
+    }
+
+    #[test]
+    fn populated_sv_model_round_trips_through_serde_json() {
+        let mut m = SvModel {
+            per_base_rate: 2.3e-7,
+            homozygous_frequency: 0.31,
+            ..Default::default()
+        };
+        m.type_probabilities.insert(SvType::Del, 0.6);
+        m.type_probabilities.insert(SvType::Dup, 0.3);
+        m.type_probabilities.insert(SvType::Cnv, 0.1);
+        m.length_log_normal.insert(SvType::Del, (7.5, 1.8));
+        m.length_log_normal.insert(SvType::Dup, (8.1, 1.5));
+        m.cnv_copy_number_distribution.insert(0, 0.05);
+        m.cnv_copy_number_distribution.insert(1, 0.45);
+        m.cnv_copy_number_distribution.insert(3, 0.30);
+        m.cnv_copy_number_distribution.insert(4, 0.20);
+
+        let json = serde_json::to_string(&m).unwrap();
+        let back: SvModel = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, m);
+        assert!(back.is_usable());
+    }
+
+    #[test]
+    fn is_usable_requires_both_rate_and_type_probabilities() {
+        let mut only_rate = SvModel::default();
+        only_rate.per_base_rate = 1e-6;
+        assert!(!only_rate.is_usable());
+
+        let mut only_types = SvModel::default();
+        only_types.type_probabilities.insert(SvType::Del, 1.0);
+        assert!(!only_types.is_usable());
+    }
+
+    /// Build a synthetic symbolic-SV `Variant` with a 1-based POS,
+    /// a 1-based-inclusive END (or `None` to skip), the given type,
+    /// genotype, and optional copy_number. Returns a value owned by
+    /// the caller — tests construct a `Vec<Variant>` and pass a slice
+    /// to the fitter.
+    fn sv(
+        pos_1based: usize,
+        end_1based: Option<usize>,
+        sv_type: SvType,
+        genotype: Genotype,
+        copy_number: Option<u32>,
+    ) -> Variant {
+        let raw_alt = match sv_type {
+            SvType::Del => "<DEL>",
+            SvType::Dup => "<DUP>",
+            SvType::Cnv => "<CNV>",
+            SvType::Ins => "<INS>",
+            SvType::Inv => "<INV>",
+            SvType::Bnd => "B[chr1:1000[",
+            SvType::Unknown => "<NOVEL>",
+        };
+        let mut sv_data = SvData::new(raw_alt, sv_type);
+        sv_data.end = end_1based;
+        sv_data.copy_number = copy_number;
+        let gt_str = match genotype {
+            Genotype::Homozygous => "1/1",
+            Genotype::Heterozygous => "0/1",
+        };
+        Variant {
+            variant_type: VariantType::Complex,
+            location: pos_1based,
+            reference: vec![Nucleotide::A],
+            alternate: AlternateType::Symbolic(sv_data),
+            genotype_str: gt_str.to_string(),
+            genotype,
+            id: None,
+            quality_score: None,
+            filter: None,
+            info: None,
+            format: Vec::new(),
+            sample: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn fit_returns_none_for_empty_observations() {
+        let m = SvModel::fit_from_observations(&[], 10_000);
+        assert!(m.is_none());
+    }
+
+    #[test]
+    fn fit_returns_none_when_total_reflen_zero() {
+        // Per-base rate would be 0/0 — `None` keeps the contract that a
+        // `Some(SvModel)` is always usable.
+        let obs = vec![
+            sv(100, Some(200), SvType::Del, Genotype::Homozygous, None),
+            sv(500, Some(700), SvType::Del, Genotype::Heterozygous, None),
+        ];
+        assert!(SvModel::fit_from_observations(&obs, 0).is_none());
+    }
+
+    #[test]
+    fn fit_drops_sub_50bp_records_and_unsupported_types() {
+        // 5 input records, only the two ≥50bp DELs should survive into
+        // the fit. The INV and BND are dropped as unsupported; the
+        // 30bp DEL is dropped as an indel-disguised-as-SV.
+        let obs = vec![
+            sv(100, Some(200), SvType::Del, Genotype::Homozygous, None), // 101bp DEL — keep
+            sv(500, Some(700), SvType::Del, Genotype::Heterozygous, None), // 201bp DEL — keep
+            sv(800, Some(829), SvType::Del, Genotype::Heterozygous, None), // 30bp — drop (sub-50)
+            sv(1000, Some(2000), SvType::Inv, Genotype::Homozygous, None), // INV — drop
+            sv(3000, None, SvType::Bnd, Genotype::Heterozygous, None),     // BND — drop
+        ];
+        let m = SvModel::fit_from_observations(&obs, 100_000).unwrap();
+        assert!(m.is_usable());
+        assert_eq!(m.type_probabilities.len(), 1);
+        assert_eq!(m.type_probabilities.get(&SvType::Del), Some(&1.0));
+        // 2 surviving SVs / 100kb = 2e-5 per base.
+        assert!((m.per_base_rate - 2e-5).abs() < 1e-12);
+        // 1 homozygous of 2 surviving → 0.5
+        assert!((m.homozygous_frequency - 0.5).abs() < 1e-12);
+    }
+
+    #[test]
+    fn fit_drops_types_with_one_observation() {
+        // DEL has 2 observations → kept. DUP has 1 → dropped (can't fit σ
+        // from a single sample). Probabilities renormalize over what's
+        // left, so DEL becomes 1.0.
+        let obs = vec![
+            sv(100, Some(200), SvType::Del, Genotype::Homozygous, None),
+            sv(500, Some(700), SvType::Del, Genotype::Homozygous, None),
+            sv(1000, Some(1500), SvType::Dup, Genotype::Heterozygous, None),
+        ];
+        let m = SvModel::fit_from_observations(&obs, 10_000).unwrap();
+        assert_eq!(m.type_probabilities.len(), 1);
+        assert!(m.type_probabilities.contains_key(&SvType::Del));
+        assert!(!m.type_probabilities.contains_key(&SvType::Dup));
+        assert!(m.length_log_normal.contains_key(&SvType::Del));
+        assert!(!m.length_log_normal.contains_key(&SvType::Dup));
+    }
+
+    #[test]
+    fn fit_recovers_log_normal_parameters_within_tolerance() {
+        // For 4 deletions of length e^7, e^7, e^8, e^8 (i.e.
+        // ln-lengths = 7, 7, 8, 8), MLE gives μ=7.5, σ²=0.25, σ=0.5.
+        let lens = [
+            (7.0_f64.exp() as usize), // ~1097
+            (7.0_f64.exp() as usize),
+            (8.0_f64.exp() as usize), // ~2981
+            (8.0_f64.exp() as usize),
+        ];
+        let mut pos = 100usize;
+        let mut obs = Vec::new();
+        for &len in &lens {
+            obs.push(sv(pos, Some(pos + len - 1), SvType::Del, Genotype::Heterozygous, None));
+            pos += len + 1000; // separate them in coords (doesn't affect fit)
+        }
+        let m = SvModel::fit_from_observations(&obs, 1_000_000).unwrap();
+        let (mu, sigma) = m.length_log_normal[&SvType::Del];
+        // Rounding through usize introduces tiny error vs the exact
+        // analytic value, but it should easily land within 5%.
+        assert!((mu - 7.5).abs() < 0.05, "mu was {mu}, expected ~7.5");
+        assert!((sigma - 0.5).abs() < 0.05, "sigma was {sigma}, expected ~0.5");
+    }
+
+    #[test]
+    fn fit_populates_cnv_copy_number_distribution() {
+        // Three CNVs: CN=1, CN=1, CN=3 → P(1)=2/3, P(3)=1/3.
+        // Two CNVs without CN — they're kept but don't contribute to
+        // the CN distribution (cn_counts is empty for those).
+        let obs = vec![
+            sv(100, Some(500), SvType::Cnv, Genotype::Heterozygous, Some(1)),
+            sv(1000, Some(1500), SvType::Cnv, Genotype::Heterozygous, Some(1)),
+            sv(2000, Some(2500), SvType::Cnv, Genotype::Heterozygous, Some(3)),
+            sv(3000, Some(3500), SvType::Cnv, Genotype::Heterozygous, None),
+            sv(4000, Some(4500), SvType::Cnv, Genotype::Heterozygous, None),
+        ];
+        let m = SvModel::fit_from_observations(&obs, 100_000).unwrap();
+        let cn = &m.cnv_copy_number_distribution;
+        assert_eq!(cn.len(), 2);
+        assert!((cn[&1] - 2.0 / 3.0).abs() < 1e-12);
+        assert!((cn[&3] - 1.0 / 3.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn fit_returns_none_when_every_type_thin() {
+        // Two records, two different types — neither type clears the
+        // 2-observation bar, so the fit returns None.
+        let obs = vec![
+            sv(100, Some(200), SvType::Del, Genotype::Homozygous, None),
+            sv(500, Some(1500), SvType::Dup, Genotype::Heterozygous, None),
+        ];
+        assert!(SvModel::fit_from_observations(&obs, 10_000).is_none());
+    }
+
+    #[test]
+    fn fit_ignores_non_symbolic_alts() {
+        // A literal SNP slipped in shouldn't blow up the fitter — it's
+        // not a symbolic record, so it's silently skipped.
+        use crate::structs::variants::Variant as V;
+        let snp = V::new(
+            VariantType::SNP,
+            42,
+            &vec![Nucleotide::A],
+            &vec![Nucleotide::C],
+            &mut vec![1, 0],
+        )
+        .unwrap();
+        let obs = vec![
+            snp,
+            sv(100, Some(200), SvType::Del, Genotype::Homozygous, None),
+            sv(500, Some(700), SvType::Del, Genotype::Heterozygous, None),
+        ];
+        let m = SvModel::fit_from_observations(&obs, 10_000).unwrap();
+        assert_eq!(m.type_probabilities.len(), 1);
+        assert!(m.is_usable());
+    }
+
+    // ── sample_variants tests ────────────────────────────────────────
+
+    fn deterministic_rng() -> NeatRng {
+        NeatRng::new_from_seed(&vec![
+            "phase3".to_string(),
+            "sample_variants".to_string(),
+        ])
+        .unwrap()
+    }
+
+    /// Build a usable `SvModel` with a single SV type so we can assert
+    /// sampling produces only that type. Length distribution centered
+    /// around `e^7` ≈ 1097bp.
+    fn model_with_single_type(sv_type: SvType, per_base_rate: f64) -> SvModel {
+        let mut m = SvModel::default();
+        m.per_base_rate = per_base_rate;
+        m.homozygous_frequency = 0.5;
+        m.type_probabilities.insert(sv_type, 1.0);
+        m.length_log_normal.insert(sv_type, (7.0, 0.4));
+        if sv_type == SvType::Cnv {
+            m.cnv_copy_number_distribution.insert(0, 0.3);
+            m.cnv_copy_number_distribution.insert(3, 0.5);
+            m.cnv_copy_number_distribution.insert(4, 0.2);
+        }
+        m
+    }
+
+    /// An ACGT-only contig of the requested length. No `N`s, so anchor
+    /// rejection never fires.
+    fn acgt_sequence(len: usize) -> Vec<Nucleotide> {
+        let bases = [Nucleotide::A, Nucleotide::C, Nucleotide::G, Nucleotide::T];
+        (0..len).map(|i| bases[i % 4]).collect()
+    }
+
+    #[test]
+    fn sample_variants_returns_empty_when_rate_scale_zero() {
+        let m = model_with_single_type(SvType::Del, 1e-3);
+        let seq = acgt_sequence(50_000);
+        let mut rng = deterministic_rng();
+        let out = m.sample_variants(50_000, &[], &seq, 2, 0.0, &mut rng);
+        assert!(
+            out.is_empty(),
+            "rate_scale=0 must disable generation; got {} SV(s)",
+            out.len()
+        );
+    }
+
+    #[test]
+    fn sample_variants_returns_empty_when_model_unusable() {
+        let m = SvModel::default();
+        let seq = acgt_sequence(50_000);
+        let mut rng = deterministic_rng();
+        let out = m.sample_variants(50_000, &[], &seq, 2, 1.0, &mut rng);
+        assert!(out.is_empty(), "unusable model must yield no SVs");
+    }
+
+    #[test]
+    fn sample_variants_returns_empty_when_contig_too_small() {
+        // Anything below 2 × MIN_SV_LENGTH_BP is rejected outright —
+        // we can't reliably place a ≥50bp SV in a 50bp contig.
+        let m = model_with_single_type(SvType::Del, 1e-3);
+        let seq = acgt_sequence(MIN_SV_LENGTH_BP);
+        let mut rng = deterministic_rng();
+        let out = m.sample_variants(MIN_SV_LENGTH_BP, &[], &seq, 2, 1.0, &mut rng);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn sample_variants_emits_only_supported_types() {
+        // Even if the model is hand-rolled with an INV in
+        // type_probabilities (which fit_from_observations would never
+        // produce), the sampler skips the unsupported branch — the
+        // resulting output contains only DEL/DUP/CNV.
+        let mut m = SvModel::default();
+        m.per_base_rate = 5e-3;
+        m.homozygous_frequency = 0.5;
+        m.type_probabilities.insert(SvType::Del, 0.5);
+        m.type_probabilities.insert(SvType::Inv, 0.5);
+        m.length_log_normal.insert(SvType::Del, (7.0, 0.3));
+        m.length_log_normal.insert(SvType::Inv, (7.0, 0.3));
+        let seq = acgt_sequence(100_000);
+        let mut rng = deterministic_rng();
+        let out = m.sample_variants(100_000, &[], &seq, 2, 1.0, &mut rng);
+        for v in &out {
+            let sv = v.alternate.as_symbolic().expect("must be symbolic");
+            assert!(
+                matches!(sv.sv_type, SvType::Del | SvType::Dup | SvType::Cnv),
+                "v1 sampler must only emit DEL/DUP/CNV, got {:?}",
+                sv.sv_type
+            );
+        }
+    }
+
+    #[test]
+    fn sampled_dels_have_correct_anchor_and_end_invariant() {
+        // For each generated DEL: variant.location is the 0-based anchor
+        // (just before the deletion), sv.end is 1-based inclusive
+        // covering the last deleted base. The span computed from those
+        // two fields must satisfy:
+        //   span_bases = end - (location + 1) + 1 = end - location
+        // …and the affected bases ≥ MIN_SV_LENGTH_BP.
+        let m = model_with_single_type(SvType::Del, 5e-3);
+        let seq = acgt_sequence(100_000);
+        let mut rng = deterministic_rng();
+        let out = m.sample_variants(100_000, &[], &seq, 2, 1.0, &mut rng);
+        assert!(
+            !out.is_empty(),
+            "expected at least one sampled DEL at this rate"
+        );
+        for v in &out {
+            let sv = v.alternate.as_symbolic().expect("must be symbolic");
+            assert_eq!(sv.sv_type, SvType::Del);
+            let end = sv.end.expect("END must be populated");
+            // location is 0-based; end is 1-based inclusive. Deleted
+            // bases are 0-based [location+1, end), so length = end - location - 1.
+            let length = end - v.location - 1;
+            assert!(
+                length >= MIN_SV_LENGTH_BP,
+                "DEL length {} below MIN_SV_LENGTH_BP",
+                length
+            );
+            // Fits within contig.
+            assert!(end <= 100_000);
+        }
+    }
+
+    #[test]
+    fn sampled_dups_have_correct_pos_and_end_invariant() {
+        let m = model_with_single_type(SvType::Dup, 5e-3);
+        let seq = acgt_sequence(100_000);
+        let mut rng = deterministic_rng();
+        let out = m.sample_variants(100_000, &[], &seq, 2, 1.0, &mut rng);
+        assert!(!out.is_empty());
+        for v in &out {
+            let sv = v.alternate.as_symbolic().expect("must be symbolic");
+            assert_eq!(sv.sv_type, SvType::Dup);
+            let end = sv.end.expect("END must be populated");
+            // For DUP, the duplicated region is 0-based [location, end).
+            let length = end - v.location;
+            assert!(length >= MIN_SV_LENGTH_BP);
+            assert!(end <= 100_000);
+        }
+    }
+
+    #[test]
+    fn sampled_cnvs_carry_info_cn_from_distribution() {
+        let m = model_with_single_type(SvType::Cnv, 5e-3);
+        let seq = acgt_sequence(100_000);
+        let mut rng = deterministic_rng();
+        let out = m.sample_variants(100_000, &[], &seq, 2, 1.0, &mut rng);
+        assert!(!out.is_empty());
+        let expected_cns: std::collections::HashSet<u32> =
+            m.cnv_copy_number_distribution.keys().copied().collect();
+        for v in &out {
+            let sv = v.alternate.as_symbolic().expect("must be symbolic");
+            assert_eq!(sv.sv_type, SvType::Cnv);
+            let cn = sv.copy_number.expect("<CNV> must carry CN");
+            assert!(
+                expected_cns.contains(&cn),
+                "sampled CN={cn} not in training distribution {:?}",
+                expected_cns
+            );
+        }
+    }
+
+    #[test]
+    fn sampled_variants_dont_overlap_each_other_or_existing_svs() {
+        // Pre-load one big <DEL> at position 100 spanning ~1000bp.
+        // Sample with a high rate so we exercise the overlap rejector.
+        // After sampling, no two SVs (existing + sampled) share any base.
+        let existing = vec![{
+            let mut sd = SvData::new("<DEL>", SvType::Del);
+            sd.end = Some(1100);
+            Variant {
+                variant_type: VariantType::Complex,
+                location: 100,
+                reference: vec![Nucleotide::A],
+                alternate: AlternateType::Symbolic(sd),
+                genotype_str: "1/1".to_string(),
+                genotype: Genotype::Homozygous,
+                id: None,
+                quality_score: None,
+                filter: None,
+                info: None,
+                format: Vec::new(),
+                sample: Vec::new(),
+            }
+        }];
+        let m = model_with_single_type(SvType::Dup, 1e-3);
+        let seq = acgt_sequence(50_000);
+        let mut rng = deterministic_rng();
+        let sampled = m.sample_variants(50_000, &existing, &seq, 2, 1.0, &mut rng);
+
+        let mut ranges: Vec<(usize, usize)> = Vec::new();
+        for v in existing.iter().chain(sampled.iter()) {
+            if let Some(r) = affected_range_for_existing(v, 50_000) {
+                ranges.push(r);
+            }
+        }
+        for i in 0..ranges.len() {
+            for j in (i + 1)..ranges.len() {
+                let (s1, e1) = ranges[i];
+                let (s2, e2) = ranges[j];
+                assert!(
+                    !(s1 < e2 && s2 < e1),
+                    "SVs overlap: [{s1}, {e1}) vs [{s2}, {e2})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sample_variants_skips_anchors_in_n_gaps() {
+        // First 10kb of the contig is all-N; sampler must place every
+        // SV in the ACGT tail. With a deterministic seed and a small
+        // contig + high rate, we exercise the rejection loop hard.
+        let mut seq = vec![Nucleotide::N; 10_000];
+        seq.extend(acgt_sequence(20_000));
+        let m = model_with_single_type(SvType::Del, 2e-3);
+        let mut rng = deterministic_rng();
+        let out = m.sample_variants(seq.len(), &[], &seq, 2, 1.0, &mut rng);
+        for v in &out {
+            // Anchor is 0-based variant.location. Must NOT fall in the
+            // all-N prefix.
+            assert_ne!(seq[v.location], Nucleotide::N);
+            assert!(
+                v.location >= 10_000,
+                "anchor {} fell in the all-N gap",
+                v.location
+            );
+        }
+    }
+
+    #[test]
+    fn sample_variants_is_deterministic_for_same_seed() {
+        // Two runs with seeded RNGs must produce the exact same Variants
+        // — a non-trivial property given the overlap retry loop, since
+        // a wrong reuse of RNG state would diverge on the first rejection.
+        let m = model_with_single_type(SvType::Del, 5e-3);
+        let seq = acgt_sequence(100_000);
+        let mut rng1 = deterministic_rng();
+        let mut rng2 = deterministic_rng();
+        let a = m.sample_variants(100_000, &[], &seq, 2, 1.0, &mut rng1);
+        let b = m.sample_variants(100_000, &[], &seq, 2, 1.0, &mut rng2);
+        assert_eq!(a.len(), b.len());
+        for (x, y) in a.iter().zip(b.iter()) {
+            assert_eq!(x.location, y.location);
+            assert_eq!(
+                x.alternate.as_symbolic().map(|s| s.end),
+                y.alternate.as_symbolic().map(|s| s.end)
+            );
+        }
+    }
+
+    #[test]
+    fn build_info_field_round_trips_through_parse_sv_info() {
+        use crate::structs::variants::parse_sv_info;
+        // The INFO string we emit must round-trip through the existing
+        // parser so the writer + downstream readers behave like
+        // user-supplied input.
+        let info = build_info_field(SvType::Cnv, 1500, Some(4));
+        let parsed = parse_sv_info(&info);
+        assert_eq!(parsed.svtype.as_deref(), Some("CNV"));
+        assert_eq!(parsed.end, Some(1500));
+        assert_eq!(parsed.copy_number, Some(4));
+    }
+
+    #[test]
+    fn genotype_string_handles_polyploid() {
+        assert_eq!(genotype_string(&Genotype::Homozygous, 2), "1/1");
+        assert_eq!(genotype_string(&Genotype::Heterozygous, 2), "0/1");
+        assert_eq!(genotype_string(&Genotype::Homozygous, 3), "1/1/1");
+        assert_eq!(genotype_string(&Genotype::Heterozygous, 4), "0/0/0/1");
+    }
+
+    #[test]
+    fn ranges_overlap_helper_is_half_open() {
+        // Adjacent (touching at boundary) does NOT count as overlap.
+        assert!(!ranges_overlap(0, 50, 50, 100));
+        assert!(!ranges_overlap(50, 100, 0, 50));
+        // Any real intersection does.
+        assert!(ranges_overlap(0, 51, 50, 100));
+        assert!(ranges_overlap(0, 200, 50, 100));
+    }
+}

@@ -1,7 +1,7 @@
 use crate::filter_reads::errors::FilterReadsError;
 use common::structs::bed_record::BedRecord;
 use flate2::Compression;
-use flate2::read::GzDecoder;
+use flate2::read::MultiGzDecoder;
 use flate2::write::GzEncoder;
 use log::*;
 use std::collections::HashMap;
@@ -14,7 +14,7 @@ use common::file_tools::file_io::{create_output_file, read_gzip_lines, read_line
 /// The purpose of this module is to filter a rneat-generated fastq and vcf file, so that they only show regions
 /// of overlap with an input bed file.
 enum ReaderType {
-    GzipReader(Lines<BufReader<GzDecoder<File>>>),
+    GzipReader(Lines<BufReader<MultiGzDecoder<File>>>),
     NonZipReader(Lines<BufReader<File>>),
 }
 

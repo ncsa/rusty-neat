@@ -3,7 +3,7 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader, Lines, Read, Result, Write};
 use std::path::{Path, PathBuf};
 
-use flate2::read::GzDecoder;
+use flate2::read::MultiGzDecoder;
 
 /// Errors with `ErrorKind::AlreadyExists` if `path` is an existing regular
 /// file and `allow_overwrite` is false. `label` is the human-facing name of
@@ -32,10 +32,17 @@ pub fn read_lines(filename: &PathBuf) -> Result<Lines<BufReader<File>>> {
     Ok(BufReader::new(file).lines())
 }
 
-pub fn read_gzip_lines(filename: &PathBuf) -> Result<Lines<BufReader<GzDecoder<File>>>> {
-    // Reads a file from gzipped format into lines
+pub fn read_gzip_lines(filename: &PathBuf) -> Result<Lines<BufReader<MultiGzDecoder<File>>>> {
+    // `MultiGzDecoder` reads concatenated gzip streams, which is what `bgzip`
+    // produces (one stream per block, ~64 KB each). Plain `GzDecoder` stops
+    // after the first stream and silently returns no further data — that
+    // path silently dropped 100% of records for every bgzipped VCF, the
+    // standard format the bioinformatics ecosystem uses for indexed VCFs
+    // (gnomAD, dbSNP, anything via `bcftools view -Oz` or `tabix`).
+    // `MultiGzDecoder` is a strict superset: it also handles single-stream
+    // plain gzip correctly, so there's no downside to using it everywhere.
     let file = File::open(filename)?;
-    Ok(BufReader::new(GzDecoder::new(file)).lines())
+    Ok(BufReader::new(MultiGzDecoder::new(file)).lines())
 }
 
 pub fn open_safe(filename: &PathBuf) -> Result<BufReader<File>> {

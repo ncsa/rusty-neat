@@ -141,7 +141,7 @@ These are documented here so future work has a record of what's been decided vs 
 
 - **Subclonal heterogeneity.** The orchestration approach models two populations. Real tumors often have 3–5+ subclones at different fractions. v1 ignores this; v2 should think about whether to support N populations via the orchestration layer (cheap, N-way concat) or via a native sampler (requires shared-mutation tracking).
 - **Mutation signatures (COSMIC SBS).** Cancer mutation patterns are dominated by tissue- and exposure-specific signatures (UV → SBS7 in melanoma, tobacco → SBS4 in lung, MMR deficiency → SBS6/15 in colorectal, etc.). rneat's trinucleotide-frequency model can in principle capture these per-corpus, but explicit signature support (load a COSMIC SBS profile, mix signatures at known proportions) is a separate enhancement.
-- **Variant allele fraction (VAF) annotation in the truth VCF.** Critical for benchmarking VAF-aware somatic callers. Not in #185 yet — would be a tagged-along bullet there.
+- **Variant allele fraction (VAF) annotation in the truth VCF.** Critical for benchmarking VAF-aware somatic callers (Mutect2, Strelka), and required by `hap.py` / `som.py` for VAF-stratified TP/FP/FN scoring. Tracked at **#176** (with `FORMAT/AD`, `FORMAT/DP`, `FORMAT/AF`, and FILTER companions). Either lands before the cancer MVP or co-lands with **#184** orchestration — the cancer MVP isn't truly benchmarkable without it.
 - **Cancer-specific SvModel defaults.** The bundled `default_sv_model()` is gnomAD-SV-derived (germline). A cancer-specific default trained against PCAWG SV consensus would be the natural complement once **#187** / **#188** land. Possibly bundle as `default_cancer_sv_model()` alongside the germline default.
 
 ## References

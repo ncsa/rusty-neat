@@ -38,6 +38,28 @@ pub const MIN_SV_LENGTH_BP: usize = 50;
 /// dropped from the trained model rather than carrying a fake `sigma`.
 const MIN_OBS_FOR_LENGTH_FIT: usize = 2;
 
+/// Fallback copy-number distribution used by [`SvModel::sample_variants`]
+/// when the trained model's `cnv_copy_number_distribution` is empty but
+/// `Cnv` is still in `type_probabilities`. This happens when the
+/// training corpus had `<CNV>` records but stored per-sample CN in
+/// FORMAT/SAMPLE rather than `INFO/CN` (gnomAD-SV is the canonical
+/// example — CN varies across the cohort, so the sites VCF leaves
+/// `INFO/CN` unset). Without a fallback the sampler would emit `<CNV>`
+/// records without `copy_number`, and gen-reads would warn-and-skip
+/// coverage modulation for each one.
+///
+/// Values mirror `sv_model_defaults::default_sv_model`'s
+/// `cnv_copy_number_distribution` — duplicated here as a local constant
+/// to avoid a `structs::sv_model` ↔ `models::sv_model_defaults` module
+/// dependency cycle. Keep the two in sync if either drifts.
+const FALLBACK_CN_DISTRIBUTION: &[(u32, f64)] = &[
+    (0, 0.15),
+    (1, 0.35),
+    (3, 0.30),
+    (4, 0.15),
+    (5, 0.05),
+];
+
 /// Learned statistical model for symbolic-SV generation.
 ///
 /// The five fields together specify everything a sampler needs: how
@@ -367,14 +389,37 @@ impl SvModel {
             return Vec::new();
         }
 
-        let mut cn_values: Vec<u32> = self.cnv_copy_number_distribution.keys().copied().collect();
-        cn_values.sort_unstable();
-        let cn_cum = cumulative_normalized(
-            &cn_values
+        // CN values + cumulative weights for sampling `<CNV>` copy
+        // numbers. If the trained distribution is empty but `Cnv` is in
+        // the model's type list, fall back to `FALLBACK_CN_DISTRIBUTION`
+        // so sampled `<CNV>` records carry a sensible CN — otherwise
+        // gen-reads warn-and-skips depth modulation on every one of them
+        // (which is what gnomAD-SV-trained models hit in practice).
+        let cnv_in_model = self.type_probabilities.contains_key(&SvType::Cnv);
+        let cn_dist_is_empty = self.cnv_copy_number_distribution.is_empty();
+        let using_cn_fallback = cnv_in_model && cn_dist_is_empty;
+        if using_cn_fallback {
+            info!(
+                "SvModel: trained `cnv_copy_number_distribution` is empty but Cnv is \
+                 in the type list — falling back to the bundled default CN distribution \
+                 for sampled <CNV> records (this is what you want when training from a \
+                 sites-only VCF that puts CN in FORMAT instead of INFO, like gnomAD-SV)."
+            );
+        }
+        let (cn_values, cn_cum): (Vec<u32>, Vec<f64>) = if using_cn_fallback {
+            let values: Vec<u32> = FALLBACK_CN_DISTRIBUTION.iter().map(|(c, _)| *c).collect();
+            let weights: Vec<f64> = FALLBACK_CN_DISTRIBUTION.iter().map(|(_, p)| *p).collect();
+            (values, cumulative_normalized(&weights))
+        } else {
+            let mut values: Vec<u32> =
+                self.cnv_copy_number_distribution.keys().copied().collect();
+            values.sort_unstable();
+            let weights: Vec<f64> = values
                 .iter()
                 .map(|c| self.cnv_copy_number_distribution[c].max(0.0))
-                .collect::<Vec<_>>(),
-        );
+                .collect();
+            (values, cumulative_normalized(&weights))
+        };
 
         // Existing affected ranges seed the overlap set; new draws are
         // appended as accepted.
@@ -1101,6 +1146,41 @@ mod tests {
                 expected_cns.contains(&cn),
                 "sampled CN={cn} not in training distribution {:?}",
                 expected_cns
+            );
+        }
+    }
+
+    #[test]
+    fn sampled_cnvs_use_fallback_cn_when_trained_dist_is_empty() {
+        // gnomAD-SV trains with Cnv in type_probabilities but
+        // `cnv_copy_number_distribution: {}` because the per-sample CN
+        // lives in FORMAT/SAMPLE rather than INFO. The sampler must
+        // still emit `<CNV>` records that carry a sensible
+        // `copy_number` — drawing from `FALLBACK_CN_DISTRIBUTION` —
+        // otherwise gen-reads warn-and-skips every one of them.
+        let mut m = SvModel::default();
+        m.per_base_rate = 5e-3;
+        m.homozygous_frequency = 0.5;
+        m.type_probabilities.insert(SvType::Cnv, 1.0);
+        m.length_log_normal.insert(SvType::Cnv, (7.0, 0.4));
+        // Intentionally leave cnv_copy_number_distribution empty.
+        assert!(m.cnv_copy_number_distribution.is_empty());
+
+        let seq = acgt_sequence(100_000);
+        let mut rng = deterministic_rng();
+        let out = m.sample_variants(100_000, &[], &seq, 2, 1.0, &mut rng);
+        assert!(!out.is_empty(), "expected at least one sampled CNV");
+
+        let fallback_cns: std::collections::HashSet<u32> =
+            FALLBACK_CN_DISTRIBUTION.iter().map(|(c, _)| *c).collect();
+        for v in &out {
+            let sv = v.alternate.as_symbolic().expect("must be symbolic");
+            assert_eq!(sv.sv_type, SvType::Cnv);
+            let cn = sv.copy_number.expect("CNV must carry CN even with empty trained dist");
+            assert!(
+                fallback_cns.contains(&cn),
+                "sampled CN={cn} not in FALLBACK_CN_DISTRIBUTION {:?}",
+                fallback_cns
             );
         }
     }

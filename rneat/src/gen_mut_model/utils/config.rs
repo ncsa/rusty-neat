@@ -3,7 +3,7 @@
 // config yaml file or command line arguments and turn them into the configuration.
 use crate::gen_mut_model::errors::GenMutationModelError;
 use common::{
-    file_tools::{bed_reader::read_bed, vcf_tools::read_vcf},
+    file_tools::{bed_reader::read_bed, vcf_tools::read_vcf_lean},
     structs::{bed_record::BedRecord, variants::Variant},
 };
 use serde_yml::Value;
@@ -71,7 +71,7 @@ impl RunConfiguration {
         if !overwrite_output && output_file.is_file() {
             panic!("Attempting to overwrite an existing file {:?}", output_file)
         }
-        let mutations = read_vcf(vcf_file)?;
+        let mutations = read_vcf_lean(vcf_file)?;
 
         let transition_matrix_file = scrape_config
             .get("transition_matrix_file")

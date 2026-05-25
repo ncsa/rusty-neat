@@ -1,21 +1,26 @@
 //! Bundled default [`SvModel`] used by [`crate::models::mutation_model::MutationModel::default`].
 //!
-//! Most parameters are **refit** from the v1.10 validation run against
-//! the gnomAD-SV v4.1 sites VCF on chr22 (~27k surviving SVs after the
-//! standard INV/CPX/CTX/BND/INS:ME filter; `tools/validate_with_gnomad.sh
-//! smoke` produces the same numbers). The two parameters that can't be
-//! sourced from a sites-only VCF — `homozygous_frequency` and
-//! `cnv_copy_number_distribution` — are kept at their original
-//! literature-derived approximations (gnomAD-SV per-sample CN lives in
-//! FORMAT/SAMPLE, not INFO/CN; het:hom ≈ 4:1 is taken from the
-//! Collins et al. paper, *Nature* 581, 444–451, 2020).
+//! Most parameters are **refit** from a full-genome validation run
+//! against the gnomAD-SV v4.1 sites VCF (1,476,325 surviving SVs across
+//! all autosomes/sex chromosomes after the standard INV/CPX/CTX/BND/INS:ME
+//! filter; `tools/validate_with_gnomad.sh full` produces the same numbers).
+//! The two parameters that can't be sourced from a sites-only VCF —
+//! `homozygous_frequency` and `cnv_copy_number_distribution` — are kept
+//! at their original literature-derived approximations (gnomAD-SV
+//! per-sample CN lives in FORMAT/SAMPLE, not INFO/CN; het:hom ≈ 4:1 is
+//! taken from the Collins et al. paper, *Nature* 581, 444–451, 2020).
 //!
-//! chr22 is gene-dense and may not exactly match genome-wide statistics
-//! — a `full`-mode validation run can supersede the per_base_rate and
-//! type-probability values here. Anyone doing serious benchmarking
-//! should train their own model with `gen-mut-model` against the
-//! SV-rich VCF of their choice and override the embedded default by
-//! passing `mutation_model: <trained>.json.gz` in their gen-reads YAML.
+//! Earlier revisions of this file sourced the same parameters from a
+//! chr22-only smoke run. The chr22 fit reported `per_base_rate ≈ 8.9e-6`
+//! because the trainer normalizes by the *whole* FASTA length, not by
+//! the simulated chromosome — so the chr22 default was effectively
+//! "fraction of all-genome SVs that happen to fall on chr22," not a
+//! true per-base rate. The full-genome refit corrects that.
+//!
+//! Anyone doing serious benchmarking should train their own model with
+//! `gen-mut-model` against the SV-rich VCF of their choice and override
+//! the embedded default by passing `mutation_model: <trained>.json.gz`
+//! in their gen-reads YAML.
 
 use crate::structs::sv_model::SvModel;
 use crate::structs::variants::SvType;
@@ -28,36 +33,35 @@ use std::collections::HashMap;
 /// when `sv_rate_scale > 0.0`, so generation remains opt-in even though
 /// the model itself is always loaded.
 pub fn default_sv_model() -> SvModel {
-    // Per-base rate: fitted from chr22 gnomAD-SV v4.1 (27,192 surviving
-    // SVs over 50,818,468 bp = 5.35e-4 per chr22 bp — but the trainer
-    // reports per_base_rate as `n / total_reflen_seen`, which uses the
-    // full chr22 length not the simulated denominator. The 8.917e-6
-    // value below is what the trainer wrote, and is what gen-reads
-    // multiplies by `contig_len * sv_rate_scale`. chr22 is gene-dense
-    // and may run hotter than the genome-wide average — a `full`-mode
-    // run can refine this.
-    let per_base_rate = 8.917e-6;
+    // Per-base rate: fitted from the full gnomAD-SV v4.1 sites VCF
+    // (1,476,325 surviving SVs over the GRCh38 primary assembly ~3.05 Gb).
+    // The trainer computes `n / total_reflen_seen`, which gen-reads then
+    // multiplies by `contig_len * sv_rate_scale` to determine the
+    // expected per-contig SV count.
+    let per_base_rate = 4.841e-4;
 
-    // Type breakdown: fitted directly from chr22. gnomAD-SV chr22 is
-    // overwhelmingly deletions, with CNV essentially a rounding error
-    // because most multi-allelic CNV records on chr22 collapse into a
-    // small number of sites. v1's hand-rolled 60/30/10 split was off
-    // by ~20 percentage points on DEL.
+    // Type breakdown: fitted from the full gnomAD-SV v4.1 run.
+    // Deletions dominate; CNV is dramatically rarer at genome scale than
+    // the chr22-only fit suggested (chr22 sits over several gene-dense
+    // CNV hotspots — DiGeorge / 22q11, etc. — that skewed the smoke
+    // numbers high). v1's hand-rolled 60/30/10 split was off by ~20
+    // percentage points on DEL.
     let mut type_probabilities: HashMap<SvType, f64> = HashMap::new();
-    type_probabilities.insert(SvType::Del, 0.807);
-    type_probabilities.insert(SvType::Dup, 0.191);
-    type_probabilities.insert(SvType::Cnv, 0.002);
+    type_probabilities.insert(SvType::Del, 0.8171);
+    type_probabilities.insert(SvType::Dup, 0.1824);
+    type_probabilities.insert(SvType::Cnv, 0.0005);
 
-    // Length log-normals: fitted from chr22 via MLE on ln(span). Quick
-    // gut-check on the medians (= exp(mu)):
-    //   DEL: median ≈ 583bp (vs hand-rolled 270bp — too small)
-    //   DUP: median ≈ 735bp (vs hand-rolled 3kb — way too large)
-    //   CNV: median ≈ 18kb  (vs hand-rolled 50kb — too large)
-    // Sigmas pulled in / out accordingly.
+    // Length log-normals: fitted from the full-genome run via MLE on
+    // ln(span). Quick gut-check on the medians (= exp(mu)):
+    //   DEL: median ≈ 703 bp
+    //   DUP: median ≈ 864 bp
+    //   CNV: median ≈ 15.3 kb
+    // Sigmas reflect the heavy right tail of DUPs (multi-megabase calls
+    // pull sigma out to ~2.5) and the tighter clustering of DELs / CNVs.
     let mut length_log_normal: HashMap<SvType, (f64, f64)> = HashMap::new();
-    length_log_normal.insert(SvType::Del, (6.370, 1.433));
-    length_log_normal.insert(SvType::Dup, (6.600, 2.375));
-    length_log_normal.insert(SvType::Cnv, (9.806, 1.112));
+    length_log_normal.insert(SvType::Del, (6.557, 1.543));
+    length_log_normal.insert(SvType::Dup, (6.761, 2.530));
+    length_log_normal.insert(SvType::Cnv, (9.637, 1.152));
 
     // Copy-number distribution for `<CNV>` records. gnomAD-SV's sites
     // VCF leaves `INFO/CN` unset (CN varies per-sample, in

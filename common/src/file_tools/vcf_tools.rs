@@ -132,6 +132,25 @@ pub fn read_vcf(vcf_file: PathBuf) -> Result<HashMap<String, Vec<Variant>>, VcfT
     }
 }
 
+/// Lean counterpart to [`read_vcf`] for callers that only need the structural
+/// fields of each [`Variant`] (variant_type, location, reference, alternate,
+/// genotype). Skips populating `info`, `id`, `filter`, `genotype_str`,
+/// `quality_score`, and the FORMAT/SAMPLE vectors — none of which are read
+/// by gen_mut_model. On gnomAD-scale inputs this cuts peak RSS by several
+/// GB (the INFO column alone is hundreds of bytes to several KB per record).
+///
+/// Use [`read_vcf`] when the caller needs to round-trip records back to VCF
+/// (e.g. gen_reads) or read `v.filter` (compare_vcfs).
+pub fn read_vcf_lean(vcf_file: PathBuf) -> Result<HashMap<String, Vec<Variant>>, VcfToolsError> {
+    if is_gzipped_file(&vcf_file)? {
+        let reader = read_gzip_lines(&vcf_file)?;
+        read_open_vcf_lean(reader)
+    } else {
+        let reader = read_lines(&vcf_file)?;
+        read_open_vcf_lean(reader)
+    }
+}
+
 fn process_gzip_vcf(filename: &PathBuf) -> Result<HashMap<String, Vec<Variant>>, VcfToolsError> {
     let reader = read_gzip_lines(filename)?;
     read_open_vcf(reader)
@@ -238,6 +257,98 @@ fn read_open_vcf<P: Read>(
         }
     }
     Ok(file_records)
+}
+
+/// Lean parser used by [`read_vcf_lean`]. Mirrors [`read_open_vcf`] but
+/// extracts just the GT token (without allocating a `Vec<String>` for
+/// FORMAT/SAMPLE) and hands it to [`Variant::from_file_lean`], which leaves
+/// the unused string fields empty. The cumulative effect is several GB
+/// less peak RSS on a gnomAD-scale ingest.
+fn read_open_vcf_lean<P: Read>(
+    reader: Lines<BufReader<P>>,
+) -> Result<HashMap<String, Vec<Variant>>, VcfToolsError> {
+    let mut file_records: HashMap<String, Vec<Variant>> = HashMap::new();
+    for result in reader {
+        match result {
+            Ok(line) => {
+                if line.starts_with("#") {
+                    continue;
+                }
+                let split_line: Vec<&str> = line.split("\t").collect();
+                let chrom = split_line[0];
+                let pos = split_line[1].parse();
+                let location: usize = match pos {
+                    Ok(num) => num,
+                    Err(error) => return Err(VcfToolsError::ParserError(error)),
+                };
+                let vcf_reference = split_line[3];
+                let vcf_alternate = split_line[4];
+                if vcf_alternate.contains(',') {
+                    debug!("Skipping multi-allelic site at {}:{}", chrom, location);
+                    continue;
+                }
+                let info_field = split_line[7];
+                // Pull just the GT field if present. Sites-only VCFs (no
+                // FORMAT/SAMPLE) and records whose FORMAT lacks GT default
+                // to "0/1" — matching the full-fat reader's behavior.
+                let gt_str: &str = if split_line.len() > 9 {
+                    match extract_gt_str(split_line[8], split_line[9])? {
+                        Some(gt) => gt,
+                        None => "0/1",
+                    }
+                } else {
+                    "0/1"
+                };
+                if split_line.len() > 10 {
+                    warn!("Currently rneat can only read one sample per record")
+                }
+                let variant = match Variant::from_file_lean(
+                    location,
+                    info_field,
+                    vcf_reference,
+                    vcf_alternate,
+                    gt_str,
+                ) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        warn!("Skipping variant at {}:{} — {}", chrom, location, e);
+                        continue;
+                    }
+                };
+                file_records
+                    .entry(chrom.to_string())
+                    .or_default()
+                    .push(variant);
+            }
+            Err(error) => return Err(VcfToolsError::IoError(error)),
+        }
+    }
+    Ok(file_records)
+}
+
+/// Find the GT column in a `FORMAT`/`SAMPLE` pair without allocating a
+/// `Vec<String>` for either. Returns the GT token (e.g. `"0/1"`) by
+/// reference into the input. Mirrors the validation in `read_open_vcf`:
+///   - `fmt == "."` or `smp == "."`  → `Ok(None)` (sites-only fallback)
+///   - mismatched lengths            → `MalformedVcf` error
+///   - no GT key                     → `Ok(None)` (defaults applied by caller)
+fn extract_gt_str<'a>(fmt: &'a str, smp: &'a str) -> Result<Option<&'a str>, VcfToolsError> {
+    if fmt == "." || smp == "." {
+        return Ok(None);
+    }
+    let format_parts: Vec<&str> = fmt.split(':').collect();
+    let sample_parts: Vec<&str> = smp.split(':').collect();
+    if sample_parts.len() != format_parts.len() {
+        return Err(VcfToolsError::MalformedVcf(
+            "FORMAT list and sample list different lengths, invalid VCF".to_string(),
+        ));
+    }
+    for (i, key) in format_parts.iter().enumerate() {
+        if *key == "GT" {
+            return Ok(Some(sample_parts[i]));
+        }
+    }
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -411,6 +522,63 @@ mod tests {
             "missing chr2 variant; got: {:?}",
             lines
         );
+    }
+
+    #[test]
+    fn test_read_vcf_lean_drops_unused_string_fields() {
+        // Lean reader produces structurally-correct Variants but leaves
+        // the per-record string fields empty/None. Locks in the memory-
+        // saving contract: a future refactor that re-populates info /
+        // filter / etc. here would silently re-introduce gnomAD-scale
+        // bloat in gen_mut_model.
+        let vcf_content = "\
+##fileformat=VCFv4.1\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n\
+chr1\t100\trsBIG\tA\tT\t60\tPASS\tAF=0.01;AC=2;AN=100;long_info_string_that_would_bloat_memory\tGT:DP:GQ\t0/1:30:99\n";
+        let mut tmp = tempfile::Builder::new().suffix(".vcf").tempfile().unwrap();
+        write!(tmp, "{}", vcf_content).unwrap();
+        let records = read_vcf_lean(tmp.path().to_path_buf()).unwrap();
+        let variants = records.get("chr1").expect("chr1 not parsed");
+        assert_eq!(variants.len(), 1);
+        let v = &variants[0];
+        // Structural fields still populated.
+        assert_eq!(v.location, 100);
+        assert_eq!(v.variant_type, crate::structs::variants::VariantType::SNP);
+        assert!(matches!(
+            v.genotype,
+            crate::structs::variants::Genotype::Heterozygous
+        ));
+        // String fields all empty / None.
+        assert!(v.id.is_none(), "id should be None");
+        assert!(v.filter.is_none(), "filter should be None");
+        assert!(v.info.is_none(), "info should be None (the big one)");
+        assert!(v.quality_score.is_none(), "quality_score should be None");
+        assert!(v.genotype_str.is_empty(), "genotype_str should be empty");
+        assert!(v.format.is_empty(), "format should be empty");
+        assert!(v.sample.is_empty(), "sample should be empty");
+    }
+
+    #[test]
+    fn test_read_vcf_lean_sites_only_defaults_to_heterozygous() {
+        // Sites-only VCFs (8 columns, no FORMAT/SAMPLE) must still produce
+        // a Variant via the lean path — matching read_vcf's contract.
+        let vcf_content = "\
+##fileformat=VCFv4.2\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n\
+chr1\t100\t.\tN\t<DEL>\t60\tPASS\tSVTYPE=DEL;END=500\n";
+        let mut tmp = tempfile::Builder::new().suffix(".vcf").tempfile().unwrap();
+        write!(tmp, "{}", vcf_content).unwrap();
+        let records = read_vcf_lean(tmp.path().to_path_buf()).unwrap();
+        let v = &records.get("chr1").expect("chr1 missing")[0];
+        // SV metadata still survives via SvData (parsed at construction
+        // time from the INFO column, then info: Option<String> dropped).
+        let sv = v.alternate.as_symbolic().expect("symbolic ALT");
+        assert_eq!(sv.end, Some(500));
+        assert_eq!(sv.sv_type, SvType::Del);
+        assert!(matches!(
+            v.genotype,
+            crate::structs::variants::Genotype::Heterozygous
+        ));
     }
 
     #[test]

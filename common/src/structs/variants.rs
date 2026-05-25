@@ -269,7 +269,7 @@ impl Variant {
     ) -> Result<Self, VariantError> {
         let genotype_str = {
             if format.contains(&String::from("GT")) {
-                debug!("Found genotype in vcf file");
+                trace!("Found genotype in vcf file");
                 let gt_pos = format.clone().into_iter().position(|x| x == "GT").unwrap();
                 sample[gt_pos].to_string()
             } else {
@@ -280,55 +280,8 @@ impl Variant {
             }
         };
 
-        let mut reference = Vec::new();
-        for char in vcf_reference.chars() {
-            reference.push(Nucleotide::from(char))
-        }
-        let (variant_type, alternate) = match parse_alternate(vcf_reference, vcf_alternate)? {
-            ParsedAlt::Literal(vt) => {
-                let alt_bases: Vec<Nucleotide> =
-                    vcf_alternate.chars().map(Nucleotide::from).collect();
-                (vt, AlternateType::Literal(alt_bases))
-            }
-            ParsedAlt::Symbolic { sv_type, raw_alt } => {
-                let mut sv_data = SvData::new(raw_alt, sv_type);
-                let parsed_info = parse_sv_info(info_field);
-                // If SVTYPE is present and disagrees with the ALT tag, trust
-                // the ALT (it's the more canonical signal) but warn so the
-                // user can clean up their VCF.
-                if let Some(svtype_str) = &parsed_info.svtype
-                    && !sv_type_matches_svtype(sv_type, svtype_str)
-                {
-                    warn!(
-                        "INFO/SVTYPE={svtype_str} disagrees with ALT {} at position {location} — trusting ALT",
-                        sv_data.raw_alt
-                    );
-                }
-                // Drop an INFO/END that's before POS — keeping it would let
-                // span() silently produce a bogus 1-base modulation range for
-                // <DUP>/<CNV>/<INV> (the <DEL> path masks the bug via an
-                // empty-range check downstream). Fall back to SVLEN if the
-                // user supplied that too, otherwise the record passes through
-                // with no depth modulation and gen_reads logs a "no span" warn.
-                sv_data.end = match parsed_info.end {
-                    Some(end) if end < location => {
-                        warn!(
-                            "INFO/END={end} is before POS={location} for ALT {} — ignoring END",
-                            sv_data.raw_alt
-                        );
-                        None
-                    }
-                    other => other,
-                };
-                sv_data.svlen = parsed_info.svlen;
-                sv_data.copy_number = parsed_info.copy_number;
-                // Symbolic SVs share the `Complex` variant_type with literal
-                // multi-base substitutions; downstream code distinguishes them
-                // by the `AlternateType` enum (literal vs symbolic), not by
-                // variant_type.
-                (VariantType::Complex, AlternateType::Symbolic(sv_data))
-            }
-        };
+        let (variant_type, alternate, reference) =
+            parse_alt_payload(location, info_field, vcf_reference, vcf_alternate)?;
         let genotype = gt_from_str(&genotype_str);
         Ok(Variant {
             variant_type,
@@ -343,6 +296,42 @@ impl Variant {
             info: Some(info_field.to_string()),
             format,
             sample,
+        })
+    }
+
+    /// Minimal constructor for callers that only need structural fields
+    /// (variant_type, location, reference, alternate, genotype) — e.g.
+    /// gen_mut_model, which trains from millions of records and never
+    /// round-trips them back to VCF.
+    ///
+    /// Skips allocating the per-record String fields (`info`, `id`,
+    /// `filter`, `genotype_str`, plus the FORMAT/SAMPLE vectors) that
+    /// gen_mut_model never reads. On gnomAD-scale inputs the `info`
+    /// column alone is hundreds of bytes to several KB per record, so
+    /// dropping it cuts memory by ~2–5 GB on a full-chromosome fit.
+    pub fn from_file_lean(
+        location: usize,
+        info_field: &str,
+        vcf_reference: &str,
+        vcf_alternate: &str,
+        gt_str: &str,
+    ) -> Result<Self, VariantError> {
+        let (variant_type, alternate, reference) =
+            parse_alt_payload(location, info_field, vcf_reference, vcf_alternate)?;
+        let genotype = gt_from_str(gt_str);
+        Ok(Variant {
+            variant_type,
+            location,
+            reference,
+            alternate,
+            genotype_str: String::new(),
+            genotype,
+            id: None,
+            quality_score: None,
+            filter: None,
+            info: None,
+            format: Vec::new(),
+            sample: Vec::new(),
         })
     }
 
@@ -404,6 +393,68 @@ impl Variant {
     pub fn get_loc(&self) -> Result<usize, VariantError> {
         Ok(self.location)
     }
+}
+
+/// Shared core of `Variant::from_file` and `Variant::from_file_lean`: parse
+/// REF into a `Vec<Nucleotide>`, classify the ALT, and (for symbolic ALTs)
+/// lift `END` / `SVLEN` / `CN` / `SVTYPE` from the INFO column into `SvData`.
+/// Both constructors handle the trailing string-field population themselves.
+fn parse_alt_payload(
+    location: usize,
+    info_field: &str,
+    vcf_reference: &str,
+    vcf_alternate: &str,
+) -> Result<(VariantType, AlternateType, Vec<Nucleotide>), VariantError> {
+    let mut reference = Vec::new();
+    for char in vcf_reference.chars() {
+        reference.push(Nucleotide::from(char))
+    }
+    let (variant_type, alternate) = match parse_alternate(vcf_reference, vcf_alternate)? {
+        ParsedAlt::Literal(vt) => {
+            let alt_bases: Vec<Nucleotide> =
+                vcf_alternate.chars().map(Nucleotide::from).collect();
+            (vt, AlternateType::Literal(alt_bases))
+        }
+        ParsedAlt::Symbolic { sv_type, raw_alt } => {
+            let mut sv_data = SvData::new(raw_alt, sv_type);
+            let parsed_info = parse_sv_info(info_field);
+            // If SVTYPE is present and disagrees with the ALT tag, trust
+            // the ALT (it's the more canonical signal) but warn so the
+            // user can clean up their VCF.
+            if let Some(svtype_str) = &parsed_info.svtype
+                && !sv_type_matches_svtype(sv_type, svtype_str)
+            {
+                warn!(
+                    "INFO/SVTYPE={svtype_str} disagrees with ALT {} at position {location} — trusting ALT",
+                    sv_data.raw_alt
+                );
+            }
+            // Drop an INFO/END that's before POS — keeping it would let
+            // span() silently produce a bogus 1-base modulation range for
+            // <DUP>/<CNV>/<INV> (the <DEL> path masks the bug via an
+            // empty-range check downstream). Fall back to SVLEN if the
+            // user supplied that too, otherwise the record passes through
+            // with no depth modulation and gen_reads logs a "no span" warn.
+            sv_data.end = match parsed_info.end {
+                Some(end) if end < location => {
+                    warn!(
+                        "INFO/END={end} is before POS={location} for ALT {} — ignoring END",
+                        sv_data.raw_alt
+                    );
+                    None
+                }
+                other => other,
+            };
+            sv_data.svlen = parsed_info.svlen;
+            sv_data.copy_number = parsed_info.copy_number;
+            // Symbolic SVs share the `Complex` variant_type with literal
+            // multi-base substitutions; downstream code distinguishes them
+            // by the `AlternateType` enum (literal vs symbolic), not by
+            // variant_type.
+            (VariantType::Complex, AlternateType::Symbolic(sv_data))
+        }
+    };
+    Ok((variant_type, alternate, reference))
 }
 
 /// Classification of a parsed VCF ALT field.

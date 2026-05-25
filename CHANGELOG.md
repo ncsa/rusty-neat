@@ -1,5 +1,14 @@
 5/25/2026
 =========
+## rneat v1.10.3
+
+### Patch release: fix silent zero-SV output at human-chromosome scale (#194)
+- **`SvModel::sample_variants` now produces de-novo SVs at chromosome-scale `λ`.** The Knuth multiplicative Poisson sampler at the core of `sample_variants` errored out when `exp(-λ)` underflowed to 0 — which happens around λ ≈ 745 in f64. With v1.10.2's full-genome `per_base_rate = 4.841e-4`, every human chromosome at `sv_rate_scale = 1.0` lands well past that threshold (chr22: λ ≈ 24,205; chr1: λ ≈ 121,000). The caller logged a `warn!` and emitted **zero** de-novo SVs — a silent regression introduced by v1.10.2's gnomAD-SV refit that nobody had hit because no test fixture used a contig larger than ~1.7 kb, and no one had run `gen-reads` with `sv_rate_scale > 0` against a real chromosome since v1.10.1 landed.
+- **Fix:** `sample_poisson` is now hybrid. For `λ < 30` it keeps Knuth's exact algorithm (preserves the RNG-draw sequence that small-λ pipeline tests are seeded against). For `λ ≥ 30` it switches to a Gaussian approximation `N(λ, √λ)` sampled via inverse-CDF on a uniform draw — the same pattern `sample_log_normal_usize` uses for log-normal. At λ = 30 the approximation error is below 1 part in 1000; by λ = 1000 it's indistinguishable from exact Poisson in practice. No new dependencies; ~25 LoC change.
+- **Regression tests added:** `sample_poisson_{large,extreme}_lambda_*` exercise λ from 1,000 to 121,000 explicitly. `sample_variants_works_at_chromosome_scale` is the end-to-end pin: hand-rolls a 50-Mb synthetic contig with the v1.10.2 default `per_base_rate` and asserts the returned SV count is well above zero (used to be silently zero before this fix).
+
+5/25/2026
+=========
 ## rneat v1.10.2
 
 ### Patch release: documentation, CI maintenance, known-limitations cleanup

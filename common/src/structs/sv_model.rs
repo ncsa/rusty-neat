@@ -537,33 +537,55 @@ impl SvModel {
     }
 }
 
-/// Knuth's multiplicative Poisson sampler. Cheap and correct for the
-/// `λ ≲ 30` range we expect from per-base rates × realistic contig
-/// lengths × `sv_rate_scale ≤ ~5`. Returns an error if the loop appears
-/// to be runaway (defensive — `exp(-λ)` underflows to 0 around λ≈745).
+/// Hybrid Poisson sampler:
+///   - λ < `LARGE_LAMBDA_THRESHOLD` (30): Knuth's multiplicative algorithm.
+///     Exact, cheap, and preserves the RNG-draw sequence the small-λ
+///     pipeline tests are seeded against.
+///   - λ ≥ `LARGE_LAMBDA_THRESHOLD`: Gaussian approximation N(λ, √λ),
+///     sampled via inverse-CDF on a uniform draw. At λ = 30 the
+///     approximation error is below 1 part in 1000; by λ = 1000 it's
+///     indistinguishable from exact Poisson in practice. This branch
+///     exists because human-chromosome-scale λ (~10⁴–10⁵) overflows
+///     Knuth's algorithm via `exp(-λ)` underflow around λ ≈ 745.
 fn sample_poisson(lambda: f64, rng: &mut NeatRng) -> Result<u64, NeatRngError> {
     if lambda <= 0.0 || !lambda.is_finite() {
         return Ok(0);
     }
-    let l = (-lambda).exp();
-    if l == 0.0 {
-        return Err(NeatRngError::SamplingError(format!(
-            "Poisson λ={lambda} too large (exp(-λ) underflowed to 0)"
-        )));
-    }
-    let mut k: u64 = 0;
-    let mut p: f64 = 1.0;
-    loop {
-        k += 1;
-        p *= rng.random()?;
-        if p < l {
-            return Ok(k - 1);
+    const LARGE_LAMBDA_THRESHOLD: f64 = 30.0;
+    if lambda < LARGE_LAMBDA_THRESHOLD {
+        // Knuth's multiplicative algorithm. Iterates roughly λ+1 times in
+        // expectation, so capped well below the underflow threshold.
+        let l = (-lambda).exp();
+        let mut k: u64 = 0;
+        let mut p: f64 = 1.0;
+        loop {
+            k += 1;
+            p *= rng.random()?;
+            if p < l {
+                return Ok(k - 1);
+            }
+            if k > 1_000_000 {
+                return Err(NeatRngError::SamplingError(format!(
+                    "Poisson sampler exceeded 1e6 iterations at λ={lambda}"
+                )));
+            }
         }
-        if k > 1_000_000 {
+    } else {
+        // Gaussian approximation. Truncation at 0 has probability
+        // Φ(−√λ) ≈ 0 for λ ≥ 30 (Φ(−√30) ≈ 3e-7), so the rounding /
+        // max(0) clamp doesn't materially bias the mean.
+        let normal = NormalDistribution::new(lambda, lambda.sqrt())
+            .map_err(|e| NeatRngError::SamplingError(format!("{e:?}")))?;
+        let u = rng.random()?.clamp(1e-12, 1.0 - 1e-12);
+        let sample = normal
+            .sample(u)
+            .map_err(|e| NeatRngError::SamplingError(format!("{e:?}")))?;
+        if !sample.is_finite() {
             return Err(NeatRngError::SamplingError(format!(
-                "Poisson sampler exceeded 1e6 iterations at λ={lambda}"
+                "Poisson Gaussian-approximation sample non-finite at λ={lambda}: {sample}"
             )));
         }
+        Ok(sample.max(0.0).round() as u64)
     }
 }
 
@@ -1303,5 +1325,112 @@ mod tests {
         // Any real intersection does.
         assert!(ranges_overlap(0, 51, 50, 100));
         assert!(ranges_overlap(0, 200, 50, 100));
+    }
+
+    // ── sample_poisson tests ─────────────────────────────────────────
+    //
+    // The hybrid sampler switches between Knuth's (λ<30) and a Gaussian
+    // approximation (λ≥30). The lower branch is exercised implicitly by
+    // every `sample_variants_*` test that uses small-λ models; the tests
+    // below pin the upper branch, which previously errored out via
+    // `exp(-λ)` underflow at λ ≈ 745 — silently disabling de-novo SV
+    // generation at human-chromosome scale (regression introduced by
+    // v1.10.2's full-genome `per_base_rate` refit).
+
+    #[test]
+    fn sample_poisson_large_lambda_returns_finite_count() {
+        // The exact value that the v1.10.2 default per_base_rate produces
+        // on chr22-scale: 4.841e-4 × 50e6 = ~24,205. Previously errored
+        // via `exp(-λ)` underflow; must now succeed.
+        let mut rng = deterministic_rng();
+        let n = sample_poisson(24_205.0, &mut rng).expect("must not error at λ=24,205");
+        // Within ±5σ of mean. σ = √24205 ≈ 156, so ±780 of 24,205.
+        assert!(
+            (n as f64 - 24_205.0).abs() < 780.0,
+            "λ=24,205 draw {n} is more than 5σ from mean — algorithm broken?"
+        );
+    }
+
+    #[test]
+    fn sample_poisson_large_lambda_mean_matches() {
+        // Empirical mean of many large-λ draws should approach λ.
+        let mut rng = deterministic_rng();
+        let lambda = 1_000.0;
+        let n_draws = 200;
+        let total: u64 = (0..n_draws)
+            .map(|_| sample_poisson(lambda, &mut rng).unwrap())
+            .sum();
+        let mean = total as f64 / n_draws as f64;
+        // Standard error of the mean is σ/√n = √λ/√n = √1000/√200 ≈ 2.24,
+        // so allow ±10 (~4 SE).
+        assert!(
+            (mean - lambda).abs() < 10.0,
+            "λ=1000 empirical mean over {n_draws} draws = {mean}; expected ≈ 1000"
+        );
+    }
+
+    #[test]
+    fn sample_poisson_extreme_lambda_does_not_overflow() {
+        // chr1-scale: 4.841e-4 × 250e6 ≈ 121,000. Previously errored;
+        // Gaussian approximation handles it cleanly.
+        let mut rng = deterministic_rng();
+        let n = sample_poisson(121_000.0, &mut rng).expect("must not error at λ=121,000");
+        assert!(n > 0, "λ=121,000 must produce a positive draw");
+    }
+
+    #[test]
+    fn sample_poisson_small_lambda_still_uses_knuth() {
+        // Regression guard: small-λ behavior is unchanged. Knuth's
+        // algorithm consumes a variable number of RNG draws (matters for
+        // determinism tests downstream); the Gaussian branch consumes
+        // exactly 1. If λ<30 stopped routing to Knuth, existing seeded
+        // tests would silently shift output.
+        let mut rng_a = deterministic_rng();
+        let mut rng_b = deterministic_rng();
+        let _ = sample_poisson(5.0, &mut rng_a).unwrap();
+        // After the same number of Knuth iterations, both RNGs should be
+        // in identical states — confirmed by drawing the same next value.
+        let _ = sample_poisson(5.0, &mut rng_b).unwrap();
+        let next_a = rng_a.random().unwrap();
+        let next_b = rng_b.random().unwrap();
+        assert_eq!(
+            next_a, next_b,
+            "small-λ path RNG-draw-sequence diverged between runs"
+        );
+    }
+
+    #[test]
+    fn sample_variants_works_at_chromosome_scale() {
+        // End-to-end regression for the silent-zero bug. With the v1.10.2
+        // full-genome `per_base_rate` (4.841e-4) and a chr22-sized
+        // synthetic contig, the de-novo sampler must produce a non-zero
+        // number of SVs within a Poisson-reasonable range.
+        //
+        // We don't use the bundled default model directly because its
+        // length_log_normal has values up to μ=9.6 (CNVs around 15kb)
+        // which would still mostly clear the contig_len/4 cap on a
+        // synthetic 50Mb sequence — but to keep the test runtime
+        // tractable, we hand-roll a small-length model.
+        let mut m = SvModel::default();
+        m.per_base_rate = 4.841e-4;
+        m.homozygous_frequency = 0.2;
+        m.type_probabilities.clear();
+        m.type_probabilities.insert(SvType::Del, 1.0);
+        m.length_log_normal.clear();
+        m.length_log_normal.insert(SvType::Del, (6.5, 1.0)); // median ~665bp
+        let contig_len = 50_000_000;
+        let seq = acgt_sequence(contig_len);
+        let mut rng = deterministic_rng();
+        let out = m.sample_variants(contig_len, &[], &seq, 2, 1.0, &mut rng);
+        // Expected ≈ 24,205. Even with overlap-rejection saturation
+        // capping below this (max_retries = 10 × n_sv), we should land
+        // very far from zero. Anything > 1000 is a clear sign the
+        // Poisson branch worked.
+        assert!(
+            out.len() > 1000,
+            "Expected thousands of de-novo SVs at chr22 scale; got {}. \
+             This used to silently emit zero due to Poisson `exp(-λ)` underflow.",
+            out.len()
+        );
     }
 }

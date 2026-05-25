@@ -181,14 +181,14 @@ inspect() {
     del_p="$(echo "$sv_model" | jq '.type_probabilities.Del // 0')"
     dup_p="$(echo "$sv_model" | jq '.type_probabilities.Dup // 0')"
     cnv_p="$(echo "$sv_model" | jq '.type_probabilities.Cnv // 0')"
-    echo "Type breakdown:  DEL=$del_p  DUP=$dup_p  CNV=$cnv_p"
-    echo "Default expects: DEL=0.6    DUP=0.3    CNV=0.1"
+    echo "Type breakdown:  DEL=$del_p     DUP=$dup_p     CNV=$cnv_p"
+    echo "Default expects: DEL=0.8171  DUP=0.1824  CNV=0.0005"
     local per_base
     per_base="$(echo "$sv_model" | jq '.per_base_rate')"
-    echo "per_base_rate: $per_base (default 3e-6)"
+    echo "per_base_rate: $per_base (default 4.841e-4 from full gnomAD-SV v4.1)"
     local hom
     hom="$(echo "$sv_model" | jq '.homozygous_frequency')"
-    echo "homozygous_frequency: $hom (default 0.20)"
+    echo "homozygous_frequency: $hom (default 0.20 — literature; gnomAD-SV is sites-only)"
 }
 
 # ── Optional: smoke gen-reads against the trained model ─────────────────

@@ -139,7 +139,14 @@ fn main() -> Result<(), NeatErrors> {
     // This parses the command arguments
     let matches = cmd.get_matches();
     let mut subcommand = matches.subcommand();
-    let mut level_filter = "trace".to_string();
+    // Default is `info`, not `trace`. The per-base debug events in
+    // gen-reads (sequencing-error generation, read-position logs, etc.)
+    // fire on the order of `coverage × read_len × reference_bp`, so on a
+    // human-sized reference a default-trace run produces a multi-GB
+    // `.neat.log` and burns most of the wall-clock time on log writes.
+    // Users who actually want verbose output pass `--log-level debug` or
+    // `trace` explicitly.
+    let mut level_filter = "info".to_string();
     let mut log_dest = env::current_dir().unwrap();
     log_dest.push(".neat.log");
     if let Some(("rneat", cmd)) = subcommand {

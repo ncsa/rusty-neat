@@ -197,12 +197,36 @@ smoke_gen_reads() {
     echo "=========================================="
     echo "Running gen-reads against the trained model (sv_rate_scale=1.0)"
     echo "=========================================="
-    # Use a small reference for this (the trained model's lengths may be
-    # huge — the chr22-trained gnomAD model has median DEL ~270bp which
-    # fits, but the sampler clamps to contig_len/4 anyway).
+    # Slice the reference to chr22 so gen-reads runs in seconds, not
+    # hours. Using the full hg38 here was a footgun — it works, but a
+    # smoke test that takes ~1h with a 10GB log isn't a smoke test.
+    # Cache the chr22-only FASTA in the work dir; awk is portable and
+    # doesn't require samtools/bgzip/.fai indexing on the source file.
+    local smoke_ref="$(pwd)/smoke_ref_chr22.fa.gz"
+    if [[ ! -f "$smoke_ref" ]]; then
+        echo "Extracting chr22 from $REF_FASTA → $smoke_ref"
+        if [[ "$REF_FASTA" == *.gz ]]; then
+            zcat "$REF_FASTA"
+        else
+            cat "$REF_FASTA"
+        fi | awk -v target="chr22" '
+            /^>/ {
+                # Strip ">" and take the first whitespace-delimited token.
+                split(substr($0, 2), parts, /[ \t]+/);
+                keep = (parts[1] == target);
+            }
+            keep { print }
+        ' | gzip > "$smoke_ref"
+        if [[ ! -s "$smoke_ref" ]] || [[ "$(zcat "$smoke_ref" | wc -l)" -lt 2 ]]; then
+            echo "ERROR: chr22 extraction produced an empty file. The reference may use" >&2
+            echo "       a different contig name. Check with:" >&2
+            echo "       zcat $REF_FASTA | grep -m5 '^>'" >&2
+            return 1
+        fi
+    fi
     local config="gen.yml"
     cat > "$config" <<EOF
-reference: $REF_FASTA
+reference: $smoke_ref
 read_len: 150
 coverage: 10
 ploidy: 2

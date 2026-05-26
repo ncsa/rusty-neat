@@ -785,11 +785,14 @@ Single-threaded; streams TLEN fields from the BAM. A full human genome BAM at 30
 
 ### Environment notes
 
-The `rneat` binary has no runtime dependencies beyond a standard C library (glibc), which is present on all Linux HPC systems. No module loads or conda environments are required — copy the release binary to your scratch or project directory and run it directly. If you compile from source on the cluster, ensure `cmake` is available (`module load cmake` on most systems) before running `cargo build --release`.
+- The `rneat` binary has no runtime dependencies beyond a standard C library (glibc), which is present on all Linux HPC systems.
+- No module loads or conda environments are required — copy the release binary to your scratch or project directory and run it directly.
+- If you compile from source on the cluster, ensure `cmake` is available (`module load cmake` on most systems) before running `cargo build --release`.
 
 **Current Benchmarks**
 We ran some benchmarks on `rneat` on my home desktop, a very basic Linux desktop, using data pulled from public resources on the internet (mostly ncbi). The "yeast" is brewer's yeast. These are the results:
 
+```text
 [16:26:39] Build complete.
 rneat Benchmark Report
 Run:        20260510_162639
@@ -830,6 +833,7 @@ paired-ended         0:13.30        1126.8      354%
   Paired/single wall-time ratio: 1.27x  (10.48s → 13.30s)
   Paired/single peak-RSS ratio:  1.16x  (970.4 MB → 1126.8 MB)
 ──────────────────────────────────────────────────────────────────────
+```
 
 **Zenodo release**
 

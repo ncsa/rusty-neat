@@ -79,6 +79,8 @@ Two open-tier sources are supported, each with its own adapter in `tools/`. The 
 
 Both adapters can chain into `rneat gen-mut-model` via `--train`. The output mutation model is structurally identical regardless of which adapter produced the input VCF — "cancer-ness" is in the training data, not the schema.
 
+A pre-trained pan-cancer model fit from the COSMIC adapter against v104 is checked into the repo at `tools/cosmic_v104_pancancer_model.json.gz` (9.2 KB). It's a temporary placement so the cancer simulator can be exercised end-to-end without requiring users to download the ~1 GB COSMIC corpus first. Final placement (bundled / hosted with a fetch helper / user-trains-their-own) is tracked at **#186**.
+
 **A note on the fitted `mutation_rate`.** `gen-mut-model` normalizes variant count by total reference length, so a corpus aggregated across many donors (COSMIC, MC3) will produce a `mutation_rate` that reflects "fraction of bp with any observed mutation across the catalog," not per-tumor burden. The v104 COSMIC fit lands at ~5.5e-3 — high if mistaken for a per-tumor rate. Users simulating a specific tumor purity should treat this as a corpus-level constant and shape the per-sample burden via coverage and purity in the orchestration layer, not by rescaling the model's rate.
 
 ### Considered and ruled out (for v1)

@@ -10,6 +10,13 @@
 #     https://cancer.sanger.ac.uk/cosmic/download/cosmic
 #   Requires a free academic-license registration to download.
 #
+# A pre-trained model fit by this exact script against v104 is bundled at
+# `tools/cosmic_v104_pancancer_model.json.gz` (9.2 KB). Users who only need
+# a tumor model for `tools/cancer_simulate.sh` can skip the COSMIC download
+# entirely and pass that file as `--tumor-model`. The bundled artifact's
+# long-term placement is tracked at #186; expect it to move once the
+# release/bundle/host decision is finalized.
+#
 # What this script does:
 #   1. Drop complex variants (REF and ALT both >1 bp: multi-base substitutions
 #      and delins). gen-mut-model classifies these as VariantType::Complex and

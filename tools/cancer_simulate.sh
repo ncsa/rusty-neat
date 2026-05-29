@@ -38,6 +38,8 @@ TOTAL_COVERAGE="30"
 PURITY="0.5"
 NORMAL_MODEL=""
 TUMOR_MODEL=""
+NORMAL_MUTATION_RATE=""
+TUMOR_MUTATION_RATE=""
 GERMLINE_VCF=""
 READ_LEN="151"
 PAIRED_END="false"
@@ -71,6 +73,15 @@ which is germline-derived. Supplying a cancer-trained tumor model is strongly
 recommended for any non-toy run — see issue #186):
   --normal-model     Path to a .json.gz mutation model for the normal pass
   --tumor-model      Path to a .json.gz mutation model for the tumor pass
+
+Mutation-rate overrides (optional; each pass uses its model's fitted rate if
+omitted). Useful when the supplied model's rate is corpus-aggregated rather
+than per-tumor — e.g. the bundled COSMIC pan-cancer model fits to ~5.5e-3 per
+bp ("fraction of bp with any observed mutation across the COSMIC catalog"),
+which inflates a single-tumor simulation by ~50–500×. Realistic per-tumor
+rates are ~1e-5 (typical solid tumor) to ~1e-4 (high-burden / MSI).
+  --normal-mutation-rate  Override the normal pass's per-base mutation rate
+  --tumor-mutation-rate   Override the tumor pass's per-base mutation rate
 
 Germline VCF (optional):
   --germline-vcf     A VCF to use as the shared germline. If omitted, pass 1
@@ -107,8 +118,10 @@ while [[ $# -gt 0 ]]; do
         --output-prefix)    OUTPUT_PREFIX="$2"; shift 2 ;;
         --total-coverage)   TOTAL_COVERAGE="$2"; shift 2 ;;
         --purity)           PURITY="$2"; shift 2 ;;
-        --normal-model)     NORMAL_MODEL="$2"; shift 2 ;;
-        --tumor-model)      TUMOR_MODEL="$2"; shift 2 ;;
+        --normal-model)         NORMAL_MODEL="$2"; shift 2 ;;
+        --tumor-model)          TUMOR_MODEL="$2"; shift 2 ;;
+        --normal-mutation-rate) NORMAL_MUTATION_RATE="$2"; shift 2 ;;
+        --tumor-mutation-rate)  TUMOR_MUTATION_RATE="$2"; shift 2 ;;
         --germline-vcf)     GERMLINE_VCF="$2"; shift 2 ;;
         --read-len)         READ_LEN="$2"; shift 2 ;;
         --paired-ended)     PAIRED_END="true"; shift ;;
@@ -174,6 +187,7 @@ write_config() {
     local input_vcf="$5"
     local seed_suffix="$6"
     local sv_scale="$7"
+    local mutation_rate="$8"
 
     cat > "$config_path" <<EOF
 reference: $REFERENCE
@@ -207,6 +221,9 @@ EOF
     if [[ -n "$input_vcf" ]]; then
         echo "input_vcf: $input_vcf" >> "$config_path"
     fi
+    if [[ -n "$mutation_rate" ]]; then
+        echo "mutation_rate: $mutation_rate" >> "$config_path"
+    fi
     return 0
 }
 
@@ -214,7 +231,7 @@ EOF
 echo ">> Pass 1: normal at ${NORMAL_COVERAGE}× coverage"
 NORMAL_CONFIG="${OUTPUT_DIR}/${NORMAL_PREFIX}.yml"
 write_config "$NORMAL_CONFIG" "$NORMAL_PREFIX" "$NORMAL_COVERAGE" \
-    "$NORMAL_MODEL" "$GERMLINE_VCF" "normal" "0.0"
+    "$NORMAL_MODEL" "$GERMLINE_VCF" "normal" "0.0" "$NORMAL_MUTATION_RATE"
 "$RNEAT_BIN" gen-reads -c "$NORMAL_CONFIG"
 
 # If the user didn't supply a germline VCF, use pass 1's golden as the
@@ -232,7 +249,7 @@ fi
 echo ">> Pass 2: tumor at ${TUMOR_COVERAGE}× coverage (germline from ${GERMLINE_VCF})"
 TUMOR_CONFIG="${OUTPUT_DIR}/${TUMOR_PREFIX}.yml"
 write_config "$TUMOR_CONFIG" "$TUMOR_PREFIX" "$TUMOR_COVERAGE" \
-    "$TUMOR_MODEL" "$GERMLINE_VCF" "tumor" "$SV_RATE_SCALE"
+    "$TUMOR_MODEL" "$GERMLINE_VCF" "tumor" "$SV_RATE_SCALE" "$TUMOR_MUTATION_RATE"
 "$RNEAT_BIN" gen-reads -c "$TUMOR_CONFIG"
 
 # ── Merge FASTQs ─────────────────────────────────────────────────────────

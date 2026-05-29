@@ -1079,7 +1079,7 @@ mod tests {
 
     #[test]
     fn test_filter_input_vcf() {
-        use crate::common::structs::variants::{Genotype, VariantType};
+        use crate::common::structs::variants::{Genotype, Provenance, VariantType};
         use common::structs::nucleotides::Nucleotide;
         let mut raw = HashMap::new();
         let v1 = Variant {
@@ -1095,6 +1095,7 @@ mod tests {
             info: None,
             format: vec![],
             sample: vec![],
+            provenance: Provenance::InputVcf,
         };
         let v2 = Variant {
             location: 200,
@@ -1109,6 +1110,7 @@ mod tests {
             info: None,
             format: vec![],
             sample: vec![],
+            provenance: Provenance::InputVcf,
         };
         // Symbolic SV — tagged Complex but must NOT be dropped by
         // filter_input_vcf: gen_reads uses it downstream for coverage
@@ -1127,6 +1129,7 @@ mod tests {
             info: None,
             format: vec![],
             sample: vec![],
+            provenance: Provenance::InputVcf,
         };
         raw.insert("chr1".to_string(), vec![v1.clone(), v2, v3]);
 
@@ -1177,6 +1180,7 @@ mod tests {
             filter: None,
             info: None,
             format: vec![],
+            provenance: common::structs::variants::Provenance::Denovo,
             sample: vec![],
         }
     }

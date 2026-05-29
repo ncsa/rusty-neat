@@ -69,6 +69,12 @@ pub fn write_vcf(
     )?;
     writeln!(
         &mut buffer,
+        "##INFO=<ID=NEAT_PROVENANCE,Number=1,Type=String,\
+        Description=\"Origin of variant in this gen-reads run: \
+        'denovo' = sampled by the simulator, 'input' = supplied via input_vcf:\">"
+    )?;
+    writeln!(
+        &mut buffer,
         "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">"
     )?;
     // Add a neat sample column
@@ -81,19 +87,22 @@ pub fn write_vcf(
         let block_maps = &mutated_maps[contig];
         for block_map in block_maps {
             for (position, variant) in &block_map.variant_map {
-                // Format the output line. Any fields without data will be a simple period. Quality
-                // is set to 37 for all these variants, to indicate in the golden vcf that these are
-                // the generated variants.
+                // Format the output line. Quality is set to 37 for all these
+                // variants, to indicate in the golden VCF that these are the
+                // generated variants. INFO carries NEAT_PROVENANCE so downstream
+                // merges (e.g. cancer_simulate.sh) can resolve germline vs
+                // somatic vs shared without re-reading the simulator's intent.
                 let alt_str = match &variant.alternate {
                     AlternateType::Literal(bases) => sequence_array_to_string(bases),
                     AlternateType::Symbolic(sv) => sv.raw_alt.clone(),
                 };
                 let line = format!(
-                    "{}\t{}\t.\t{}\t{}\t37\tPASS\t.\tGT\t{}",
+                    "{}\t{}\t.\t{}\t{}\t37\tPASS\tNEAT_PROVENANCE={}\tGT\t{}",
                     contig,
                     position + 1,
                     sequence_array_to_string(&variant.reference),
                     alt_str,
+                    variant.provenance.as_str(),
                     variant.genotype_str,
                 );
                 writeln!(&mut buffer, "{}", line)?;
@@ -101,13 +110,18 @@ pub fn write_vcf(
             // Symbolic / structural variants are tracked separately on the map
             // so they don't flag per-base mutation positions during read gen.
             // Preserve the original INFO field verbatim so SVLEN / END / CN
-            // round-trip from input VCF to output VCF.
+            // round-trip from input VCF to output VCF — and append (or replace
+            // an empty ".") with NEAT_PROVENANCE for the cancer-merge step.
             for variant in &block_map.sv_records {
                 let alt_str = match &variant.alternate {
                     AlternateType::Literal(bases) => sequence_array_to_string(bases),
                     AlternateType::Symbolic(sv) => sv.raw_alt.clone(),
                 };
-                let info_str = variant.info.as_deref().unwrap_or(".");
+                let prov = variant.provenance.as_str();
+                let info_str = match variant.info.as_deref() {
+                    None | Some(".") | Some("") => format!("NEAT_PROVENANCE={prov}"),
+                    Some(existing) => format!("{existing};NEAT_PROVENANCE={prov}"),
+                };
                 let line = format!(
                     "{}\t{}\t.\t{}\t{}\t37\tPASS\t{}\tGT\t{}",
                     contig,
@@ -356,7 +370,7 @@ mod tests {
     use super::*;
     use crate::structs::{
         nucleotides::Nucleotide,
-        variants::{Genotype, SvData, SvType, Variant, VariantType},
+        variants::{Genotype, Provenance, SvData, SvType, Variant, VariantType},
     };
     use std::io::Write;
 
@@ -421,18 +435,20 @@ mod tests {
                 .any(|l| l.contains("#CHROM\tPOS\tID\tREF\tALT"))
         );
 
-        // Both variant lines must be present (HashMap iteration order is non-deterministic)
+        // Both variant lines must be present (HashMap iteration order is non-deterministic).
+        // Variants from `Variant::new` carry `Provenance::Denovo`, which the writer
+        // surfaces as `INFO/NEAT_PROVENANCE=denovo`.
         assert!(
             lines
                 .iter()
-                .any(|l| l == "chr1\t4\t.\tA\tG\t37\tPASS\t.\tGT\t0/1"),
+                .any(|l| l == "chr1\t4\t.\tA\tG\t37\tPASS\tNEAT_PROVENANCE=denovo\tGT\t0/1"),
             "missing het SNP line; got: {:?}",
             lines
         );
         assert!(
             lines
                 .iter()
-                .any(|l| l == "chr1\t8\t.\tT\tG\t37\tPASS\t.\tGT\t1/1"),
+                .any(|l| l == "chr1\t8\t.\tT\tG\t37\tPASS\tNEAT_PROVENANCE=denovo\tGT\t1/1"),
             "missing hom SNP line; got: {:?}",
             lines
         );
@@ -886,6 +902,7 @@ chr1\t100\t.\tN\t<DEL>\t60\tPASS\tSVTYPE=DEL;END=500\n";
             info: None,
             format: Vec::new(),
             sample: Vec::new(),
+            provenance: Provenance::Denovo,
         };
         let mutated_map =
             MutatedMap::from_interval(0, 200, vec![sv]).unwrap();
@@ -906,8 +923,117 @@ chr1\t100\t.\tN\t<DEL>\t60\tPASS\tSVTYPE=DEL;END=500\n";
             .map(|l| l.unwrap())
             .collect();
         assert!(
-            lines.iter().any(|l| l == "chr1\t100\t.\tA\t<DEL>\t37\tPASS\t.\tGT\t0/1"),
-            "expected symbolic ALT to round-trip as `<DEL>`; got: {:?}",
+            lines.iter().any(
+                |l| l == "chr1\t100\t.\tA\t<DEL>\t37\tPASS\tNEAT_PROVENANCE=denovo\tGT\t0/1"
+            ),
+            "expected symbolic ALT to round-trip as `<DEL>` with denovo provenance; got: {:?}",
+            lines
+        );
+    }
+
+    /// `Provenance::InputVcf` literal variants must surface as
+    /// `NEAT_PROVENANCE=input` in the golden VCF — this is the signal the
+    /// cancer-simulator merge step relies on to detect germline carry-through
+    /// (a variant that was supplied via `input_vcf:` and appears in both
+    /// passes is the "shared" case).
+    #[test]
+    fn test_write_vcf_input_provenance_surfaces_as_input_tag() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        // Hand-roll the variant directly so we exercise the InputVcf path
+        // without round-tripping through from_file (which has its own tests).
+        let v = Variant {
+            variant_type: VariantType::SNP,
+            location: 49, // 0-based; will appear as POS=50 in output
+            reference: vec![Nucleotide::A],
+            alternate: AlternateType::Literal(vec![Nucleotide::G]),
+            genotype_str: "0/1".to_string(),
+            genotype: Genotype::Heterozygous,
+            id: None,
+            quality_score: None,
+            filter: None,
+            info: None,
+            format: Vec::new(),
+            sample: Vec::new(),
+            provenance: Provenance::InputVcf,
+        };
+        let mutated_map = MutatedMap::from_interval(0, 200, vec![v]).unwrap();
+        let mut mutated_maps = HashMap::new();
+        mutated_maps.insert("chr1".to_string(), vec![mutated_map]);
+        let output_path = temp_dir.path().join("input_prov.vcf");
+        write_vcf(
+            &mutated_maps,
+            &vec!["chr1".to_string()],
+            &HashMap::from([("chr1".to_string(), 200usize)]),
+            &PathBuf::from("ref.fa"),
+            false,
+            &output_path,
+        )
+        .unwrap();
+        let lines: Vec<String> = crate::file_tools::file_io::read_gzip_lines(&output_path)
+            .unwrap()
+            .map(|l| l.unwrap())
+            .collect();
+        assert!(
+            lines
+                .iter()
+                .any(|l| l == "chr1\t50\t.\tA\tG\t37\tPASS\tNEAT_PROVENANCE=input\tGT\t0/1"),
+            "expected NEAT_PROVENANCE=input on InputVcf literal; got: {:?}",
+            lines
+        );
+        // Header line must declare the new INFO field so downstream
+        // parsers (bcftools, hap.py, …) don't drop it as unknown.
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.starts_with("##INFO=<ID=NEAT_PROVENANCE,")),
+            "missing NEAT_PROVENANCE INFO header line; got: {:?}",
+            lines
+        );
+    }
+
+    /// Symbolic SVs typically arrive with a populated INFO column
+    /// (SVLEN, END, SVTYPE, CN). The writer must *append* NEAT_PROVENANCE
+    /// to that existing field rather than overwrite it — otherwise span
+    /// metadata is lost on the symbolic record's round trip.
+    #[test]
+    fn test_write_vcf_symbolic_appends_provenance_to_existing_info() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let sv = Variant {
+            variant_type: VariantType::Complex,
+            location: 199, // 0-based; will appear as POS=200 in output
+            reference: vec![Nucleotide::A],
+            alternate: AlternateType::Symbolic(SvData::new("<DEL>", SvType::Del)),
+            genotype_str: "1/1".to_string(),
+            genotype: Genotype::Homozygous,
+            id: None,
+            quality_score: None,
+            filter: None,
+            info: Some("SVTYPE=DEL;END=300;SVLEN=-100".to_string()),
+            format: Vec::new(),
+            sample: Vec::new(),
+            provenance: Provenance::InputVcf,
+        };
+        let mutated_map = MutatedMap::from_interval(0, 400, vec![sv]).unwrap();
+        let mut mutated_maps = HashMap::new();
+        mutated_maps.insert("chr1".to_string(), vec![mutated_map]);
+        let output_path = temp_dir.path().join("sv_appended.vcf");
+        write_vcf(
+            &mutated_maps,
+            &vec!["chr1".to_string()],
+            &HashMap::from([("chr1".to_string(), 400usize)]),
+            &PathBuf::from("ref.fa"),
+            false,
+            &output_path,
+        )
+        .unwrap();
+        let lines: Vec<String> = crate::file_tools::file_io::read_gzip_lines(&output_path)
+            .unwrap()
+            .map(|l| l.unwrap())
+            .collect();
+        assert!(
+            lines.iter().any(|l| l == "chr1\t200\t.\tA\t<DEL>\t37\tPASS\t\
+                 SVTYPE=DEL;END=300;SVLEN=-100;NEAT_PROVENANCE=input\tGT\t1/1"),
+            "expected SVTYPE/END/SVLEN to survive with NEAT_PROVENANCE appended; got: {:?}",
             lines
         );
     }

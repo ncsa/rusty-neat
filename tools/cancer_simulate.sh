@@ -251,6 +251,84 @@ if [[ "$PAIRED_END" == "true" ]]; then
     cat "$NORMAL_R2" "$TUMOR_R2" > "$MERGED_R2"
 fi
 
+# ── Merge golden VCFs into a single origin-tagged truth set ─────────────
+# Resolves rneat's per-pass `INFO/NEAT_PROVENANCE` (which says "denovo or
+# input") into the cancer-specific `INFO/NEAT_ORIGIN` (which says "germline,
+# somatic, or shared"):
+#
+#   only in normal_golden                → NEAT_ORIGIN=germline
+#   only in tumor_golden  (denovo there) → NEAT_ORIGIN=somatic
+#   in both passes                       → NEAT_ORIGIN=shared
+#
+# bcftools is required for the set operations. If it isn't installed we
+# leave the per-pass VCFs and warn — the merge is a post-processing step,
+# not part of the simulation correctness.
+NORMAL_VCF="${OUTPUT_DIR}/${NORMAL_PREFIX}.vcf.gz"
+TUMOR_VCF="${OUTPUT_DIR}/${TUMOR_PREFIX}.vcf.gz"
+MERGED_TRUTH_VCF="${OUTPUT_DIR}/${MERGED_PREFIX}_truth.vcf.gz"
+MERGE_OK="false"
+
+if ! command -v bcftools >/dev/null 2>&1; then
+    echo ">> [skipped] bcftools not found — per-pass VCFs only."
+    echo "   Install bcftools to enable the origin-tagged truth-VCF merge."
+elif ! command -v bgzip >/dev/null 2>&1; then
+    echo ">> [skipped] bgzip not found — install htslib for the truth-VCF merge."
+else
+    echo ">> Merging golden VCFs into origin-tagged truth set..."
+    ISEC_DIR="${OUTPUT_DIR}/_isec_$$"
+    mkdir -p "$ISEC_DIR"
+    # bcftools isec needs tabix-indexed inputs.
+    bcftools index -f -t "$NORMAL_VCF"
+    bcftools index -f -t "$TUMOR_VCF"
+    # Outputs:
+    #   0000.vcf.gz — only in NORMAL_VCF (germline that didn't round-trip)
+    #   0001.vcf.gz — only in TUMOR_VCF  (somatic de-novo)
+    #   0002.vcf.gz — common, drawn from NORMAL_VCF
+    #   0003.vcf.gz — common, drawn from TUMOR_VCF (preferred — preserves tumor's SV INFO)
+    bcftools isec -p "$ISEC_DIR" -O z "$NORMAL_VCF" "$TUMOR_VCF" >/dev/null
+
+    # Annotate each disjoint subset with NEAT_ORIGIN and re-bgzip.
+    # awk owns the INFO-column rewrite because we want a stream-pure
+    # operation that doesn't require building an annotations file.
+    annotate_origin() {
+        local in_vcf="$1" out_vcf="$2" origin="$3"
+        zcat "$in_vcf" | awk -v origin="$origin" '
+            BEGIN { FS = "\t"; OFS = "\t" }
+            /^##/ { print; next }
+            /^#CHROM/ {
+                print "##INFO=<ID=NEAT_ORIGIN,Number=1,Type=String,Description=\"" \
+                      "Origin of variant in tumor/normal mix: germline | somatic | shared\">"
+                print; next
+            }
+            {
+                tag = "NEAT_ORIGIN=" origin
+                if ($8 == "." || $8 == "") $8 = tag
+                else                       $8 = $8 ";" tag
+                print
+            }
+        ' | bgzip -c > "$out_vcf"
+    }
+
+    annotate_origin "$ISEC_DIR/0000.vcf.gz" "$ISEC_DIR/normal_only.vcf.gz" germline
+    annotate_origin "$ISEC_DIR/0001.vcf.gz" "$ISEC_DIR/tumor_only.vcf.gz"  somatic
+    annotate_origin "$ISEC_DIR/0003.vcf.gz" "$ISEC_DIR/shared.vcf.gz"      shared
+
+    # bcftools concat -a (allow-overlaps) requires indexed inputs because
+    # the three subset files all sit on overlapping contigs (different
+    # positions per file, but the same chr names). Index, concat, sort.
+    bcftools index -f -t "$ISEC_DIR/normal_only.vcf.gz"
+    bcftools index -f -t "$ISEC_DIR/tumor_only.vcf.gz"
+    bcftools index -f -t "$ISEC_DIR/shared.vcf.gz"
+    bcftools concat -a -O u \
+        "$ISEC_DIR/normal_only.vcf.gz" \
+        "$ISEC_DIR/tumor_only.vcf.gz" \
+        "$ISEC_DIR/shared.vcf.gz" \
+      | bcftools sort -O z -o "$MERGED_TRUTH_VCF"
+    bcftools index -f -t "$MERGED_TRUTH_VCF"
+    rm -rf "$ISEC_DIR"
+    MERGE_OK="true"
+fi
+
 # ── Summary ──────────────────────────────────────────────────────────────
 cat <<EOF
 
@@ -272,10 +350,9 @@ Outputs (in ${OUTPUT_DIR}):
   Tumor FASTQ:      ${TUMOR_PREFIX}_r1.fastq.gz $( [[ "$PAIRED_END" == "true" ]] && echo ", ${TUMOR_PREFIX}_r2.fastq.gz" )
   Tumor truth:      ${TUMOR_PREFIX}.vcf.gz              (germline + somatic)
   Merged FASTQ:     ${MERGED_PREFIX}_r1.fastq.gz$( [[ "$PAIRED_END" == "true" ]] && echo ", ${MERGED_PREFIX}_r2.fastq.gz" )
+$( [[ "$MERGE_OK" == "true" ]] && echo "  Merged truth:     ${MERGED_PREFIX}_truth.vcf.gz   (INFO/NEAT_ORIGIN = germline | somatic | shared)" )
 
 The merged FASTQ is what a downstream somatic-variant pipeline should
-consume. Both per-pass golden VCFs are preserved for benchmarking; a
-proper unified truth set with germline/somatic origin tags is tracked
-at rneat issue #185.
+consume.$( [[ "$MERGE_OK" == "true" ]] && echo " The merged truth VCF carries INFO/NEAT_ORIGIN tags that distinguish germline, somatic, and shared (germline-carried-through-tumor) variants — feed it to hap.py / som.py / vcfeval as the truth set for somatic-caller benchmarking." || echo " Per-pass golden VCFs are preserved; install bcftools + bgzip to enable the origin-tagged truth merge." )
 ────────────────────────────────────────────────────────────────
 EOF

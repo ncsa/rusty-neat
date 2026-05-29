@@ -533,7 +533,7 @@ fn collect_naming_warnings(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use common::structs::variants::{AlternateType, Genotype, VariantType};
+    use common::structs::variants::{AlternateType, Genotype, Provenance, VariantType};
 
     fn snp(loc: usize, ref_b: Nucleotide, alt_b: Nucleotide, filter: Option<&str>) -> Variant {
         Variant {
@@ -549,6 +549,7 @@ mod tests {
             info: None,
             format: Vec::new(),
             sample: Vec::new(),
+            provenance: Provenance::Denovo,
         }
     }
 
@@ -689,6 +690,7 @@ mod tests {
             info: None,
             format: Vec::new(),
             sample: Vec::new(),
+            provenance: Provenance::Denovo,
         };
         let mut raw = HashMap::new();
         raw.insert(

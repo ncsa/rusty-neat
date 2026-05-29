@@ -83,56 +83,54 @@ pub fn write_vcf(
         "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tNEAT_simulated_sample"
     )?;
     // write out mutations
+    //
+    // Per-contig: collect every record (literal + symbolic) from every block
+    // into one Vec and sort by position before writing. The underlying
+    // storage is a HashMap (variant_map), so iteration order is non-
+    // deterministic and unsorted output breaks `bcftools index -t` (tabix
+    // requires position-sorted input) — which broke the cancer_simulate.sh
+    // merge step (see #185). Sorting in the writer is the simplest fix and
+    // matches what every other VCF-producing tool does.
+    //
+    // Literals and SVs share a single sorted output stream because that's
+    // how VCF spec expects them. Ties at the same position are stable-sorted
+    // in collection order; rare in practice and tolerable.
     for contig in contig_order {
         let block_maps = &mutated_maps[contig];
+        let mut records: Vec<&Variant> = Vec::new();
         for block_map in block_maps {
-            for (position, variant) in &block_map.variant_map {
-                // Format the output line. Quality is set to 37 for all these
-                // variants, to indicate in the golden VCF that these are the
-                // generated variants. INFO carries NEAT_PROVENANCE so downstream
-                // merges (e.g. cancer_simulate.sh) can resolve germline vs
-                // somatic vs shared without re-reading the simulator's intent.
-                let alt_str = match &variant.alternate {
-                    AlternateType::Literal(bases) => sequence_array_to_string(bases),
-                    AlternateType::Symbolic(sv) => sv.raw_alt.clone(),
-                };
-                let line = format!(
-                    "{}\t{}\t.\t{}\t{}\t37\tPASS\tNEAT_PROVENANCE={}\tGT\t{}",
-                    contig,
-                    position + 1,
-                    sequence_array_to_string(&variant.reference),
-                    alt_str,
-                    variant.provenance.as_str(),
-                    variant.genotype_str,
-                );
-                writeln!(&mut buffer, "{}", line)?;
-            }
-            // Symbolic / structural variants are tracked separately on the map
-            // so they don't flag per-base mutation positions during read gen.
-            // Preserve the original INFO field verbatim so SVLEN / END / CN
-            // round-trip from input VCF to output VCF — and append (or replace
-            // an empty ".") with NEAT_PROVENANCE for the cancer-merge step.
-            for variant in &block_map.sv_records {
-                let alt_str = match &variant.alternate {
-                    AlternateType::Literal(bases) => sequence_array_to_string(bases),
-                    AlternateType::Symbolic(sv) => sv.raw_alt.clone(),
-                };
-                let prov = variant.provenance.as_str();
-                let info_str = match variant.info.as_deref() {
+            records.extend(block_map.variant_map.values());
+            records.extend(block_map.sv_records.iter());
+        }
+        records.sort_by_key(|v| v.location);
+
+        for variant in records {
+            let alt_str = match &variant.alternate {
+                AlternateType::Literal(bases) => sequence_array_to_string(bases),
+                AlternateType::Symbolic(sv) => sv.raw_alt.clone(),
+            };
+            let prov = variant.provenance.as_str();
+            // Symbolic records preserve any pre-existing INFO (SVLEN / END /
+            // CN / SVTYPE) and append NEAT_PROVENANCE. Literal records have
+            // no upstream INFO, so just emit NEAT_PROVENANCE alone.
+            let info_str = if variant.alternate.is_symbolic() {
+                match variant.info.as_deref() {
                     None | Some(".") | Some("") => format!("NEAT_PROVENANCE={prov}"),
                     Some(existing) => format!("{existing};NEAT_PROVENANCE={prov}"),
-                };
-                let line = format!(
-                    "{}\t{}\t.\t{}\t{}\t37\tPASS\t{}\tGT\t{}",
-                    contig,
-                    variant.location + 1,
-                    sequence_array_to_string(&variant.reference),
-                    alt_str,
-                    info_str,
-                    variant.genotype_str,
-                );
-                writeln!(&mut buffer, "{}", line)?;
-            }
+                }
+            } else {
+                format!("NEAT_PROVENANCE={prov}")
+            };
+            let line = format!(
+                "{}\t{}\t.\t{}\t{}\t37\tPASS\t{}\tGT\t{}",
+                contig,
+                variant.location + 1,
+                sequence_array_to_string(&variant.reference),
+                alt_str,
+                info_str,
+                variant.genotype_str,
+            );
+            writeln!(&mut buffer, "{}", line)?;
         }
     }
     Ok(())
@@ -1035,6 +1033,72 @@ chr1\t100\t.\tN\t<DEL>\t60\tPASS\tSVTYPE=DEL;END=500\n";
                  SVTYPE=DEL;END=300;SVLEN=-100;NEAT_PROVENANCE=input\tGT\t1/1"),
             "expected SVTYPE/END/SVLEN to survive with NEAT_PROVENANCE appended; got: {:?}",
             lines
+        );
+    }
+
+    /// `write_vcf` must emit records in position-sorted order — `bcftools
+    /// index -t` (tabix) requires it, and the cancer_simulate.sh merge
+    /// step calls `bcftools index -t` on each per-pass output. Pre-fix the
+    /// writer iterated the variant_map HashMap and emitted records in
+    /// nondeterministic order, which silently broke the merge step.
+    ///
+    /// Mixes literals (HashMap-backed) and SVs (Vec-backed) to verify the
+    /// sort runs across both bins, not just within each.
+    #[test]
+    fn test_write_vcf_records_emitted_in_position_sorted_order() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let v_500 = Variant::new(
+            VariantType::SNP, 500, &vec![Nucleotide::A], &vec![Nucleotide::G], &mut vec![0, 1],
+        ).unwrap();
+        let v_100 = Variant::new(
+            VariantType::SNP, 100, &vec![Nucleotide::C], &vec![Nucleotide::T], &mut vec![0, 1],
+        ).unwrap();
+        let v_300 = Variant::new(
+            VariantType::SNP, 300, &vec![Nucleotide::G], &vec![Nucleotide::A], &mut vec![0, 1],
+        ).unwrap();
+        // Symbolic SV at position 200 — must interleave with the literals,
+        // not get bucketed to the end of the file.
+        let sv_200 = Variant {
+            variant_type: VariantType::Complex,
+            location: 200,
+            reference: vec![Nucleotide::T],
+            alternate: AlternateType::Symbolic(SvData::new("<DEL>", SvType::Del)),
+            genotype_str: "0/1".to_string(),
+            genotype: Genotype::Heterozygous,
+            id: None,
+            quality_score: None,
+            filter: None,
+            info: Some("SVTYPE=DEL;END=250".to_string()),
+            format: Vec::new(),
+            sample: Vec::new(),
+            provenance: Provenance::Denovo,
+        };
+
+        let map = MutatedMap::from_interval(0, 1000, vec![v_500, v_100, v_300, sv_200]).unwrap();
+        let mut maps = HashMap::new();
+        maps.insert("chr1".to_string(), vec![map]);
+
+        let output = temp_dir.path().join("sorted.vcf");
+        write_vcf(
+            &maps,
+            &vec!["chr1".to_string()],
+            &HashMap::from([("chr1".to_string(), 1000usize)]),
+            &PathBuf::from("ref.fa"),
+            false,
+            &output,
+        )
+        .unwrap();
+
+        let positions: Vec<usize> = crate::file_tools::file_io::read_gzip_lines(&output)
+            .unwrap()
+            .map(|l| l.unwrap())
+            .filter(|l| !l.starts_with('#'))
+            .map(|l| l.split('\t').nth(1).unwrap().parse::<usize>().unwrap())
+            .collect();
+        assert_eq!(
+            positions,
+            vec![101, 201, 301, 501],
+            "records must be in position-sorted order regardless of insertion order"
         );
     }
 }

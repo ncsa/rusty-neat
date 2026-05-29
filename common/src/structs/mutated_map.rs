@@ -27,6 +27,18 @@ pub struct MutatedMap {
     pub sv_records: Vec<Variant>,
 }
 
+/// Per-variant allelic-depth accumulator populated by the gen-reads fragment
+/// loop. The key is the variant's absolute per-contig reference position
+/// (matching [`Variant::location`]); the value is `(ref_count, alt_count)` —
+/// how many simulated reads carried each allele at that locus across the
+/// current contig. Drives `FORMAT/AD`, `FORMAT/DP`, and `FORMAT/AF` in the
+/// golden VCF (see issue #176).
+///
+/// Only literal SNP / insertion / deletion variants are tracked here.
+/// Symbolic / structural variants use span-based, not point-based, depth
+/// semantics — they emit `.` placeholders on the AD/DP/AF fields.
+pub type AdCounter = HashMap<usize, (u32, u32)>;
+
 impl MutatedMap {
     pub fn from_interval(
         start: usize,

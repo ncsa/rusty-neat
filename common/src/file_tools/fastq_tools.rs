@@ -68,7 +68,7 @@ pub enum Strand {
     Reverse,
 }
 
-fn reverse_complement(sequence: Vec<Nucleotide>) -> Vec<Nucleotide> {
+pub fn reverse_complement(sequence: Vec<Nucleotide>) -> Vec<Nucleotide> {
     // Returns the reverse complement of a vector of u8's representing a DNA sequence.
     let length = sequence.len();
     let mut rev_comp = Vec::new();
@@ -274,7 +274,7 @@ fn stream_gzip_files(files: &[PathBuf], output: &PathBuf) -> Result<(), FastqToo
 // `cigar_ops.push('D')` runs in a loop per deletion-error base; pushing the
 // same byte N times is the entire CIGAR encoding, not a copy-paste mistake.
 #[allow(clippy::same_item_push)]
-fn generate_read(
+pub fn generate_read(
     sequence: &[Nucleotide],
     flagged_positions: &[usize],
     variant_map: &HashMap<usize, &Variant>,
@@ -416,7 +416,7 @@ fn generate_read(
     })
 }
 
-fn write_read_to_fastq<T: Write>(
+pub fn write_read_to_fastq<T: Write>(
     record: &ReadRecord,
     buffer: &mut GzEncoder<T>,
 ) -> Result<(), FastqToolsError> {

@@ -29,39 +29,38 @@ use std::collections::HashMap;
 /// Build the bundled default `SvModel`.
 ///
 /// Returns a fully-populated, [`SvModel::is_usable`]-passing model with
-/// `<DEL>`, `<DUP>`, and `<CNV>` entries. `gen-reads` consults this only
+/// `<DEL>`, `<DUP>`, `<CNV>`, and `<BND>` entries. `gen-reads` consults this only
 /// when `sv_rate_scale > 0.0`, so generation remains opt-in even though
 /// the model itself is always loaded.
 pub fn default_sv_model() -> SvModel {
     // Per-base rate: fitted from the full gnomAD-SV v4.1 sites VCF
-    // (1,476,325 surviving SVs over the GRCh38 primary assembly ~3.05 Gb).
+    // (1,832,360 surviving SVs over the GRCh38 primary assembly ~3.05 Gb).
     // The trainer computes `n / total_reflen_seen`, which gen-reads then
     // multiplies by `contig_len * sv_rate_scale` to determine the
     // expected per-contig SV count.
-    let per_base_rate = 4.841e-4;
+    let per_base_rate = 6.009e-4;
 
     // Type breakdown: fitted from the full gnomAD-SV v4.1 run.
-    // Deletions dominate; CNV is dramatically rarer at genome scale than
-    // the chr22-only fit suggested (chr22 sits over several gene-dense
-    // CNV hotspots — DiGeorge / 22q11, etc. — that skewed the smoke
-    // numbers high). v1's hand-rolled 60/30/10 split was off by ~20
-    // percentage points on DEL.
+    // Deletions dominate; BNDs are now included at ~19%.
     let mut type_probabilities: HashMap<SvType, f64> = HashMap::new();
-    type_probabilities.insert(SvType::Del, 0.8171);
-    type_probabilities.insert(SvType::Dup, 0.1824);
-    type_probabilities.insert(SvType::Cnv, 0.0005);
+    type_probabilities.insert(SvType::Del, 0.6583);
+    type_probabilities.insert(SvType::Dup, 0.1470);
+    type_probabilities.insert(SvType::Cnv, 0.0004);
+    type_probabilities.insert(SvType::Bnd, 0.1943);
 
     // Length log-normals: fitted from the full-genome run via MLE on
     // ln(span). Quick gut-check on the medians (= exp(mu)):
-    //   DEL: median ≈ 703 bp
-    //   DUP: median ≈ 864 bp
+    //   DEL: median ≈ 704 bp
+    //   DUP: median ≈ 863 bp
     //   CNV: median ≈ 15.3 kb
+    //   BND: nominal 1 bp (fixed)
     // Sigmas reflect the heavy right tail of DUPs (multi-megabase calls
     // pull sigma out to ~2.5) and the tighter clustering of DELs / CNVs.
     let mut length_log_normal: HashMap<SvType, (f64, f64)> = HashMap::new();
     length_log_normal.insert(SvType::Del, (6.557, 1.543));
     length_log_normal.insert(SvType::Dup, (6.761, 2.530));
     length_log_normal.insert(SvType::Cnv, (9.637, 1.152));
+    length_log_normal.insert(SvType::Bnd, (0.0, 0.0));
 
     // Copy-number distribution for `<CNV>` records. gnomAD-SV's sites
     // VCF leaves `INFO/CN` unset (CN varies per-sample, in
@@ -116,12 +115,12 @@ mod tests {
     }
 
     #[test]
-    fn default_sv_model_carries_all_three_supported_types() {
+    fn default_sv_model_carries_all_four_supported_types() {
         // Sampler skips types missing from `type_probabilities`. The
-        // default must include DEL, DUP, and CNV so users see all three
+        // default must include DEL, DUP, CNV, and BND so users see all four
         // when they enable generation.
         let m = default_sv_model();
-        for t in [SvType::Del, SvType::Dup, SvType::Cnv] {
+        for t in [SvType::Del, SvType::Dup, SvType::Cnv, SvType::Bnd] {
             assert!(
                 m.type_probabilities.contains_key(&t),
                 "missing type probability for {:?}",
@@ -166,10 +165,16 @@ mod tests {
         let m = default_sv_model();
         assert!(m.per_base_rate > 0.0 && m.per_base_rate < 1e-3);
         assert!(m.homozygous_frequency >= 0.0 && m.homozygous_frequency <= 1.0);
-        for (_, (mu, sigma)) in m.length_log_normal.iter() {
+        for (t, (mu, sigma)) in m.length_log_normal.iter() {
             // mu is ln(median bp); medians range from ~tens to ~tens-of-thousands.
-            assert!(*mu > 2.0 && *mu < 14.0, "mu={mu} out of plausible range");
-            assert!(*sigma > 0.0 && *sigma < 4.0, "sigma={sigma} out of plausible range");
+            // BND has a fixed nominal mu=0.
+            if *t == SvType::Bnd {
+                assert_eq!(*mu, 0.0);
+                assert_eq!(*sigma, 0.0);
+            } else {
+                assert!(*mu > 2.0 && *mu < 14.0, "mu={mu} out of plausible range");
+                assert!(*sigma > 0.0 && *sigma < 4.0, "sigma={sigma} out of plausible range");
+            }
         }
         for cn in m.cnv_copy_number_distribution.keys() {
             // Excluding CN=2 (which is reference for diploid) is a

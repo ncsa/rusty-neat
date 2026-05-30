@@ -488,12 +488,56 @@ impl SvModel {
             };
             let genotype_str = genotype_string(&genotype, ploidy);
 
+            // De novo <INS> records are emitted as LITERAL Insertion variants
+            // (REF="A", ALT="A<novel-bases>") rather than symbolic <INS>. That
+            // routes them through gen-reads' existing literal-insertion
+            // machinery — fragment-loop reads spanning the locus naturally
+            // pick up the inserted bases, and the output VCF carries the
+            // resolved sequence (matching what real callers like Manta emit
+            // when they can resolve the insertion). The novel sequence is
+            // drawn from the single-base composition of a ±250 bp window
+            // around the anchor; #190 calls out trinucleotide-context
+            // sampling as a possible refinement.
+            if sv_type == SvType::Ins {
+                let novel = match sample_novel_insertion_bases(
+                    sequence,
+                    anchor_0based,
+                    length,
+                    rng,
+                ) {
+                    Ok(bases) => bases,
+                    Err(_) => continue, // RNG hiccup; retry the slot
+                };
+                let mut alt_bases = Vec::with_capacity(length + 1);
+                alt_bases.push(anchor_base);
+                alt_bases.extend(novel);
+
+                occupied.push((affected_start, affected_end));
+                out.push(Variant {
+                    variant_type: VariantType::Insertion,
+                    location: anchor_0based,
+                    reference: vec![anchor_base],
+                    alternate: AlternateType::Literal(alt_bases),
+                    genotype_str: genotype_str.clone(),
+                    genotype,
+                    id: None,
+                    quality_score: None,
+                    filter: None,
+                    // No symbolic INFO needed — the SVLEN is implicit in
+                    // the REF/ALT length difference.
+                    info: None,
+                    format: vec!["GT".to_string()],
+                    sample: vec![genotype_str],
+                    provenance: Provenance::Denovo,
+                });
+                continue;
+            }
+
             let (raw_alt, m_contig, m_pos) = match sv_type {
                 SvType::Del => ("<DEL>".to_string(), None, None),
                 SvType::Dup => ("<DUP>".to_string(), None, None),
                 SvType::Cnv => ("<CNV>".to_string(), None, None),
                 SvType::Inv => ("<INV>".to_string(), None, None),
-                SvType::Ins => ("<INS>".to_string(), None, None),
                 SvType::Bnd => {
                     // For de novo BNDs, generate an intra-chromosomal translocation
                     // to a random mate position on the same contig.
@@ -766,6 +810,54 @@ fn affected_range_for_existing(v: &Variant, block_end: usize) -> Option<(usize, 
 
 fn ranges_overlap(a_start: usize, a_end: usize, b_start: usize, b_end: usize) -> bool {
     a_start < b_end && b_start < a_end
+}
+
+/// Draw `length` random nucleotides for a novel insertion, weighted by the
+/// single-base composition of a 501 bp window centered on `anchor_0based`
+/// (±250 bp, clamped to contig bounds; `N`s in the window are ignored).
+/// Falls back to uniform ACGT if the window has no usable bases (e.g.
+/// an all-N region). #190.
+fn sample_novel_insertion_bases(
+    sequence: &[Nucleotide],
+    anchor_0based: usize,
+    length: usize,
+    rng: &mut NeatRng,
+) -> Result<Vec<Nucleotide>, NeatRngError> {
+    const WINDOW: usize = 250;
+    let start = anchor_0based.saturating_sub(WINDOW);
+    let end = anchor_0based.saturating_add(WINDOW).min(sequence.len());
+
+    let mut counts = [0u64; 4];
+    for &b in &sequence[start..end] {
+        match b {
+            Nucleotide::A => counts[0] += 1,
+            Nucleotide::C => counts[1] += 1,
+            Nucleotide::G => counts[2] += 1,
+            Nucleotide::T => counts[3] += 1,
+            _ => {} // N or other ambiguity codes — skip
+        }
+    }
+
+    let total: u64 = counts.iter().sum();
+    // Cumulative ACGT-ordered probabilities for the inverse-CDF sample.
+    let cum: [f64; 4] = if total == 0 {
+        [0.25, 0.5, 0.75, 1.0]
+    } else {
+        let t = total as f64;
+        let p_a = counts[0] as f64 / t;
+        let p_c = counts[1] as f64 / t;
+        let p_g = counts[2] as f64 / t;
+        [p_a, p_a + p_c, p_a + p_c + p_g, 1.0]
+    };
+
+    let bases = [Nucleotide::A, Nucleotide::C, Nucleotide::G, Nucleotide::T];
+    let mut out = Vec::with_capacity(length);
+    for _ in 0..length {
+        let r = rng.random()?;
+        let idx = cum.iter().position(|&c| r < c).unwrap_or(3);
+        out.push(bases[idx]);
+    }
+    Ok(out)
 }
 
 /// Emit a single-line VCF `INFO` field carrying the structural-variant
@@ -1158,17 +1250,38 @@ mod tests {
         let mut rng = deterministic_rng();
         let out = m.sample_variants("chr1", 200_000, &[], &seq, 2, 1.0, &mut rng);
         let mut seen_types = std::collections::HashSet::new();
+        let mut seen_literal_ins = false;
         for v in &out {
-            let sv = v.alternate.as_symbolic().expect("must be symbolic");
-            seen_types.insert(sv.sv_type);
+            // Post-#190: de novo INS records are LITERAL Insertion variants
+            // (REF=anchor, ALT=anchor+novel bases) rather than symbolic
+            // `<INS>`, so they live in `alternate.as_literal()` and have
+            // `variant_type == Insertion`. Every other SV type is still
+            // symbolic and goes via `alternate.as_symbolic()`.
+            match v.alternate.as_symbolic() {
+                Some(sv) => {
+                    seen_types.insert(sv.sv_type);
+                }
+                None => {
+                    assert_eq!(
+                        v.variant_type,
+                        VariantType::Insertion,
+                        "non-symbolic ALT must be a literal INS; got {:?}",
+                        v.variant_type
+                    );
+                    seen_literal_ins = true;
+                    seen_types.insert(SvType::Ins);
+                }
+            }
         }
-        // At this rate and probability we expect to see all six types
+        // At this rate and probability we expect to see all six types,
+        // with INS landing on the literal path.
         assert!(seen_types.contains(&SvType::Del));
         assert!(seen_types.contains(&SvType::Dup));
         assert!(seen_types.contains(&SvType::Cnv));
         assert!(seen_types.contains(&SvType::Ins));
         assert!(seen_types.contains(&SvType::Bnd));
         assert!(seen_types.contains(&SvType::Inv));
+        assert!(seen_literal_ins, "expected at least one literal-ALT INS");
     }
 
     #[test]
@@ -1240,22 +1353,33 @@ mod tests {
         }
     }
 
+    /// Post-#190: de novo `<INS>` records are LITERAL Insertion variants,
+    /// not symbolic `<INS>`. Their length lives in the REF/ALT length
+    /// delta, the insertion site is `variant.location`, and the ALT
+    /// content is the actual novel sequence plus the anchor base.
+    /// (The richer in-memory shape test — uniqueness of fields, ACGT-only
+    /// novel bases, MutatedMap routing to variant_map — lives in
+    /// `de_novo_ins_emits_literal_variant_with_novel_sequence`. This one
+    /// just pins the length invariant: ALT.len() - REF.len() ≥ MIN_SV.)
     #[test]
-    fn sampled_ins_have_correct_pos_and_end_invariant() {
+    fn sampled_ins_emit_literal_with_min_length_inserted_sequence() {
         let m = model_with_single_type(SvType::Ins, 5e-3);
         let seq = acgt_sequence(100_000);
         let mut rng = deterministic_rng();
         let out = m.sample_variants("chr1", 100_000, &[], &seq, 2, 1.0, &mut rng);
         assert!(!out.is_empty());
         for v in &out {
-            let sv = v.alternate.as_symbolic().expect("must be symbolic");
-            assert_eq!(sv.sv_type, SvType::Ins);
-            // For symbolic INS, location is where it's inserted. END usually equals location + 1.
-            let end = sv.end.expect("END must be populated");
-            assert_eq!(end, v.location + 1);
-            // SVLEN should be set and >= MIN_SV_LENGTH_BP
-            let svlen = sv.svlen.expect("SVLEN must be populated for symbolic INS");
-            assert!(svlen >= MIN_SV_LENGTH_BP as i64);
+            assert_eq!(v.variant_type, VariantType::Insertion);
+            let alt = v
+                .alternate
+                .as_literal()
+                .expect("de novo INS must be literal-ALT");
+            assert_eq!(v.reference.len(), 1, "REF should be a single anchor base");
+            let inserted_len = alt.len().saturating_sub(v.reference.len());
+            assert!(
+                inserted_len >= MIN_SV_LENGTH_BP,
+                "inserted-sequence length {inserted_len} must be ≥ {MIN_SV_LENGTH_BP}"
+            );
         }
     }
 
@@ -1583,5 +1707,75 @@ mod tests {
         // exp(mu) should be ~200. ln(200) ≈ 5.298
         assert!((mu - 200.0f64.ln()).abs() < 1e-5);
         assert!(m.per_base_rate > 0.0);
+    }
+
+    /// De novo `<INS>` records (#190) must be emitted as LITERAL Insertion
+    /// variants with a generated novel-base sequence — not symbolic
+    /// `<INS>` with no allele. This pins:
+    ///   - VariantType::Insertion (not Complex)
+    ///   - AlternateType::Literal (not Symbolic)
+    ///   - ALT bases = [anchor_base, ...novel_bases] of correct length
+    ///   - Only ACGT in the novel bases (no Ns or other ambiguity)
+    ///   - MutatedMap::from_interval routes the record to variant_map
+    ///     (where literal insertions live) rather than sv_records
+    #[test]
+    fn de_novo_ins_emits_literal_variant_with_novel_sequence() {
+        use crate::structs::mutated_map::MutatedMap;
+        let seq = acgt_sequence(50_000);
+        // INS-only model so we don't have to wade through DEL/DUP/etc.
+        let m = model_with_single_type(SvType::Ins, 1e-3);
+        let mut rng = deterministic_rng();
+        let sampled = m.sample_variants("chr1", 50_000, &[], &seq, 2, 1.0, &mut rng);
+
+        assert!(!sampled.is_empty(), "expected ≥1 de novo INS");
+
+        for v in &sampled {
+            assert_eq!(
+                v.variant_type,
+                VariantType::Insertion,
+                "INS must be a literal Insertion variant; got {:?}",
+                v.variant_type
+            );
+            let alt = match &v.alternate {
+                AlternateType::Literal(bases) => bases,
+                AlternateType::Symbolic(_) => panic!("INS must be literal-ALT, not symbolic"),
+            };
+            assert!(
+                alt.len() > 1,
+                "ALT must include anchor + novel bases; got len {}",
+                alt.len()
+            );
+            assert_eq!(
+                v.reference.len(),
+                1,
+                "REF for an insertion is the single anchor base"
+            );
+            assert_eq!(
+                alt[0], v.reference[0],
+                "ALT[0] must equal REF (anchor base)"
+            );
+            for (i, &b) in alt.iter().enumerate().skip(1) {
+                assert!(
+                    matches!(b, Nucleotide::A | Nucleotide::C | Nucleotide::G | Nucleotide::T),
+                    "novel-insertion base {i} must be ACGT; got {:?}",
+                    b
+                );
+            }
+        }
+
+        // MutatedMap::from_interval routes literal Insertions to variant_map,
+        // not sv_records. Confirm that's where the de novo INS lands.
+        let map = MutatedMap::from_interval(0, 50_000, sampled).unwrap();
+        assert!(
+            map.sv_records.iter().all(|v| !matches!(
+                v.variant_type,
+                VariantType::Insertion
+            )),
+            "de novo INS landed in sv_records; expected variant_map"
+        );
+        assert!(
+            !map.variant_map.is_empty(),
+            "de novo INS missing from variant_map"
+        );
     }
 }

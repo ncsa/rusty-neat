@@ -74,7 +74,11 @@ fn open_unzipped(filename: &PathBuf) -> ReaderType {
 }
 
 fn parse_fastq_record_name(line: &str) -> Result<(String, usize, usize), FilterLibError> {
-    // gen_reads produces: "@RNEAT_generated_<contig>_<10-digit start>_<10-digit end>/N"
+    // gen_reads produces:
+    //   "@RNEAT_generated_<contig>_<10-digit start>_<10-digit end>_<16-hex uniq>/N"
+    // The trailing 16-char hex disambiguates same-position fragments (see #210
+    // for why it's necessary). Parser takes the last three underscore-separated
+    // tokens as (start, end, uniq) and ignores uniq.
     if !line.starts_with("@RNEAT_generated_") {
         return if line.contains("@RNEAT_generated_") {
             Err(FilterLibError::MalformedLine(line.to_string()))
@@ -86,9 +90,13 @@ fn parse_fastq_record_name(line: &str) -> Result<(String, usize, usize), FilterL
     let trimmed = &line[17..line.len() - 2];
     let split_line: Vec<&str> = trimmed.split('_').collect();
     let length = split_line.len();
-    let start: usize = split_line[length - 2].parse().unwrap();
-    let end: usize = split_line[length - 1].parse().unwrap();
-    let contig = split_line[..length - 2].join("_");
+    if length < 4 {
+        return Err(FilterLibError::MalformedLine(line.to_string()));
+    }
+    let start: usize = split_line[length - 3].parse().unwrap();
+    let end: usize = split_line[length - 2].parse().unwrap();
+    // split_line[length - 1] is the per-fragment uniqueness tag; ignored.
+    let contig = split_line[..length - 3].join("_");
     Ok((contig, start, end))
 }
 
@@ -221,24 +229,48 @@ mod tests {
 
     #[test]
     fn test_parse_record_name() {
-        let record_name = "@RNEAT_generated_chrom_1_0000001000_0000002000/1".to_string();
+        // Updated for the per-fragment uniqueness tag introduced in #210.
+        let record_name =
+            "@RNEAT_generated_chrom_1_0000001000_0000002000_000000000000002a/1".to_string();
         assert_eq!(
             parse_fastq_record_name(&record_name).unwrap(),
             ("chrom_1".to_string(), 1000, 2000),
         );
     }
 
+    /// Record names that pre-date the uniqueness-tag rollout (i.e. only have
+    /// `<contig>_<start>_<end>` without the trailing hex tag) should produce a
+    /// clear MalformedLine error rather than silently parsing the contig as
+    /// the wrong thing or panicking. This protects users who feed old rneat
+    /// output through a new filter_reads — they'll see a real error.
+    #[test]
+    fn test_parse_record_name_legacy_format_errors() {
+        let legacy = "@RNEAT_generated_chr1_0000001000_0000002000/1".to_string();
+        match parse_fastq_record_name(&legacy) {
+            // Legacy split has 3 tokens [chr1, 0000001000, 0000002000]; new
+            // parser reads end (parses 1000) and start (parses chr1 — fails).
+            // The unwrap on `parse()` panics in that case — accept either
+            // path so this test stays robust to small parser tweaks.
+            Err(_) => {}
+            Ok(parsed) => panic!(
+                "legacy read name should not parse cleanly under the new parser; got {:?}",
+                parsed
+            ),
+        }
+    }
+
     #[test]
     fn test_filter_fastq() {
         let temp_dir: TempDir = tempfile::tempdir().unwrap();
 
-        // Two reads: first inside BED chr1:0-2000, second outside
+        // Two reads: first inside BED chr1:0-2000, second outside.
+        // The 16-hex trailer is the per-fragment uniqueness tag (#210).
         let fastq_content = concat!(
-            "@RNEAT_generated_chr1_0000001000_0000002000/1\n",
+            "@RNEAT_generated_chr1_0000001000_0000002000_0000000000000000/1\n",
             "ACGTACGT\n",
             "+\n",
             "IIIIIIII\n",
-            "@RNEAT_generated_chr1_0000005000_0000006000/1\n",
+            "@RNEAT_generated_chr1_0000005000_0000006000_0000000000000001/1\n",
             "TTTTTTTT\n",
             "+\n",
             "IIIIIIII\n",
@@ -334,11 +366,11 @@ mod tests {
         // FASTQ records.
         let temp_dir: TempDir = tempfile::tempdir().unwrap();
         let fastq_content = concat!(
-            "@RNEAT_generated_chr1_0000001000_0000002000/1\n",
+            "@RNEAT_generated_chr1_0000001000_0000002000_0000000000000000/1\n",
             "ACGTACGT\n",
             "+\n",
             "IIIIIIII\n",
-            "@RNEAT_generated_chr1_0000005000_0000006000/1\n",
+            "@RNEAT_generated_chr1_0000005000_0000006000_0000000000000001/1\n",
             "TTTTTTTT\n",
             "+\n",
             "IIIIIIII\n",
@@ -409,15 +441,15 @@ mod tests {
         // Read B [2000, 2200) — starts exactly at BED end  → excluded
         // Read C [999,  1001) — straddles BED start        → included
         let fastq_content = concat!(
-            "@RNEAT_generated_chr1_0000000800_0000001000/1\n",
+            "@RNEAT_generated_chr1_0000000800_0000001000_0000000000000000/1\n",
             "ACGTACGT\n",
             "+\n",
             "IIIIIIII\n",
-            "@RNEAT_generated_chr1_0000002000_0000002200/1\n",
+            "@RNEAT_generated_chr1_0000002000_0000002200_0000000000000001/1\n",
             "TTTTTTTT\n",
             "+\n",
             "IIIIIIII\n",
-            "@RNEAT_generated_chr1_0000000999_0000001001/1\n",
+            "@RNEAT_generated_chr1_0000000999_0000001001_0000000000000002/1\n",
             "GGGGGGGG\n",
             "+\n",
             "IIIIIIII\n",

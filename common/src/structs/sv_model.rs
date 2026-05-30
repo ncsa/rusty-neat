@@ -18,7 +18,7 @@ use crate::rng::{NeatRng, NeatRngError};
 use crate::structs::distributions::NormalDistribution;
 use crate::structs::nucleotides::Nucleotide;
 use crate::structs::variants::{
-    AlternateType, Genotype, SvData, SvType, Variant, VariantType,
+    AlternateType, Genotype, Provenance, SvData, SvType, Variant, VariantType,
 };
 use log::{info, warn};
 use serde::{Deserialize, Serialize};
@@ -513,6 +513,7 @@ impl SvModel {
                 info: Some(info_field),
                 format: vec!["GT".to_string()],
                 sample: vec![genotype_str],
+                provenance: Provenance::Denovo,
             });
         }
 
@@ -870,6 +871,7 @@ mod tests {
             info: None,
             format: Vec::new(),
             sample: Vec::new(),
+            provenance: Provenance::Denovo,
         }
     }
 
@@ -1228,6 +1230,7 @@ mod tests {
                 info: None,
                 format: Vec::new(),
                 sample: Vec::new(),
+                provenance: Provenance::InputVcf,
             }
         }];
         let m = model_with_single_type(SvType::Dup, 1e-3);

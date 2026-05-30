@@ -37,8 +37,8 @@ set -euo pipefail
 # Pinned so a fresh checkout months from now reproduces the same scoring.
 BWA_IMG="quay.io/biocontainers/bwa:0.7.18--he4a0461_0"
 SAMTOOLS_IMG="quay.io/biocontainers/samtools:1.21--h50ea8bc_0"
-GATK_IMG="broadinstitute/gatk:4.5.0.0"
-HAPPY_IMG="jmcdani20/hap.py:v0.3.12"
+GATK_IMG="docker.io/broadinstitute/gatk:4.5.0.0"
+HAPPY_IMG="docker.io/jmcdani20/hap.py:v0.3.12"
 
 # ── Defaults ────────────────────────────────────────────────────────────
 REFERENCE=""

@@ -102,7 +102,7 @@ pub fn write_block_fastq<T: Write, W: Write>(
     // read_length so no padding is needed (and it would shift R2 coordinates).
     let seq_len = sequence_block.sequence.len();
     let se_pad = if paired_ended { 0 } else { 32 };
-    for (start, end) in block_fragments {
+    for (frag_idx, (start, end)) in block_fragments.into_iter().enumerate() {
         let padded_end = (end + se_pad).min(seq_len);
         let fragment = sequence_block.get_subseq(start, padded_end)?;
         // In long-read mode a fragment may be shorter than read_length; truncate the read
@@ -135,7 +135,19 @@ pub fn write_block_fastq<T: Write, W: Write>(
         let ref_start = sequence_block.ref_start;
         let abs_start = start + ref_start;
         let abs_end = end + ref_start;
-        let base_name = format!("{}_{:010}_{:010}", read_name_prefix, abs_start, abs_end);
+        // Per-fragment uniqueness tag in the read name. Without this, two
+        // fragments that land at the same (start, end) — common via birthday
+        // paradox at 30×+ coverage — share an identical QNAME, which violates
+        // BAM/VCF spec and silently confuses Picard MarkDuplicates into
+        // dropping them (see #210). The within-block frag_idx is sufficient
+        // because rneat currently uses one block per contig and per-contig
+        // read names already differ via `read_name_prefix`. For multi-pass
+        // workflows that concatenate FASTQs from independent gen-reads runs,
+        // the caller must still prefix each run's reads (e.g. cancer_simulate.sh
+        // does N_/T_ between normal and tumor passes).
+        let base_name = format!(
+            "{}_{:010}_{:010}_{:016x}", read_name_prefix, abs_start, abs_end, frag_idx,
+        );
 
         let r2_start = if paired_ended && abs_end >= effective_read_len {
             abs_end - effective_read_len
@@ -635,6 +647,88 @@ mod tests {
             "Read name should NOT contain block-local start {}; got: {}",
             local_start,
             header
+        );
+    }
+
+    /// Two fragments at the SAME (start, end) coordinate must produce reads
+    /// with distinct QNAMEs — without the per-fragment uniqueness tag this
+    /// would silently emit collision-named reads, which Picard MarkDuplicates
+    /// would interpret as PCR duplicates and drop (see #210).
+    #[test]
+    fn test_write_block_fastq_unique_names_for_same_position_fragments() {
+        use crate::structs::{
+            mutated_map::MutatedMap,
+            sequence_block::{RegionType, SequenceBlock, SequenceMap},
+        };
+        let temp_dir = tempfile::tempdir().unwrap();
+        let seq_len: usize = 200;
+        let sequence: Vec<Nucleotide> = (0..seq_len)
+            .map(|i| match i % 4 {
+                0 => A,
+                1 => C,
+                2 => G,
+                _ => T,
+            })
+            .collect();
+        let block = SequenceBlock {
+            contig: "chr1".to_string(),
+            ref_start: 0,
+            ref_end: seq_len,
+            sequence,
+            sequence_map: vec![SequenceMap::from(RegionType::NonNRegion, 0, seq_len)],
+        };
+        let mutated_map = MutatedMap::from_interval(0, seq_len, vec![]).unwrap();
+        // Four fragments — three at the SAME coordinate, one elsewhere.
+        let fragments = vec![(10, 80), (10, 80), (10, 80), (100, 170)];
+        let out_path = temp_dir.path().join("collide.fastq.gz");
+        let outfile = create_output_file(&out_path, true).unwrap();
+        use crate::file_tools::file_io::VectorBuffer;
+        let dummy: VectorBuffer = VectorBuffer::new();
+        let mut buf1 = GzEncoder::new(outfile, Compression::default());
+        let mut buf2 = GzEncoder::new(dummy, Compression::default());
+        let seq_err_model = SequencingErrorModel::default().unwrap();
+        let quality_model = QualityScoreModel::default().unwrap();
+        let mut rng = NeatRng::new_from_seed(&vec!["uniq-name".to_string()]).unwrap();
+        write_block_fastq(
+            fragments,
+            &mutated_map,
+            &block,
+            false,
+            &mut buf1,
+            &mut buf2,
+            70,
+            false,
+            "chr1",
+            &quality_model,
+            &seq_err_model,
+            &mut rng,
+            None,
+            &mut AdCounter::new(),
+        )
+        .unwrap();
+        buf1.finish().unwrap();
+        // Read every line that starts with @ AND is followed by a valid
+        // FASTQ record. Filter by record-position (line 1 of every 4-line
+        // block) — quality lines (line 4) can start with @ too.
+        let lines: Vec<String> = read_gzip_lines(&out_path)
+            .unwrap()
+            .map(|l| l.unwrap())
+            .collect();
+        let names: Vec<&String> = lines
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| i % 4 == 0)
+            .map(|(_, l)| l)
+            .collect();
+        assert_eq!(names.len(), 4, "expected 4 read names, got: {:?}", names);
+        let mut sorted: Vec<&&String> = names.iter().collect();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(
+            sorted.len(),
+            4,
+            "expected 4 unique names, got duplicates in: {:?}",
+            names
         );
     }
 

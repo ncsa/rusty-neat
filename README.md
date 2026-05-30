@@ -3,6 +3,10 @@ Welcome to `rneat`, a Rust port of NEAT (https://github.com/ncsa/neat), a geneti
 
 The most recent version of `rneat` includes adding in the utilities to allow users to generate their own models for running `rneat`. It also now outputs a golden BAM file with ideal alignments, accepts a BED file for filtering the genome down to target regions for read creation, a more accurate coverage tool, and the ability to read in custom variants from a VCF file and insert them into the code. We swapped out the temp file writing method for a file streaming method that seems to work even faster and does not take up as much space on disk, avoiding expensive disk I/O of previous versions. We've done numerous benchmarks and tests on the data, but we look forward to user feedback on how well the output reproduces their data on a statistical level,
 
+## Cancer simulation (new in v1.11.0)
+
+`rneat` can now simulate tumor / normal sequencing data end-to-end. The orchestration script `tools/cancer_simulate.sh` drives two `gen-reads` passes — one normal-genotype, one tumor — and merges them at a configurable purity into a single FASTQ that downstream somatic callers (Mutect2, Strelka, etc.) consume as a "tumor biopsy" sample. Alongside the merged FASTQ it emits a single origin-tagged truth VCF where every record carries `INFO/NEAT_ORIGIN ∈ {germline, somatic, shared}` and `FORMAT/GT:AD:DP:AF`, so the truth set is directly consumable by `hap.py` / `som.py` / `vcfeval` for VAF-stratified TP/FP/FN benchmarking without any preprocessing. A pre-trained pan-cancer mutation model fit from COSMIC v104 is bundled at `tools/cosmic_v104_pancancer_model.json.gz`; users wanting their own can train from MC3 (`tools/fetch_tumor_corpus.sh`) or COSMIC (`tools/fetch_cosmic_corpus.sh`). A companion script `tools/cancer_benchmark.sh` runs the full BWA-MEM → Mutect2 → som.py pipeline in pinned Docker containers and scores a caller against the truth in one command. See `docs/cancer_simulator.md` for the design rationale, mutation-rate calibration caveats, and the staged SV-gap roadmap.
+
 # How to use `rneat`
 
 ## Prerequisites

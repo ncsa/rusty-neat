@@ -53,7 +53,9 @@ TRUVARI_IMG="quay.io/biocontainers/truvari:4.3.1--pyhdfd78af_0"
 # ── Defaults ────────────────────────────────────────────────────────────
 REFERENCE=""
 NORMAL_FASTQ=""
+NORMAL_FASTQ_R2=""
 TUMOR_FASTQ=""
+TUMOR_FASTQ_R2=""
 TRUTH_VCF=""
 OUTPUT_DIR="sv_benchmark_out"
 THREADS="4"
@@ -70,15 +72,21 @@ usage() {
 Usage: cancer_sv_benchmark.sh [options]
 
 Required:
-  --reference      Decompressed reference FASTA (.fa, not .fa.gz). Must be
-                   on a path the Docker daemon can mount. If a .fai is
-                   missing it will be built; same for the BWA index.
-  --normal-fastq   Single-end FASTQ from the pure-normal pass of
-                   cancer_simulate.sh (typically <prefix>_normal_r1.fastq.gz)
-  --tumor-fastq    Single-end FASTQ representing the purity-mixed tumor
-                   biopsy (typically <prefix>_merged_r1.fastq.gz)
-  --truth-vcf      Origin-tagged truth VCF emitted by the merge step of
-                   cancer_simulate.sh (typically <prefix>_merged_truth.vcf.gz)
+  --reference        Decompressed reference FASTA (.fa, not .fa.gz). Must be
+                     on a path the Docker daemon can mount. If a .fai is
+                     missing it will be built; same for the BWA index.
+  --normal-fastq     R1 of the pure-normal sample (typically <prefix>_normal_r1.fastq.gz)
+  --normal-fastq-r2  R2 of the pure-normal sample (typically <prefix>_normal_r2.fastq.gz).
+                     REQUIRED: Manta, DELLY, and GRIDSS all use pair-orientation
+                     signal for SV detection and refuse to run on single-end data.
+                     Re-run cancer_simulate.sh with `--paired-ended --fragment-mean
+                     <N> --fragment-st-dev <M>` if your existing data is SE.
+  --tumor-fastq      R1 of the purity-mixed tumor biopsy (typically
+                     <prefix>_merged_r1.fastq.gz)
+  --tumor-fastq-r2   R2 of the tumor sample (typically <prefix>_merged_r2.fastq.gz).
+                     Also REQUIRED for the same reason.
+  --truth-vcf        Origin-tagged truth VCF emitted by the merge step of
+                     cancer_simulate.sh (typically <prefix>_merged_truth.vcf.gz)
 
 Output:
   --output-dir     Directory for intermediate BAMs, Manta run dir, filtered
@@ -107,8 +115,10 @@ EOF
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --reference)     REFERENCE="$2"; shift 2 ;;
-        --normal-fastq)  NORMAL_FASTQ="$2"; shift 2 ;;
-        --tumor-fastq)   TUMOR_FASTQ="$2"; shift 2 ;;
+        --normal-fastq)     NORMAL_FASTQ="$2"; shift 2 ;;
+        --normal-fastq-r2)  NORMAL_FASTQ_R2="$2"; shift 2 ;;
+        --tumor-fastq)      TUMOR_FASTQ="$2"; shift 2 ;;
+        --tumor-fastq-r2)   TUMOR_FASTQ_R2="$2"; shift 2 ;;
         --truth-vcf)     TRUTH_VCF="$2"; shift 2 ;;
         --output-dir)    OUTPUT_DIR="$2"; shift 2 ;;
         --threads)       THREADS="$2"; shift 2 ;;
@@ -120,15 +130,23 @@ while [[ $# -gt 0 ]]; do
 done
 
 # ── Validation ──────────────────────────────────────────────────────────
-for var in REFERENCE NORMAL_FASTQ TUMOR_FASTQ TRUTH_VCF; do
+for var in REFERENCE NORMAL_FASTQ NORMAL_FASTQ_R2 TUMOR_FASTQ TUMOR_FASTQ_R2 TRUTH_VCF; do
     if [[ -z "${!var}" ]]; then
-        echo "Missing required --$(echo "$var" | tr '[:upper:]_' '[:lower:]-')" >&2
-        usage >&2
+        flag="--$(echo "$var" | tr '[:upper:]_' '[:lower:]-')"
+        echo "Missing required $flag" >&2
+        if [[ "$var" == *"_R2" ]]; then
+            echo "" >&2
+            echo "Manta requires paired-end reads to determine fragment-size and" >&2
+            echo "orientation distributions used for SV detection. If your existing" >&2
+            echo "cancer_simulate.sh outputs are single-end, regenerate with:" >&2
+            echo "  tools/cancer_simulate.sh ... \\" >&2
+            echo "      --paired-ended --fragment-mean 350 --fragment-st-dev 50" >&2
+        fi
         exit 2
     fi
 done
 
-for f in "$REFERENCE" "$NORMAL_FASTQ" "$TUMOR_FASTQ" "$TRUTH_VCF"; do
+for f in "$REFERENCE" "$NORMAL_FASTQ" "$NORMAL_FASTQ_R2" "$TUMOR_FASTQ" "$TUMOR_FASTQ_R2" "$TRUTH_VCF"; do
     [[ -f "$f" ]] || { echo "File not found: $f" >&2; exit 2; }
 done
 
@@ -147,16 +165,36 @@ mkdir -p "$OUTPUT_DIR"
 
 REFERENCE="$(realpath "$REFERENCE")"
 NORMAL_FASTQ="$(realpath "$NORMAL_FASTQ")"
+NORMAL_FASTQ_R2="$(realpath "$NORMAL_FASTQ_R2")"
 TUMOR_FASTQ="$(realpath "$TUMOR_FASTQ")"
+TUMOR_FASTQ_R2="$(realpath "$TUMOR_FASTQ_R2")"
 TRUTH_VCF="$(realpath "$TRUTH_VCF")"
 OUTPUT_DIR="$(realpath "$OUTPUT_DIR")"
+
+# Manta needs the R1 and R2 reads to live in directories the container
+# can mount. Validate that R1 and R2 are siblings (typical cancer_simulate.sh
+# layout) so we can mount one dir per sample instead of four.
+if [[ "$(dirname "$NORMAL_FASTQ")" != "$(dirname "$NORMAL_FASTQ_R2")" ]]; then
+    echo "Normal R1 and R2 must live in the same directory; got:" >&2
+    echo "  R1: $NORMAL_FASTQ" >&2
+    echo "  R2: $NORMAL_FASTQ_R2" >&2
+    exit 2
+fi
+if [[ "$(dirname "$TUMOR_FASTQ")" != "$(dirname "$TUMOR_FASTQ_R2")" ]]; then
+    echo "Tumor R1 and R2 must live in the same directory; got:" >&2
+    echo "  R1: $TUMOR_FASTQ" >&2
+    echo "  R2: $TUMOR_FASTQ_R2" >&2
+    exit 2
+fi
 
 REF_DIR="$(dirname "$REFERENCE")"
 REF_NAME="$(basename "$REFERENCE")"
 NORMAL_DIR="$(dirname "$NORMAL_FASTQ")"
 NORMAL_NAME="$(basename "$NORMAL_FASTQ")"
+NORMAL_NAME_R2="$(basename "$NORMAL_FASTQ_R2")"
 TUMOR_DIR="$(dirname "$TUMOR_FASTQ")"
 TUMOR_NAME="$(basename "$TUMOR_FASTQ")"
+TUMOR_NAME_R2="$(basename "$TUMOR_FASTQ_R2")"
 TRUTH_DIR="$(dirname "$TRUTH_VCF")"
 TRUTH_NAME="$(basename "$TRUTH_VCF")"
 
@@ -200,9 +238,12 @@ else
     echo ">> .fai present — skipping."
 fi
 
-# ── 2 & 3. Align FASTQ → sorted/indexed BAM ─────────────────────────────
+# ── 2 & 3. Align paired-end FASTQ → sorted/indexed BAM ──────────────────
+# BWA-MEM with both R1 and R2 sets the proper PE flags (0x1 paired, 0x2
+# proper-pair, 0x40 first-of-pair / 0x80 second-of-pair) that Manta needs
+# to determine fragment-orientation statistics.
 align_one() {
-    local in_dir_alias="$1" in_name="$2" out_bam="$3" sample_name="$4"
+    local in_dir_alias="$1" in_name_r1="$2" in_name_r2="$3" out_bam="$4" sample_name="$5"
     local out_name
     out_name="$(basename "$out_bam")"
 
@@ -211,10 +252,11 @@ align_one() {
         return 0
     fi
 
-    echo ">> Aligning $sample_name FASTQ -> $out_name..."
+    echo ">> Aligning $sample_name FASTQ (PE) -> $out_name..."
     local rg="@RG\tID:${sample_name}\tSM:${sample_name}\tLB:${sample_name}\tPL:ILLUMINA"
     run_in "$BWA_IMG" sh -c \
-        "bwa mem -t $THREADS -R '$rg' '/refs/$REF_NAME' '${in_dir_alias}/${in_name}' \
+        "bwa mem -t $THREADS -R '$rg' '/refs/$REF_NAME' \
+            '${in_dir_alias}/${in_name_r1}' '${in_dir_alias}/${in_name_r2}' \
             > '/work/${out_name%.bam}.unsorted.sam'"
     run_in "$SAMTOOLS_IMG" sh -c \
         "samtools sort -@ $THREADS -o '/work/${out_name}' '/work/${out_name%.bam}.unsorted.sam' \
@@ -222,8 +264,8 @@ align_one() {
          && rm '/work/${out_name%.bam}.unsorted.sam'"
 }
 
-align_one "/normal_in" "$NORMAL_NAME" "$NORMAL_BAM" "NORMAL"
-align_one "/tumor_in"  "$TUMOR_NAME"  "$TUMOR_BAM"  "TUMOR"
+align_one "/normal_in" "$NORMAL_NAME" "$NORMAL_NAME_R2" "$NORMAL_BAM" "NORMAL"
+align_one "/tumor_in"  "$TUMOR_NAME"  "$TUMOR_NAME_R2"  "$TUMOR_BAM"  "TUMOR"
 
 # ── 4. Manta tumor/normal SV calling ────────────────────────────────────
 if [[ -f "$SOMATIC_SV_VCF" ]]; then

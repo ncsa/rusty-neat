@@ -1,3 +1,59 @@
+5/30/2026
+=========
+## rneat v1.11.0
+
+### Minor release: cancer-MVP — origin-tagged truth VCFs, FORMAT/AD/DP/AF, COSMIC adapter
+
+First release with end-to-end cancer-simulation capability. The bundled COSMIC pan-cancer model produces a benchmark-grade somatic truth VCF (origin tags + per-variant VAF) that `hap.py` / `som.py` / `vcfeval` consume without preprocessing. Validated on chr22 + GATK Mutect2 end-to-end: 67.5% SNV recall at 96.7% precision against the somatic-tagged truth set, at default settings.
+
+#### New: tumor mutation training corpora (#183)
+- **`tools/fetch_cosmic_corpus.sh` (#201).** Sibling to the existing `tools/fetch_tumor_corpus.sh` (TCGA MC3 MAF adapter). Converts COSMIC's GenomeScreensMutant VCF into a dedup, chr-prefixed, gen-mut-model-consumable corpus. v104 collapses ~50.6M raw records → ~16.7M unique (deduplicates ~11.8M multi-transcript annotation duplicates and remaps `MT → chrM`). `--train` chains directly into `rneat gen-mut-model`.
+- **`tools/cosmic_v104_pancancer_model.json.gz`.** A 9.2 KB pre-trained pan-cancer mutation model bundled in `tools/` so the cancer simulator can be exercised end-to-end without a 1 GB COSMIC download. Interim placement — final hosting decision tracked at **#186**. **Important caveat:** the fitted `mutation_rate` of ~5.5e-3 is corpus-aggregated ("fraction of bp with any observed mutation across the entire COSMIC catalog"), not per-tumor burden. Use `cancer_simulate.sh --tumor-mutation-rate 1e-5` (or similar) to shape per-sample burden — see "Behavioral changes" below.
+
+#### New: variant-origin annotation in golden VCFs (#185, PR #204)
+- **`INFO/NEAT_PROVENANCE` on every gen-reads output record.** Two-layer split: `gen-reads` itself emits `denovo` / `input` per record (a generic "where in this pass did this variant come from"), staying cancer-agnostic. The cancer-orchestration script then resolves cross-pass provenance into `INFO/NEAT_ORIGIN = germline | somatic | shared` via `bcftools isec` + an awk annotation pass — variants present only in the normal pass are `germline`, only in the tumor pass (de novo) are `somatic`, in both passes are `shared` (germline that round-tripped). The merged `<prefix>_merged_truth.vcf.gz` carries both `NEAT_PROVENANCE` (audit trail) and `NEAT_ORIGIN` (benchmark label).
+- **`tools/cancer_simulate.sh` merge step.** New post-processing block produces `<prefix>_merged_truth.vcf.gz` automatically when `bcftools` and `bgzip` are available; gracefully skipped otherwise with per-pass VCFs preserved. Includes a `bcftools view -O z` transcode step to convert gen-reads' plain-gzip output to bgzip framing (so tabix indexing works); the transcode becomes a no-op once **#206** lands and `write_vcf` emits bgzip directly.
+
+#### New: FORMAT/AD, FORMAT/DP, FORMAT/AF per variant (#176, PR #205)
+- **Golden VCF FORMAT column expanded from `GT` to `GT:AD:DP:AF`.** Populated from a per-variant allelic-depth counter incremented by the gen-reads fragment loop at the existing per-base coin-flip site — for each emitted read that overlaps a variant locus, the counter records whether the haplotype draw landed on ref or alt. The counter accumulates per-contig through the rayon parallel join and is consumed by `write_vcf` at output time.
+- **Literal variants** carry computed values (e.g. `0/1:18,12:30:0.4000` for a het with binomial 50/50 noise on 30× coverage).
+- **Symbolic SVs** emit `.,.:.:.` placeholders — span-based depth semantics don't fit a point-based counter; tracked as a v2 follow-up.
+- This is what makes the truth VCF consumable by `hap.py` / `som.py` / `vcfeval` for VAF-stratified TP/FP/FN scoring.
+
+#### New: cancer simulator orchestration knobs (#184 follow-ups)
+- **`--normal-mutation-rate` and `--tumor-mutation-rate` on `cancer_simulate.sh`.** Each forwards to gen-reads' existing `mutation_rate:` config field, overriding the model's fitted value. Per-tumor burdens are typically 1e-5 to 1e-4 per bp — the bundled COSMIC model's 5.5e-3 reflects aggregate catalog coverage and should be overridden for single-tumor simulation.
+- **Position-sorted golden VCF output.** Pre-fix, `write_vcf` iterated `block_map.variant_map` (a HashMap), emitting records in nondeterministic order — `bcftools index -t` (tabix) refused to index the output. The writer now collects all records per contig into a sorted Vec before emission.
+- **Per-pass read-name prefixing in the FASTQ merge step.** The normal + tumor passes were producing FASTQs whose read names collided whenever both passes happened to sample the same start coordinate. The merge step now prefixes each pass's reads with `N_` / `T_` before `cat`-merging so the resulting FASTQ has no cross-pass name collisions.
+
+#### New: per-fragment uniqueness tag in read names (#210, PR #211)
+- **gen-reads QNAMEs are now globally unique within a pass.** Pre-fix, the read name was `RNEAT_generated_<contig>_<start>_<end>/<mate>` — two fragments at the same coordinate (which the birthday paradox guarantees at 30×+ coverage; we observed ~250k such collisions per pass on chr22) shared an identical QNAME. Picard MarkDuplicates would silently classify them as PCR duplicates and remove them, halving effective coverage at the affected loci. The new format appends a 16-char hex frag-index tag: `RNEAT_generated_<contig>_<start>_<end>_<uniq>/<mate>`. `rneat filter-reads`'s record-name parser updated to read the last three underscore-separated tokens as `(start, end, uniq)` and ignore `uniq`.
+
+#### New: somatic-caller benchmark pipeline (PR #208)
+- **`tools/cancer_benchmark.sh`.** Drives the standard cancer-MVP validation: align per-pass FASTQs → tumor + normal BAMs (BWA-MEM 0.7.18), call somatic variants (GATK Mutect2 4.5.0.0 in tumor/normal mode), filter (FilterMutectCalls), and score against the rneat truth VCF (Illumina som.py via the GA4GH `jmcdani20/hap.py:v0.3.12` image). Every tool runs in a pinned Docker (or Podman-as-Docker) container; per-step outputs are idempotent (re-running after a single-step change is cheap). A `--truth-filter` flag defaults to `INFO/NEAT_ORIGIN="somatic"` so the recall metric measures real somatic-caller performance rather than the (correct) refusal to call germline-carry-through records.
+
+#### Behavioral changes — read before upgrading
+- **Golden VCF FORMAT column changed from `GT` to `GT:AD:DP:AF`.** Any downstream pipeline that hardcoded the FORMAT field as just `GT` (parsing the SAMPLE column as a single genotype string) will need updating. The new shape is the standard VAF-aware truth-set format expected by hap.py / som.py / vcfeval.
+- **Output VCF records now have an INFO column.** Pre-v1.11.0 emitted `.` (empty INFO); now emits `NEAT_PROVENANCE=denovo|input`. Symbolic SVs that came in via `input_vcf:` have `NEAT_PROVENANCE` appended to their preserved INFO (SVTYPE / END / SVLEN / CN survive verbatim).
+- **Output VCF records are now position-sorted within each contig.** Was nondeterministic HashMap iteration order; broke tabix indexing. The new sorted-Vec-per-contig emission produces tabix-indexable output once #206 (bgzip framing) also lands.
+- **gen-reads read names now carry a uniqueness tag.** Format went from `RNEAT_generated_<contig>_<start>_<end>/<mate>` to `RNEAT_generated_<contig>_<start>_<end>_<16-hex>/<mate>`. Anything that pattern-matched the old format (regex, awk field splits) needs updating. `rneat filter-reads` was updated in-tree; external consumers may not have been.
+- **`tools/cancer_simulate.sh` produces a merged truth VCF.** New file `<prefix>_merged_truth.vcf.gz` appears in the output directory alongside the per-pass VCFs whenever bcftools is installed. Per-pass VCFs are still produced and preserved.
+
+#### Known limitations
+Restated for v1.11.0 (carried over unless marked):
+- **Symbolic SVs (`<DEL>` / `<DUP>` / `<CNV>`) emit `.,.:.:.` on FORMAT/AD/DP/AF.** Span-based depth semantics require a different counter shape; tracked as a v2 follow-up.
+- **The bundled COSMIC pan-cancer model's `mutation_rate` is corpus-aggregated, not per-tumor.** Always override with `--tumor-mutation-rate` for single-tumor simulation. The model's docstring and `docs/cancer_simulator.md` flag this explicitly.
+- **gen-reads writes plain gzip, not bgzip.** `tools/cancer_simulate.sh` works around it by transcoding via `bcftools view -O z` before indexing. Once **#206** lands, the transcode step becomes a no-op and the script can drop it.
+- **`##Generated by rusty-neat` header line is malformed** (should be `##source=rusty-neat`). Tracked at **#207**; non-fatal — bcftools warns but proceeds.
+- **No per-tissue tumor models yet.** Both adapters produce pan-cancer corpora. Per-tissue split (BRCA / SKCM / LUAD) tracked at **#202**.
+- **`<INV>` / `<BND>` SVs not yet generated de novo.** Tier-1 SV gaps for cancer simulation; tracked at **#187** / **#188**.
+
+#### Validation
+End-to-end smoke run on chr22 + bundled COSMIC model + `--tumor-mutation-rate 1e-5`:
+- Pass 1 (normal, 15× chr22): ~48 min, 55,811 germline variants
+- Pass 2 (tumor, 15× chr22 with input_vcf=normal_golden): ~50 min, 56,318 variants (55,811 germline carried through + 507 somatic de-novo)
+- Merge step: 55,811 `NEAT_ORIGIN=shared` + 507 `NEAT_ORIGIN=somatic`, 0 `germline`-only (every germline variant round-tripped, as expected when `input_vcf` is the normal pass's golden VCF)
+- GATK Mutect2 + FilterMutectCalls scored via som.py against the somatic-filtered truth: **67.5% SNV recall, 96.7% precision; 12.1% indel recall, 66.7% precision.** Single-end alignment defaults; PE + panel-of-normals + contamination model would substantially lift indel numbers.
+
 5/25/2026
 =========
 ## rneat v1.10.3

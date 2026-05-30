@@ -20,7 +20,7 @@ use crate::models::quality_scores::QualityScoreModel;
 use crate::models::sequencing_error_model::{
     SeqModelError, SequencingErrorModel, SequencingErrorType,
 };
-use crate::structs::mutated_map::{MutatedMap, MutatedMapError};
+use crate::structs::mutated_map::{AdCounter, MutatedMap, MutatedMapError};
 use crate::structs::nucleotides::Nucleotide;
 use crate::structs::nucleotides::Nucleotide::N;
 use crate::structs::read_record::ReadRecord;
@@ -92,6 +92,7 @@ pub fn write_block_fastq<T: Write, W: Write>(
     sequencing_error_model: &SequencingErrorModel,
     rng: &mut NeatRng,
     mut bam_writer: Option<&mut dyn BamRecordStager>,
+    ad_counter: &mut AdCounter,
 ) -> Result<(), FastqToolsError> {
     debug!("writing reads for {}", sequence_block.contig);
     // For SE reads, fragment_length == read_length exactly.  Sequencing-error deletions advance
@@ -101,7 +102,7 @@ pub fn write_block_fastq<T: Write, W: Write>(
     // read_length so no padding is needed (and it would shift R2 coordinates).
     let seq_len = sequence_block.sequence.len();
     let se_pad = if paired_ended { 0 } else { 32 };
-    for (start, end) in block_fragments {
+    for (frag_idx, (start, end)) in block_fragments.into_iter().enumerate() {
         let padded_end = (end + se_pad).min(seq_len);
         let fragment = sequence_block.get_subseq(start, padded_end)?;
         // In long-read mode a fragment may be shorter than read_length; truncate the read
@@ -134,7 +135,19 @@ pub fn write_block_fastq<T: Write, W: Write>(
         let ref_start = sequence_block.ref_start;
         let abs_start = start + ref_start;
         let abs_end = end + ref_start;
-        let base_name = format!("{}_{:010}_{:010}", read_name_prefix, abs_start, abs_end);
+        // Per-fragment uniqueness tag in the read name. Without this, two
+        // fragments that land at the same (start, end) — common via birthday
+        // paradox at 30×+ coverage — share an identical QNAME, which violates
+        // BAM/VCF spec and silently confuses Picard MarkDuplicates into
+        // dropping them (see #210). The within-block frag_idx is sufficient
+        // because rneat currently uses one block per contig and per-contig
+        // read names already differ via `read_name_prefix`. For multi-pass
+        // workflows that concatenate FASTQs from independent gen-reads runs,
+        // the caller must still prefix each run's reads (e.g. cancer_simulate.sh
+        // does N_/T_ between normal and tumor passes).
+        let base_name = format!(
+            "{}_{:010}_{:010}_{:016x}", read_name_prefix, abs_start, abs_end, frag_idx,
+        );
 
         let r2_start = if paired_ended && abs_end >= effective_read_len {
             abs_end - effective_read_len
@@ -165,6 +178,7 @@ pub fn write_block_fastq<T: Write, W: Write>(
             r2_start,
             tlen,
             paired_ended,
+            ad_counter,
         ) {
             Ok(record) => record,
             Err(FastqToolsError::TruncatedRead(msg)) => {
@@ -202,6 +216,7 @@ pub fn write_block_fastq<T: Write, W: Write>(
                 abs_start,
                 tlen_r2,
                 true,
+                ad_counter,
             ) {
                 Ok(record) => record,
                 Err(FastqToolsError::TruncatedRead(msg)) => {
@@ -275,6 +290,7 @@ fn generate_read(
     mate_position: usize,
     template_length: i32,
     is_paired: bool,
+    ad_counter: &mut AdCounter,
 ) -> Result<ReadRecord, FastqToolsError> {
     if sequence.len() < read_length {
         return Err(FastqToolsError::TruncatedRead(format!("{:?}", sequence)));
@@ -310,6 +326,7 @@ fn generate_read(
                 variant.alternate.is_literal(),
                 "symbolic ALT reached generate_read at position {fragment_position}"
             );
+            let entry = ad_counter.entry(variant.location).or_insert((0, 0));
             if (variant.genotype == Genotype::Homozygous) || (rng.random()? < 0.5) {
                 base_to_write = match read_strand {
                     Strand::Forward => variant.alternate
@@ -323,6 +340,9 @@ fn generate_read(
                         .map(|b| b.complement())
                         .collect(),
                 };
+                entry.1 += 1; // alt
+            } else {
+                entry.0 += 1; // ref (het coin landed on ref)
             }
         } else {
             let score = quality_scores[quality_index];
@@ -496,6 +516,7 @@ mod tests {
             0,
             0,
             false,
+            &mut AdCounter::new(),
         )
         .unwrap();
         let mut buffer = GzEncoder::new(&mut temp_writer, Compression::default());
@@ -590,6 +611,7 @@ mod tests {
             &seq_err_model,
             &mut rng,
             None,
+            &mut AdCounter::new(),
         )
         .unwrap();
         buf1.finish().unwrap();
@@ -625,6 +647,88 @@ mod tests {
             "Read name should NOT contain block-local start {}; got: {}",
             local_start,
             header
+        );
+    }
+
+    /// Two fragments at the SAME (start, end) coordinate must produce reads
+    /// with distinct QNAMEs — without the per-fragment uniqueness tag this
+    /// would silently emit collision-named reads, which Picard MarkDuplicates
+    /// would interpret as PCR duplicates and drop (see #210).
+    #[test]
+    fn test_write_block_fastq_unique_names_for_same_position_fragments() {
+        use crate::structs::{
+            mutated_map::MutatedMap,
+            sequence_block::{RegionType, SequenceBlock, SequenceMap},
+        };
+        let temp_dir = tempfile::tempdir().unwrap();
+        let seq_len: usize = 200;
+        let sequence: Vec<Nucleotide> = (0..seq_len)
+            .map(|i| match i % 4 {
+                0 => A,
+                1 => C,
+                2 => G,
+                _ => T,
+            })
+            .collect();
+        let block = SequenceBlock {
+            contig: "chr1".to_string(),
+            ref_start: 0,
+            ref_end: seq_len,
+            sequence,
+            sequence_map: vec![SequenceMap::from(RegionType::NonNRegion, 0, seq_len)],
+        };
+        let mutated_map = MutatedMap::from_interval(0, seq_len, vec![]).unwrap();
+        // Four fragments — three at the SAME coordinate, one elsewhere.
+        let fragments = vec![(10, 80), (10, 80), (10, 80), (100, 170)];
+        let out_path = temp_dir.path().join("collide.fastq.gz");
+        let outfile = create_output_file(&out_path, true).unwrap();
+        use crate::file_tools::file_io::VectorBuffer;
+        let dummy: VectorBuffer = VectorBuffer::new();
+        let mut buf1 = GzEncoder::new(outfile, Compression::default());
+        let mut buf2 = GzEncoder::new(dummy, Compression::default());
+        let seq_err_model = SequencingErrorModel::default().unwrap();
+        let quality_model = QualityScoreModel::default().unwrap();
+        let mut rng = NeatRng::new_from_seed(&vec!["uniq-name".to_string()]).unwrap();
+        write_block_fastq(
+            fragments,
+            &mutated_map,
+            &block,
+            false,
+            &mut buf1,
+            &mut buf2,
+            70,
+            false,
+            "chr1",
+            &quality_model,
+            &seq_err_model,
+            &mut rng,
+            None,
+            &mut AdCounter::new(),
+        )
+        .unwrap();
+        buf1.finish().unwrap();
+        // Read every line that starts with @ AND is followed by a valid
+        // FASTQ record. Filter by record-position (line 1 of every 4-line
+        // block) — quality lines (line 4) can start with @ too.
+        let lines: Vec<String> = read_gzip_lines(&out_path)
+            .unwrap()
+            .map(|l| l.unwrap())
+            .collect();
+        let names: Vec<&String> = lines
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| i % 4 == 0)
+            .map(|(_, l)| l)
+            .collect();
+        assert_eq!(names.len(), 4, "expected 4 read names, got: {:?}", names);
+        let mut sorted: Vec<&&String> = names.iter().collect();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(
+            sorted.len(),
+            4,
+            "expected 4 unique names, got duplicates in: {:?}",
+            names
         );
     }
 
@@ -665,6 +769,7 @@ mod tests {
             0,
             0,
             false,
+            &mut AdCounter::new(),
         )
         .unwrap();
         assert_eq!(record.sequence.len(), read_length);
@@ -700,6 +805,7 @@ mod tests {
             0,
             0,
             false,
+            &mut AdCounter::new(),
         )
         .unwrap();
         let mi = record
@@ -711,6 +817,65 @@ mod tests {
         assert_eq!(record.sequence.len(), read_length);
         assert_eq!(mi, read_length, "M+I must equal read_length");
         assert_eq!(record.cigar_ops.len(), mi + d, "cigar len must equal M+I+D");
+    }
+
+    /// Counter behaviour: a homozygous SNP should drive alt_count up and
+    /// leave ref_count at 0 across many reads; a heterozygous SNP should split
+    /// roughly 50/50 around the half-point of N reads. Together these pin the
+    /// AdCounter increments in generate_read at the coin-flip site.
+    #[test]
+    fn test_generate_read_counter_homozygous_all_alt() {
+        let sequence = make_sequence(30);
+        let read_length = 10;
+        let hom_snp =
+            Variant::new(VariantType::SNP, 5, &vec![T], &vec![C], &mut vec![1, 1]).unwrap();
+        let variant_map = HashMap::from([(5usize, &hom_snp)]);
+        let quality_scores = vec![40usize; read_length];
+        let model = SequencingErrorModel::default().unwrap();
+        let mut rng = NeatRng::new_from_seed(&vec!["hom".to_string()]).unwrap();
+        let mut ad: AdCounter = HashMap::new();
+        for i in 0..50 {
+            let _ = generate_read(
+                &sequence, &[5], &variant_map, read_length, format!("r{i}/1"),
+                Strand::Forward, quality_scores.clone(), &model, &mut rng,
+                "chr1".to_string(), 0, "chr1".to_string(), 0, 0, false, &mut ad,
+            )
+            .unwrap();
+        }
+        let (refs, alts) = ad[&5];
+        assert_eq!(refs, 0, "homozygous SNP must produce zero ref reads");
+        assert_eq!(alts, 50, "homozygous SNP must produce all alt reads");
+    }
+
+    #[test]
+    fn test_generate_read_counter_heterozygous_splits_around_half() {
+        let sequence = make_sequence(30);
+        let read_length = 10;
+        let het_snp =
+            Variant::new(VariantType::SNP, 5, &vec![T], &vec![C], &mut vec![0, 1]).unwrap();
+        let variant_map = HashMap::from([(5usize, &het_snp)]);
+        let quality_scores = vec![40usize; read_length];
+        let model = SequencingErrorModel::default().unwrap();
+        let mut rng = NeatRng::new_from_seed(&vec!["het".to_string()]).unwrap();
+        let mut ad: AdCounter = HashMap::new();
+        let n = 1000;
+        for i in 0..n {
+            let _ = generate_read(
+                &sequence, &[5], &variant_map, read_length, format!("r{i}/1"),
+                Strand::Forward, quality_scores.clone(), &model, &mut rng,
+                "chr1".to_string(), 0, "chr1".to_string(), 0, 0, false, &mut ad,
+            )
+            .unwrap();
+        }
+        let (refs, alts) = ad[&5];
+        assert_eq!(refs + alts, n, "every read should increment exactly one slot");
+        // Binomial(1000, 0.5) → 99.99% CI is well within [400, 600]
+        assert!(
+            (400..600).contains(&(refs as usize)),
+            "het split should be roughly 50/50 ({}/1000 ref, {} alt)",
+            refs,
+            alts
+        );
     }
 
     #[test]
@@ -739,6 +904,7 @@ mod tests {
             0,
             0,
             false,
+            &mut AdCounter::new(),
         )
         .unwrap();
         assert_eq!(record.cigar_ops.len(), read_length);
@@ -782,6 +948,7 @@ mod tests {
             0,
             0,
             false,
+            &mut AdCounter::new(),
         )
         .unwrap();
         let i_count = record.cigar_ops.iter().filter(|&&c| c == 'I').count();
@@ -820,6 +987,7 @@ mod tests {
             0,
             0,
             false,
+            &mut AdCounter::new(),
         )
         .unwrap();
         assert!(
@@ -862,6 +1030,7 @@ mod tests {
             0,
             0,
             false,
+            &mut AdCounter::new(),
         )
         .unwrap();
         let mi = record
@@ -920,6 +1089,7 @@ mod tests {
             0,
             0,
             false,
+            &mut AdCounter::new(),
         );
         assert!(result.is_ok());
     }
@@ -972,6 +1142,7 @@ mod tests {
             &seq_err_model,
             &mut rng,
             stager,
+            &mut AdCounter::new(),
         )
         .unwrap();
     }

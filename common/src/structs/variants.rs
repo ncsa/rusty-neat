@@ -29,6 +29,30 @@ pub enum Genotype {
     Homozygous,
 }
 
+/// Where a variant came from in the current `gen-reads` run.
+///
+/// Emitted as `INFO/NEAT_PROVENANCE` in the golden VCF so downstream
+/// merges (e.g. `tools/cancer_simulate.sh`'s normal/tumor truth merge)
+/// can resolve cancer-specific origin labels (`germline` / `somatic` /
+/// `shared`) without `gen-reads` itself needing any cancer vocabulary.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+pub enum Provenance {
+    /// Variant was sampled de novo by the simulator.
+    Denovo,
+    /// Variant was carried through from the user's `input_vcf:` file.
+    InputVcf,
+}
+
+impl Provenance {
+    /// Lowercase string used in `INFO/NEAT_PROVENANCE=` values.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Provenance::Denovo => "denovo",
+            Provenance::InputVcf => "input",
+        }
+    }
+}
+
 fn gt_from_str(input: &str) -> Genotype {
     let mut result: Vec<&str> = input.split("/").collect();
     if result.len() == 1 {
@@ -253,6 +277,9 @@ pub struct Variant {
     pub format: Vec<String>,
     // Sample, if present, must be same length as format
     pub sample: Vec<String>,
+    // Where this variant came from in the current gen-reads run.
+    // Emitted as INFO/NEAT_PROVENANCE in the golden VCF.
+    pub provenance: Provenance,
 }
 
 impl Variant {
@@ -296,6 +323,7 @@ impl Variant {
             info: Some(info_field.to_string()),
             format,
             sample,
+            provenance: Provenance::InputVcf,
         })
     }
 
@@ -332,6 +360,7 @@ impl Variant {
             info: None,
             format: Vec::new(),
             sample: Vec::new(),
+            provenance: Provenance::InputVcf,
         })
     }
 
@@ -387,6 +416,7 @@ impl Variant {
             info: None,
             format: Vec::new(),
             sample: Vec::new(),
+            provenance: Provenance::Denovo,
         })
     }
 
@@ -622,6 +652,7 @@ mod tests {
             info: None,
             format: Vec::new(),
             sample: Vec::new(),
+            provenance: Provenance::Denovo,
         };
         assert_eq!(variant.variant_type, SNP);
         assert_eq!(
@@ -641,7 +672,25 @@ mod tests {
             &mut vec![0, 1],
         )
         .unwrap();
-        assert_eq!(variant.genotype, Genotype::Heterozygous)
+        assert_eq!(variant.genotype, Genotype::Heterozygous);
+        // Variant::new is the de-novo constructor — gen-reads samples
+        // germline and somatic variants through this path, so the writer
+        // can rely on Denovo as the default provenance for unannotated
+        // outputs.
+        assert_eq!(variant.provenance, Provenance::Denovo);
+    }
+
+    #[test]
+    fn test_variant_from_file_carries_input_provenance() {
+        // Variants read from a user-supplied input_vcf must be tagged
+        // InputVcf so the cancer-simulator merge step can distinguish
+        // them from de-novo somatic draws on the tumor pass.
+        let v = Variant::from_file(
+            99, "rs1", "PASS", ".", "A", "G", 60, vec!["GT".to_string()],
+            vec!["0/1".to_string()],
+        )
+        .unwrap();
+        assert_eq!(v.provenance, Provenance::InputVcf);
     }
 
     #[test]

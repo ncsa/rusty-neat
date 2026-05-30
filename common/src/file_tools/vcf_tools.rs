@@ -14,7 +14,7 @@ use thiserror::Error;
 use crate::file_tools::file_io::{
     create_output_file, is_gzipped_file, read_gzip_lines, read_lines,
 };
-use crate::structs::mutated_map::MutatedMap;
+use crate::structs::mutated_map::{AdCounter, MutatedMap};
 use crate::structs::nucleotides::sequence_array_to_string;
 use crate::structs::variants::{AlternateType, Variant, VariantError};
 
@@ -39,6 +39,7 @@ pub fn write_vcf(
     reference_path: &PathBuf,
     overwrite_output: bool,
     output_vcf: &PathBuf,
+    ad_counters: &HashMap<String, AdCounter>,
 ) -> io::Result<()> {
     // Takes:
     // mutated_maps: A map of contig names keyed to lists of mutated maps holding variants
@@ -48,6 +49,9 @@ pub fn write_vcf(
     // reference_path: The location of the reference file this vcf is showing variants from.
     // overwrite output: Whether to overwrite output for the vcf
     // output_vcf: The PathBuf object with the path to the output file
+    // ad_counters: Per-contig allelic-depth counters from the gen-reads fragment loop.
+    //     Drives FORMAT/AD, FORMAT/DP, FORMAT/AF. Empty (or missing per-contig) is fine —
+    //     variants with no observed coverage emit `.` placeholders.
     // Result:
     // Throws and error if there's a problem, or else returns nothing.
     //
@@ -69,7 +73,27 @@ pub fn write_vcf(
     )?;
     writeln!(
         &mut buffer,
+        "##INFO=<ID=NEAT_PROVENANCE,Number=1,Type=String,\
+        Description=\"Origin of variant in this gen-reads run: \
+        'denovo' = sampled by the simulator, 'input' = supplied via input_vcf:\">"
+    )?;
+    writeln!(
+        &mut buffer,
         "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">"
+    )?;
+    writeln!(
+        &mut buffer,
+        "##FORMAT=<ID=AD,Number=R,Type=Integer,\
+        Description=\"Allelic depths for the ref and alt alleles in the order listed\">"
+    )?;
+    writeln!(
+        &mut buffer,
+        "##FORMAT=<ID=DP,Number=1,Type=Integer,Description=\"Read depth\">"
+    )?;
+    writeln!(
+        &mut buffer,
+        "##FORMAT=<ID=AF,Number=A,Type=Float,\
+        Description=\"Allele frequency for each alt allele (AD[1] / DP)\">"
     )?;
     // Add a neat sample column
     writeln!(
@@ -77,48 +101,79 @@ pub fn write_vcf(
         "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tNEAT_simulated_sample"
     )?;
     // write out mutations
+    //
+    // Per-contig: collect every record (literal + symbolic) from every block
+    // into one Vec and sort by position before writing. The underlying
+    // storage is a HashMap (variant_map), so iteration order is non-
+    // deterministic and unsorted output breaks `bcftools index -t` (tabix
+    // requires position-sorted input) — which broke the cancer_simulate.sh
+    // merge step (see #185). Sorting in the writer is the simplest fix and
+    // matches what every other VCF-producing tool does.
+    //
+    // Literals and SVs share a single sorted output stream because that's
+    // how VCF spec expects them. Ties at the same position are stable-sorted
+    // in collection order; rare in practice and tolerable.
     for contig in contig_order {
         let block_maps = &mutated_maps[contig];
+        let contig_ad = ad_counters.get(contig);
+        let mut records: Vec<&Variant> = Vec::new();
         for block_map in block_maps {
-            for (position, variant) in &block_map.variant_map {
-                // Format the output line. Any fields without data will be a simple period. Quality
-                // is set to 37 for all these variants, to indicate in the golden vcf that these are
-                // the generated variants.
-                let alt_str = match &variant.alternate {
-                    AlternateType::Literal(bases) => sequence_array_to_string(bases),
-                    AlternateType::Symbolic(sv) => sv.raw_alt.clone(),
+            records.extend(block_map.variant_map.values());
+            records.extend(block_map.sv_records.iter());
+        }
+        records.sort_by_key(|v| v.location);
+
+        for variant in records {
+            let alt_str = match &variant.alternate {
+                AlternateType::Literal(bases) => sequence_array_to_string(bases),
+                AlternateType::Symbolic(sv) => sv.raw_alt.clone(),
+            };
+            let prov = variant.provenance.as_str();
+            let is_symbolic = variant.alternate.is_symbolic();
+            // INFO: symbolic records preserve any pre-existing INFO (SVLEN / END /
+            // CN / SVTYPE) and append NEAT_PROVENANCE. Literal records have no
+            // upstream INFO, so just emit NEAT_PROVENANCE alone.
+            let info_str = if is_symbolic {
+                match variant.info.as_deref() {
+                    None | Some(".") | Some("") => format!("NEAT_PROVENANCE={prov}"),
+                    Some(existing) => format!("{existing};NEAT_PROVENANCE={prov}"),
+                }
+            } else {
+                format!("NEAT_PROVENANCE={prov}")
+            };
+            // SAMPLE: for literal variants, AD/DP/AF come from the per-contig
+            // counter populated by the gen-reads fragment loop; positions with
+            // no observed coverage emit DP=0, AD=0,0, AF=`.`. Symbolic SVs use
+            // span-based depth semantics that don't fit a point-based counter,
+            // so they emit `.` placeholders to keep FORMAT consistent across
+            // all records.
+            let sample_str = if is_symbolic {
+                format!("{}:.,.:.:.", variant.genotype_str)
+            } else {
+                let (ref_count, alt_count) = contig_ad
+                    .and_then(|c| c.get(&variant.location).copied())
+                    .unwrap_or((0, 0));
+                let depth = ref_count + alt_count;
+                let af_str = if depth > 0 {
+                    format!("{:.4}", alt_count as f64 / depth as f64)
+                } else {
+                    ".".to_string()
                 };
-                let line = format!(
-                    "{}\t{}\t.\t{}\t{}\t37\tPASS\t.\tGT\t{}",
-                    contig,
-                    position + 1,
-                    sequence_array_to_string(&variant.reference),
-                    alt_str,
-                    variant.genotype_str,
-                );
-                writeln!(&mut buffer, "{}", line)?;
-            }
-            // Symbolic / structural variants are tracked separately on the map
-            // so they don't flag per-base mutation positions during read gen.
-            // Preserve the original INFO field verbatim so SVLEN / END / CN
-            // round-trip from input VCF to output VCF.
-            for variant in &block_map.sv_records {
-                let alt_str = match &variant.alternate {
-                    AlternateType::Literal(bases) => sequence_array_to_string(bases),
-                    AlternateType::Symbolic(sv) => sv.raw_alt.clone(),
-                };
-                let info_str = variant.info.as_deref().unwrap_or(".");
-                let line = format!(
-                    "{}\t{}\t.\t{}\t{}\t37\tPASS\t{}\tGT\t{}",
-                    contig,
-                    variant.location + 1,
-                    sequence_array_to_string(&variant.reference),
-                    alt_str,
-                    info_str,
-                    variant.genotype_str,
-                );
-                writeln!(&mut buffer, "{}", line)?;
-            }
+                format!(
+                    "{}:{},{}:{}:{}",
+                    variant.genotype_str, ref_count, alt_count, depth, af_str
+                )
+            };
+            let line = format!(
+                "{}\t{}\t.\t{}\t{}\t37\tPASS\t{}\tGT:AD:DP:AF\t{}",
+                contig,
+                variant.location + 1,
+                sequence_array_to_string(&variant.reference),
+                alt_str,
+                info_str,
+                sample_str,
+            );
+            writeln!(&mut buffer, "{}", line)?;
         }
     }
     Ok(())
@@ -356,7 +411,7 @@ mod tests {
     use super::*;
     use crate::structs::{
         nucleotides::Nucleotide,
-        variants::{Genotype, SvData, SvType, Variant, VariantType},
+        variants::{Genotype, Provenance, SvData, SvType, Variant, VariantType},
     };
     use std::io::Write;
 
@@ -393,6 +448,7 @@ mod tests {
             &reference_path,
             false,
             &output_filename,
+            &HashMap::new(),
         );
         result.unwrap();
         assert!(output_filename.exists());
@@ -421,18 +477,18 @@ mod tests {
                 .any(|l| l.contains("#CHROM\tPOS\tID\tREF\tALT"))
         );
 
-        // Both variant lines must be present (HashMap iteration order is non-deterministic)
+        // Both variant lines must be present (HashMap iteration order is non-deterministic).
+        // Variants from `Variant::new` carry `Provenance::Denovo` (→ INFO/NEAT_PROVENANCE=denovo)
+        // and an empty ad_counter means no reads were simulated (→ AD=0,0 DP=0 AF=`.`).
         assert!(
-            lines
-                .iter()
-                .any(|l| l == "chr1\t4\t.\tA\tG\t37\tPASS\t.\tGT\t0/1"),
+            lines.iter().any(|l| l
+                == "chr1\t4\t.\tA\tG\t37\tPASS\tNEAT_PROVENANCE=denovo\tGT:AD:DP:AF\t0/1:0,0:0:."),
             "missing het SNP line; got: {:?}",
             lines
         );
         assert!(
-            lines
-                .iter()
-                .any(|l| l == "chr1\t8\t.\tT\tG\t37\tPASS\t.\tGT\t1/1"),
+            lines.iter().any(|l| l
+                == "chr1\t8\t.\tT\tG\t37\tPASS\tNEAT_PROVENANCE=denovo\tGT:AD:DP:AF\t1/1:0,0:0:."),
             "missing hom SNP line; got: {:?}",
             lines
         );
@@ -491,6 +547,7 @@ mod tests {
             &PathBuf::from("ref.fa"),
             false,
             &output_path,
+            &HashMap::new(),
         )
         .unwrap();
 
@@ -710,6 +767,7 @@ chr1\t150\t.\tG\t<DEL>\t60\tPASS\tSVTYPE=DEL;END=300\tGT\t1/1\n";
             &PathBuf::from("ref.fa"),
             false,
             &output,
+            &HashMap::new(),
         )
         .unwrap();
         let body: Vec<String> = crate::file_tools::file_io::read_gzip_lines(&output)
@@ -886,6 +944,7 @@ chr1\t100\t.\tN\t<DEL>\t60\tPASS\tSVTYPE=DEL;END=500\n";
             info: None,
             format: Vec::new(),
             sample: Vec::new(),
+            provenance: Provenance::Denovo,
         };
         let mutated_map =
             MutatedMap::from_interval(0, 200, vec![sv]).unwrap();
@@ -899,16 +958,282 @@ chr1\t100\t.\tN\t<DEL>\t60\tPASS\tSVTYPE=DEL;END=500\n";
             &PathBuf::from("ref.fa"),
             false,
             &output_path,
+            &HashMap::new(),
         )
         .unwrap();
         let lines: Vec<String> = crate::file_tools::file_io::read_gzip_lines(&output_path)
             .unwrap()
             .map(|l| l.unwrap())
             .collect();
+        // Symbolic SVs use span-based depth semantics that don't fit the
+        // point-based AD/DP/AF counter — they emit `.` placeholders. The
+        // `Provenance::Denovo` constructor on the test fixture surfaces as
+        // INFO/NEAT_PROVENANCE=denovo.
         assert!(
-            lines.iter().any(|l| l == "chr1\t100\t.\tA\t<DEL>\t37\tPASS\t.\tGT\t0/1"),
-            "expected symbolic ALT to round-trip as `<DEL>`; got: {:?}",
+            lines.iter().any(|l| l
+                == "chr1\t100\t.\tA\t<DEL>\t37\tPASS\tNEAT_PROVENANCE=denovo\tGT:AD:DP:AF\t0/1:.,.:.:."),
+            "expected symbolic ALT to round-trip as `<DEL>` with denovo provenance and `.` AD/DP/AF; got: {:?}",
             lines
+        );
+    }
+
+    /// When the per-contig AdCounter has real (ref_count, alt_count) values
+    /// at a variant's position, the writer must surface them as AD = a,b,
+    /// DP = a+b, AF = b/(a+b) rounded to 4 decimal places. After the #185
+    /// merge, every literal record also carries `NEAT_PROVENANCE=denovo`
+    /// (since `Variant::new` is the de-novo constructor).
+    #[test]
+    fn test_write_vcf_emits_ad_dp_af_from_counter() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let v_het = Variant::new(
+            VariantType::SNP,
+            10,
+            &vec![Nucleotide::A],
+            &vec![Nucleotide::G],
+            &mut vec![0, 1],
+        )
+        .unwrap();
+        let v_hom = Variant::new(
+            VariantType::SNP,
+            20,
+            &vec![Nucleotide::C],
+            &vec![Nucleotide::T],
+            &mut vec![1, 1],
+        )
+        .unwrap();
+        let map = MutatedMap::from_interval(0, 100, vec![v_het, v_hom]).unwrap();
+        let mut maps = HashMap::new();
+        maps.insert("chr1".to_string(), vec![map]);
+
+        // Stub AdCounter: het pos=10 → 18 ref, 12 alt (AF=0.4); hom pos=20 → 0,30 (AF=1.0)
+        let mut ad_chr1: AdCounter = HashMap::new();
+        ad_chr1.insert(10, (18, 12));
+        ad_chr1.insert(20, (0, 30));
+        let mut ad_counters = HashMap::new();
+        ad_counters.insert("chr1".to_string(), ad_chr1);
+
+        let output = temp_dir.path().join("ad_dp_af.vcf");
+        write_vcf(
+            &maps,
+            &vec!["chr1".to_string()],
+            &HashMap::from([("chr1".to_string(), 100usize)]),
+            &PathBuf::from("ref.fa"),
+            false,
+            &output,
+            &ad_counters,
+        )
+        .unwrap();
+        let lines: Vec<String> = crate::file_tools::file_io::read_gzip_lines(&output)
+            .unwrap()
+            .map(|l| l.unwrap())
+            .collect();
+
+        // Het: position 11 (1-based), AD=18,12, DP=30, AF=0.4000
+        assert!(
+            lines.iter().any(|l| l
+                == "chr1\t11\t.\tA\tG\t37\tPASS\tNEAT_PROVENANCE=denovo\tGT:AD:DP:AF\t0/1:18,12:30:0.4000"),
+            "missing het record with AD=18,12 DP=30 AF=0.4000; got: {:?}",
+            lines
+        );
+        // Hom: position 21 (1-based), AD=0,30, DP=30, AF=1.0000
+        assert!(
+            lines.iter().any(|l| l
+                == "chr1\t21\t.\tC\tT\t37\tPASS\tNEAT_PROVENANCE=denovo\tGT:AD:DP:AF\t1/1:0,30:30:1.0000"),
+            "missing hom record with AD=0,30 DP=30 AF=1.0000; got: {:?}",
+            lines
+        );
+
+        // Header lines must declare the three new FORMAT fields.
+        assert!(
+            lines.iter().any(|l| l.starts_with("##FORMAT=<ID=AD,")),
+            "missing AD header"
+        );
+        assert!(
+            lines.iter().any(|l| l.starts_with("##FORMAT=<ID=DP,")),
+            "missing DP header"
+        );
+        assert!(
+            lines.iter().any(|l| l.starts_with("##FORMAT=<ID=AF,")),
+            "missing AF header"
+        );
+    }
+
+    /// `Provenance::InputVcf` literal variants must surface as
+    /// `NEAT_PROVENANCE=input` in the golden VCF — this is the signal the
+    /// cancer-simulator merge step relies on to detect germline carry-through
+    /// (a variant that was supplied via `input_vcf:` and appears in both
+    /// passes is the "shared" case).
+    #[test]
+    fn test_write_vcf_input_provenance_surfaces_as_input_tag() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        // Hand-roll the variant directly so we exercise the InputVcf path
+        // without round-tripping through from_file (which has its own tests).
+        let v = Variant {
+            variant_type: VariantType::SNP,
+            location: 49, // 0-based; will appear as POS=50 in output
+            reference: vec![Nucleotide::A],
+            alternate: AlternateType::Literal(vec![Nucleotide::G]),
+            genotype_str: "0/1".to_string(),
+            genotype: Genotype::Heterozygous,
+            id: None,
+            quality_score: None,
+            filter: None,
+            info: None,
+            format: Vec::new(),
+            sample: Vec::new(),
+            provenance: Provenance::InputVcf,
+        };
+        let mutated_map = MutatedMap::from_interval(0, 200, vec![v]).unwrap();
+        let mut mutated_maps = HashMap::new();
+        mutated_maps.insert("chr1".to_string(), vec![mutated_map]);
+        let output_path = temp_dir.path().join("input_prov.vcf");
+        write_vcf(
+            &mutated_maps,
+            &vec!["chr1".to_string()],
+            &HashMap::from([("chr1".to_string(), 200usize)]),
+            &PathBuf::from("ref.fa"),
+            false,
+            &output_path,
+            &HashMap::new(),
+        )
+        .unwrap();
+        let lines: Vec<String> = crate::file_tools::file_io::read_gzip_lines(&output_path)
+            .unwrap()
+            .map(|l| l.unwrap())
+            .collect();
+        // Empty ad_counter → AD=0,0 DP=0 AF=`.`.
+        assert!(
+            lines.iter().any(|l| l
+                == "chr1\t50\t.\tA\tG\t37\tPASS\tNEAT_PROVENANCE=input\tGT:AD:DP:AF\t0/1:0,0:0:."),
+            "expected NEAT_PROVENANCE=input on InputVcf literal; got: {:?}",
+            lines
+        );
+        // Header line must declare the new INFO field so downstream
+        // parsers (bcftools, hap.py, …) don't drop it as unknown.
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.starts_with("##INFO=<ID=NEAT_PROVENANCE,")),
+            "missing NEAT_PROVENANCE INFO header line; got: {:?}",
+            lines
+        );
+    }
+
+    /// Symbolic SVs typically arrive with a populated INFO column
+    /// (SVLEN, END, SVTYPE, CN). The writer must *append* NEAT_PROVENANCE
+    /// to that existing field rather than overwrite it — otherwise span
+    /// metadata is lost on the symbolic record's round trip.
+    #[test]
+    fn test_write_vcf_symbolic_appends_provenance_to_existing_info() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let sv = Variant {
+            variant_type: VariantType::Complex,
+            location: 199, // 0-based; will appear as POS=200 in output
+            reference: vec![Nucleotide::A],
+            alternate: AlternateType::Symbolic(SvData::new("<DEL>", SvType::Del)),
+            genotype_str: "1/1".to_string(),
+            genotype: Genotype::Homozygous,
+            id: None,
+            quality_score: None,
+            filter: None,
+            info: Some("SVTYPE=DEL;END=300;SVLEN=-100".to_string()),
+            format: Vec::new(),
+            sample: Vec::new(),
+            provenance: Provenance::InputVcf,
+        };
+        let mutated_map = MutatedMap::from_interval(0, 400, vec![sv]).unwrap();
+        let mut mutated_maps = HashMap::new();
+        mutated_maps.insert("chr1".to_string(), vec![mutated_map]);
+        let output_path = temp_dir.path().join("sv_appended.vcf");
+        write_vcf(
+            &mutated_maps,
+            &vec!["chr1".to_string()],
+            &HashMap::from([("chr1".to_string(), 400usize)]),
+            &PathBuf::from("ref.fa"),
+            false,
+            &output_path,
+            &HashMap::new(),
+        )
+        .unwrap();
+        let lines: Vec<String> = crate::file_tools::file_io::read_gzip_lines(&output_path)
+            .unwrap()
+            .map(|l| l.unwrap())
+            .collect();
+        // Symbolic SVs always emit `.,.:.:.` for AD/DP/AF (span-based depth,
+        // not point-based). Existing INFO must survive with NEAT_PROVENANCE
+        // appended.
+        assert!(
+            lines.iter().any(|l| l == "chr1\t200\t.\tA\t<DEL>\t37\tPASS\t\
+                 SVTYPE=DEL;END=300;SVLEN=-100;NEAT_PROVENANCE=input\tGT:AD:DP:AF\t1/1:.,.:.:."),
+            "expected SVTYPE/END/SVLEN to survive with NEAT_PROVENANCE appended; got: {:?}",
+            lines
+        );
+    }
+
+    /// `write_vcf` must emit records in position-sorted order — `bcftools
+    /// index -t` (tabix) requires it, and the cancer_simulate.sh merge
+    /// step calls `bcftools index -t` on each per-pass output. Pre-fix the
+    /// writer iterated the variant_map HashMap and emitted records in
+    /// nondeterministic order, which silently broke the merge step.
+    ///
+    /// Mixes literals (HashMap-backed) and SVs (Vec-backed) to verify the
+    /// sort runs across both bins, not just within each.
+    #[test]
+    fn test_write_vcf_records_emitted_in_position_sorted_order() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let v_500 = Variant::new(
+            VariantType::SNP, 500, &vec![Nucleotide::A], &vec![Nucleotide::G], &mut vec![0, 1],
+        ).unwrap();
+        let v_100 = Variant::new(
+            VariantType::SNP, 100, &vec![Nucleotide::C], &vec![Nucleotide::T], &mut vec![0, 1],
+        ).unwrap();
+        let v_300 = Variant::new(
+            VariantType::SNP, 300, &vec![Nucleotide::G], &vec![Nucleotide::A], &mut vec![0, 1],
+        ).unwrap();
+        // Symbolic SV at position 200 — must interleave with the literals,
+        // not get bucketed to the end of the file.
+        let sv_200 = Variant {
+            variant_type: VariantType::Complex,
+            location: 200,
+            reference: vec![Nucleotide::T],
+            alternate: AlternateType::Symbolic(SvData::new("<DEL>", SvType::Del)),
+            genotype_str: "0/1".to_string(),
+            genotype: Genotype::Heterozygous,
+            id: None,
+            quality_score: None,
+            filter: None,
+            info: Some("SVTYPE=DEL;END=250".to_string()),
+            format: Vec::new(),
+            sample: Vec::new(),
+            provenance: Provenance::Denovo,
+        };
+
+        let map = MutatedMap::from_interval(0, 1000, vec![v_500, v_100, v_300, sv_200]).unwrap();
+        let mut maps = HashMap::new();
+        maps.insert("chr1".to_string(), vec![map]);
+
+        let output = temp_dir.path().join("sorted.vcf");
+        write_vcf(
+            &maps,
+            &vec!["chr1".to_string()],
+            &HashMap::from([("chr1".to_string(), 1000usize)]),
+            &PathBuf::from("ref.fa"),
+            false,
+            &output,
+            &HashMap::new(),
+        )
+        .unwrap();
+
+        let positions: Vec<usize> = crate::file_tools::file_io::read_gzip_lines(&output)
+            .unwrap()
+            .map(|l| l.unwrap())
+            .filter(|l| !l.starts_with('#'))
+            .map(|l| l.split('\t').nth(1).unwrap().parse::<usize>().unwrap())
+            .collect();
+        assert_eq!(
+            positions,
+            vec![101, 201, 301, 501],
+            "records must be in position-sorted order regardless of insertion order"
         );
     }
 }

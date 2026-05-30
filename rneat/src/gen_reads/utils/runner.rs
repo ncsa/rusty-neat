@@ -28,7 +28,7 @@ use crate::{
         },
         structs::{
             bed_record::BedRecord,
-            mutated_map::MutatedMap,
+            mutated_map::{AdCounter, MutatedMap},
             nucleotides::{Nucleotide, NucleotideSelector},
             sequence_block::{RegionType, SequenceBlock, SequenceMap},
             variants::Variant,
@@ -75,6 +75,10 @@ struct ProcessedContigData {
     r1_files: Vec<PathBuf>,
     r2_files: Vec<PathBuf>,
     bam_body_file: Option<PathBuf>,
+    // Per-contig allelic-depth accumulator populated by write_block_fastq.
+    // Keyed by per-contig position (matches Variant::location). Passed to
+    // write_vcf so the golden VCF can carry FORMAT/AD, FORMAT/DP, FORMAT/AF.
+    ad_counter: AdCounter,
 }
 
 pub fn run_neat(
@@ -196,6 +200,7 @@ pub fn run_neat(
     let mut contig_order: Vec<String> = Vec::new();
     let mut fasta_lengths: HashMap<String, usize> = HashMap::new();
     let mut bam_body_files: HashMap<String, PathBuf> = HashMap::new();
+    let mut ad_counters: HashMap<String, AdCounter> = HashMap::new();
 
     info!("Generating simulated dataset");
 
@@ -236,6 +241,7 @@ pub fn run_neat(
             &mut mutated_maps,
             &mut all_fastq_files,
             &mut bam_body_files,
+            &mut ad_counters,
         );
     }
 
@@ -320,6 +326,7 @@ pub fn run_neat(
             &config.reference,
             config.overwrite_output,
             filename,
+            &ad_counters,
         );
         match result {
             Ok(()) => {
@@ -594,6 +601,12 @@ fn process_contig(
     let mut contig_files_r1: Vec<PathBuf> = Vec::new();
     let mut contig_files_r2: Vec<PathBuf> = Vec::new();
 
+    // Per-contig allelic-depth counter. Threaded into every write_block_fastq
+    // call below; each variant-overlapping read increments the (ref|alt) slot
+    // for that variant. The fully-populated counter is handed off via
+    // ProcessedContigData → run_neat → write_vcf for FORMAT/AD/DP/AF.
+    let mut ad_counter: AdCounter = AdCounter::new();
+
     // Create a per-contig BAM body writer if BAM output is requested.
     let mut bam_body_writer: Option<BamBodyWriter> = if let Some(bam_ctx) = &ctx.bam_context {
         let bam_temp_path =
@@ -641,6 +654,7 @@ fn process_contig(
                 ctx.seq_error_model,
                 &mut rng,
                 bam_stager,
+                &mut ad_counter,
             )?;
             contig_files_r1.push(file_to_write_1);
             contig_files_r2.push(file_to_write_2);
@@ -662,6 +676,7 @@ fn process_contig(
                 ctx.seq_error_model,
                 &mut rng,
                 bam_stager,
+                &mut ad_counter,
             )?;
             contig_files_r1.push(file_to_write_1);
         }
@@ -690,6 +705,7 @@ fn process_contig(
             ctx.seq_error_model,
             &mut rng,
             bam_stager,
+            &mut ad_counter,
         )?;
     }
 
@@ -710,6 +726,7 @@ fn process_contig(
             r1_files: contig_files_r1,
             r2_files: contig_files_r2,
             bam_body_file,
+            ad_counter,
         }),
     })
 }
@@ -721,6 +738,7 @@ fn collect_contig_result(
     mutated_maps: &mut HashMap<String, Vec<MutatedMap>>,
     all_fastq_files: &mut HashMap<String, (Vec<PathBuf>, Vec<PathBuf>)>,
     bam_body_files: &mut HashMap<String, PathBuf>,
+    ad_counters: &mut HashMap<String, AdCounter>,
 ) {
     contig_order.push(cr.name.clone());
     fasta_lengths.insert(cr.name.clone(), cr.len);
@@ -728,8 +746,9 @@ fn collect_contig_result(
         mutated_maps.insert(cr.name.clone(), vec![data.mutated_map]);
         all_fastq_files.insert(cr.name.clone(), (data.r1_files, data.r2_files));
         if let Some(bam_path) = data.bam_body_file {
-            bam_body_files.insert(cr.name, bam_path);
+            bam_body_files.insert(cr.name.clone(), bam_path);
         }
+        ad_counters.insert(cr.name, data.ad_counter);
     }
 }
 
@@ -1079,7 +1098,7 @@ mod tests {
 
     #[test]
     fn test_filter_input_vcf() {
-        use crate::common::structs::variants::{Genotype, VariantType};
+        use crate::common::structs::variants::{Genotype, Provenance, VariantType};
         use common::structs::nucleotides::Nucleotide;
         let mut raw = HashMap::new();
         let v1 = Variant {
@@ -1095,6 +1114,7 @@ mod tests {
             info: None,
             format: vec![],
             sample: vec![],
+            provenance: Provenance::InputVcf,
         };
         let v2 = Variant {
             location: 200,
@@ -1109,6 +1129,7 @@ mod tests {
             info: None,
             format: vec![],
             sample: vec![],
+            provenance: Provenance::InputVcf,
         };
         // Symbolic SV — tagged Complex but must NOT be dropped by
         // filter_input_vcf: gen_reads uses it downstream for coverage
@@ -1127,6 +1148,7 @@ mod tests {
             info: None,
             format: vec![],
             sample: vec![],
+            provenance: Provenance::InputVcf,
         };
         raw.insert("chr1".to_string(), vec![v1.clone(), v2, v3]);
 
@@ -1177,6 +1199,7 @@ mod tests {
             filter: None,
             info: None,
             format: vec![],
+            provenance: common::structs::variants::Provenance::Denovo,
             sample: vec![],
         }
     }

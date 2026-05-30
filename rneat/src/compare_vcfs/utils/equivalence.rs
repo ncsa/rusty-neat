@@ -168,7 +168,7 @@ mod tests {
         nucleotides::Nucleotide,
         variants::{Genotype, VariantType},
     };
-    use common::structs::variants::AlternateType;
+    use common::structs::variants::{AlternateType, Provenance};
 
     fn variant(
         loc: usize,
@@ -189,6 +189,7 @@ mod tests {
             info: None,
             format: Vec::new(),
             sample: Vec::new(),
+            provenance: Provenance::Denovo,
         }
     }
 

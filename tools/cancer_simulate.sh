@@ -38,6 +38,8 @@ TOTAL_COVERAGE="30"
 PURITY="0.5"
 NORMAL_MODEL=""
 TUMOR_MODEL=""
+NORMAL_MUTATION_RATE=""
+TUMOR_MUTATION_RATE=""
 GERMLINE_VCF=""
 READ_LEN="151"
 PAIRED_END="false"
@@ -71,6 +73,15 @@ which is germline-derived. Supplying a cancer-trained tumor model is strongly
 recommended for any non-toy run — see issue #186):
   --normal-model     Path to a .json.gz mutation model for the normal pass
   --tumor-model      Path to a .json.gz mutation model for the tumor pass
+
+Mutation-rate overrides (optional; each pass uses its model's fitted rate if
+omitted). Useful when the supplied model's rate is corpus-aggregated rather
+than per-tumor — e.g. the bundled COSMIC pan-cancer model fits to ~5.5e-3 per
+bp ("fraction of bp with any observed mutation across the COSMIC catalog"),
+which inflates a single-tumor simulation by ~50–500×. Realistic per-tumor
+rates are ~1e-5 (typical solid tumor) to ~1e-4 (high-burden / MSI).
+  --normal-mutation-rate  Override the normal pass's per-base mutation rate
+  --tumor-mutation-rate   Override the tumor pass's per-base mutation rate
 
 Germline VCF (optional):
   --germline-vcf     A VCF to use as the shared germline. If omitted, pass 1
@@ -107,8 +118,10 @@ while [[ $# -gt 0 ]]; do
         --output-prefix)    OUTPUT_PREFIX="$2"; shift 2 ;;
         --total-coverage)   TOTAL_COVERAGE="$2"; shift 2 ;;
         --purity)           PURITY="$2"; shift 2 ;;
-        --normal-model)     NORMAL_MODEL="$2"; shift 2 ;;
-        --tumor-model)      TUMOR_MODEL="$2"; shift 2 ;;
+        --normal-model)         NORMAL_MODEL="$2"; shift 2 ;;
+        --tumor-model)          TUMOR_MODEL="$2"; shift 2 ;;
+        --normal-mutation-rate) NORMAL_MUTATION_RATE="$2"; shift 2 ;;
+        --tumor-mutation-rate)  TUMOR_MUTATION_RATE="$2"; shift 2 ;;
         --germline-vcf)     GERMLINE_VCF="$2"; shift 2 ;;
         --read-len)         READ_LEN="$2"; shift 2 ;;
         --paired-ended)     PAIRED_END="true"; shift ;;
@@ -174,6 +187,7 @@ write_config() {
     local input_vcf="$5"
     local seed_suffix="$6"
     local sv_scale="$7"
+    local mutation_rate="$8"
 
     cat > "$config_path" <<EOF
 reference: $REFERENCE
@@ -207,6 +221,9 @@ EOF
     if [[ -n "$input_vcf" ]]; then
         echo "input_vcf: $input_vcf" >> "$config_path"
     fi
+    if [[ -n "$mutation_rate" ]]; then
+        echo "mutation_rate: $mutation_rate" >> "$config_path"
+    fi
     return 0
 }
 
@@ -214,7 +231,7 @@ EOF
 echo ">> Pass 1: normal at ${NORMAL_COVERAGE}× coverage"
 NORMAL_CONFIG="${OUTPUT_DIR}/${NORMAL_PREFIX}.yml"
 write_config "$NORMAL_CONFIG" "$NORMAL_PREFIX" "$NORMAL_COVERAGE" \
-    "$NORMAL_MODEL" "$GERMLINE_VCF" "normal" "0.0"
+    "$NORMAL_MODEL" "$GERMLINE_VCF" "normal" "0.0" "$NORMAL_MUTATION_RATE"
 "$RNEAT_BIN" gen-reads -c "$NORMAL_CONFIG"
 
 # If the user didn't supply a germline VCF, use pass 1's golden as the
@@ -232,23 +249,136 @@ fi
 echo ">> Pass 2: tumor at ${TUMOR_COVERAGE}× coverage (germline from ${GERMLINE_VCF})"
 TUMOR_CONFIG="${OUTPUT_DIR}/${TUMOR_PREFIX}.yml"
 write_config "$TUMOR_CONFIG" "$TUMOR_PREFIX" "$TUMOR_COVERAGE" \
-    "$TUMOR_MODEL" "$GERMLINE_VCF" "tumor" "$SV_RATE_SCALE"
+    "$TUMOR_MODEL" "$GERMLINE_VCF" "tumor" "$SV_RATE_SCALE" "$TUMOR_MUTATION_RATE"
 "$RNEAT_BIN" gen-reads -c "$TUMOR_CONFIG"
 
 # ── Merge FASTQs ─────────────────────────────────────────────────────────
-# Gzipped FASTQ files are concatenable as-is — multi-stream gzip is part
-# of the spec and every standard reader (fastp, samtools, MultiGzDecoder,
-# bgzf-aware tools) handles it. cat is the right tool here, not a re-gzip.
+# gen-reads names reads by genomic position (`RNEAT_generated_<contig>_
+# <start>_<end>/<mate>`), so if the normal and tumor passes happen to
+# sample reads at the same start coordinate they get IDENTICAL names. On
+# chr22 at 30× combined coverage we observed ~456k collisions out of
+# ~9.6M reads, which Mutect2 warns about and which Picard MarkDuplicates
+# would silently drop (halving effective coverage at those loci).
+#
+# Fix: stream each per-pass FASTQ through awk and prefix the read name
+# (line 1 of every 4-line record) with `N_` or `T_` before re-bgzipping.
+# Quality lines (line 4) can start with `@` too — that's why we filter
+# by line position within each record, not by leading character.
+prefix_reads() {
+    local in_fq="$1" out_fq="$2" tag="$3"
+    zcat "$in_fq" | awk -v tag="$tag" '
+        NR % 4 == 1 { sub(/^@/, "@" tag "_") }
+        { print }
+    ' | gzip -c > "$out_fq"
+}
+
 NORMAL_R1="${OUTPUT_DIR}/${NORMAL_PREFIX}_r1.fastq.gz"
 TUMOR_R1="${OUTPUT_DIR}/${TUMOR_PREFIX}_r1.fastq.gz"
 MERGED_R1="${OUTPUT_DIR}/${MERGED_PREFIX}_r1.fastq.gz"
-cat "$NORMAL_R1" "$TUMOR_R1" > "$MERGED_R1"
+NORMAL_R1_TAGGED="${OUTPUT_DIR}/${NORMAL_PREFIX}_r1.tagged.fastq.gz"
+TUMOR_R1_TAGGED="${OUTPUT_DIR}/${TUMOR_PREFIX}_r1.tagged.fastq.gz"
+prefix_reads "$NORMAL_R1" "$NORMAL_R1_TAGGED" "N"
+prefix_reads "$TUMOR_R1"  "$TUMOR_R1_TAGGED"  "T"
+cat "$NORMAL_R1_TAGGED" "$TUMOR_R1_TAGGED" > "$MERGED_R1"
+rm -f "$NORMAL_R1_TAGGED" "$TUMOR_R1_TAGGED"
 
 if [[ "$PAIRED_END" == "true" ]]; then
     NORMAL_R2="${OUTPUT_DIR}/${NORMAL_PREFIX}_r2.fastq.gz"
     TUMOR_R2="${OUTPUT_DIR}/${TUMOR_PREFIX}_r2.fastq.gz"
     MERGED_R2="${OUTPUT_DIR}/${MERGED_PREFIX}_r2.fastq.gz"
-    cat "$NORMAL_R2" "$TUMOR_R2" > "$MERGED_R2"
+    NORMAL_R2_TAGGED="${OUTPUT_DIR}/${NORMAL_PREFIX}_r2.tagged.fastq.gz"
+    TUMOR_R2_TAGGED="${OUTPUT_DIR}/${TUMOR_PREFIX}_r2.tagged.fastq.gz"
+    prefix_reads "$NORMAL_R2" "$NORMAL_R2_TAGGED" "N"
+    prefix_reads "$TUMOR_R2"  "$TUMOR_R2_TAGGED"  "T"
+    cat "$NORMAL_R2_TAGGED" "$TUMOR_R2_TAGGED" > "$MERGED_R2"
+    rm -f "$NORMAL_R2_TAGGED" "$TUMOR_R2_TAGGED"
+fi
+
+# ── Merge golden VCFs into a single origin-tagged truth set ─────────────
+# Resolves rneat's per-pass `INFO/NEAT_PROVENANCE` (which says "denovo or
+# input") into the cancer-specific `INFO/NEAT_ORIGIN` (which says "germline,
+# somatic, or shared"):
+#
+#   only in normal_golden                → NEAT_ORIGIN=germline
+#   only in tumor_golden  (denovo there) → NEAT_ORIGIN=somatic
+#   in both passes                       → NEAT_ORIGIN=shared
+#
+# bcftools is required for the set operations. If it isn't installed we
+# leave the per-pass VCFs and warn — the merge is a post-processing step,
+# not part of the simulation correctness.
+NORMAL_VCF="${OUTPUT_DIR}/${NORMAL_PREFIX}.vcf.gz"
+TUMOR_VCF="${OUTPUT_DIR}/${TUMOR_PREFIX}.vcf.gz"
+MERGED_TRUTH_VCF="${OUTPUT_DIR}/${MERGED_PREFIX}_truth.vcf.gz"
+MERGE_OK="false"
+
+if ! command -v bcftools >/dev/null 2>&1; then
+    echo ">> [skipped] bcftools not found — per-pass VCFs only."
+    echo "   Install bcftools to enable the origin-tagged truth-VCF merge."
+elif ! command -v bgzip >/dev/null 2>&1; then
+    echo ">> [skipped] bgzip not found — install htslib for the truth-VCF merge."
+else
+    echo ">> Merging golden VCFs into origin-tagged truth set..."
+    ISEC_DIR="${OUTPUT_DIR}/_isec_$$"
+    mkdir -p "$ISEC_DIR"
+    # gen-reads writes the golden VCF with plain gzip framing (flate2's
+    # GzEncoder), but bcftools requires bgzip (block-gzip) for tabix
+    # indexing. Transcode in place — `bcftools view -O z` reads any
+    # gzip variant and writes bgzip. Eventually `write_vcf` should emit
+    # bgzip directly so this step can go away; tracked separately.
+    bcftools view -O z -o "$NORMAL_VCF.bgz" "$NORMAL_VCF"
+    bcftools view -O z -o "$TUMOR_VCF.bgz"  "$TUMOR_VCF"
+    mv "$NORMAL_VCF.bgz" "$NORMAL_VCF"
+    mv "$TUMOR_VCF.bgz"  "$TUMOR_VCF"
+    # bcftools isec needs tabix-indexed inputs.
+    bcftools index -f -t "$NORMAL_VCF"
+    bcftools index -f -t "$TUMOR_VCF"
+    # Outputs:
+    #   0000.vcf.gz — only in NORMAL_VCF (germline that didn't round-trip)
+    #   0001.vcf.gz — only in TUMOR_VCF  (somatic de-novo)
+    #   0002.vcf.gz — common, drawn from NORMAL_VCF
+    #   0003.vcf.gz — common, drawn from TUMOR_VCF (preferred — preserves tumor's SV INFO)
+    bcftools isec -p "$ISEC_DIR" -O z "$NORMAL_VCF" "$TUMOR_VCF" >/dev/null
+
+    # Annotate each disjoint subset with NEAT_ORIGIN and re-bgzip.
+    # awk owns the INFO-column rewrite because we want a stream-pure
+    # operation that doesn't require building an annotations file.
+    annotate_origin() {
+        local in_vcf="$1" out_vcf="$2" origin="$3"
+        zcat "$in_vcf" | awk -v origin="$origin" '
+            BEGIN { FS = "\t"; OFS = "\t" }
+            /^##/ { print; next }
+            /^#CHROM/ {
+                print "##INFO=<ID=NEAT_ORIGIN,Number=1,Type=String,Description=\"" \
+                      "Origin of variant in tumor/normal mix: germline | somatic | shared\">"
+                print; next
+            }
+            {
+                tag = "NEAT_ORIGIN=" origin
+                if ($8 == "." || $8 == "") $8 = tag
+                else                       $8 = $8 ";" tag
+                print
+            }
+        ' | bgzip -c > "$out_vcf"
+    }
+
+    annotate_origin "$ISEC_DIR/0000.vcf.gz" "$ISEC_DIR/normal_only.vcf.gz" germline
+    annotate_origin "$ISEC_DIR/0001.vcf.gz" "$ISEC_DIR/tumor_only.vcf.gz"  somatic
+    annotate_origin "$ISEC_DIR/0003.vcf.gz" "$ISEC_DIR/shared.vcf.gz"      shared
+
+    # bcftools concat -a (allow-overlaps) requires indexed inputs because
+    # the three subset files all sit on overlapping contigs (different
+    # positions per file, but the same chr names). Index, concat, sort.
+    bcftools index -f -t "$ISEC_DIR/normal_only.vcf.gz"
+    bcftools index -f -t "$ISEC_DIR/tumor_only.vcf.gz"
+    bcftools index -f -t "$ISEC_DIR/shared.vcf.gz"
+    bcftools concat -a -O u \
+        "$ISEC_DIR/normal_only.vcf.gz" \
+        "$ISEC_DIR/tumor_only.vcf.gz" \
+        "$ISEC_DIR/shared.vcf.gz" \
+      | bcftools sort -O z -o "$MERGED_TRUTH_VCF"
+    bcftools index -f -t "$MERGED_TRUTH_VCF"
+    rm -rf "$ISEC_DIR"
+    MERGE_OK="true"
 fi
 
 # ── Summary ──────────────────────────────────────────────────────────────
@@ -272,10 +402,9 @@ Outputs (in ${OUTPUT_DIR}):
   Tumor FASTQ:      ${TUMOR_PREFIX}_r1.fastq.gz $( [[ "$PAIRED_END" == "true" ]] && echo ", ${TUMOR_PREFIX}_r2.fastq.gz" )
   Tumor truth:      ${TUMOR_PREFIX}.vcf.gz              (germline + somatic)
   Merged FASTQ:     ${MERGED_PREFIX}_r1.fastq.gz$( [[ "$PAIRED_END" == "true" ]] && echo ", ${MERGED_PREFIX}_r2.fastq.gz" )
+$( [[ "$MERGE_OK" == "true" ]] && echo "  Merged truth:     ${MERGED_PREFIX}_truth.vcf.gz   (INFO/NEAT_ORIGIN = germline | somatic | shared)" )
 
 The merged FASTQ is what a downstream somatic-variant pipeline should
-consume. Both per-pass golden VCFs are preserved for benchmarking; a
-proper unified truth set with germline/somatic origin tags is tracked
-at rneat issue #185.
+consume.$( [[ "$MERGE_OK" == "true" ]] && echo " The merged truth VCF carries INFO/NEAT_ORIGIN tags that distinguish germline, somatic, and shared (germline-carried-through-tumor) variants — feed it to hap.py / som.py / vcfeval as the truth set for somatic-caller benchmarking." || echo " Per-pass golden VCFs are preserved; install bcftools + bgzip to enable the origin-tagged truth merge." )
 ────────────────────────────────────────────────────────────────
 EOF

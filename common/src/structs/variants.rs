@@ -234,6 +234,16 @@ impl SvData {
         }
         None
     }
+
+    /// Compute the total length of the variant event. For non-insertions, this
+    /// is identical to the reference span. For insertions, it is the length
+    /// of the inserted sequence (derived from `SVLEN`).
+    pub fn event_length(&self, location: usize) -> Option<usize> {
+        match self.sv_type {
+            SvType::Ins => self.svlen.map(|l| l.unsigned_abs() as usize),
+            _ => self.span(location),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Hash)]

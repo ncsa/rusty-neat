@@ -41,12 +41,16 @@ pub fn default_sv_model() -> SvModel {
     let per_base_rate = 6.009e-4;
 
     // Type breakdown: fitted from the full gnomAD-SV v4.1 run.
-    // Deletions dominate; BNDs are now included at ~19%.
+    // Deletions dominate; BNDs are included at ~19%.
+    // Inversions and Insertions are added here at nominal rates (heuristic) since they
+    // were filtered in the original validation fit.
     let mut type_probabilities: HashMap<SvType, f64> = HashMap::new();
-    type_probabilities.insert(SvType::Del, 0.6583);
+    type_probabilities.insert(SvType::Del, 0.6433);
     type_probabilities.insert(SvType::Dup, 0.1470);
     type_probabilities.insert(SvType::Cnv, 0.0004);
     type_probabilities.insert(SvType::Bnd, 0.1943);
+    type_probabilities.insert(SvType::Inv, 0.0050);
+    type_probabilities.insert(SvType::Ins, 0.0100);
 
     // Length log-normals: fitted from the full-genome run via MLE on
     // ln(span). Quick gut-check on the medians (= exp(mu)):
@@ -54,6 +58,8 @@ pub fn default_sv_model() -> SvModel {
     //   DUP: median ≈ 863 bp
     //   CNV: median ≈ 15.3 kb
     //   BND: nominal 1 bp (fixed)
+    //   INV: median ≈ 4.9 kb (heuristic)
+    //   INS: median ≈ 300 bp (heuristic, matching Alu MEI)
     // Sigmas reflect the heavy right tail of DUPs (multi-megabase calls
     // pull sigma out to ~2.5) and the tighter clustering of DELs / CNVs.
     let mut length_log_normal: HashMap<SvType, (f64, f64)> = HashMap::new();
@@ -61,6 +67,8 @@ pub fn default_sv_model() -> SvModel {
     length_log_normal.insert(SvType::Dup, (6.761, 2.530));
     length_log_normal.insert(SvType::Cnv, (9.637, 1.152));
     length_log_normal.insert(SvType::Bnd, (0.0, 0.0));
+    length_log_normal.insert(SvType::Inv, (8.5, 1.5));
+    length_log_normal.insert(SvType::Ins, (5.7, 1.0));
 
     // Copy-number distribution for `<CNV>` records. gnomAD-SV's sites
     // VCF leaves `INFO/CN` unset (CN varies per-sample, in
@@ -115,12 +123,19 @@ mod tests {
     }
 
     #[test]
-    fn default_sv_model_carries_all_four_supported_types() {
+    fn default_sv_model_carries_all_six_supported_types() {
         // Sampler skips types missing from `type_probabilities`. The
-        // default must include DEL, DUP, CNV, and BND so users see all four
+        // default must include DEL, DUP, CNV, BND, INV, and INS so users see all six
         // when they enable generation.
         let m = default_sv_model();
-        for t in [SvType::Del, SvType::Dup, SvType::Cnv, SvType::Bnd] {
+        for t in [
+            SvType::Del,
+            SvType::Dup,
+            SvType::Cnv,
+            SvType::Bnd,
+            SvType::Inv,
+            SvType::Ins,
+        ] {
             assert!(
                 m.type_probabilities.contains_key(&t),
                 "missing type probability for {:?}",

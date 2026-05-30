@@ -73,6 +73,18 @@ End-to-end smoke run on chr22 + bundled COSMIC model + `--tumor-mutation-rate 1e
 - Pass 2 (tumor, 15× chr22 with input_vcf=normal_golden): ~50 min, 56,318 variants (55,811 germline carried through + 507 somatic de-novo)
 - Merge step: 55,811 `NEAT_ORIGIN=shared` + 507 `NEAT_ORIGIN=somatic`, 0 `germline`-only (every germline variant round-tripped, as expected when `input_vcf` is the normal pass's golden VCF)
 - GATK Mutect2 + FilterMutectCalls scored via som.py against the somatic-filtered truth: **67.5% SNV recall, 96.7% precision; 12.1% indel recall, 66.7% precision.** Single-end alignment defaults; PE + panel-of-normals + contamination model would substantially lift indel numbers.
+=======
+5/27/2026
+=========
+## rneat v1.11.2
+
+### Structural variant (SV) modeling improvements
+- **Full support for symbolic `<INS>` (Insertions) in `SvModel`.** The statistical model now learns the rate and length distribution of symbolic insertions from training VCFs (gnomAD-SV, etc.). Sampled `<INS>` records now carry appropriate `SVLEN` and `END` tags in the output golden VCF.
+- **Improved VCF output for structural variants.** De novo sampled SVs now include `SVLEN` in their INFO field (negative for deletions, positive for others).
+- **VCF header completeness.** The output VCF header now includes missing `ALT` definitions for `<DUP>` and `<CNV>`, plus standard `INFO` definitions for `SVTYPE`, `SVLEN`, `END`, and `CN`.
+- **Refined SV length statistics.** Introduced `SvData::event_length` to correctly distinguish between reference span (bases removed/replaced) and event length (bases inserted), ensuring more accurate log-normal fitting for insertions.
+- **Bundled default SV model updated.** Updated `default_sv_model` with heuristic parameters for `<INS>` (median ~300bp, matching Alu MEIs) and `<INV>` (median ~4.9kb), and adjusted type probabilities to better reflect human genome diversity.
+- **Fix:** `SvModel::affected_range_for_existing` now correctly handles `<INS>` and breakends as point events (1-bp reference span) rather than using their `SVLEN` as the span. This prevents point insertions from blocking nearby variants during de novo sampling.
 
 5/25/2026
 =========

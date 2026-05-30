@@ -840,86 +840,211 @@ fn process_chimeric_variants(
     mut rng: NeatRng,
 ) -> Result<ContigResult, GenerateReadsError> {
     let mut all_reads = Vec::new();
-    let mut processed_bnds = HashSet::new();
+    let mut processed_ids = HashSet::new();
 
     for (contig_name, m_map) in ctx.mutated_maps.iter() {
         for sv_rec in &m_map.sv_records {
             let sv = match sv_rec.alternate.as_symbolic() {
-                Some(s) if s.sv_type == SvType::Bnd => s,
+                Some(s) => s,
                 _ => continue,
             };
 
-            let mate_contig = match &sv.mate_contig {
-                Some(c) => c,
-                None => continue,
-            };
-            let mate_pos = match sv.mate_pos {
-                Some(p) => p,
-                None => continue,
-            };
+            if sv.sv_type == SvType::Bnd {
+                let mate_contig = match &sv.mate_contig {
+                    Some(c) => c,
+                    None => continue,
+                };
+                let mate_pos = match sv.mate_pos {
+                    Some(p) => p,
+                    None => continue,
+                };
 
-            // BND records come in pairs — each side describes the same
-            // junction from its own contig+position. Canonicalize the
-            // (contig, pos) tuples so the "smaller" side comes first, then
-            // use that as the dedup key. Tuple ordering handles both the
-            // cross-contig case (compare contig names lexicographically)
-            // and the same-contig case (compare positions) uniformly.
-            let here = (contig_name.as_str(), sv_rec.location);
-            let mate = (mate_contig.as_str(), mate_pos);
-            let bnd_id = if here <= mate {
-                (contig_name.clone(), sv_rec.location, mate_contig.clone(), mate_pos)
-            } else {
-                (mate_contig.clone(), mate_pos, contig_name.clone(), sv_rec.location)
-            };
-            if !processed_bnds.insert(bnd_id) {
-                continue;
-            }
+                // BND records come in pairs — each side describes the same
+                // junction from its own contig+position. Canonicalize the
+                // (contig, pos) tuples so the "smaller" side comes first,
+                // then use that as the dedup key. Tuple ordering handles
+                // both the cross-contig case (compare contig names
+                // lexicographically) and the same-contig case (compare
+                // positions) uniformly. Stored in `processed_ids` keyed by
+                // type-prefixed string so BND and INV share one HashSet.
+                let here = (contig_name.as_str(), sv_rec.location);
+                let mate = (mate_contig.as_str(), mate_pos);
+                let bnd_id = if here <= mate {
+                    (contig_name.clone(), sv_rec.location, mate_contig.clone(), mate_pos)
+                } else {
+                    (mate_contig.clone(), mate_pos, contig_name.clone(), sv_rec.location)
+                };
+                if !processed_ids.insert(format!("BND_{:?}", bnd_id)) {
+                    continue;
+                }
 
-            // Coverage model for chimeric BND reads:
-            //   - Homozygous BND: every allele carries the junction, so every
-            //     read covering the breakpoint should be a junction read.
-            //     mult = 1.0 → num_frags = full configured coverage.
-            //   - Heterozygous: half the alleles carry the junction; the
-            //     other half are unbroken reference. mult = 1/ploidy.
-            //
-            // Important caveat: the *regular* per-contig pass also generates
-            // reads covering the breakpoint position (it just reads from the
-            // unbroken reference, oblivious to the BND). For a homozygous
-            // BND this means the breakpoint locus ends up with regular reads
-            // PLUS junction reads — roughly double the true biological
-            // coverage there. For a heterozygous BND it lands closer to
-            // correct (regular pass covers both alleles, chimeric pass adds
-            // 1/ploidy worth of junction reads). A proper fix would teach
-            // the regular pass to skip the broken-allele fraction of reads
-            // at BND positions; tracked as a v2 follow-up.
-            let mult = match sv_rec.genotype {
-                Genotype::Homozygous => 1.0,
-                Genotype::Heterozygous => 1.0 / (ctx.config.ploidy as f64),
-            };
+                // Coverage model for chimeric BND reads:
+                //   - Homozygous BND: every allele carries the junction, so
+                //     every read covering the breakpoint should be a
+                //     junction read. mult = 1.0 → num_frags = full coverage.
+                //   - Heterozygous: half the alleles carry the junction; the
+                //     other half are unbroken reference. mult = 1/ploidy.
+                //
+                // Important caveat: the *regular* per-contig pass also
+                // generates reads covering the breakpoint position (it just
+                // reads from the unbroken reference, oblivious to the BND).
+                // For a homozygous BND this means the breakpoint locus ends
+                // up with regular reads PLUS junction reads — roughly double
+                // the true biological coverage there. For a heterozygous
+                // BND it lands closer to correct (regular pass covers both
+                // alleles, chimeric pass adds 1/ploidy worth of junction
+                // reads). A proper fix would teach the regular pass to skip
+                // the broken-allele fraction of reads at BND positions;
+                // tracked as a v2 follow-up.
+                let mult = match sv_rec.genotype {
+                    Genotype::Homozygous => 1.0,
+                    Genotype::Heterozygous => 1.0 / (ctx.config.ploidy as f64),
+                };
 
-            let num_frags = scale_coverage(ctx.config.coverage, mult);
-            if num_frags == 0 {
-                continue;
-            }
+                let num_frags = scale_coverage(ctx.config.coverage, mult);
+                if num_frags == 0 {
+                    continue;
+                }
 
-            for frag_idx in 0..num_frags {
-                let rand_val = rng.random().map_err(GenerateReadsError::from)?;
-                let frag_len = ctx.fragment_length_model.generate_fragment(rand_val).map_err(GenerateReadsError::from)? as usize;
-                let offset = rng.range_i64(1, frag_len as i64).map_err(|e| GenerateReadsError::CliError(e))? as usize;
+                for frag_idx in 0..num_frags {
+                    // Fragment length picked the same way the main read-gen
+                    // path does it (paired-end: model-sampled with a
+                    // length-floor retry; single-end: read_len + a 32bp pad
+                    // so sequencing-error deletions don't truncate the read).
+                    let se_pad = if ctx.config.paired_ended { 0 } else { 32 };
+                    let frag_len = if ctx.config.paired_ended {
+                        let mut attempts = 0;
+                        let mut f = 0;
+                        while attempts < 100 {
+                            let rand_val = rng.random().map_err(GenerateReadsError::from)?;
+                            f = ctx.fragment_length_model.generate_fragment(rand_val).map_err(GenerateReadsError::from)? as usize;
+                            if ctx.config.long_reads || f >= ctx.config.read_len + 10 {
+                                break;
+                            }
+                            attempts += 1;
+                        }
+                        if f < ctx.config.read_len && !ctx.config.long_reads {
+                            f = ctx.config.read_len + 10;
+                        }
+                        f
+                    } else {
+                        ctx.config.read_len + se_pad
+                    };
 
-                let (read1, read2) = generate_chimeric_pair(
-                    ctx,
-                    contig_name,
-                    sv_rec.location,
-                    sv,
-                    frag_len,
-                    offset,
-                    frag_idx,
-                    &mut rng,
-                )?;
-                all_reads.push(read1);
-                if let Some(r2) = read2 {
-                    all_reads.push(r2);
+                    let offset = rng.range_i64(1, (frag_len - 1).min(ctx.config.read_len - 1).max(1) as i64).map_err(|e| GenerateReadsError::CliError(e))? as usize;
+
+                    let result = generate_chimeric_pair(
+                        ctx,
+                        contig_name,
+                        sv_rec.location,
+                        sv,
+                        frag_len,
+                        offset,
+                        frag_idx,
+                        &mut rng,
+                    );
+
+                    match result {
+                        Ok((read1, read2)) => {
+                            all_reads.push(read1);
+                            if let Some(r2) = read2 {
+                                all_reads.push(r2);
+                            }
+                        }
+                        Err(GenerateReadsError::FqToolsError(common::file_tools::fastq_tools::FastqToolsError::TruncatedRead(msg))) => {
+                            debug!("Skipping truncated chimeric read: {}", msg);
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
+            } else if sv.sv_type == SvType::Inv {
+                let end = match sv.end {
+                    Some(e) => e,
+                    None => {
+                        if let Some(span) = sv.span(sv_rec.location) {
+                            sv_rec.location + span - 1
+                        } else {
+                            continue;
+                        }
+                    }
+                };
+
+                let inv_id = (contig_name.clone(), sv_rec.location, end);
+                if !processed_ids.insert(format!("INV_{:?}", inv_id)) {
+                    continue;
+                }
+
+                // Same coverage model as BND — full coverage for homozygous,
+                // 1/ploidy for heterozygous. The double-counting caveat from
+                // the BND branch applies here too: the regular per-contig
+                // pass still generates reads spanning the inversion's two
+                // breakpoints (it reads from the unbroken forward reference),
+                // so a homozygous inversion ends up with regular + junction
+                // coverage at each breakpoint.
+                let mult = match sv_rec.genotype {
+                    Genotype::Homozygous => 1.0,
+                    Genotype::Heterozygous => 1.0 / (ctx.config.ploidy as f64),
+                };
+
+                let num_frags = scale_coverage(ctx.config.coverage, mult);
+                if num_frags == 0 {
+                    continue;
+                }
+
+                for frag_idx in 0..num_frags {
+                    let se_pad = if ctx.config.paired_ended { 0 } else { 32 };
+                    let frag_len = if ctx.config.paired_ended {
+                        let mut attempts = 0;
+                        let mut f = 0;
+                        while attempts < 100 {
+                            let rand_val = rng.random().map_err(GenerateReadsError::from)?;
+                            f = ctx.fragment_length_model.generate_fragment(rand_val).map_err(GenerateReadsError::from)? as usize;
+                            if ctx.config.long_reads || f >= ctx.config.read_len + 10 {
+                                break;
+                            }
+                            attempts += 1;
+                        }
+                        if f < ctx.config.read_len && !ctx.config.long_reads {
+                            f = ctx.config.read_len + 10;
+                        }
+                        f
+                    } else {
+                        ctx.config.read_len + se_pad
+                    };
+
+                    // An inversion has two breakpoints (junction=1 at the
+                    // start, junction=2 at the end), and each one needs
+                    // its own junction-spanning reads. Both junctions share
+                    // the frag_idx (it's a per-INV-record counter) but the
+                    // junction number disambiguates the QNAMEs that
+                    // generate_inv_pair emits.
+                    for junction in 1..=2 {
+                        let offset = rng.range_i64(1, (frag_len - 1).min(ctx.config.read_len - 1).max(1) as i64).map_err(|e| GenerateReadsError::CliError(e))? as usize;
+                        let result = generate_inv_pair(
+                            ctx,
+                            contig_name,
+                            sv_rec.location,
+                            end,
+                            junction,
+                            frag_len,
+                            offset,
+                            frag_idx,
+                            &mut rng,
+                        );
+
+                        match result {
+                            Ok((read1, read2)) => {
+                                all_reads.push(read1);
+                                if let Some(r2) = read2 {
+                                    all_reads.push(r2);
+                                }
+                            }
+                            Err(GenerateReadsError::FqToolsError(common::file_tools::fastq_tools::FastqToolsError::TruncatedRead(msg))) => {
+                                debug!("Skipping truncated chimeric read: {}", msg);
+                            }
+                            Err(e) => return Err(e),
+                        }
+                    }
                 }
             }
         }
@@ -1075,6 +1200,125 @@ fn generate_chimeric_pair(
     }
 
     Ok((r1, r2))
+}
+
+fn generate_inv_pair(
+    ctx: &ContigContext,
+    contig: &str,
+    location: usize, // 0-based
+    end: usize, // 1-based
+    junction: usize,
+    frag_len: usize,
+    offset: usize,
+    frag_idx: usize,
+    rng: &mut NeatRng,
+) -> Result<(ReadRecord, Option<ReadRecord>), GenerateReadsError> {
+    let ((c1, s1, e1, rev1), (c2, s2, e2, rev2)) =
+        get_inv_pieces(contig, location, end, junction, offset, frag_len - offset, ctx)?;
+
+    let seq1 = get_stitched_sequence(ctx, &c1, s1, e1, rev1, &c2, s2, e2, rev2, rng)?;
+
+    let read_len = ctx.config.read_len;
+    // The trailing 16-hex `frag_idx` matches the uniqueness-tag pattern that
+    // write_block_fastq + generate_chimeric_pair use (#210). The `junction`
+    // tag already disambiguates the two breakpoints of a single inversion;
+    // frag_idx disambiguates fragments at the same breakpoint when
+    // num_frags > 1.
+    let base_name = format!(
+        "RNEAT_chimeric_INV_{}_{}_{}_{}_{:016x}",
+        contig, location + 1, end, junction, frag_idx,
+    );
+
+    let quality_scores_1 = ctx.quality_score_model.generate_quality_scores(read_len, rng).map_err(GenerateReadsError::from)?;
+
+    // Inversion-junction reads contribute to junction signal, not point
+    // coverage — same rationale as generate_chimeric_pair. Use a throwaway
+    // AdCounter so generate_read's increment site has somewhere to write
+    // without leaking values into the per-contig counter used by write_vcf.
+    let mut throwaway_ad = AdCounter::new();
+
+    let r1 = generate_read(
+        &seq1,
+        &[],
+        &HashMap::new(),
+        read_len,
+        format!("{}/1", base_name),
+        Strand::Forward,
+        quality_scores_1,
+        ctx.seq_error_model,
+        rng,
+        c1.clone(),
+        s1,
+        c2.clone(),
+        s2,
+        frag_len as i32,
+        ctx.config.paired_ended,
+        &mut throwaway_ad,
+    ).map_err(GenerateReadsError::from)?;
+
+    let mut r2 = None;
+    if ctx.config.paired_ended {
+        let quality_scores_2 = ctx.quality_score_model.generate_quality_scores(read_len, rng).map_err(GenerateReadsError::from)?;
+        let r2_record = generate_read(
+            &reverse_complement(seq1),
+            &[],
+            &HashMap::new(),
+            read_len,
+            format!("{}/2", base_name),
+            Strand::Reverse,
+            quality_scores_2,
+            ctx.seq_error_model,
+            rng,
+            c2.clone(),
+            s2,
+            c1.clone(),
+            s1,
+            -(frag_len as i32),
+            true,
+            &mut throwaway_ad,
+        ).map_err(GenerateReadsError::from)?;
+        r2 = Some(r2_record);
+    }
+
+    Ok((r1, r2))
+}
+
+fn get_inv_pieces(
+    contig: &str,
+    location: usize, // 0-based location (POS-1)
+    end: usize, // 1-based END
+    junction: usize, // 1 or 2
+    len1: usize,
+    len2: usize,
+    ctx: &ContigContext,
+) -> Result<((String, usize, usize, bool), (String, usize, usize, bool)), GenerateReadsError> {
+    // Error rather than silently defaulting to zero-length sequences if the
+    // inversion's contig is missing from the reference — same defense-in-
+    // depth as get_bnd_pieces.
+    let c_len = ctx.reference.get(contig).map(|s| s.len()).ok_or_else(|| {
+        GenerateReadsError::CliError(format!(
+            "INV at {contig}:{location} references contig {contig} but that contig is not in the reference"
+        ))
+    })?;
+    Ok(if junction == 1 {
+        // Junction 1: REF[..POS-1] | RC(REF[POS..END])
+        // Left piece ends at index location-1. Right piece starts at RC(index end-1).
+        let e1 = location;
+        let s1 = e1.saturating_sub(len1);
+
+        let e2 = end.min(c_len);
+        let s2 = e2.saturating_sub(len2).max(location);
+        ((contig.to_string(), s1, e1, false), (contig.to_string(), s2, e2, true))
+    } else {
+        // Junction 2: RC(REF[POS..END]) | REF[END+1..]
+        // Left piece ends at RC(index location). Right piece starts at index end.
+        let s1 = location;
+        let e1 = (s1 + len1).min(end).min(c_len);
+
+        let s2 = end.min(c_len);
+        let e2 = (s2 + len2).min(c_len);
+        ((contig.to_string(), s1, e1, true), (contig.to_string(), s2, e2, false))
+    })
 }
 
 fn get_bnd_pieces(

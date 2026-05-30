@@ -37,6 +37,7 @@ set -euo pipefail
 # Pinned so a fresh checkout months from now reproduces the same scoring.
 BWA_IMG="quay.io/biocontainers/bwa:0.7.18--he4a0461_0"
 SAMTOOLS_IMG="quay.io/biocontainers/samtools:1.21--h50ea8bc_0"
+BCFTOOLS_IMG="quay.io/biocontainers/bcftools:1.21--h3a4d415_1"
 GATK_IMG="docker.io/broadinstitute/gatk:4.5.0.0"
 HAPPY_IMG="docker.io/jmcdani20/hap.py:v0.3.12"
 
@@ -48,6 +49,13 @@ TRUTH_VCF=""
 OUTPUT_DIR="benchmark_out"
 THREADS="4"
 DOCKER="docker"
+# Default truth filter: keep only records whose origin is "somatic" — those
+# are the only variants Mutect2 in tumor/normal mode is expected to call.
+# Without this filter, the truth VCF's ~99% germline-carry-through records
+# (NEAT_ORIGIN=shared) inflate the FN count and tank apparent recall even
+# when the somatic caller is doing fine. Set to empty (--truth-filter '')
+# to skip filtering and score against the full truth as-is.
+TRUTH_FILTER='INFO/NEAT_ORIGIN="somatic"'
 
 usage() {
     cat <<'EOF'
@@ -72,6 +80,14 @@ Output:
 Resources:
   --threads        Threads passed to bwa / samtools / Mutect2 (default: 4)
 
+Truth filtering:
+  --truth-filter   bcftools view -i expression applied to the truth VCF
+                   before scoring. Default: 'INFO/NEAT_ORIGIN="somatic"'
+                   — keeps only the records Mutect2 in tumor/normal mode
+                   is expected to call (germline-carried-through records
+                   would otherwise be counted as FN). Pass an empty string
+                   to skip filtering and score against the full truth.
+
 Reproducibility:
   --docker         Container runtime to use (default: docker; podman in
                    compatibility mode also works)
@@ -89,6 +105,7 @@ while [[ $# -gt 0 ]]; do
         --truth-vcf)     TRUTH_VCF="$2"; shift 2 ;;
         --output-dir)    OUTPUT_DIR="$2"; shift 2 ;;
         --threads)       THREADS="$2"; shift 2 ;;
+        --truth-filter)  TRUTH_FILTER="$2"; shift 2 ;;
         --docker)        DOCKER="$2"; shift 2 ;;
         -h|--help)       usage; exit 0 ;;
         *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
@@ -260,18 +277,49 @@ else
         -O "/work/$(basename "$FILTERED_VCF")"
 fi
 
-# ── 6. Score against the truth VCF with som.py ──────────────────────────
-# Mount the truth VCF's directory at /truth_in. som.py uses the reference
-# for variant normalization (left-alignment, multi-allelic decomposition).
+# ── 6a. Filter truth VCF before scoring ─────────────────────────────────
+# som.py treats every record in the truth VCF as an expected somatic
+# call. The rneat-emitted truth carries both germline-carry-through
+# (NEAT_ORIGIN=shared) and somatic (NEAT_ORIGIN=somatic) records, so
+# without filtering, Mutect2's (correct) refusal to call the germline
+# carry-through variants shows up as ~99% false negatives. Filter the
+# truth down to just the somatic ground-truth records before scoring.
+SCORING_TRUTH="$OUTPUT_DIR/scoring_truth.vcf.gz"
+SCORING_TRUTH_NAME="$(basename "$SCORING_TRUTH")"
+if [[ -n "$TRUTH_FILTER" ]]; then
+    echo ">> Filtering truth VCF with: $TRUTH_FILTER"
+    run_in "$BCFTOOLS_IMG" sh -c \
+        "bcftools view -i '$TRUTH_FILTER' -O z -o '/work/$SCORING_TRUTH_NAME' '/truth_in/$TRUTH_NAME' \
+         && bcftools index -f -t '/work/$SCORING_TRUTH_NAME'"
+    # If the filtered truth is empty the filter didn't match anything —
+    # almost always means INFO/NEAT_ORIGIN isn't present on this truth
+    # VCF (e.g. a non-rneat truth set). Point the user at the escape
+    # hatch rather than silently scoring against zero records.
+    filtered_count=$(run_in "$BCFTOOLS_IMG" sh -c \
+        "bcftools view -H '/work/$SCORING_TRUTH_NAME' | wc -l" | tr -d '\r\n')
+    if [[ "$filtered_count" == "0" ]]; then
+        echo "WARNING: truth filter '$TRUTH_FILTER' matched zero records." >&2
+        echo "  If your truth VCF doesn't have INFO/NEAT_ORIGIN, pass --truth-filter ''" >&2
+    else
+        echo "    Filtered truth: $filtered_count records retained."
+    fi
+else
+    echo ">> No truth filter applied — scoring against full truth VCF."
+    cp "$TRUTH_VCF" "$SCORING_TRUTH"
+    run_in "$BCFTOOLS_IMG" bcftools index -f -t "/work/$SCORING_TRUTH_NAME"
+fi
+
+# ── 6b. Score against the truth VCF with som.py ─────────────────────────
+# som.py uses the reference for variant normalization (left-alignment,
+# multi-allelic decomposition).
 echo ">> Scoring filtered calls against truth VCF via som.py..."
 "$DOCKER" run --rm \
     -v "$REF_DIR:/refs:ro" \
     -v "$OUTPUT_DIR:/work" \
-    -v "$TRUTH_DIR:/truth_in:ro" \
     -w /work \
     "$HAPPY_IMG" \
     /opt/hap.py/bin/som.py \
-        "/truth_in/$TRUTH_NAME" \
+        "/work/$SCORING_TRUTH_NAME" \
         "/work/$(basename "$FILTERED_VCF")" \
         -r "/refs/$REF_NAME" \
         -o "/work/$(basename "$SCORE_PREFIX")" \

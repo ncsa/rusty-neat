@@ -16,9 +16,8 @@ use crate::{
             bed_reader::read_bed,
             fasta_stream::{
                 FastaStream, apply_n_substitution, map_buffer, resolve_iupac_bases,
-                scan_fasta_lengths,
             },
-            fastq_tools::{combine_temp_fastqs, write_block_fastq},
+            fastq_tools::{combine_temp_fastqs, write_block_fastq, generate_read, write_read_to_fastq, reverse_complement, Strand},
             file_io::{VectorBuffer, append_to_file},
             vcf_tools::{read_vcf, write_vcf},
         },
@@ -30,8 +29,9 @@ use crate::{
             bed_record::BedRecord,
             mutated_map::{AdCounter, MutatedMap},
             nucleotides::{Nucleotide, NucleotideSelector},
+            read_record::ReadRecord,
             sequence_block::{RegionType, SequenceBlock, SequenceMap},
-            variants::Variant,
+            variants::{Variant, SvData},
         },
     },
     gen_reads::{
@@ -50,9 +50,6 @@ struct ContigContext<'a> {
     config: &'a RunConfiguration,
     target_bed: &'a Option<HashMap<String, Vec<BedRecord>>>,
     mutation_regions: &'a Option<HashMap<String, Vec<BedRecord>>>,
-    input_variants: &'a Option<HashMap<String, Vec<Variant>>>,
-    nuc_sub_model: &'a NucleotideSelector,
-    mutation_model: &'a MutationModel,
     default_run_mutation_rate: f64,
     fragment_length_model: &'a FragmentLengthModel,
     gc_bias_model: &'a GcBiasModel,
@@ -61,6 +58,9 @@ struct ContigContext<'a> {
     working_dir: &'a std::path::Path,
     base_rng: NeatRng,
     bam_context: Option<Arc<BamContext>>,
+    reference: Arc<HashMap<String, Vec<Nucleotide>>>,
+    mutated_maps: Arc<HashMap<String, MutatedMap>>,
+    max_del_lens: HashMap<String, usize>,
 }
 
 struct ContigResult {
@@ -171,20 +171,62 @@ pub fn run_neat(
     };
 
     info!("Reading fasta file: {}", &config.reference.display());
+    let mut reference_map = HashMap::new();
+    let mut contig_order_in_file = Vec::new();
+    let fasta = FastaStream::open(&config.reference)?;
+    for (idx, result) in fasta.enumerate() {
+        let (name, raw) = result?;
+        let mut child_rng = rng.derive_child(idx as u64);
+        let (mut seq, iupac_count) = resolve_iupac_bases(&raw, &mut child_rng)?;
+        if iupac_count > 0 {
+            warn!(
+                "Contig {}: resolved {} IUPAC ambiguity base(s) to ACGT",
+                name, iupac_count
+            );
+        }
+        apply_n_substitution(&mut seq, &nuc_sub_model, &mut child_rng)?;
+        contig_order_in_file.push(name.clone());
+        reference_map.insert(name, seq);
+    }
+    let reference = Arc::new(reference_map);
+
     let bam_context: Option<Arc<BamContext>> = if config.produce_bam {
-        let contigs = scan_fasta_lengths(&config.reference)?;
-        Some(Arc::new(BamContext::new(&contigs)))
+        let contig_lengths: Vec<(String, usize)> = contig_order_in_file
+            .iter()
+            .map(|name| (name.clone(), reference.get(name).unwrap().len()))
+            .collect();
+        Some(Arc::new(BamContext::new(&contig_lengths)))
     } else {
         None
     };
+
+    // Phase 1: Generate MutatedMaps for all contigs
+    info!("Generating mutations for all contigs");
+    let mut all_mutated_maps = HashMap::new();
+    let mut max_del_lens = HashMap::new();
+    for (m_idx, name) in contig_order_in_file.iter().enumerate() {
+        let m_rng = rng.derive_child((m_idx + 1000000) as u64);
+        let seq = reference.get(name).unwrap();
+        let (m_map, max_del) = generate_mutated_map(
+            name,
+            seq,
+            config,
+            &target_bed,
+            &mutation_regions,
+            &input_variants,
+            &mutation_model,
+            default_run_mutation_rate,
+            m_rng,
+        )?;
+        all_mutated_maps.insert(name.clone(), m_map);
+        max_del_lens.insert(name.clone(), max_del);
+    }
+    let shared_mutated_maps = Arc::new(all_mutated_maps);
 
     let ctx = ContigContext {
         config,
         target_bed: &target_bed,
         mutation_regions: &mutation_regions,
-        input_variants: &input_variants,
-        nuc_sub_model: &nuc_sub_model,
-        mutation_model: &mutation_model,
         default_run_mutation_rate,
         fragment_length_model: &fragment_length_model,
         gc_bias_model: &gc_bias_model,
@@ -193,6 +235,9 @@ pub fn run_neat(
         working_dir: working_dir.path(),
         base_rng: *rng,
         bam_context,
+        reference,
+        mutated_maps: shared_mutated_maps,
+        max_del_lens,
     };
 
     let mut mutated_maps: HashMap<String, Vec<MutatedMap>> = HashMap::new();
@@ -205,19 +250,10 @@ pub fn run_neat(
     info!("Generating simulated dataset");
 
     // All contigs processed in parallel; BAM workers each write a temp body file.
-    let fasta = FastaStream::open(&config.reference)?;
-    let parallel_iter = fasta.enumerate().par_bridge().map(
-        |(idx, result)| -> Result<ContigResult, GenerateReadsError> {
-            let (name, raw) = result?;
-            let mut child_rng = ctx.base_rng.derive_child(idx as u64);
-            let (seq, iupac_count) = resolve_iupac_bases(&raw, &mut child_rng)?;
-            if iupac_count > 0 {
-                warn!(
-                    "Contig {}: resolved {} IUPAC ambiguity base(s) to ACGT",
-                    name, iupac_count
-                );
-            }
-            process_contig(idx, name, seq, &ctx, child_rng)
+    let parallel_iter = contig_order_in_file.into_iter().enumerate().par_bridge().map(
+        |(idx, name)| -> Result<ContigResult, GenerateReadsError> {
+            let child_rng = ctx.base_rng.derive_child(idx as u64);
+            process_contig(idx, name, &ctx, child_rng)
         },
     );
     let collected: Result<Vec<ContigResult>, _> = match config.num_threads {
@@ -233,6 +269,14 @@ pub fn run_neat(
     // par_bridge does not preserve order — restore contig order by idx.
     let mut results = collected?;
     results.sort_unstable_by_key(|r| r.idx);
+
+    // Phase 3: Generate chimeric reads for BND junctions
+    if config.produce_fastq || config.produce_bam {
+        let chimeric_rng = ctx.base_rng.derive_child(999999);
+        let chimeric_res = process_chimeric_variants(&ctx, chimeric_rng)?;
+        results.push(chimeric_res);
+    }
+
     for cr in results {
         collect_contig_result(
             cr,
@@ -345,10 +389,19 @@ pub fn run_neat(
 fn process_contig(
     idx: usize,
     contig_name: String,
-    mut sequence: Vec<Nucleotide>,
     ctx: &ContigContext,
     mut rng: NeatRng,
 ) -> Result<ContigResult, GenerateReadsError> {
+    let sequence = ctx
+        .reference
+        .get(&contig_name)
+        .ok_or_else(|| {
+            GenerateReadsError::IoError(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("Contig {} not found in reference", contig_name),
+            ))
+        })?
+        .clone();
     let contig_len = sequence.len();
     debug!("Processing {}", contig_name);
 
@@ -374,7 +427,6 @@ fn process_contig(
         });
     }
 
-    apply_n_substitution(&mut sequence, ctx.nuc_sub_model, &mut rng)?;
     let sequence_map = map_buffer(&sequence);
     let current_block = SequenceBlock {
         contig: contig_name.clone(),
@@ -419,137 +471,31 @@ fn process_contig(
         }
     }
 
-    let mut num_mutations_sum: f64 = rate_segments
-        .iter()
-        .map(|&(s, e, r)| (e - s) as f64 * r)
-        .sum();
-
-    let block_end = contig_len;
-    let mut block_variants: Vec<Variant> = Vec::new();
-    // Symbolic / structural input variants live in their own bucket: they
-    // don't consume mutation budget or flag positions, but they do drive
-    // per-region coverage modulation below and round-trip to the output VCF.
-    let mut sv_variants: Vec<Variant> = Vec::new();
-    if let Some(iv) = ctx.input_variants
-        && let Some(vs) = iv.get(&contig_name)
-    {
-        let mut excluded: Vec<usize> = Vec::new();
-        let mut seen: HashSet<usize> = HashSet::new();
-        for v in vs {
-            let pos0 = v.location.saturating_sub(1);
-            if pos0 >= block_end {
-                continue;
-            }
-            let local_pos = v.location - 1;
-            let mut v2 = v.clone();
-            v2.location = local_pos;
-            if v.alternate.is_symbolic() {
-                sv_variants.push(v2);
-                continue;
-            }
-            if seen.insert(local_pos) {
-                let rate = rate_at(&rate_segments, local_pos);
-                if rate > 0.0 {
-                    num_mutations_sum -= rate;
-                    excluded.push(local_pos);
-                }
-            }
-            block_variants.push(v2);
-        }
-        if !excluded.is_empty() {
-            excluded.sort_unstable();
-            rate_segments = exclude_positions(rate_segments, &excluded);
-        }
-    }
-
-    // De novo SV generation from the learned SvModel, gated by the
-    // config knob. Default `sv_rate_scale` is 0.0, so unless the user
-    // explicitly opts in, this branch is a no-op and behavior is
-    // identical to v1.9.x.
-    if ctx.config.sv_rate_scale > 0.0
-        && let Some(sv_model) = ctx.mutation_model.sv_model.as_ref()
-        && sv_model.is_usable()
-    {
-        let de_novo = sv_model.sample_variants(
-            block_end,
-            &sv_variants,
-            &current_block.sequence,
-            ctx.config.ploidy,
-            ctx.config.sv_rate_scale,
-            &mut rng,
-        );
-        if !de_novo.is_empty() {
-            debug!(
-                "Sampled {} de novo SV(s) on contig {}",
-                de_novo.len(),
-                contig_name
-            );
-        }
-        sv_variants.extend(de_novo);
-    }
-
-    let coverage_multipliers =
-        build_coverage_multipliers(&sv_variants, ctx.config.ploidy, block_end);
-    // Where coverage drops to zero (e.g., a homozygous <DEL>), the bases
-    // aren't actually there — sampling de-novo SNPs in that span would only
-    // pollute the golden VCF with variants that produce no reads. Override
-    // the mutation rate to 0 over those segments and recompute the budget.
-    let mut zeroed = false;
-    for &(s, e, mult) in &coverage_multipliers {
-        if mult == 0.0 && s < e {
-            rate_segments = apply_rate_override(rate_segments, s, e, 0.0);
-            zeroed = true;
-        }
-    }
-    if zeroed {
-        num_mutations_sum = rate_segments
-            .iter()
-            .map(|&(s, e, r)| (e - s) as f64 * r)
-            .sum();
-    }
-
-    debug!(
-        "Seeded {} user variant(s) into contig {}",
-        block_variants.len(),
-        contig_name
-    );
-    let num_mutations = num_mutations_sum.trunc() as usize;
-    debug!(
-        "Adding {} mutations to contig {}",
-        num_mutations, contig_name
-    );
-    let mut max_del_len = 0;
-    for v in &block_variants {
-        if v.variant_type == VariantType::Deletion && v.reference.len() > 1 {
-            max_del_len = max_del_len.max(v.reference.len() - 1);
-        }
-    }
-    if num_mutations > 0 {
-        let result: Option<Vec<Variant>> = generate_variants(
-            &current_block,
-            &rate_segments,
-            ctx.mutation_model,
-            num_mutations,
-            ctx.config.ploidy,
-            &mut rng,
-        )?;
-        if let Some(vec) = result {
-            for variant in vec {
-                if variant.variant_type == VariantType::Deletion
-                    && variant.reference.len() - 1 > max_del_len
-                {
-                    max_del_len = variant.reference.len() - 1;
-                }
-                block_variants.push(variant);
-            }
-        }
-    }
+    let mutated_map = ctx
+        .mutated_maps
+        .get(&contig_name)
+        .ok_or_else(|| {
+            GenerateReadsError::IoError(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("MutatedMap for {} not found", contig_name),
+            ))
+        })?
+        .clone();
+    let max_del_len = *ctx.max_del_lens.get(&contig_name).unwrap_or(&0);
 
     let block_fragments: Vec<(usize, usize)> = {
         let mut block_frags = Vec::new();
-        for (region_start, region_end) in
-            regions_of_interest.into_iter().map(|r| (r.start, r.end))
-        {
+        // SV coverage multipliers are needed here to scale fragment counts.
+        // Even though they are also in MutatedMap, we need them as intervals.
+        let sv_variants: Vec<Variant> = mutated_map
+            .sv_records
+            .iter()
+            .cloned()
+            .collect();
+        let coverage_multipliers =
+            build_coverage_multipliers(&sv_variants, ctx.config.ploidy, contig_len);
+
+        for (region_start, region_end) in regions_of_interest.into_iter().map(|r| (r.start, r.end)) {
             for (sub_start, sub_end, mult) in
                 split_region_by_multipliers(region_start, region_end, &coverage_multipliers)
             {
@@ -592,11 +538,6 @@ fn process_contig(
         }
         block_frags
     };
-
-    // Re-fold symbolic SVs into the variant set so they round-trip to the
-    // output VCF; MutatedMap routes them to sv_records (no per-base flag).
-    block_variants.extend(sv_variants);
-    let mutated_map = MutatedMap::from_interval(0, block_end, block_variants)?;
 
     let mut contig_files_r1: Vec<PathBuf> = Vec::new();
     let mut contig_files_r2: Vec<PathBuf> = Vec::new();
@@ -729,6 +670,513 @@ fn process_contig(
             ad_counter,
         }),
     })
+}
+
+fn generate_mutated_map(
+    contig_name: &str,
+    sequence: &[Nucleotide],
+    config: &RunConfiguration,
+    target_bed: &Option<HashMap<String, Vec<BedRecord>>>,
+    mutation_regions: &Option<HashMap<String, Vec<BedRecord>>>,
+    input_variants: &Option<HashMap<String, Vec<Variant>>>,
+    mutation_model: &MutationModel,
+    default_run_mutation_rate: f64,
+    mut rng: NeatRng,
+) -> Result<(MutatedMap, usize), GenerateReadsError> {
+    let contig_len = sequence.len();
+    if contig_len == 0 {
+        return Ok((
+            MutatedMap::from_interval(0, 0, vec![]).map_err(GenerateReadsError::from)?,
+            0,
+        ));
+    }
+
+    let sequence_map = map_buffer(sequence);
+    let current_block = SequenceBlock {
+        contig: contig_name.to_string(),
+        ref_start: 0,
+        ref_end: contig_len,
+        sequence: sequence.to_vec(),
+        sequence_map,
+    };
+
+    let raw_regions = current_block.get_non_n_regions();
+    let regions_of_interest: Vec<SequenceMap> = if let Some(bed) = target_bed {
+        let contig_beds = bed.get(contig_name).map(|v| v.as_slice()).unwrap_or(&[]);
+        intersect_with_bed(&raw_regions, contig_beds, 0)
+    } else {
+        raw_regions.into_iter().cloned().collect()
+    };
+
+    if regions_of_interest.is_empty() {
+        return Ok((
+            MutatedMap::from_interval(0, contig_len, vec![]).map_err(GenerateReadsError::from)?,
+            0,
+        ));
+    }
+
+    let mut rate_segments: Vec<(usize, usize, f64)> = regions_of_interest
+        .iter()
+        .map(|r| (r.start, r.end, default_run_mutation_rate))
+        .collect();
+
+    if let Some(mut_beds) = mutation_regions
+        && let Some(records) = mut_beds.get(contig_name)
+    {
+        for rec in records {
+            if let Some(custom_rate) = rec.mut_rate {
+                rate_segments = apply_rate_override(rate_segments, rec.start, rec.end, custom_rate);
+            }
+        }
+    }
+
+    let mut num_mutations_sum: f64 = rate_segments
+        .iter()
+        .map(|&(s, e, r)| (e - s) as f64 * r)
+        .sum();
+
+    let mut block_variants: Vec<Variant> = Vec::new();
+    let mut sv_variants: Vec<Variant> = Vec::new();
+    if let Some(iv) = input_variants
+        && let Some(vs) = iv.get(contig_name)
+    {
+        let mut excluded: Vec<usize> = Vec::new();
+        let mut seen: HashSet<usize> = HashSet::new();
+        for v in vs {
+            let pos0 = v.location.saturating_sub(1);
+            if pos0 >= contig_len {
+                continue;
+            }
+            let local_pos = v.location - 1;
+            let mut v2 = v.clone();
+            v2.location = local_pos;
+            if v.alternate.is_symbolic() {
+                sv_variants.push(v2);
+                continue;
+            }
+            if seen.insert(local_pos) {
+                let rate = rate_at(&rate_segments, local_pos);
+                if rate > 0.0 {
+                    num_mutations_sum -= rate;
+                    excluded.push(local_pos);
+                }
+                block_variants.push(v2);
+            }
+        }
+        if !excluded.is_empty() {
+            excluded.sort_unstable();
+            rate_segments = exclude_positions(rate_segments, &excluded);
+        }
+    }
+
+    if config.sv_rate_scale > 0.0
+        && let Some(sv_model) = mutation_model.sv_model.as_ref()
+        && sv_model.is_usable()
+    {
+        let de_novo = sv_model.sample_variants(
+            contig_name,
+            contig_len,
+            &sv_variants,
+            sequence,
+            config.ploidy,
+            config.sv_rate_scale,
+            &mut rng,
+        );
+        sv_variants.extend(de_novo);
+    }
+
+    let coverage_multipliers = build_coverage_multipliers(&sv_variants, config.ploidy, contig_len);
+    let mut zeroed = false;
+    for &(s, e, mult) in &coverage_multipliers {
+        if mult == 0.0 && s < e {
+            rate_segments = apply_rate_override(rate_segments, s, e, 0.0);
+            zeroed = true;
+        }
+    }
+    if zeroed {
+        num_mutations_sum = rate_segments
+            .iter()
+            .map(|&(s, e, r)| (e - s) as f64 * r)
+            .sum();
+    }
+
+    let mut max_del_len = 0;
+    for v in &block_variants {
+        if v.variant_type == VariantType::Deletion && v.reference.len() > 1 {
+            max_del_len = max_del_len.max(v.reference.len() - 1);
+        }
+    }
+
+    let num_mutations = num_mutations_sum.trunc() as usize;
+    if num_mutations > 0 {
+        let result = generate_variants(
+            &current_block,
+            &rate_segments,
+            mutation_model,
+            num_mutations,
+            config.ploidy,
+            &mut rng,
+        )?;
+        if let Some(vec) = result {
+            for variant in vec {
+                if variant.variant_type == VariantType::Deletion
+                    && variant.reference.len() - 1 > max_del_len
+                {
+                    max_del_len = variant.reference.len() - 1;
+                }
+                block_variants.push(variant);
+            }
+        }
+    }
+
+    block_variants.extend(sv_variants);
+    let mutated_map = MutatedMap::from_interval(0, contig_len, block_variants)
+        .map_err(GenerateReadsError::from)?;
+    Ok((mutated_map, max_del_len))
+}
+
+fn process_chimeric_variants(
+    ctx: &ContigContext,
+    mut rng: NeatRng,
+) -> Result<ContigResult, GenerateReadsError> {
+    let mut all_reads = Vec::new();
+    let mut processed_bnds = HashSet::new();
+
+    for (contig_name, m_map) in ctx.mutated_maps.iter() {
+        for sv_rec in &m_map.sv_records {
+            let sv = match sv_rec.alternate.as_symbolic() {
+                Some(s) if s.sv_type == SvType::Bnd => s,
+                _ => continue,
+            };
+
+            let mate_contig = match &sv.mate_contig {
+                Some(c) => c,
+                None => continue,
+            };
+            let mate_pos = match sv.mate_pos {
+                Some(p) => p,
+                None => continue,
+            };
+
+            // BND records come in pairs — each side describes the same
+            // junction from its own contig+position. Canonicalize the
+            // (contig, pos) tuples so the "smaller" side comes first, then
+            // use that as the dedup key. Tuple ordering handles both the
+            // cross-contig case (compare contig names lexicographically)
+            // and the same-contig case (compare positions) uniformly.
+            let here = (contig_name.as_str(), sv_rec.location);
+            let mate = (mate_contig.as_str(), mate_pos);
+            let bnd_id = if here <= mate {
+                (contig_name.clone(), sv_rec.location, mate_contig.clone(), mate_pos)
+            } else {
+                (mate_contig.clone(), mate_pos, contig_name.clone(), sv_rec.location)
+            };
+            if !processed_bnds.insert(bnd_id) {
+                continue;
+            }
+
+            // Coverage model for chimeric BND reads:
+            //   - Homozygous BND: every allele carries the junction, so every
+            //     read covering the breakpoint should be a junction read.
+            //     mult = 1.0 → num_frags = full configured coverage.
+            //   - Heterozygous: half the alleles carry the junction; the
+            //     other half are unbroken reference. mult = 1/ploidy.
+            //
+            // Important caveat: the *regular* per-contig pass also generates
+            // reads covering the breakpoint position (it just reads from the
+            // unbroken reference, oblivious to the BND). For a homozygous
+            // BND this means the breakpoint locus ends up with regular reads
+            // PLUS junction reads — roughly double the true biological
+            // coverage there. For a heterozygous BND it lands closer to
+            // correct (regular pass covers both alleles, chimeric pass adds
+            // 1/ploidy worth of junction reads). A proper fix would teach
+            // the regular pass to skip the broken-allele fraction of reads
+            // at BND positions; tracked as a v2 follow-up.
+            let mult = match sv_rec.genotype {
+                Genotype::Homozygous => 1.0,
+                Genotype::Heterozygous => 1.0 / (ctx.config.ploidy as f64),
+            };
+
+            let num_frags = scale_coverage(ctx.config.coverage, mult);
+            if num_frags == 0 {
+                continue;
+            }
+
+            for frag_idx in 0..num_frags {
+                let rand_val = rng.random().map_err(GenerateReadsError::from)?;
+                let frag_len = ctx.fragment_length_model.generate_fragment(rand_val).map_err(GenerateReadsError::from)? as usize;
+                let offset = rng.range_i64(1, frag_len as i64).map_err(|e| GenerateReadsError::CliError(e))? as usize;
+
+                let (read1, read2) = generate_chimeric_pair(
+                    ctx,
+                    contig_name,
+                    sv_rec.location,
+                    sv,
+                    frag_len,
+                    offset,
+                    frag_idx,
+                    &mut rng,
+                )?;
+                all_reads.push(read1);
+                if let Some(r2) = read2 {
+                    all_reads.push(r2);
+                }
+            }
+        }
+    }
+
+    // Write all chimeric reads to a temp fastq and BAM
+    let contig_name = "chimeric".to_string();
+    let idx = 999999;
+    
+    let mut contig_files_r1 = Vec::new();
+    let mut contig_files_r2 = Vec::new();
+    let mut bam_body_file = None;
+
+    if !all_reads.is_empty() {
+        if ctx.config.produce_fastq {
+            let mut file_to_write_1 = PathBuf::from(ctx.working_dir);
+            file_to_write_1.push("temp_chimeric_r1.fastq.gz");
+            let file1 = append_to_file(&file_to_write_1)?;
+            let writer1 = BufWriter::new(&file1);
+            let mut buffer1 = GzEncoder::new(writer1, Compression::default());
+
+            if ctx.config.paired_ended {
+                let mut file_to_write_2 = PathBuf::from(ctx.working_dir);
+                file_to_write_2.push("temp_chimeric_r2.fastq.gz");
+                let file2 = append_to_file(&file_to_write_2)?;
+                let writer2 = BufWriter::new(&file2);
+                let mut buffer2 = GzEncoder::new(writer2, Compression::default());
+
+                for i in (0..all_reads.len()).step_by(2) {
+                    write_read_to_fastq(&all_reads[i], &mut buffer1).map_err(GenerateReadsError::from)?;
+                    if i + 1 < all_reads.len() {
+                        write_read_to_fastq(&all_reads[i+1], &mut buffer2).map_err(GenerateReadsError::from)?;
+                    }
+                }
+                contig_files_r1.push(file_to_write_1);
+                contig_files_r2.push(file_to_write_2);
+            } else {
+                for read in &all_reads {
+                    write_read_to_fastq(read, &mut buffer1).map_err(GenerateReadsError::from)?;
+                }
+                contig_files_r1.push(file_to_write_1);
+            }
+        }
+        
+        if let Some(bam_ctx) = &ctx.bam_context {
+            let bam_temp_path = PathBuf::from(ctx.working_dir).join("temp_bam_chimeric.bam");
+            let mut writer = BamBodyWriter::new(bam_temp_path.clone(), Arc::clone(bam_ctx))?;
+            for read in &all_reads {
+                writer.stage_read_record(read).map_err(|e| GenerateReadsError::IoError(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+            }
+            // BamBodyWriter::stage_read_record buffers for deferred
+            // coordinate-sorted output. flush_all drains the buffer; without
+            // it, the staged chimeric reads never reach disk. The regular
+            // per-contig path calls flush_all at process_contig's tail; the
+            // chimeric path needs the same.
+            writer.flush_all()?;
+            bam_body_file = Some(bam_temp_path);
+        }
+    }
+
+    Ok(ContigResult {
+        idx,
+        name: contig_name,
+        len: 0,
+        data: Some(ProcessedContigData {
+            mutated_map: MutatedMap::from_interval(0, 0, vec![]).map_err(GenerateReadsError::from)?,
+            r1_files: contig_files_r1,
+            r2_files: contig_files_r2,
+            bam_body_file,
+            ad_counter: AdCounter::new(),
+        }),
+    })
+}
+
+fn generate_chimeric_pair(
+    ctx: &ContigContext,
+    contig: &str,
+    pos: usize,
+    sv: &SvData,
+    frag_len: usize,
+    offset: usize,
+    frag_idx: usize,
+    rng: &mut NeatRng,
+) -> Result<(ReadRecord, Option<ReadRecord>), GenerateReadsError> {
+    // Offset is where the junction is relative to the start of the fragment.
+    // frag_len = L1 + L2
+    // L1 = offset
+    // L2 = frag_len - offset
+
+    let ((c1, s1, e1, rev1), (c2, s2, e2, rev2)) =
+        get_bnd_pieces(contig, pos, sv, offset, frag_len - offset, ctx)?;
+
+    let seq1 = get_stitched_sequence(ctx, &c1, s1, e1, rev1, &c2, s2, e2, rev2, rng)?;
+
+    let read_len = ctx.config.read_len;
+    // The trailing 16-hex `frag_idx` matches the uniqueness-tag pattern that
+    // write_block_fastq uses for regular reads (#210). Without it, two
+    // chimeric reads spawned from the same BND (num_frags > 1) would share
+    // a QNAME and Picard MarkDuplicates would drop one as a "PCR duplicate".
+    let base_name = format!(
+        "RNEAT_chimeric_{}_{}_{}_{}_{:016x}",
+        c1, pos, c2, sv.mate_pos.unwrap_or(0), frag_idx,
+    );
+    
+    let quality_scores_1 = ctx.quality_score_model.generate_quality_scores(read_len, rng).map_err(GenerateReadsError::from)?;
+    
+    // Chimeric pairs don't drive AD/DP/AF (BND junction reads are span/
+    // discordant-pair signal, not point-coverage signal). Pass a throwaway
+    // local AdCounter so generate_read still increments somewhere but the
+    // values don't leak into the per-contig counter used by write_vcf.
+    let mut throwaway_ad = AdCounter::new();
+    let r1 = generate_read(
+        &seq1,
+        &[], // Mutations already applied in get_stitched_sequence
+        &HashMap::new(),
+        read_len,
+        format!("{}/1", base_name),
+        Strand::Forward,
+        quality_scores_1,
+        ctx.seq_error_model,
+        rng,
+        c1.clone(),
+        s1,
+        c2.clone(),
+        s2,
+        frag_len as i32,
+        ctx.config.paired_ended,
+        &mut throwaway_ad,
+    ).map_err(GenerateReadsError::from)?;
+
+    let mut r2 = None;
+    if ctx.config.paired_ended {
+        let quality_scores_2 = ctx.quality_score_model.generate_quality_scores(read_len, rng).map_err(GenerateReadsError::from)?;
+        let r2_record = generate_read(
+            &reverse_complement(seq1),
+            &[],
+            &HashMap::new(),
+            read_len,
+            format!("{}/2", base_name),
+            Strand::Reverse,
+            quality_scores_2,
+            ctx.seq_error_model,
+            rng,
+            c2.clone(),
+            s2,
+            c1.clone(),
+            s1,
+            -(frag_len as i32),
+            true,
+            &mut throwaway_ad,
+        ).map_err(GenerateReadsError::from)?;
+        r2 = Some(r2_record);
+    }
+
+    Ok((r1, r2))
+}
+
+fn get_bnd_pieces(
+    contig: &str,
+    pos: usize, // 0-based
+    sv: &SvData,
+    len1: usize,
+    len2: usize,
+    ctx: &ContigContext,
+) -> Result<((String, usize, usize, bool), (String, usize, usize, bool)), GenerateReadsError> {
+    let mate_contig = sv.mate_contig.as_ref().unwrap().clone();
+    let mate_pos = sv.mate_pos.unwrap().saturating_sub(1);
+
+    // BNDs can legitimately point at a contig outside the reference (a real
+    // VCF data quality issue). Surface that as an error rather than silently
+    // producing zero-length sequences via `unwrap_or(0)`.
+    let c1_len = ctx.reference.get(contig).map(|s| s.len()).ok_or_else(|| {
+        GenerateReadsError::CliError(format!(
+            "BND at {contig}:{pos} references its own contig {contig} but that contig is not in the reference"
+        ))
+    })?;
+    let c2_len = ctx.reference.get(&mate_contig).map(|s| s.len()).ok_or_else(|| {
+        GenerateReadsError::CliError(format!(
+            "BND at {contig}:{pos} has mate on contig {mate_contig} but that contig is not in the reference"
+        ))
+    })?;
+
+    Ok(if sv.bnd_join_after {
+        if sv.bnd_mate_extends_right {
+            // Case 1: t[p[ -> REF[..=pos] + MATE[mate_pos..]
+            let s1 = pos.saturating_sub(len1.saturating_sub(1));
+            let e1 = pos + 1;
+            let s2 = mate_pos;
+            let e2 = (mate_pos + len2).min(c2_len);
+            ((contig.to_string(), s1, e1, false), (mate_contig, s2, e2, false))
+        } else {
+            // Case 2: t]p] -> REF[..=pos] + revcomp(MATE[..=mate_pos])
+            let s1 = pos.saturating_sub(len1.saturating_sub(1));
+            let e1 = pos + 1;
+            let e2 = mate_pos + 1;
+            let s2 = e2.saturating_sub(len2);
+            ((contig.to_string(), s1, e1, false), (mate_contig, s2, e2, true))
+        }
+    } else if sv.bnd_mate_extends_right {
+        // Case 3: [p[t -> revcomp(MATE[mate_pos..]) + REF[pos..]
+        let s1 = mate_pos;
+        let e1 = (mate_pos + len1).min(c2_len);
+        let s2 = pos;
+        let e2 = (pos + len2).min(c1_len);
+        ((mate_contig, s1, e1, true), (contig.to_string(), s2, e2, false))
+    } else {
+        // Case 4: ]p]t -> MATE[..=mate_pos] + REF[pos..]
+        let e1 = mate_pos + 1;
+        let s1 = e1.saturating_sub(len1);
+        let s2 = pos;
+        let e2 = (pos + len2).min(c1_len);
+        ((mate_contig, s1, e1, false), (contig.to_string(), s2, e2, false))
+    })
+}
+
+fn get_stitched_sequence(
+    ctx: &ContigContext,
+    c1: &str, s1: usize, e1: usize, rev1: bool,
+    c2: &str, s2: usize, e2: usize, rev2: bool,
+    rng: &mut NeatRng,
+) -> Result<Vec<Nucleotide>, GenerateReadsError> {
+    let mut seq1 = get_mutated_subseq(ctx, c1, s1, e1, rng)?;
+    if rev1 {
+        seq1 = reverse_complement(seq1);
+    }
+    let mut seq2 = get_mutated_subseq(ctx, c2, s2, e2, rng)?;
+    if rev2 {
+        seq2 = reverse_complement(seq2);
+    }
+    seq1.extend(seq2);
+    Ok(seq1)
+}
+
+fn get_mutated_subseq(
+    ctx: &ContigContext,
+    contig: &str,
+    start: usize,
+    end: usize,
+    rng: &mut NeatRng,
+) -> Result<Vec<Nucleotide>, GenerateReadsError> {
+    let ref_seq = ctx.reference.get(contig).ok_or_else(|| GenerateReadsError::IoError(std::io::Error::new(std::io::ErrorKind::NotFound, format!("Contig {} not found", contig))))?;
+    let m_map = ctx.mutated_maps.get(contig).ok_or_else(|| GenerateReadsError::IoError(std::io::Error::new(std::io::ErrorKind::NotFound, format!("MutatedMap for {} not found", contig))))?;
+    
+    let mut seq = Vec::new();
+    for i in start..end {
+        if i >= ref_seq.len() {
+            seq.push(Nucleotide::N);
+            continue;
+        }
+        if m_map.is_flagged(&i) {
+            let variants = m_map.mutate_position(i, rng).map_err(GenerateReadsError::from)?;
+            seq.extend(variants);
+        } else {
+            seq.push(ref_seq[i]);
+        }
+    }
+    Ok(seq)
 }
 
 fn collect_contig_result(

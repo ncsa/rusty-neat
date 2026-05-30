@@ -536,7 +536,7 @@ H1N1_HA\t600\t.\tT\t<DUP>\t60\tPASS\tEND=700\tGT\t1/1\n",
 
     #[test]
     fn test_runner_fits_sv_model_from_sv_rich_vcf() {
-        // Train on a VCF with enough <DEL> / <DUP> / <CNV> observations
+        // Train on a VCF with enough <DEL> / <DUP> / <CNV> / <BND> observations
         // to clear the per-type fit bar. The produced MutationModel must
         // carry a populated sv_model whose distributions match the input
         // counts (within tolerance for the log-normal fit).
@@ -562,7 +562,9 @@ H1N1_HA\t1500\t.\tA\t<DEL>\t60\tPASS\tEND=2000\tGT\t0/1\n\
 H1N1_HA\t2500\t.\tT\t<DUP>\t60\tPASS\tEND=2700\tGT\t1/1\n\
 H1N1_HA\t3000\t.\tT\t<DUP>\t60\tPASS\tEND=3300\tGT\t0/1\n\
 H1N1_HA\t4000\t.\tA\t<CNV>\t60\tPASS\tEND=4500;CN=3\tGT\t1/1\n\
-H1N1_HA\t5000\t.\tA\t<CNV>\t60\tPASS\tEND=5500;CN=0\tGT\t1/1\n",
+H1N1_HA\t5000\t.\tA\t<CNV>\t60\tPASS\tEND=5500;CN=0\tGT\t1/1\n\
+H1N1_HA\t6000\t.\tG\t<BND>\t60\tPASS\t.\tGT\t1/1\n\
+H1N1_HA\t7000\t.\tG\t<BND>\t60\tPASS\t.\tGT\t0/1\n",
         )
         .unwrap();
 
@@ -577,21 +579,27 @@ H1N1_HA\t5000\t.\tA\t<CNV>\t60\tPASS\tEND=5500;CN=0\tGT\t1/1\n",
             .as_ref()
             .expect("sv_model must be populated when all types clear the fit bar");
         assert!(sv.is_usable());
-        // 3 DELs + 2 DUPs + 2 CNVs, all ≥50bp — all three types survive.
-        assert_eq!(sv.type_probabilities.len(), 3);
+        // 3 DELs + 2 DUPs + 2 CNVs + 2 BNDs, all clearing the bar — all four survive.
+        assert_eq!(sv.type_probabilities.len(), 4);
         assert!(sv.type_probabilities.contains_key(&SvType::Del));
         assert!(sv.type_probabilities.contains_key(&SvType::Dup));
         assert!(sv.type_probabilities.contains_key(&SvType::Cnv));
+        assert!(sv.type_probabilities.contains_key(&SvType::Bnd));
         // Each type also has a length distribution.
         assert!(sv.length_log_normal.contains_key(&SvType::Del));
         assert!(sv.length_log_normal.contains_key(&SvType::Dup));
         assert!(sv.length_log_normal.contains_key(&SvType::Cnv));
+        assert!(sv.length_log_normal.contains_key(&SvType::Bnd));
+        // BND length distribution should be fixed at mu=0, sigma=0.
+        let (mu, sigma) = sv.length_log_normal[&SvType::Bnd];
+        assert_eq!(mu, 0.0);
+        assert_eq!(sigma, 0.0);
         // CN distribution: CN=0 and CN=3 each at 1/2.
         assert_eq!(sv.cnv_copy_number_distribution.len(), 2);
         assert!((sv.cnv_copy_number_distribution[&0] - 0.5).abs() < 1e-12);
         assert!((sv.cnv_copy_number_distribution[&3] - 0.5).abs() < 1e-12);
-        // 4 homozygous of 7 records.
-        assert!((sv.homozygous_frequency - 4.0 / 7.0).abs() < 1e-6);
+        // 5 homozygous of 9 records.
+        assert!((sv.homozygous_frequency - 5.0 / 9.0).abs() < 1e-6);
         // Per-base rate is positive and tiny (7 events over ~14kb of
         // H1N1 reference).
         assert!(sv.per_base_rate > 0.0);

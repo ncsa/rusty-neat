@@ -82,6 +82,7 @@ pub enum VariantType {
     Insertion,
     Deletion,
     Complex,
+    BND,
 }
 
 impl From<usize> for VariantType {
@@ -91,6 +92,7 @@ impl From<usize> for VariantType {
             1 => Self::Insertion,
             2 => Self::Deletion,
             3 => Self::Complex,
+            4 => Self::BND,
             _ => panic!("Index out of range!"),
         }
     }
@@ -138,12 +140,28 @@ impl SvType {
                 "CNV" => SvType::Cnv,
                 "INS" => SvType::Ins,
                 "INV" => SvType::Inv,
+                "BND" => SvType::Bnd,
                 _ => SvType::Unknown,
             });
         }
         // Breakend notation contains `[` or `]` and a `:`-separated mate locus.
         if (alt.contains('[') || alt.contains(']')) && alt.contains(':') {
             return Some(SvType::Bnd);
+        }
+        // Single breakends (VCF 4.2 §1.4.2)
+        if alt.contains('.') && !alt.starts_with('<') {
+            // Check if it matches t. or .t where t is a sequence of bases
+            if alt.ends_with('.') {
+                let t = &alt[..alt.len() - 1];
+                if !t.is_empty() && is_acgtn(t) {
+                    return Some(SvType::Bnd);
+                }
+            } else if alt.starts_with('.') {
+                let t = &alt[1..];
+                if !t.is_empty() && is_acgtn(t) {
+                    return Some(SvType::Bnd);
+                }
+            }
         }
         None
     }
@@ -156,7 +174,7 @@ impl SvType {
 /// populates the optional fields from the VCF INFO column via `parse_sv_info`;
 /// other constructors (e.g. `SvData::new`) start them as `None` and let the
 /// caller fill in whatever it has.
-#[derive(Debug, PartialEq, Eq, Clone, Hash)]
+#[derive(Debug, PartialEq, Eq, Clone, Hash, Serialize, Deserialize)]
 pub struct SvData {
     /// The original ALT field, verbatim — used to round-trip back to the
     /// output VCF without re-synthesizing the angle-bracket notation.
@@ -169,6 +187,14 @@ pub struct SvData {
     pub svlen: Option<i64>,
     /// `INFO/CN` if present. Total copy number for `<CNV>` / `<DUP>` records.
     pub copy_number: Option<u32>,
+    /// Mate contig for breakends (BND).
+    pub mate_contig: Option<String>,
+    /// 1-based mate position for breakends (BND).
+    pub mate_pos: Option<usize>,
+    /// For BND: true if the breakend is after the REF base (e.g. t[p[ or t]p]).
+    pub bnd_join_after: bool,
+    /// For BND: true if the mate piece extends to the right ([p[).
+    pub bnd_mate_extends_right: bool,
 }
 
 impl SvData {
@@ -182,6 +208,10 @@ impl SvData {
             end: None,
             svlen: None,
             copy_number: None,
+            mate_contig: None,
+            mate_pos: None,
+            bnd_join_after: false,
+            bnd_mate_extends_right: false,
         }
     }
 
@@ -477,11 +507,25 @@ fn parse_alt_payload(
             };
             sv_data.svlen = parsed_info.svlen;
             sv_data.copy_number = parsed_info.copy_number;
-            // Symbolic SVs share the `Complex` variant_type with literal
+            if matches!(sv_type, SvType::Bnd) {
+                let (m_contig, m_pos, j_after, m_extends_right) = parse_bnd_alt(&sv_data.raw_alt);
+                sv_data.mate_contig = m_contig;
+                sv_data.mate_pos = m_pos;
+                sv_data.bnd_join_after = j_after;
+                sv_data.bnd_mate_extends_right = m_extends_right;
+            }
+            // BND (breakend) variants are classified with VariantType::BND
+            // to allow downstream code to specifically handle them.
+            // Other symbolic SVs share the `Complex` variant_type with literal
             // multi-base substitutions; downstream code distinguishes them
             // by the `AlternateType` enum (literal vs symbolic), not by
             // variant_type.
-            (VariantType::Complex, AlternateType::Symbolic(sv_data))
+            let vt = if matches!(sv_type, SvType::Bnd) {
+                VariantType::BND
+            } else {
+                VariantType::Complex
+            };
+            (vt, AlternateType::Symbolic(sv_data))
         }
     };
     Ok((variant_type, alternate, reference))
@@ -612,6 +656,36 @@ fn sv_type_matches_svtype(sv_type: SvType, svtype_str: &str) -> bool {
         SvType::Unknown => return true,
     };
     svtype_str.eq_ignore_ascii_case(expected)
+}
+
+fn parse_bnd_alt(alt: &str) -> (Option<String>, Option<usize>, bool, bool) {
+    // VCF 4.2 breakend notation (Section 1.4.2)
+    // 4 possible forms involving brackets:
+    // 1. t[p[  2. t]p]  3. ]p]t  4. [p[t
+    // where p is "contig:pos"
+    let bracket_start = alt.find('[').or_else(|| alt.find(']'));
+    let bracket_end = alt.rfind('[').or_else(|| alt.rfind(']'));
+
+    if let (Some(s), Some(e)) = (bracket_start, bracket_end) {
+        if s < e {
+            let p = &alt[s + 1..e];
+            let join_after = s > 0;
+            let bracket = alt.chars().nth(s).unwrap();
+            let mate_extends_right = bracket == '[';
+
+            if let Some((contig, pos_str)) = p.split_once(':') {
+                if let Ok(pos) = pos_str.parse::<usize>() {
+                    return (
+                        Some(contig.to_string()),
+                        Some(pos),
+                        join_after,
+                        mate_extends_right,
+                    );
+                }
+            }
+        }
+    }
+    (None, None, false, false)
 }
 
 fn genotype_to_string(genotype: &mut Vec<usize>) -> Result<String, VariantError> {
@@ -825,14 +899,39 @@ mod tests {
 
     #[test]
     fn parse_alternate_breakend_alt_classifies_as_bnd() {
-        // VCF 4.2 breakend notation like `G]17:198982]` or `]13:123456]T`
-        // routes through SvType::from_alt_string's breakend branch.
-        match parse_alternate("G", "G]17:198982]").unwrap() {
-            ParsedAlt::Symbolic { sv_type, raw_alt } => {
-                assert_eq!(sv_type, SvType::Bnd);
-                assert_eq!(raw_alt, "G]17:198982]");
+        // VCF 4.2 breakend notation (Section 1.4.2)
+        // 4 possible forms:
+        // 1. t[p[ (piece extending to the right of p is joined after t)
+        // 2. t]p] (piece extending to the left of p is joined after t)
+        // 3. ]p]t (piece extending to the left of p is joined before t)
+        // 4. [p[t (piece extending to the right of p is joined before t)
+
+        let cases = vec![
+            ("G", "G]17:198982]", "t]p]"),
+            ("G", "G[17:198982[", "t[p["),
+            ("A", "]13:123456]A", "]p]t"),
+            ("A", "[13:123456[A", "[p[t"),
+            ("GTC", "GTC[2:1000[", "multi-base t [p["),
+            ("G", "G.", "single breakend t."),
+            ("A", ".A", "single breakend .t"),
+            ("A", "]1:100]ATG", "BND with insertion ]p]t"),
+            ("A", "ATG[1:100[", "BND with insertion t[p["),
+        ];
+
+        for (ref_base, alt, desc) in cases {
+            match parse_alternate(ref_base, alt).expect(desc) {
+                ParsedAlt::Symbolic { sv_type, raw_alt } => {
+                    assert_eq!(sv_type, SvType::Bnd, "form {} should be Bnd", desc);
+                    assert_eq!(raw_alt, alt, "form {} raw_alt mismatch", desc);
+                }
+                ParsedAlt::Literal(vt) => {
+                    panic!("expected Symbolic(Bnd) for form {}, got Literal({vt:?})", desc)
+                }
             }
-            ParsedAlt::Literal(vt) => panic!("expected Symbolic(Bnd), got Literal({vt:?})"),
+
+            // Check if VariantType is also BND when fully parsed
+            let (vt, _, _) = parse_alt_payload(100, ".", ref_base, alt).expect(desc);
+            assert_eq!(vt, VariantType::BND, "form {} VariantType mismatch", desc);
         }
     }
 
@@ -842,6 +941,29 @@ mod tests {
         // be rejected — e.g. a malformed bracket-only string.
         let err = parse_alternate("A", "<broken").unwrap_err();
         assert!(matches!(err, VariantError::InvalidVcf(_)));
+    }
+
+    #[test]
+    fn parse_bnd_alt_extracts_mate_info() {
+        assert_eq!(
+            parse_bnd_alt("G]17:198982]"),
+            (Some("17".to_string()), Some(198982), true, false)
+        );
+        assert_eq!(
+            parse_bnd_alt("[chrX:123[A"),
+            (Some("chrX".to_string()), Some(123), false, true)
+        );
+        assert_eq!(
+            parse_bnd_alt("]2:500]T"),
+            (Some("2".to_string()), Some(500), false, false)
+        );
+        assert_eq!(
+            parse_bnd_alt("A[1:100["),
+            (Some("1".to_string()), Some(100), true, true)
+        );
+        // Single breakends have no mate info in brackets
+        assert_eq!(parse_bnd_alt("G."), (None, None, false, false));
+        assert_eq!(parse_bnd_alt(".A"), (None, None, false, false));
     }
 
     #[test]

@@ -253,19 +253,45 @@ write_config "$TUMOR_CONFIG" "$TUMOR_PREFIX" "$TUMOR_COVERAGE" \
 "$RNEAT_BIN" gen-reads -c "$TUMOR_CONFIG"
 
 # ── Merge FASTQs ─────────────────────────────────────────────────────────
-# Gzipped FASTQ files are concatenable as-is — multi-stream gzip is part
-# of the spec and every standard reader (fastp, samtools, MultiGzDecoder,
-# bgzf-aware tools) handles it. cat is the right tool here, not a re-gzip.
+# gen-reads names reads by genomic position (`RNEAT_generated_<contig>_
+# <start>_<end>/<mate>`), so if the normal and tumor passes happen to
+# sample reads at the same start coordinate they get IDENTICAL names. On
+# chr22 at 30× combined coverage we observed ~456k collisions out of
+# ~9.6M reads, which Mutect2 warns about and which Picard MarkDuplicates
+# would silently drop (halving effective coverage at those loci).
+#
+# Fix: stream each per-pass FASTQ through awk and prefix the read name
+# (line 1 of every 4-line record) with `N_` or `T_` before re-bgzipping.
+# Quality lines (line 4) can start with `@` too — that's why we filter
+# by line position within each record, not by leading character.
+prefix_reads() {
+    local in_fq="$1" out_fq="$2" tag="$3"
+    zcat "$in_fq" | awk -v tag="$tag" '
+        NR % 4 == 1 { sub(/^@/, "@" tag "_") }
+        { print }
+    ' | gzip -c > "$out_fq"
+}
+
 NORMAL_R1="${OUTPUT_DIR}/${NORMAL_PREFIX}_r1.fastq.gz"
 TUMOR_R1="${OUTPUT_DIR}/${TUMOR_PREFIX}_r1.fastq.gz"
 MERGED_R1="${OUTPUT_DIR}/${MERGED_PREFIX}_r1.fastq.gz"
-cat "$NORMAL_R1" "$TUMOR_R1" > "$MERGED_R1"
+NORMAL_R1_TAGGED="${OUTPUT_DIR}/${NORMAL_PREFIX}_r1.tagged.fastq.gz"
+TUMOR_R1_TAGGED="${OUTPUT_DIR}/${TUMOR_PREFIX}_r1.tagged.fastq.gz"
+prefix_reads "$NORMAL_R1" "$NORMAL_R1_TAGGED" "N"
+prefix_reads "$TUMOR_R1"  "$TUMOR_R1_TAGGED"  "T"
+cat "$NORMAL_R1_TAGGED" "$TUMOR_R1_TAGGED" > "$MERGED_R1"
+rm -f "$NORMAL_R1_TAGGED" "$TUMOR_R1_TAGGED"
 
 if [[ "$PAIRED_END" == "true" ]]; then
     NORMAL_R2="${OUTPUT_DIR}/${NORMAL_PREFIX}_r2.fastq.gz"
     TUMOR_R2="${OUTPUT_DIR}/${TUMOR_PREFIX}_r2.fastq.gz"
     MERGED_R2="${OUTPUT_DIR}/${MERGED_PREFIX}_r2.fastq.gz"
-    cat "$NORMAL_R2" "$TUMOR_R2" > "$MERGED_R2"
+    NORMAL_R2_TAGGED="${OUTPUT_DIR}/${NORMAL_PREFIX}_r2.tagged.fastq.gz"
+    TUMOR_R2_TAGGED="${OUTPUT_DIR}/${TUMOR_PREFIX}_r2.tagged.fastq.gz"
+    prefix_reads "$NORMAL_R2" "$NORMAL_R2_TAGGED" "N"
+    prefix_reads "$TUMOR_R2"  "$TUMOR_R2_TAGGED"  "T"
+    cat "$NORMAL_R2_TAGGED" "$TUMOR_R2_TAGGED" > "$MERGED_R2"
+    rm -f "$NORMAL_R2_TAGGED" "$TUMOR_R2_TAGGED"
 fi
 
 # ── Merge golden VCFs into a single origin-tagged truth set ─────────────

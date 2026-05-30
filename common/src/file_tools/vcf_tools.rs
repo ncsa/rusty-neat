@@ -14,7 +14,7 @@ use thiserror::Error;
 use crate::file_tools::file_io::{
     create_output_file, is_gzipped_file, read_gzip_lines, read_lines,
 };
-use crate::structs::mutated_map::MutatedMap;
+use crate::structs::mutated_map::{AdCounter, MutatedMap};
 use crate::structs::nucleotides::sequence_array_to_string;
 use crate::structs::variants::{AlternateType, Variant, VariantError};
 
@@ -39,6 +39,7 @@ pub fn write_vcf(
     reference_path: &PathBuf,
     overwrite_output: bool,
     output_vcf: &PathBuf,
+    ad_counters: &HashMap<String, AdCounter>,
 ) -> io::Result<()> {
     // Takes:
     // mutated_maps: A map of contig names keyed to lists of mutated maps holding variants
@@ -48,6 +49,9 @@ pub fn write_vcf(
     // reference_path: The location of the reference file this vcf is showing variants from.
     // overwrite output: Whether to overwrite output for the vcf
     // output_vcf: The PathBuf object with the path to the output file
+    // ad_counters: Per-contig allelic-depth counters from the gen-reads fragment loop.
+    //     Drives FORMAT/AD, FORMAT/DP, FORMAT/AF. Empty (or missing per-contig) is fine —
+    //     variants with no observed coverage emit `.` placeholders.
     // Result:
     // Throws and error if there's a problem, or else returns nothing.
     //
@@ -77,6 +81,20 @@ pub fn write_vcf(
         &mut buffer,
         "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">"
     )?;
+    writeln!(
+        &mut buffer,
+        "##FORMAT=<ID=AD,Number=R,Type=Integer,\
+        Description=\"Allelic depths for the ref and alt alleles in the order listed\">"
+    )?;
+    writeln!(
+        &mut buffer,
+        "##FORMAT=<ID=DP,Number=1,Type=Integer,Description=\"Read depth\">"
+    )?;
+    writeln!(
+        &mut buffer,
+        "##FORMAT=<ID=AF,Number=A,Type=Float,\
+        Description=\"Allele frequency for each alt allele (AD[1] / DP)\">"
+    )?;
     // Add a neat sample column
     writeln!(
         &mut buffer,
@@ -97,6 +115,7 @@ pub fn write_vcf(
     // in collection order; rare in practice and tolerable.
     for contig in contig_order {
         let block_maps = &mutated_maps[contig];
+        let contig_ad = ad_counters.get(contig);
         let mut records: Vec<&Variant> = Vec::new();
         for block_map in block_maps {
             records.extend(block_map.variant_map.values());
@@ -110,10 +129,11 @@ pub fn write_vcf(
                 AlternateType::Symbolic(sv) => sv.raw_alt.clone(),
             };
             let prov = variant.provenance.as_str();
-            // Symbolic records preserve any pre-existing INFO (SVLEN / END /
-            // CN / SVTYPE) and append NEAT_PROVENANCE. Literal records have
-            // no upstream INFO, so just emit NEAT_PROVENANCE alone.
-            let info_str = if variant.alternate.is_symbolic() {
+            let is_symbolic = variant.alternate.is_symbolic();
+            // INFO: symbolic records preserve any pre-existing INFO (SVLEN / END /
+            // CN / SVTYPE) and append NEAT_PROVENANCE. Literal records have no
+            // upstream INFO, so just emit NEAT_PROVENANCE alone.
+            let info_str = if is_symbolic {
                 match variant.info.as_deref() {
                     None | Some(".") | Some("") => format!("NEAT_PROVENANCE={prov}"),
                     Some(existing) => format!("{existing};NEAT_PROVENANCE={prov}"),
@@ -121,14 +141,37 @@ pub fn write_vcf(
             } else {
                 format!("NEAT_PROVENANCE={prov}")
             };
+            // SAMPLE: for literal variants, AD/DP/AF come from the per-contig
+            // counter populated by the gen-reads fragment loop; positions with
+            // no observed coverage emit DP=0, AD=0,0, AF=`.`. Symbolic SVs use
+            // span-based depth semantics that don't fit a point-based counter,
+            // so they emit `.` placeholders to keep FORMAT consistent across
+            // all records.
+            let sample_str = if is_symbolic {
+                format!("{}:.,.:.:.", variant.genotype_str)
+            } else {
+                let (ref_count, alt_count) = contig_ad
+                    .and_then(|c| c.get(&variant.location).copied())
+                    .unwrap_or((0, 0));
+                let depth = ref_count + alt_count;
+                let af_str = if depth > 0 {
+                    format!("{:.4}", alt_count as f64 / depth as f64)
+                } else {
+                    ".".to_string()
+                };
+                format!(
+                    "{}:{},{}:{}:{}",
+                    variant.genotype_str, ref_count, alt_count, depth, af_str
+                )
+            };
             let line = format!(
-                "{}\t{}\t.\t{}\t{}\t37\tPASS\t{}\tGT\t{}",
+                "{}\t{}\t.\t{}\t{}\t37\tPASS\t{}\tGT:AD:DP:AF\t{}",
                 contig,
                 variant.location + 1,
                 sequence_array_to_string(&variant.reference),
                 alt_str,
                 info_str,
-                variant.genotype_str,
+                sample_str,
             );
             writeln!(&mut buffer, "{}", line)?;
         }
@@ -405,6 +448,7 @@ mod tests {
             &reference_path,
             false,
             &output_filename,
+            &HashMap::new(),
         );
         result.unwrap();
         assert!(output_filename.exists());
@@ -434,19 +478,17 @@ mod tests {
         );
 
         // Both variant lines must be present (HashMap iteration order is non-deterministic).
-        // Variants from `Variant::new` carry `Provenance::Denovo`, which the writer
-        // surfaces as `INFO/NEAT_PROVENANCE=denovo`.
+        // Variants from `Variant::new` carry `Provenance::Denovo` (→ INFO/NEAT_PROVENANCE=denovo)
+        // and an empty ad_counter means no reads were simulated (→ AD=0,0 DP=0 AF=`.`).
         assert!(
-            lines
-                .iter()
-                .any(|l| l == "chr1\t4\t.\tA\tG\t37\tPASS\tNEAT_PROVENANCE=denovo\tGT\t0/1"),
+            lines.iter().any(|l| l
+                == "chr1\t4\t.\tA\tG\t37\tPASS\tNEAT_PROVENANCE=denovo\tGT:AD:DP:AF\t0/1:0,0:0:."),
             "missing het SNP line; got: {:?}",
             lines
         );
         assert!(
-            lines
-                .iter()
-                .any(|l| l == "chr1\t8\t.\tT\tG\t37\tPASS\tNEAT_PROVENANCE=denovo\tGT\t1/1"),
+            lines.iter().any(|l| l
+                == "chr1\t8\t.\tT\tG\t37\tPASS\tNEAT_PROVENANCE=denovo\tGT:AD:DP:AF\t1/1:0,0:0:."),
             "missing hom SNP line; got: {:?}",
             lines
         );
@@ -505,6 +547,7 @@ mod tests {
             &PathBuf::from("ref.fa"),
             false,
             &output_path,
+            &HashMap::new(),
         )
         .unwrap();
 
@@ -724,6 +767,7 @@ chr1\t150\t.\tG\t<DEL>\t60\tPASS\tSVTYPE=DEL;END=300\tGT\t1/1\n";
             &PathBuf::from("ref.fa"),
             false,
             &output,
+            &HashMap::new(),
         )
         .unwrap();
         let body: Vec<String> = crate::file_tools::file_io::read_gzip_lines(&output)
@@ -914,18 +958,103 @@ chr1\t100\t.\tN\t<DEL>\t60\tPASS\tSVTYPE=DEL;END=500\n";
             &PathBuf::from("ref.fa"),
             false,
             &output_path,
+            &HashMap::new(),
         )
         .unwrap();
         let lines: Vec<String> = crate::file_tools::file_io::read_gzip_lines(&output_path)
             .unwrap()
             .map(|l| l.unwrap())
             .collect();
+        // Symbolic SVs use span-based depth semantics that don't fit the
+        // point-based AD/DP/AF counter — they emit `.` placeholders. The
+        // `Provenance::Denovo` constructor on the test fixture surfaces as
+        // INFO/NEAT_PROVENANCE=denovo.
         assert!(
-            lines.iter().any(
-                |l| l == "chr1\t100\t.\tA\t<DEL>\t37\tPASS\tNEAT_PROVENANCE=denovo\tGT\t0/1"
-            ),
-            "expected symbolic ALT to round-trip as `<DEL>` with denovo provenance; got: {:?}",
+            lines.iter().any(|l| l
+                == "chr1\t100\t.\tA\t<DEL>\t37\tPASS\tNEAT_PROVENANCE=denovo\tGT:AD:DP:AF\t0/1:.,.:.:."),
+            "expected symbolic ALT to round-trip as `<DEL>` with denovo provenance and `.` AD/DP/AF; got: {:?}",
             lines
+        );
+    }
+
+    /// When the per-contig AdCounter has real (ref_count, alt_count) values
+    /// at a variant's position, the writer must surface them as AD = a,b,
+    /// DP = a+b, AF = b/(a+b) rounded to 4 decimal places. After the #185
+    /// merge, every literal record also carries `NEAT_PROVENANCE=denovo`
+    /// (since `Variant::new` is the de-novo constructor).
+    #[test]
+    fn test_write_vcf_emits_ad_dp_af_from_counter() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let v_het = Variant::new(
+            VariantType::SNP,
+            10,
+            &vec![Nucleotide::A],
+            &vec![Nucleotide::G],
+            &mut vec![0, 1],
+        )
+        .unwrap();
+        let v_hom = Variant::new(
+            VariantType::SNP,
+            20,
+            &vec![Nucleotide::C],
+            &vec![Nucleotide::T],
+            &mut vec![1, 1],
+        )
+        .unwrap();
+        let map = MutatedMap::from_interval(0, 100, vec![v_het, v_hom]).unwrap();
+        let mut maps = HashMap::new();
+        maps.insert("chr1".to_string(), vec![map]);
+
+        // Stub AdCounter: het pos=10 → 18 ref, 12 alt (AF=0.4); hom pos=20 → 0,30 (AF=1.0)
+        let mut ad_chr1: AdCounter = HashMap::new();
+        ad_chr1.insert(10, (18, 12));
+        ad_chr1.insert(20, (0, 30));
+        let mut ad_counters = HashMap::new();
+        ad_counters.insert("chr1".to_string(), ad_chr1);
+
+        let output = temp_dir.path().join("ad_dp_af.vcf");
+        write_vcf(
+            &maps,
+            &vec!["chr1".to_string()],
+            &HashMap::from([("chr1".to_string(), 100usize)]),
+            &PathBuf::from("ref.fa"),
+            false,
+            &output,
+            &ad_counters,
+        )
+        .unwrap();
+        let lines: Vec<String> = crate::file_tools::file_io::read_gzip_lines(&output)
+            .unwrap()
+            .map(|l| l.unwrap())
+            .collect();
+
+        // Het: position 11 (1-based), AD=18,12, DP=30, AF=0.4000
+        assert!(
+            lines.iter().any(|l| l
+                == "chr1\t11\t.\tA\tG\t37\tPASS\tNEAT_PROVENANCE=denovo\tGT:AD:DP:AF\t0/1:18,12:30:0.4000"),
+            "missing het record with AD=18,12 DP=30 AF=0.4000; got: {:?}",
+            lines
+        );
+        // Hom: position 21 (1-based), AD=0,30, DP=30, AF=1.0000
+        assert!(
+            lines.iter().any(|l| l
+                == "chr1\t21\t.\tC\tT\t37\tPASS\tNEAT_PROVENANCE=denovo\tGT:AD:DP:AF\t1/1:0,30:30:1.0000"),
+            "missing hom record with AD=0,30 DP=30 AF=1.0000; got: {:?}",
+            lines
+        );
+
+        // Header lines must declare the three new FORMAT fields.
+        assert!(
+            lines.iter().any(|l| l.starts_with("##FORMAT=<ID=AD,")),
+            "missing AD header"
+        );
+        assert!(
+            lines.iter().any(|l| l.starts_with("##FORMAT=<ID=DP,")),
+            "missing DP header"
+        );
+        assert!(
+            lines.iter().any(|l| l.starts_with("##FORMAT=<ID=AF,")),
+            "missing AF header"
         );
     }
 
@@ -965,16 +1094,17 @@ chr1\t100\t.\tN\t<DEL>\t60\tPASS\tSVTYPE=DEL;END=500\n";
             &PathBuf::from("ref.fa"),
             false,
             &output_path,
+            &HashMap::new(),
         )
         .unwrap();
         let lines: Vec<String> = crate::file_tools::file_io::read_gzip_lines(&output_path)
             .unwrap()
             .map(|l| l.unwrap())
             .collect();
+        // Empty ad_counter → AD=0,0 DP=0 AF=`.`.
         assert!(
-            lines
-                .iter()
-                .any(|l| l == "chr1\t50\t.\tA\tG\t37\tPASS\tNEAT_PROVENANCE=input\tGT\t0/1"),
+            lines.iter().any(|l| l
+                == "chr1\t50\t.\tA\tG\t37\tPASS\tNEAT_PROVENANCE=input\tGT:AD:DP:AF\t0/1:0,0:0:."),
             "expected NEAT_PROVENANCE=input on InputVcf literal; got: {:?}",
             lines
         );
@@ -1022,15 +1152,19 @@ chr1\t100\t.\tN\t<DEL>\t60\tPASS\tSVTYPE=DEL;END=500\n";
             &PathBuf::from("ref.fa"),
             false,
             &output_path,
+            &HashMap::new(),
         )
         .unwrap();
         let lines: Vec<String> = crate::file_tools::file_io::read_gzip_lines(&output_path)
             .unwrap()
             .map(|l| l.unwrap())
             .collect();
+        // Symbolic SVs always emit `.,.:.:.` for AD/DP/AF (span-based depth,
+        // not point-based). Existing INFO must survive with NEAT_PROVENANCE
+        // appended.
         assert!(
             lines.iter().any(|l| l == "chr1\t200\t.\tA\t<DEL>\t37\tPASS\t\
-                 SVTYPE=DEL;END=300;SVLEN=-100;NEAT_PROVENANCE=input\tGT\t1/1"),
+                 SVTYPE=DEL;END=300;SVLEN=-100;NEAT_PROVENANCE=input\tGT:AD:DP:AF\t1/1:.,.:.:."),
             "expected SVTYPE/END/SVLEN to survive with NEAT_PROVENANCE appended; got: {:?}",
             lines
         );
@@ -1086,6 +1220,7 @@ chr1\t100\t.\tN\t<DEL>\t60\tPASS\tSVTYPE=DEL;END=500\n";
             &PathBuf::from("ref.fa"),
             false,
             &output,
+            &HashMap::new(),
         )
         .unwrap();
 

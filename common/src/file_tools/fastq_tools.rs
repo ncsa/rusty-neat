@@ -20,7 +20,7 @@ use crate::models::quality_scores::QualityScoreModel;
 use crate::models::sequencing_error_model::{
     SeqModelError, SequencingErrorModel, SequencingErrorType,
 };
-use crate::structs::mutated_map::{MutatedMap, MutatedMapError};
+use crate::structs::mutated_map::{AdCounter, MutatedMap, MutatedMapError};
 use crate::structs::nucleotides::Nucleotide;
 use crate::structs::nucleotides::Nucleotide::N;
 use crate::structs::read_record::ReadRecord;
@@ -92,6 +92,7 @@ pub fn write_block_fastq<T: Write, W: Write>(
     sequencing_error_model: &SequencingErrorModel,
     rng: &mut NeatRng,
     mut bam_writer: Option<&mut dyn BamRecordStager>,
+    ad_counter: &mut AdCounter,
 ) -> Result<(), FastqToolsError> {
     debug!("writing reads for {}", sequence_block.contig);
     // For SE reads, fragment_length == read_length exactly.  Sequencing-error deletions advance
@@ -165,6 +166,7 @@ pub fn write_block_fastq<T: Write, W: Write>(
             r2_start,
             tlen,
             paired_ended,
+            ad_counter,
         ) {
             Ok(record) => record,
             Err(FastqToolsError::TruncatedRead(msg)) => {
@@ -202,6 +204,7 @@ pub fn write_block_fastq<T: Write, W: Write>(
                 abs_start,
                 tlen_r2,
                 true,
+                ad_counter,
             ) {
                 Ok(record) => record,
                 Err(FastqToolsError::TruncatedRead(msg)) => {
@@ -275,6 +278,7 @@ fn generate_read(
     mate_position: usize,
     template_length: i32,
     is_paired: bool,
+    ad_counter: &mut AdCounter,
 ) -> Result<ReadRecord, FastqToolsError> {
     if sequence.len() < read_length {
         return Err(FastqToolsError::TruncatedRead(format!("{:?}", sequence)));
@@ -310,6 +314,7 @@ fn generate_read(
                 variant.alternate.is_literal(),
                 "symbolic ALT reached generate_read at position {fragment_position}"
             );
+            let entry = ad_counter.entry(variant.location).or_insert((0, 0));
             if (variant.genotype == Genotype::Homozygous) || (rng.random()? < 0.5) {
                 base_to_write = match read_strand {
                     Strand::Forward => variant.alternate
@@ -323,6 +328,9 @@ fn generate_read(
                         .map(|b| b.complement())
                         .collect(),
                 };
+                entry.1 += 1; // alt
+            } else {
+                entry.0 += 1; // ref (het coin landed on ref)
             }
         } else {
             let score = quality_scores[quality_index];
@@ -496,6 +504,7 @@ mod tests {
             0,
             0,
             false,
+            &mut AdCounter::new(),
         )
         .unwrap();
         let mut buffer = GzEncoder::new(&mut temp_writer, Compression::default());
@@ -590,6 +599,7 @@ mod tests {
             &seq_err_model,
             &mut rng,
             None,
+            &mut AdCounter::new(),
         )
         .unwrap();
         buf1.finish().unwrap();
@@ -665,6 +675,7 @@ mod tests {
             0,
             0,
             false,
+            &mut AdCounter::new(),
         )
         .unwrap();
         assert_eq!(record.sequence.len(), read_length);
@@ -700,6 +711,7 @@ mod tests {
             0,
             0,
             false,
+            &mut AdCounter::new(),
         )
         .unwrap();
         let mi = record
@@ -711,6 +723,65 @@ mod tests {
         assert_eq!(record.sequence.len(), read_length);
         assert_eq!(mi, read_length, "M+I must equal read_length");
         assert_eq!(record.cigar_ops.len(), mi + d, "cigar len must equal M+I+D");
+    }
+
+    /// Counter behaviour: a homozygous SNP should drive alt_count up and
+    /// leave ref_count at 0 across many reads; a heterozygous SNP should split
+    /// roughly 50/50 around the half-point of N reads. Together these pin the
+    /// AdCounter increments in generate_read at the coin-flip site.
+    #[test]
+    fn test_generate_read_counter_homozygous_all_alt() {
+        let sequence = make_sequence(30);
+        let read_length = 10;
+        let hom_snp =
+            Variant::new(VariantType::SNP, 5, &vec![T], &vec![C], &mut vec![1, 1]).unwrap();
+        let variant_map = HashMap::from([(5usize, &hom_snp)]);
+        let quality_scores = vec![40usize; read_length];
+        let model = SequencingErrorModel::default().unwrap();
+        let mut rng = NeatRng::new_from_seed(&vec!["hom".to_string()]).unwrap();
+        let mut ad: AdCounter = HashMap::new();
+        for i in 0..50 {
+            let _ = generate_read(
+                &sequence, &[5], &variant_map, read_length, format!("r{i}/1"),
+                Strand::Forward, quality_scores.clone(), &model, &mut rng,
+                "chr1".to_string(), 0, "chr1".to_string(), 0, 0, false, &mut ad,
+            )
+            .unwrap();
+        }
+        let (refs, alts) = ad[&5];
+        assert_eq!(refs, 0, "homozygous SNP must produce zero ref reads");
+        assert_eq!(alts, 50, "homozygous SNP must produce all alt reads");
+    }
+
+    #[test]
+    fn test_generate_read_counter_heterozygous_splits_around_half() {
+        let sequence = make_sequence(30);
+        let read_length = 10;
+        let het_snp =
+            Variant::new(VariantType::SNP, 5, &vec![T], &vec![C], &mut vec![0, 1]).unwrap();
+        let variant_map = HashMap::from([(5usize, &het_snp)]);
+        let quality_scores = vec![40usize; read_length];
+        let model = SequencingErrorModel::default().unwrap();
+        let mut rng = NeatRng::new_from_seed(&vec!["het".to_string()]).unwrap();
+        let mut ad: AdCounter = HashMap::new();
+        let n = 1000;
+        for i in 0..n {
+            let _ = generate_read(
+                &sequence, &[5], &variant_map, read_length, format!("r{i}/1"),
+                Strand::Forward, quality_scores.clone(), &model, &mut rng,
+                "chr1".to_string(), 0, "chr1".to_string(), 0, 0, false, &mut ad,
+            )
+            .unwrap();
+        }
+        let (refs, alts) = ad[&5];
+        assert_eq!(refs + alts, n, "every read should increment exactly one slot");
+        // Binomial(1000, 0.5) → 99.99% CI is well within [400, 600]
+        assert!(
+            (400..600).contains(&(refs as usize)),
+            "het split should be roughly 50/50 ({}/1000 ref, {} alt)",
+            refs,
+            alts
+        );
     }
 
     #[test]
@@ -739,6 +810,7 @@ mod tests {
             0,
             0,
             false,
+            &mut AdCounter::new(),
         )
         .unwrap();
         assert_eq!(record.cigar_ops.len(), read_length);
@@ -782,6 +854,7 @@ mod tests {
             0,
             0,
             false,
+            &mut AdCounter::new(),
         )
         .unwrap();
         let i_count = record.cigar_ops.iter().filter(|&&c| c == 'I').count();
@@ -820,6 +893,7 @@ mod tests {
             0,
             0,
             false,
+            &mut AdCounter::new(),
         )
         .unwrap();
         assert!(
@@ -862,6 +936,7 @@ mod tests {
             0,
             0,
             false,
+            &mut AdCounter::new(),
         )
         .unwrap();
         let mi = record
@@ -920,6 +995,7 @@ mod tests {
             0,
             0,
             false,
+            &mut AdCounter::new(),
         );
         assert!(result.is_ok());
     }
@@ -972,6 +1048,7 @@ mod tests {
             &seq_err_model,
             &mut rng,
             stager,
+            &mut AdCounter::new(),
         )
         .unwrap();
     }

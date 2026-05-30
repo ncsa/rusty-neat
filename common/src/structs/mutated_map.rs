@@ -158,7 +158,7 @@ mod tests {
 
     #[test]
     fn test_from_interval_routes_symbolic_to_sv_records() {
-        use crate::structs::variants::{AlternateType, SvData, SvType};
+        use crate::structs::variants::{AlternateType, Provenance, SvData, SvType};
         let snp =
             Variant::new(VariantType::SNP, 50, &vec![A], &vec![G], &mut vec![1, 1]).unwrap();
         let sv = Variant {
@@ -174,6 +174,7 @@ mod tests {
             info: None,
             format: Vec::new(),
             sample: Vec::new(),
+            provenance: Provenance::Denovo,
         };
         let map = MutatedMap::from_interval(0, 200, vec![snp, sv]).unwrap();
         // SNP flags position 50; symbolic SV does NOT flag position 100.
@@ -189,7 +190,7 @@ mod tests {
         // Defensive: from_interval routes symbolic ALTs to sv_records, but if
         // a future change leaks one into variant_map, mutate_position must not
         // panic on as_literal().unwrap() — it should fall back to reference.
-        use crate::structs::variants::{AlternateType, SvData, SvType};
+        use crate::structs::variants::{AlternateType, Provenance, SvData, SvType};
         use std::collections::HashMap;
         let sv = Variant {
             variant_type: VariantType::Complex,
@@ -204,6 +205,7 @@ mod tests {
             info: None,
             format: Vec::new(),
             sample: Vec::new(),
+            provenance: Provenance::Denovo,
         };
         let mut variant_map = HashMap::new();
         variant_map.insert(75usize, sv);

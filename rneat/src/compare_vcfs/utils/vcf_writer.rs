@@ -132,7 +132,7 @@ mod tests {
         nucleotides::Nucleotide,
         variants::{Genotype, VariantType},
     };
-    use common::structs::variants::AlternateType;
+    use common::structs::variants::{AlternateType, Provenance};
 
     fn snp_with(loc: usize, info: Option<&str>) -> Variant {
         Variant {
@@ -148,6 +148,7 @@ mod tests {
             info: info.map(str::to_string),
             format: Vec::new(),
             sample: Vec::new(),
+            provenance: Provenance::Denovo,
         }
     }
 

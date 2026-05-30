@@ -61,7 +61,7 @@ Each component maps to a sub-ticket of #129:
 |---|---|---|---|
 | Source tumor training corpus | **#183** | Medium | Two adapters shipped: TCGA MC3 MAF (open) and COSMIC GenomeScreensMutant VCF (academic) |
 | Orchestration script (`tools/cancer_simulate.sh`) | **#184** | Low | Ports NEAT 2.1's `simulate.sh` idiom |
-| Variant-origin annotation in golden VCF | **#185** | Medium | `INFO/NEAT_ORIGIN={germline,somatic,shared}` |
+| Variant-origin annotation in golden VCF | **#185** | Medium | gen-reads emits `INFO/NEAT_PROVENANCE={denovo,input}`; `cancer_simulate.sh` resolves to `INFO/NEAT_ORIGIN={germline,somatic,shared}` via post-merge |
 | Train v1 tumor models | **#186** | Low (per tissue) | Run `gen-mut-model` on the chosen corpus. Likely BRCA / SKCM / LUAD |
 
 #184 can develop in parallel with #183 using a hand-rolled or NEAT-2.1-recovered model as a stand-in. #186 blocks on #183 (data) but not on anything else.
@@ -124,7 +124,7 @@ The cancer MVP's credibility depends on rneat being able to generate the SVs tha
 2. **#183** — survey + commit to a tumor training corpus. Shipped: TCGA MC3 MAF adapter (`tools/fetch_tumor_corpus.sh`) and COSMIC GenomeScreensMutant VCF adapter (`tools/fetch_cosmic_corpus.sh`).
 3. **#184** — orchestration script. Can develop in parallel with #183 using a stand-in tumor model.
 4. **#186** — train initial tumor models from the chosen corpus.
-5. **#185** — variant-origin annotation in the merged truth VCF.
+5. **#185** — variant-origin annotation in the merged truth VCF. **Shipped:** every golden VCF now carries `INFO/NEAT_PROVENANCE` (`denovo` for sampled variants, `input` for those carried through from `input_vcf:`). `tools/cancer_simulate.sh` resolves these to `INFO/NEAT_ORIGIN` (`germline`/`somatic`/`shared`) via a `bcftools isec` post-merge — see the script's "Merge golden VCFs" section.
 
 **Exit criterion:** running the orchestration script with reasonable defaults produces a merged FASTQ that a current somatic SNV caller (Mutect2 or Strelka) calls into a VCF that scores reasonably well against the origin-tagged truth.
 

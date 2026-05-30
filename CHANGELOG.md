@@ -1,5 +1,49 @@
 5/30/2026
 =========
+## rneat v1.12.0
+
+### Minor release: stage-2 cancer-SV credibility — BND, INV, de novo INS
+
+Closes the three foundational SV gaps that v1.11's cancer MVP couldn't yet generate. With these shipped, the rneat simulator covers the structural axis that most clinically-recognizable cancer SVs depend on: BCR-ABL / PML-RARA / EWSR1-FLI1 translocations (#187 BND), inv(16) AML / inv(3) MDS inversions (#188 INV), and L1 / Alu / SVA mobile-element insertions (#190 INS).
+
+End-to-end verified on a synthetic 5 kb fixture with `sv_rate_scale=50.0` plus an input VCF carrying one BND pair and one INV: 125 BND records + 1 INV + 138 de novo literal-INS records in the output VCF, with ~2,245 BND-chimeric + 60 INV-chimeric reads in the FASTQ. The first de novo INS's 20-mer prefix appears 35× in the FASTQ — confirming the inserted bases actually reach the simulated reads, not just the truth VCF.
+
+#### #187 — De novo `<BND>` translocations with junction reads (PR #198)
+- **`SvModel` learns and samples `<BND>` records.** BND records bypass the 50 bp SV-length minimum (junction variants are conceptually 1 bp); `gen-mut-model` fits the frequency and genotype distribution from training VCFs; `gen-reads` samples and emits BND records when `sv_rate_scale > 0`.
+- **Junction reads via a new chimeric-pair path.** `process_chimeric_variants` → `generate_chimeric_pair` → `get_bnd_pieces` + `get_stitched_sequence` synthesizes chimeric read pairs that span both sides of the breakend, correctly reverse-complementing per VCF 4.2 breakend orientation (the four `t[p[`, `t]p]`, `[p[t`, `]p]t` forms).
+- **Paired-BND deduplication.** Canonical-ID HashSet keyed by `format!("BND_{:?}", (min_contig, min_pos, max_contig, max_pos))` ensures each junction is processed exactly once even though VCFs encode it from both sides.
+
+#### #188 — `<INV>` inversions with read-strand flipping (PR #200)
+- **Two-junction chimeric model.** Each de novo INV generates reads spanning BOTH breakpoints (start of inversion + end of inversion), each junction independently sampling `num_frags` fragments. `generate_inv_pair` + `get_inv_pieces` handle the orientation flipping: `REF[..POS-1] | RC(REF[POS..END])` at junction 1, `RC(REF[POS..END]) | REF[END+1..]` at junction 2.
+- **Smarter fragment-length sampling.** Paired-end mode uses attempt-bounded retries for minimum length; single-end uses `read_len + 32 bp` padding so sequencing-error deletions don't truncate the read. Applied to BND too.
+- **Graceful `TruncatedRead` handling.** Edge-case junctions that exhaust the available sequence are logged and skipped rather than aborting the whole simulation.
+
+#### #190 — De novo `<INS>` with novel-sequence generation (PR #216)
+- **Literal-Insertion representation, not symbolic.** De novo INS records are emitted as `REF="A"`, `ALT="A<novel-bases>"` — the same shape Manta / DELLY produce when they resolve the inserted sequence. Routes through gen-reads' existing literal-insertion machinery; the novel bases appear in fragment-loop reads at the locus through the existing per-base coin-flip.
+- **Composition-weighted novel sequence.** New helper `sample_novel_insertion_bases` draws each base from the single-base composition of a ±250 bp window around the anchor. Falls back to uniform ACGT for all-N regions. Trinucleotide-context sampling is a deferred refinement.
+
+#### Behavioral changes — read before upgrading
+- **`gen-reads` now generates BND / INV chimeric reads when `sv_rate_scale > 0`** AND the SvModel has BND / INV in its type pool. The bundled gnomAD-SV-derived `default_sv_model()` does **not** include BND or INV (they were filtered out of the gnomAD-SV training corpus). Users wanting these in default runs must either train a model from a corpus that includes them (e.g. PCAWG consensus calls) or supply BND / INV records via `input_vcf:` for round-trip.
+- **De novo `<INS>` is now a literal-ALT Insertion record.** Pre-v1.12.0 the model picked INS as a type but emitted a symbolic `<INS>` with no allele. Output VCFs from v1.11.x with de novo INS records will look different in v1.12.0 (resolved sequence in REF/ALT instead of empty symbolic).
+- **Chimeric read QNAMEs carry a `junction` tag and a `frag_idx` 16-hex tag** so reads from the same BND / INV at the same fragment iteration don't collide. Anything pattern-matching the read-name format needs updating to handle `RNEAT_chimeric_<c1>_<pos>_<c2>_<mate>_<16-hex>/<mate-id>` (BND) and `RNEAT_chimeric_INV_<contig>_<pos>_<end>_<junction>_<16-hex>/<mate-id>` (INV).
+- **`gen-mut-model` now fits and emits BND / INV components** in trained models. Existing v1.11.x trained models still load — the BND/INV fields are absent so `gen-reads` won't generate those types unless the model is retrained.
+
+#### Known limitations
+Restated for v1.12.0 (carried over from earlier releases unless marked):
+- **BND / INV breakpoint double-counting.** The regular per-contig pass still generates reads covering BND / INV breakpoint positions (reading from the unbroken reference), so the breakpoint locus ends up with regular reads PLUS junction reads — roughly 2× coverage for homozygous variants, closer to correct for heterozygous. A proper fix would teach the regular pass to skip the broken-allele fraction at these positions; deferred to v2.
+- **Symbolic SVs emit `.,.:.:.` for FORMAT/AD/DP/AF.** That set just got bigger — BND and INV are symbolic and use the placeholder shape. INS is now literal and gets real counts, so the FORMAT field is asymmetric across SV types.
+- **No mobile-element library for de novo INS.** Insertions are random novel sequence weighted by local composition, not drawn from L1 / Alu / SVA / HERV consensus. The library-driven path is a #190 v2 extension.
+- **Viral-integration simulation is out of scope.** HPV / HBV / EBV integration into the host reference needs its own design (a viral FASTA as an optional input, chunked-integration sampler).
+- **Per-tissue tumor models still pending (#202).** Both training adapters (MC3, COSMIC) produce pan-cancer corpora.
+- **Cancer-specific SvModel defaults.** Bundled `default_sv_model()` is still gnomAD-SV-derived (germline). PCAWG-derived cancer defaults would be the natural complement; tracked at the v2 follow-up.
+
+#### Tests
+- 327 lib + 223 binary unit tests pass.
+- Per-feature integration tests: `rneat/tests/bnd_fastq.rs`, `rneat/tests/bnd_roundtrip.rs`, `rneat/tests/inv_fastq.rs`.
+- NEW combined-SV integration test: `rneat/tests/multi_sv_integration.rs` — exercises BND + INV + de novo INS in a single gen-reads run on a synthetic fixture and verifies all three pathways flow into the FASTQ / VCF correctly.
+
+5/30/2026
+=========
 ## rneat v1.11.1
 
 ### Patch release: BGZF-framed golden VCFs + spec-conformant `##source=` header

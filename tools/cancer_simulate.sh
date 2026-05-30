@@ -320,16 +320,10 @@ else
     echo ">> Merging golden VCFs into origin-tagged truth set..."
     ISEC_DIR="${OUTPUT_DIR}/_isec_$$"
     mkdir -p "$ISEC_DIR"
-    # gen-reads writes the golden VCF with plain gzip framing (flate2's
-    # GzEncoder), but bcftools requires bgzip (block-gzip) for tabix
-    # indexing. Transcode in place — `bcftools view -O z` reads any
-    # gzip variant and writes bgzip. Eventually `write_vcf` should emit
-    # bgzip directly so this step can go away; tracked separately.
-    bcftools view -O z -o "$NORMAL_VCF.bgz" "$NORMAL_VCF"
-    bcftools view -O z -o "$TUMOR_VCF.bgz"  "$TUMOR_VCF"
-    mv "$NORMAL_VCF.bgz" "$NORMAL_VCF"
-    mv "$TUMOR_VCF.bgz"  "$TUMOR_VCF"
-    # bcftools isec needs tabix-indexed inputs.
+    # gen-reads (v1.11.1+) emits bgzf-framed output directly via
+    # noodles::bgzf, so `bcftools index -t` can tabix the per-pass VCFs
+    # without a transcode step. Earlier (v1.11.0) builds wrote plain gzip
+    # and required `bcftools view -O z` here.
     bcftools index -f -t "$NORMAL_VCF"
     bcftools index -f -t "$TUMOR_VCF"
     # Outputs:

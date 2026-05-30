@@ -101,6 +101,24 @@ Tumor-pass SV generation:
                      SVs from the model are disabled). Set to 1.0 to use the
                      model's nominal rate; higher values stress-test SV callers.
 
+                     As of v1.12.0, gen-reads also emits BND translocations,
+                     INV inversions, and de novo INS (literal insertions with
+                     novel sequence) when --sv-rate-scale > 0 AND the supplied
+                     mutation model has those SV types in its pool. The bundled
+                     gnomAD-SV-derived default does NOT include BND or INV;
+                     train from PCAWG-style data or pass them via --germline-vcf
+                     to exercise the new chimeric-read pathways.
+
+                     Known caveat: chimeric BND/INV junction reads are
+                     generated on top of regular reference reads at the same
+                     breakpoint positions, so a homozygous BND or INV ends up
+                     with ~2x coverage at the junction (regular reads from the
+                     unbroken reference + junction-spanning reads). Het lands
+                     closer to correct. Downstream SV callers handle this fine
+                     (they expect both reference and junction-supporting reads
+                     at heterozygous loci), but coverage-depth plots will
+                     show a bump.
+
 Reproducibility / wiring:
   --rng-seed         Seed root (default: "cancer-simulate"); per-pass seeds
                      append "-normal" and "-tumor" so the two passes don't
@@ -359,12 +377,38 @@ else
     annotate_origin "$ISEC_DIR/0001.vcf.gz" "$ISEC_DIR/tumor_only.vcf.gz"  somatic
     annotate_origin "$ISEC_DIR/0003.vcf.gz" "$ISEC_DIR/shared.vcf.gz"      shared
 
+    # rneat's gen-reads writer preserves INFO values from input_vcf
+    # verbatim but doesn't add ##INFO header declarations for arbitrary
+    # user-supplied fields (e.g. INFO/MATEID on BND records, INFO/SVTYPE
+    # / END / SVLEN / CN on symbolic SVs). bcftools sort does internal
+    # BCF translation that errors out on undeclared INFO fields. Inject
+    # the standard SV-INFO declarations into each subset's header via
+    # `bcftools annotate -h` before sorting so the merge succeeds even
+    # when the per-pass VCFs carry BND or other SV records.
+    SV_INFO_HDR="$ISEC_DIR/sv_info_decls.txt"
+    cat > "$SV_INFO_HDR" <<'HDR'
+##INFO=<ID=MATEID,Number=.,Type=String,Description="ID of mate breakends">
+##INFO=<ID=SVTYPE,Number=1,Type=String,Description="Type of structural variant">
+##INFO=<ID=END,Number=1,Type=Integer,Description="End position of the variant described in this record">
+##INFO=<ID=SVLEN,Number=.,Type=Integer,Description="Difference in length between REF and ALT alleles">
+##INFO=<ID=CN,Number=1,Type=Integer,Description="Copy number of segment">
+##INFO=<ID=IMPRECISE,Number=0,Type=Flag,Description="Imprecise structural variation">
+##INFO=<ID=CIPOS,Number=2,Type=Integer,Description="Confidence interval around POS">
+##INFO=<ID=CIEND,Number=2,Type=Integer,Description="Confidence interval around END">
+##INFO=<ID=BND_DEPTH,Number=1,Type=Integer,Description="Read depth at local breakend (Manta-style)">
+##INFO=<ID=MATE_BND_DEPTH,Number=1,Type=Integer,Description="Read depth at remote breakend (Manta-style)">
+HDR
+    for f in "$ISEC_DIR/normal_only.vcf.gz" \
+             "$ISEC_DIR/tumor_only.vcf.gz" \
+             "$ISEC_DIR/shared.vcf.gz"; do
+        bcftools annotate -h "$SV_INFO_HDR" -O z -o "$f.hdr" "$f"
+        mv "$f.hdr" "$f"
+        bcftools index -f -t "$f"
+    done
+
     # bcftools concat -a (allow-overlaps) requires indexed inputs because
     # the three subset files all sit on overlapping contigs (different
     # positions per file, but the same chr names). Index, concat, sort.
-    bcftools index -f -t "$ISEC_DIR/normal_only.vcf.gz"
-    bcftools index -f -t "$ISEC_DIR/tumor_only.vcf.gz"
-    bcftools index -f -t "$ISEC_DIR/shared.vcf.gz"
     bcftools concat -a -O u \
         "$ISEC_DIR/normal_only.vcf.gz" \
         "$ISEC_DIR/tumor_only.vcf.gz" \

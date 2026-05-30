@@ -78,6 +78,28 @@ pub fn write_vcf(
         &mut buffer,
         "##ALT=<ID=INS,Description=\"Insertion of novel sequence\">"
     )?;
+    writeln!(&mut buffer, "##ALT=<ID=DUP,Description=\"Duplication\">")?;
+    writeln!(&mut buffer, "##ALT=<ID=INV,Description=\"Inversion\">")?;
+    writeln!(
+        &mut buffer,
+        "##ALT=<ID=CNV,Description=\"Copy number variant\">"
+    )?;
+    writeln!(
+        &mut buffer,
+        "##INFO=<ID=SVTYPE,Number=1,Type=String,Description=\"Type of structural variant\">"
+    )?;
+    writeln!(
+        &mut buffer,
+        "##INFO=<ID=SVLEN,Number=.,Type=Integer,Description=\"Difference in length between REF and ALT alleles\">"
+    )?;
+    writeln!(
+        &mut buffer,
+        "##INFO=<ID=END,Number=1,Type=Integer,Description=\"End position of the variant described in this record\">"
+    )?;
+    writeln!(
+        &mut buffer,
+        "##INFO=<ID=CN,Number=1,Type=Integer,Description=\"Copy number of segment\">"
+    )?;
     writeln!(
         &mut buffer,
         "##INFO=<ID=NEAT_PROVENANCE,Number=1,Type=String,\
@@ -798,6 +820,24 @@ chr1\t150\t.\tG\t<DEL>\t60\tPASS\tSVTYPE=DEL;END=300\tGT\t1/1\n";
             "expected <DEL> ALT to round-trip; got: {:?}",
             body
         );
+    }
+
+    #[test]
+    fn test_read_vcf_symbolic_inv() {
+        let vcf_content = "\
+##fileformat=VCFv4.1\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n\
+chr1\t500\t.\tA\t<INV>\t60\tPASS\tSVTYPE=INV;END=2500\tGT\t0/1\n";
+        let mut tmp = tempfile::Builder::new().suffix(".vcf").tempfile().unwrap();
+        write!(tmp, "{}", vcf_content).unwrap();
+        let records = read_vcf(tmp.path().to_path_buf()).unwrap();
+        let v = &records.get("chr1").unwrap()[0];
+        assert_eq!(v.variant_type, VariantType::Complex);
+        let sv = v.alternate.as_symbolic().unwrap();
+        assert_eq!(sv.sv_type, SvType::Inv);
+        assert_eq!(sv.end, Some(2500));
+        // span() = END - POS + 1 = 2500 - 500 + 1 = 2001
+        assert_eq!(sv.span(500), Some(2001));
     }
 
     #[test]

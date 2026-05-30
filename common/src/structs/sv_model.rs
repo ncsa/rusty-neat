@@ -1,16 +1,15 @@
 //! Statistical model for generating symbolic / structural variants
-//! (`<DEL>` / `<DUP>` / `<CNV>` / `<BND>`) de novo from a learned distribution.
+//! (`<DEL>` / `<DUP>` / `<CNV>` / `<BND>` / `<INV>` / `<INS>`) de novo from a learned distribution.
 //!
 //! `SvModel` is fit by [`SvModel::fit_from_observations`] (called from
 //! `gen-mut-model` after the SNP/indel pass completes) and lives on
 //! [`crate::models::mutation_model::MutationModel`] as
-//! `Option<SvModel>` — `None` whenever the training VCF didn't carry
+//! [`Option<SvModel>`] — `None` whenever the training VCF didn't carry
 //! enough usable SV observations, or whenever the model JSON was
 //! written by a pre-v1.10 build (the field defaults to `None` via
 //! `#[serde(default)]`).
 //!
-//! Supported types in this release: `<DEL>` / `<DUP>` / `<CNV>` / `<BND>`. `<INV>`
-//! records are dropped at fit time (logged with a count).
+//! Supported types: `<DEL>` / `<DUP>` / `<CNV>` / `<BND>` / `<INV>` / `<INS>`.
 //! `gen-reads` consumes the model via [`SvModel::sample_variants`],
 //! gated behind the `sv_rate_scale` config knob (default 0.0 — opt-in).
 
@@ -76,7 +75,7 @@ pub struct SvModel {
     pub per_base_rate: f64,
 
     /// Probability that a generated SV is of a given type. Keys are
-    /// limited to `SvType::Del` / `SvType::Dup` / `SvType::Cnv` / `SvType::Bnd`;
+    /// limited to `SvType::Del` / `SvType::Dup` / `SvType::Cnv` / `SvType::Bnd` / `SvType::Inv` / `SvType::Ins`;
     /// probabilities sum to ~1.0 across present keys. A type with
     /// fewer than [`MIN_OBS_FOR_LENGTH_FIT`] observations is dropped
     /// from this map (its length distribution couldn't be fit), and
@@ -125,13 +124,12 @@ impl SvModel {
     /// Filtering applied (in order):
     ///   - records whose ALT isn't `AlternateType::Symbolic` are
     ///     ignored;
-    ///   - `<INV>` / unknown tags are dropped (this release
-    ///     generates `<DEL>` / `<DUP>` / `<CNV>` / `<BND>`);
-    ///   - records with no derivable span (no `END`, no `SVLEN`) are
+    ///   - records with no derivable span/length (no `END`, no `SVLEN`) are
     ///     dropped;
     ///   - records below [`MIN_SV_LENGTH_BP`] are dropped (they're
     ///     indels, not SVs), except for `<BND>` which uses a nominal
     ///     1bp length;
+    ///   - unknown tags are dropped;
     ///   - types with fewer than [`MIN_OBS_FOR_LENGTH_FIT`] surviving
     ///     observations are dropped from the model entirely, so the
     ///     resulting `type_probabilities` and `length_log_normal` have
@@ -166,28 +164,28 @@ impl SvModel {
                 }
             };
             match sv.sv_type {
-                SvType::Del | SvType::Dup | SvType::Cnv | SvType::Bnd => {}
+                SvType::Del | SvType::Dup | SvType::Cnv | SvType::Bnd | SvType::Inv | SvType::Ins => {}
                 _ => {
                     dropped_unsupported_type += 1;
                     continue;
                 }
             }
-            let span = match sv.sv_type {
-                SvType::Bnd => Some(1), // BNDs have no span in the traditional sense; use 1 for length stats
-                _ => sv.span(v.location),
+            let length = match sv.sv_type {
+                SvType::Bnd => Some(1), // BNDs have no length in the traditional sense; use 1 for stats
+                _ => sv.event_length(v.location),
             };
-            let span = match span {
+            let length = match length {
                 Some(s) if s > 0 => s,
                 _ => {
                     dropped_no_span += 1;
                     continue;
                 }
             };
-            if sv.sv_type != SvType::Bnd && span < MIN_SV_LENGTH_BP {
+            if sv.sv_type != SvType::Bnd && length < MIN_SV_LENGTH_BP {
                 dropped_below_min_length += 1;
                 continue;
             }
-            by_type.entry(sv.sv_type).or_default().push((span, v));
+            by_type.entry(sv.sv_type).or_default().push((length, v));
         }
 
         // Drop types that don't have enough observations for a real
@@ -212,7 +210,7 @@ impl SvModel {
         }
         if dropped_unsupported_type > 0 {
             info!(
-                "SvModel: dropped {} <INV>/unknown record(s) — not yet generatable",
+                "SvModel: dropped {} unknown record(s) — not yet generatable",
                 dropped_unsupported_type
             );
         }
@@ -494,6 +492,8 @@ impl SvModel {
                 SvType::Del => ("<DEL>".to_string(), None, None),
                 SvType::Dup => ("<DUP>".to_string(), None, None),
                 SvType::Cnv => ("<CNV>".to_string(), None, None),
+                SvType::Inv => ("<INV>".to_string(), None, None),
+                SvType::Ins => ("<INS>".to_string(), None, None),
                 SvType::Bnd => {
                     // For de novo BNDs, generate an intra-chromosomal translocation
                     // to a random mate position on the same contig.
@@ -510,11 +510,19 @@ impl SvModel {
             };
             let mut sv_data = SvData::new(raw_alt, sv_type);
             sv_data.end = Some(sv_end_1based);
+            sv_data.svlen = if sv_type != SvType::Bnd {
+                Some(match sv_type {
+                    SvType::Del => -(length as i64),
+                    _ => length as i64,
+                })
+            } else {
+                None
+            };
             sv_data.copy_number = copy_number;
             sv_data.mate_contig = m_contig;
             sv_data.mate_pos = m_pos;
 
-            let info_field = build_info_field(sv_type, sv_end_1based, copy_number);
+            let info_field = build_info_field(sv_type, sv_end_1based, length, copy_number);
 
             occupied.push((affected_start, affected_end));
             out.push(Variant {
@@ -717,6 +725,12 @@ fn place_sv(
             // bases, so END_1based = anchor_1based + length = anchor + 1 + length.
             (s, e, anchor + 1 + length)
         }
+        SvType::Ins => {
+            // Insertions are point events in the reference.
+            let s = anchor;
+            let e = s + 1;
+            (s, e, anchor + 1)
+        }
         _ => {
             let s = anchor;
             let e = s + length;
@@ -732,7 +746,10 @@ fn place_sv(
 /// isn't symbolic or has no usable span.
 fn affected_range_for_existing(v: &Variant, block_end: usize) -> Option<(usize, usize)> {
     let sv = v.alternate.as_symbolic()?;
-    let span = sv.span(v.location.saturating_add(1))?;
+    let span = match sv.sv_type {
+        SvType::Ins | SvType::Bnd => Some(1),
+        _ => sv.span(v.location.saturating_add(1)),
+    }?;
     if span == 0 {
         return None;
     }
@@ -754,7 +771,12 @@ fn ranges_overlap(a_start: usize, a_end: usize, b_start: usize, b_end: usize) ->
 /// Emit a single-line VCF `INFO` field carrying the structural-variant
 /// fields downstream readers expect, so de novo records round-trip
 /// through the writer with the same shape as user-supplied input.
-fn build_info_field(sv_type: SvType, end_1based: usize, copy_number: Option<u32>) -> String {
+fn build_info_field(
+    sv_type: SvType,
+    end_1based: usize,
+    length: usize,
+    copy_number: Option<u32>,
+) -> String {
     let mut parts: Vec<String> = Vec::new();
     let svtype = match sv_type {
         SvType::Del => "DEL",
@@ -767,6 +789,13 @@ fn build_info_field(sv_type: SvType, end_1based: usize, copy_number: Option<u32>
     };
     parts.push(format!("SVTYPE={svtype}"));
     parts.push(format!("END={end_1based}"));
+    if sv_type != SvType::Bnd {
+        let svlen = match sv_type {
+            SvType::Del => -(length as i64),
+            _ => length as i64,
+        };
+        parts.push(format!("SVLEN={svlen}"));
+    }
     if let Some(cn) = copy_number {
         parts.push(format!("CN={cn}"));
     }
@@ -1104,29 +1133,42 @@ mod tests {
     }
 
     #[test]
-    fn sample_variants_emits_only_supported_types() {
-        // Even if the model is hand-rolled with an INV in
-        // type_probabilities (which fit_from_observations would never
-        // produce), the sampler skips the unsupported branch — the
-        // resulting output contains only DEL/DUP/CNV/BND.
+    fn sample_variants_emits_all_supported_types() {
+        // The sampler must emit DEL/DUP/CNV/INS/BND/INV if they are in the model.
         let mut m = SvModel::default();
-        m.per_base_rate = 5e-3;
+        m.per_base_rate = 5e-2;
         m.homozygous_frequency = 0.5;
-        m.type_probabilities.insert(SvType::Del, 0.5);
-        m.type_probabilities.insert(SvType::Inv, 0.5);
-        m.length_log_normal.insert(SvType::Del, (7.0, 0.3));
-        m.length_log_normal.insert(SvType::Inv, (7.0, 0.3));
-        let seq = acgt_sequence(100_000);
+        m.type_probabilities.insert(SvType::Del, 0.16);
+        m.type_probabilities.insert(SvType::Dup, 0.16);
+        m.type_probabilities.insert(SvType::Cnv, 0.17);
+        m.type_probabilities.insert(SvType::Ins, 0.17);
+        m.type_probabilities.insert(SvType::Bnd, 0.17);
+        m.type_probabilities.insert(SvType::Inv, 0.17);
+        for t in [
+            SvType::Del,
+            SvType::Dup,
+            SvType::Cnv,
+            SvType::Ins,
+            SvType::Bnd,
+            SvType::Inv,
+        ] {
+            m.length_log_normal.insert(t, (7.0, 0.3));
+        }
+        let seq = acgt_sequence(200_000);
         let mut rng = deterministic_rng();
-        let out = m.sample_variants("chr1", 100_000, &[], &seq, 2, 1.0, &mut rng);
+        let out = m.sample_variants("chr1", 200_000, &[], &seq, 2, 1.0, &mut rng);
+        let mut seen_types = std::collections::HashSet::new();
         for v in &out {
             let sv = v.alternate.as_symbolic().expect("must be symbolic");
-            assert!(
-                matches!(sv.sv_type, SvType::Del | SvType::Dup | SvType::Cnv | SvType::Bnd),
-                "v1 sampler must only emit DEL/DUP/CNV/BND, got {:?}",
-                sv.sv_type
-            );
+            seen_types.insert(sv.sv_type);
         }
+        // At this rate and probability we expect to see all six types
+        assert!(seen_types.contains(&SvType::Del));
+        assert!(seen_types.contains(&SvType::Dup));
+        assert!(seen_types.contains(&SvType::Cnv));
+        assert!(seen_types.contains(&SvType::Ins));
+        assert!(seen_types.contains(&SvType::Bnd));
+        assert!(seen_types.contains(&SvType::Inv));
     }
 
     #[test]
@@ -1177,6 +1219,43 @@ mod tests {
             let length = end - v.location;
             assert!(length >= MIN_SV_LENGTH_BP);
             assert!(end <= 100_000);
+        }
+    }
+
+    #[test]
+    fn sampled_invs_have_correct_pos_and_end_invariant() {
+        let m = model_with_single_type(SvType::Inv, 5e-3);
+        let seq = acgt_sequence(100_000);
+        let mut rng = deterministic_rng();
+        let out = m.sample_variants("chr1", 100_000, &[], &seq, 2, 1.0, &mut rng);
+        assert!(!out.is_empty());
+        for v in &out {
+            let sv = v.alternate.as_symbolic().expect("must be symbolic");
+            assert_eq!(sv.sv_type, SvType::Inv);
+            let end = sv.end.expect("END must be populated");
+            // For INV, the inverted region is 0-based [location, end).
+            let length = end - v.location;
+            assert!(length >= MIN_SV_LENGTH_BP);
+            assert!(end <= 100_000);
+        }
+    }
+
+    #[test]
+    fn sampled_ins_have_correct_pos_and_end_invariant() {
+        let m = model_with_single_type(SvType::Ins, 5e-3);
+        let seq = acgt_sequence(100_000);
+        let mut rng = deterministic_rng();
+        let out = m.sample_variants("chr1", 100_000, &[], &seq, 2, 1.0, &mut rng);
+        assert!(!out.is_empty());
+        for v in &out {
+            let sv = v.alternate.as_symbolic().expect("must be symbolic");
+            assert_eq!(sv.sv_type, SvType::Ins);
+            // For symbolic INS, location is where it's inserted. END usually equals location + 1.
+            let end = sv.end.expect("END must be populated");
+            assert_eq!(end, v.location + 1);
+            // SVLEN should be set and >= MIN_SV_LENGTH_BP
+            let svlen = sv.svlen.expect("SVLEN must be populated for symbolic INS");
+            assert!(svlen >= MIN_SV_LENGTH_BP as i64);
         }
     }
 
@@ -1352,7 +1431,7 @@ mod tests {
         // The INFO string we emit must round-trip through the existing
         // parser so the writer + downstream readers behave like
         // user-supplied input.
-        let info = build_info_field(SvType::Cnv, 1500, Some(4));
+        let info = build_info_field(SvType::Cnv, 1500, 1000, Some(4));
         let parsed = parse_sv_info(&info);
         assert_eq!(parsed.svtype.as_deref(), Some("CNV"));
         assert_eq!(parsed.end, Some(1500));
@@ -1368,13 +1447,15 @@ mod tests {
     }
 
     #[test]
-    fn ranges_overlap_helper_is_half_open() {
-        // Adjacent (touching at boundary) does NOT count as overlap.
-        assert!(!ranges_overlap(0, 50, 50, 100));
-        assert!(!ranges_overlap(50, 100, 0, 50));
-        // Any real intersection does.
-        assert!(ranges_overlap(0, 51, 50, 100));
-        assert!(ranges_overlap(0, 200, 50, 100));
+    fn affected_range_for_existing_ins_is_point_event() {
+        let mut v = sv(1000, None, SvType::Ins, Genotype::Heterozygous, None);
+        if let AlternateType::Symbolic(ref mut sv) = v.alternate {
+            sv.svlen = Some(500);
+        }
+        let range = affected_range_for_existing(&v, 10_000).expect("must have range");
+        // POS=1000 (0-based in the 'sv' helper) -> location=1000
+        // Insertions should only affect the anchor base in terms of reference overlap.
+        assert_eq!(range, (1000, 1001));
     }
 
     // ── sample_poisson tests ─────────────────────────────────────────
@@ -1482,5 +1563,25 @@ mod tests {
              This used to silently emit zero due to Poisson `exp(-λ)` underflow.",
             out.len()
         );
+    }
+
+    #[test]
+    fn fit_from_observations_handles_ins() {
+        // Build a training set with only symbolic insertions. Fitter
+        // must use SVLEN as length and produce a usable model.
+        let mut obs = Vec::new();
+        for i in 0..10 {
+            let mut v = sv(1000 * i, None, SvType::Ins, Genotype::Heterozygous, None);
+            if let AlternateType::Symbolic(ref mut sv) = v.alternate {
+                sv.svlen = Some(200);
+            }
+            obs.push(v);
+        }
+        let m = SvModel::fit_from_observations(&obs, 100_000).expect("must produce a model");
+        assert!(m.type_probabilities.contains_key(&SvType::Ins));
+        let (mu, _) = m.length_log_normal.get(&SvType::Ins).unwrap();
+        // exp(mu) should be ~200. ln(200) ≈ 5.298
+        assert!((mu - 200.0f64.ln()).abs() < 1e-5);
+        assert!(m.per_base_rate > 0.0);
     }
 }

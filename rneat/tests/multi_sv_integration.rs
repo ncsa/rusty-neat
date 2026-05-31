@@ -89,6 +89,21 @@ fn gen_reads_emits_bnd_inv_and_de_novo_ins_in_one_run() {
     let body: Vec<&String> = vcf_lines.iter().filter(|l| !l.starts_with('#')).collect();
     assert!(!body.is_empty(), "no records in output VCF");
 
+    // The synthetic "chimeric" contig that `process_chimeric_variants`
+    // uses as a control-flow tag for organizing its FASTQ/BAM outputs
+    // must NOT leak into the VCF's contig declarations. A bogus
+    // `##contig=<ID=chimeric,length=0>` line breaks strict downstream
+    // parsers (truvari refuses to score against it).
+    assert!(
+        !vcf_lines.iter().any(|l| l.contains("##contig=<ID=chimeric")),
+        "##contig=<ID=chimeric,...> leaked into output VCF — \
+         see collect_contig_result's pseudo-contig skip. Got: {:?}",
+        vcf_lines
+            .iter()
+            .filter(|l| l.starts_with("##contig"))
+            .collect::<Vec<_>>()
+    );
+
     // Round-trip: both BND records from input should appear in output.
     assert!(
         body.iter().any(|l| l.contains("G]H1N1_HA:1500]")),

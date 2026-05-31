@@ -1432,15 +1432,32 @@ fn collect_contig_result(
     bam_body_files: &mut HashMap<String, PathBuf>,
     ad_counters: &mut HashMap<String, AdCounter>,
 ) {
-    contig_order.push(cr.name.clone());
-    fasta_lengths.insert(cr.name.clone(), cr.len);
+    // `process_chimeric_variants` returns a pseudo ContigResult named
+    // "chimeric" with len=0 — a control-flow tag for organizing the
+    // junction-spanning FASTQ/BAM outputs, NOT a real reference contig.
+    // Its reads' positions are already keyed to real contigs (the BND
+    // mate contig + position), so we only want this pseudo-contig's
+    // FASTQ/BAM outputs to flow into the final merge — never its name
+    // into VCF-relevant accumulators. Leaving it in `contig_order` /
+    // `fasta_lengths` produces a malformed `##contig=<ID=chimeric,length=0>`
+    // header line that breaks strict downstream parsers like truvari.
+    let is_chimeric_pseudo = cr.name == "chimeric" && cr.len == 0;
+    if !is_chimeric_pseudo {
+        contig_order.push(cr.name.clone());
+        fasta_lengths.insert(cr.name.clone(), cr.len);
+    }
     if let Some(data) = cr.data {
-        mutated_maps.insert(cr.name.clone(), vec![data.mutated_map]);
+        if !is_chimeric_pseudo {
+            mutated_maps.insert(cr.name.clone(), vec![data.mutated_map]);
+            ad_counters.insert(cr.name.clone(), data.ad_counter);
+        }
+        // FASTQ + BAM outputs from chimeric reads still need to flow into
+        // the final merge — they carry real per-real-contig records that
+        // just happened to be synthesized through the chimeric path.
         all_fastq_files.insert(cr.name.clone(), (data.r1_files, data.r2_files));
         if let Some(bam_path) = data.bam_body_file {
-            bam_body_files.insert(cr.name.clone(), bam_path);
+            bam_body_files.insert(cr.name, bam_path);
         }
-        ad_counters.insert(cr.name, data.ad_counter);
     }
 }
 

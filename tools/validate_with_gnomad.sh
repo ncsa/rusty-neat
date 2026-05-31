@@ -105,18 +105,18 @@ prep_input() {
         echo "Smoke mode: restricting to '$region' (detected naming from '$first_contig')"
     fi
     # Split multi-allelic records (so MCNV doesn't get silently dropped at
-    # the reader) and exclude SV types v1.10 can't generate so the trainer
+    # the reader) and exclude SV types v1.11 can't generate so the trainer
     # warn log stays readable. Pipe through bcftools view -r FIRST so the
     # region restriction is applied before any further filtering.
-    echo "Filtering: splitting multi-allelic, dropping INV/CPX/CTX/BND/<INS:ME:*>"
+    echo "Filtering: splitting multi-allelic, dropping CPX/CTX"
     if [[ -n "$region" ]]; then
         bcftools view -r "$region" "$GNOMAD_VCF" \
             | bcftools norm -m - \
-            | bcftools view -e 'ALT~"^<INV>$" || ALT~"^<CPX>$" || ALT~"^<CTX>$" || ALT~"^<BND>$" || ALT~"^<INS:ME"' \
+            | bcftools view -e 'ALT~"^<CPX>$" || ALT~"^<CTX>$"' \
                 -Oz -o "$out"
     else
         bcftools norm -m - "$GNOMAD_VCF" \
-            | bcftools view -e 'ALT~"^<INV>$" || ALT~"^<CPX>$" || ALT~"^<CTX>$" || ALT~"^<BND>$" || ALT~"^<INS:ME"' \
+            | bcftools view -e 'ALT~"^<CPX>$" || ALT~"^<CTX>$"' \
                 -Oz -o "$out"
     fi
     bcftools index -t "$out"
@@ -177,15 +177,18 @@ inspect() {
     type_sum="$(echo "$sv_model" | jq '.type_probabilities | to_entries | map(.value) | add')"
     echo "type_probabilities sum: $type_sum (expect ~1.0)"
     # Compare against bundled defaults — fail soft on large deviations.
-    local del_p dup_p cnv_p
+    local del_p dup_p cnv_p bnd_p inv_p ins_p
     del_p="$(echo "$sv_model" | jq '.type_probabilities.Del // 0')"
     dup_p="$(echo "$sv_model" | jq '.type_probabilities.Dup // 0')"
     cnv_p="$(echo "$sv_model" | jq '.type_probabilities.Cnv // 0')"
-    echo "Type breakdown:  DEL=$del_p     DUP=$dup_p     CNV=$cnv_p"
-    echo "Default expects: DEL=0.8171  DUP=0.1824  CNV=0.0005"
+    bnd_p="$(echo "$sv_model" | jq '.type_probabilities.Bnd // 0')"
+    inv_p="$(echo "$sv_model" | jq '.type_probabilities.Inv // 0')"
+    ins_p="$(echo "$sv_model" | jq '.type_probabilities.Ins // 0')"
+    echo "Type breakdown:  DEL=$del_p     DUP=$dup_p     CNV=$cnv_p     BND=$bnd_p     INV=$inv_p     INS=$ins_p"
+    echo "Default expects: DEL=0.6433  DUP=0.1470  CNV=0.0004  BND=0.1943  INV=0.0050  INS=0.0100 (v1.11.1)"
     local per_base
     per_base="$(echo "$sv_model" | jq '.per_base_rate')"
-    echo "per_base_rate: $per_base (default 4.841e-4 from full gnomAD-SV v4.1)"
+    echo "per_base_rate: $per_base (default 6.009e-4 from full gnomAD-SV v4.1)"
     local hom
     hom="$(echo "$sv_model" | jq '.homozygous_frequency')"
     echo "homozygous_frequency: $hom (default 0.20 — literature; gnomAD-SV is sites-only)"
@@ -248,9 +251,9 @@ EOF
     local n_sv
     n_sv="$(zcat reads_out/validation.vcf.gz 2>/dev/null \
         | grep -v '^#' \
-        | grep -E '<DEL>|<DUP>|<CNV>' \
+        | grep -E '<DEL>|<DUP>|<CNV>|<INV>|[[][^]]*:[^]]*[[|]][^]]*:[^]]*[]]' \
         | wc -l)"
-    echo "Symbolic SVs in output golden VCF: $n_sv"
+    echo "SVs in output golden VCF: $n_sv"
     if [[ "$n_sv" -eq 0 ]]; then
         echo "WARN: zero de novo SVs in output — sampler may have rejected everything."
     fi

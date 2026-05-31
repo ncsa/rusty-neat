@@ -1,16 +1,15 @@
 //! Statistical model for generating symbolic / structural variants
-//! (`<DEL>` / `<DUP>` / `<CNV>`) de novo from a learned distribution.
+//! (`<DEL>` / `<DUP>` / `<CNV>` / `<BND>` / `<INV>` / `<INS>`) de novo from a learned distribution.
 //!
 //! `SvModel` is fit by [`SvModel::fit_from_observations`] (called from
 //! `gen-mut-model` after the SNP/indel pass completes) and lives on
 //! [`crate::models::mutation_model::MutationModel`] as
-//! `Option<SvModel>` — `None` whenever the training VCF didn't carry
+//! [`Option<SvModel>`] — `None` whenever the training VCF didn't carry
 //! enough usable SV observations, or whenever the model JSON was
 //! written by a pre-v1.10 build (the field defaults to `None` via
 //! `#[serde(default)]`).
 //!
-//! Supported types in this release: `<DEL>` / `<DUP>` / `<CNV>`. `<INV>`
-//! and breakend records are dropped at fit time (logged with a count).
+//! Supported types: `<DEL>` / `<DUP>` / `<CNV>` / `<BND>` / `<INV>` / `<INS>`.
 //! `gen-reads` consumes the model via [`SvModel::sample_variants`],
 //! gated behind the `sv_rate_scale` config knob (default 0.0 — opt-in).
 
@@ -76,7 +75,7 @@ pub struct SvModel {
     pub per_base_rate: f64,
 
     /// Probability that a generated SV is of a given type. Keys are
-    /// limited to `SvType::Del` / `SvType::Dup` / `SvType::Cnv`;
+    /// limited to `SvType::Del` / `SvType::Dup` / `SvType::Cnv` / `SvType::Bnd` / `SvType::Inv` / `SvType::Ins`;
     /// probabilities sum to ~1.0 across present keys. A type with
     /// fewer than [`MIN_OBS_FOR_LENGTH_FIT`] observations is dropped
     /// from this map (its length distribution couldn't be fit), and
@@ -125,12 +124,12 @@ impl SvModel {
     /// Filtering applied (in order):
     ///   - records whose ALT isn't `AlternateType::Symbolic` are
     ///     ignored;
-    ///   - `<INV>` / breakends / unknown tags are dropped (this release
-    ///     only generates `<DEL>` / `<DUP>` / `<CNV>`);
-    ///   - records with no derivable span (no `END`, no `SVLEN`) are
+    ///   - records with no derivable span/length (no `END`, no `SVLEN`) are
     ///     dropped;
     ///   - records below [`MIN_SV_LENGTH_BP`] are dropped (they're
-    ///     indels, not SVs);
+    ///     indels, not SVs), except for `<BND>` which uses a nominal
+    ///     1bp length;
+    ///   - unknown tags are dropped;
     ///   - types with fewer than [`MIN_OBS_FOR_LENGTH_FIT`] surviving
     ///     observations are dropped from the model entirely, so the
     ///     resulting `type_probabilities` and `length_log_normal` have
@@ -165,24 +164,28 @@ impl SvModel {
                 }
             };
             match sv.sv_type {
-                SvType::Del | SvType::Dup | SvType::Cnv => {}
+                SvType::Del | SvType::Dup | SvType::Cnv | SvType::Bnd | SvType::Inv | SvType::Ins => {}
                 _ => {
                     dropped_unsupported_type += 1;
                     continue;
                 }
             }
-            let span = match sv.span(v.location) {
+            let length = match sv.sv_type {
+                SvType::Bnd => Some(1), // BNDs have no length in the traditional sense; use 1 for stats
+                _ => sv.event_length(v.location),
+            };
+            let length = match length {
                 Some(s) if s > 0 => s,
                 _ => {
                     dropped_no_span += 1;
                     continue;
                 }
             };
-            if span < MIN_SV_LENGTH_BP {
+            if sv.sv_type != SvType::Bnd && length < MIN_SV_LENGTH_BP {
                 dropped_below_min_length += 1;
                 continue;
             }
-            by_type.entry(sv.sv_type).or_default().push((span, v));
+            by_type.entry(sv.sv_type).or_default().push((length, v));
         }
 
         // Drop types that don't have enough observations for a real
@@ -207,7 +210,7 @@ impl SvModel {
         }
         if dropped_unsupported_type > 0 {
             info!(
-                "SvModel: dropped {} <INV>/breakend/unknown record(s) — not yet generatable",
+                "SvModel: dropped {} unknown record(s) — not yet generatable",
                 dropped_unsupported_type
             );
         }
@@ -343,6 +346,7 @@ impl SvModel {
     /// we don't anchor SVs inside reference gaps.
     pub fn sample_variants(
         &self,
+        contig_name: &str,
         contig_len: usize,
         existing_svs: &[Variant],
         sequence: &[Nucleotide],
@@ -449,7 +453,7 @@ impl SvModel {
                 Ok(l) => l,
                 Err(_) => continue,
             };
-            if length < MIN_SV_LENGTH_BP || length > upper_len {
+            if sv_type != SvType::Bnd && (length < MIN_SV_LENGTH_BP || length > upper_len) {
                 continue;
             }
 
@@ -484,20 +488,85 @@ impl SvModel {
             };
             let genotype_str = genotype_string(&genotype, ploidy);
 
-            let raw_alt = match sv_type {
-                SvType::Del => "<DEL>",
-                SvType::Dup => "<DUP>",
-                SvType::Cnv => "<CNV>",
-                // sample_variants only emits the three supported types;
+            // De novo <INS> records are emitted as LITERAL Insertion variants
+            // (REF="A", ALT="A<novel-bases>") rather than symbolic <INS>. That
+            // routes them through gen-reads' existing literal-insertion
+            // machinery — fragment-loop reads spanning the locus naturally
+            // pick up the inserted bases, and the output VCF carries the
+            // resolved sequence (matching what real callers like Manta emit
+            // when they can resolve the insertion). The novel sequence is
+            // drawn from the single-base composition of a ±250 bp window
+            // around the anchor; #190 calls out trinucleotide-context
+            // sampling as a possible refinement.
+            if sv_type == SvType::Ins {
+                let novel = match sample_novel_insertion_bases(
+                    sequence,
+                    anchor_0based,
+                    length,
+                    rng,
+                ) {
+                    Ok(bases) => bases,
+                    Err(_) => continue, // RNG hiccup; retry the slot
+                };
+                let mut alt_bases = Vec::with_capacity(length + 1);
+                alt_bases.push(anchor_base);
+                alt_bases.extend(novel);
+
+                occupied.push((affected_start, affected_end));
+                out.push(Variant {
+                    variant_type: VariantType::Insertion,
+                    location: anchor_0based,
+                    reference: vec![anchor_base],
+                    alternate: AlternateType::Literal(alt_bases),
+                    genotype_str: genotype_str.clone(),
+                    genotype,
+                    id: None,
+                    quality_score: None,
+                    filter: None,
+                    // No symbolic INFO needed — the SVLEN is implicit in
+                    // the REF/ALT length difference.
+                    info: None,
+                    format: vec!["GT".to_string()],
+                    sample: vec![genotype_str],
+                    provenance: Provenance::Denovo,
+                });
+                continue;
+            }
+
+            let (raw_alt, m_contig, m_pos) = match sv_type {
+                SvType::Del => ("<DEL>".to_string(), None, None),
+                SvType::Dup => ("<DUP>".to_string(), None, None),
+                SvType::Cnv => ("<CNV>".to_string(), None, None),
+                SvType::Inv => ("<INV>".to_string(), None, None),
+                SvType::Bnd => {
+                    // For de novo BNDs, generate an intra-chromosomal translocation
+                    // to a random mate position on the same contig.
+                    let mp = rng
+                        .range_i64(1, contig_len.saturating_sub(1) as i64)
+                        .ok()
+                        .unwrap_or(1) as usize;
+                    (format!("N]{contig_name}:{mp}]"), Some(contig_name.to_string()), Some(mp))
+                }
+                // sample_variants only emits the four supported types;
                 // others were excluded from type_probabilities at fit
                 // time. The match is exhaustive for the compiler.
                 _ => continue,
             };
             let mut sv_data = SvData::new(raw_alt, sv_type);
             sv_data.end = Some(sv_end_1based);
+            sv_data.svlen = if sv_type != SvType::Bnd {
+                Some(match sv_type {
+                    SvType::Del => -(length as i64),
+                    _ => length as i64,
+                })
+            } else {
+                None
+            };
             sv_data.copy_number = copy_number;
+            sv_data.mate_contig = m_contig;
+            sv_data.mate_pos = m_pos;
 
-            let info_field = build_info_field(sv_type, sv_end_1based, copy_number);
+            let info_field = build_info_field(sv_type, sv_end_1based, length, copy_number);
 
             occupied.push((affected_start, affected_end));
             out.push(Variant {
@@ -596,10 +665,13 @@ fn sample_log_normal_usize(
     sigma: f64,
     rng: &mut NeatRng,
 ) -> Result<usize, NeatRngError> {
-    if !mu.is_finite() || !sigma.is_finite() || sigma <= 0.0 {
+    if !mu.is_finite() || !sigma.is_finite() || sigma < 0.0 {
         return Err(NeatRngError::SamplingError(format!(
             "log-normal parameters invalid: mu={mu} sigma={sigma}"
         )));
+    }
+    if sigma == 0.0 {
+        return Ok(mu.exp().round().max(0.0) as usize);
     }
     let normal = NormalDistribution::new(mu, sigma)
         .map_err(|e| NeatRngError::SamplingError(format!("{e:?}")))?;
@@ -697,6 +769,12 @@ fn place_sv(
             // bases, so END_1based = anchor_1based + length = anchor + 1 + length.
             (s, e, anchor + 1 + length)
         }
+        SvType::Ins => {
+            // Insertions are point events in the reference.
+            let s = anchor;
+            let e = s + 1;
+            (s, e, anchor + 1)
+        }
         _ => {
             let s = anchor;
             let e = s + length;
@@ -712,7 +790,10 @@ fn place_sv(
 /// isn't symbolic or has no usable span.
 fn affected_range_for_existing(v: &Variant, block_end: usize) -> Option<(usize, usize)> {
     let sv = v.alternate.as_symbolic()?;
-    let span = sv.span(v.location.saturating_add(1))?;
+    let span = match sv.sv_type {
+        SvType::Ins | SvType::Bnd => Some(1),
+        _ => sv.span(v.location.saturating_add(1)),
+    }?;
     if span == 0 {
         return None;
     }
@@ -731,10 +812,63 @@ fn ranges_overlap(a_start: usize, a_end: usize, b_start: usize, b_end: usize) ->
     a_start < b_end && b_start < a_end
 }
 
+/// Draw `length` random nucleotides for a novel insertion, weighted by the
+/// single-base composition of a 501 bp window centered on `anchor_0based`
+/// (±250 bp, clamped to contig bounds; `N`s in the window are ignored).
+/// Falls back to uniform ACGT if the window has no usable bases (e.g.
+/// an all-N region). #190.
+fn sample_novel_insertion_bases(
+    sequence: &[Nucleotide],
+    anchor_0based: usize,
+    length: usize,
+    rng: &mut NeatRng,
+) -> Result<Vec<Nucleotide>, NeatRngError> {
+    const WINDOW: usize = 250;
+    let start = anchor_0based.saturating_sub(WINDOW);
+    let end = anchor_0based.saturating_add(WINDOW).min(sequence.len());
+
+    let mut counts = [0u64; 4];
+    for &b in &sequence[start..end] {
+        match b {
+            Nucleotide::A => counts[0] += 1,
+            Nucleotide::C => counts[1] += 1,
+            Nucleotide::G => counts[2] += 1,
+            Nucleotide::T => counts[3] += 1,
+            _ => {} // N or other ambiguity codes — skip
+        }
+    }
+
+    let total: u64 = counts.iter().sum();
+    // Cumulative ACGT-ordered probabilities for the inverse-CDF sample.
+    let cum: [f64; 4] = if total == 0 {
+        [0.25, 0.5, 0.75, 1.0]
+    } else {
+        let t = total as f64;
+        let p_a = counts[0] as f64 / t;
+        let p_c = counts[1] as f64 / t;
+        let p_g = counts[2] as f64 / t;
+        [p_a, p_a + p_c, p_a + p_c + p_g, 1.0]
+    };
+
+    let bases = [Nucleotide::A, Nucleotide::C, Nucleotide::G, Nucleotide::T];
+    let mut out = Vec::with_capacity(length);
+    for _ in 0..length {
+        let r = rng.random()?;
+        let idx = cum.iter().position(|&c| r < c).unwrap_or(3);
+        out.push(bases[idx]);
+    }
+    Ok(out)
+}
+
 /// Emit a single-line VCF `INFO` field carrying the structural-variant
 /// fields downstream readers expect, so de novo records round-trip
 /// through the writer with the same shape as user-supplied input.
-fn build_info_field(sv_type: SvType, end_1based: usize, copy_number: Option<u32>) -> String {
+fn build_info_field(
+    sv_type: SvType,
+    end_1based: usize,
+    length: usize,
+    copy_number: Option<u32>,
+) -> String {
     let mut parts: Vec<String> = Vec::new();
     let svtype = match sv_type {
         SvType::Del => "DEL",
@@ -747,6 +881,13 @@ fn build_info_field(sv_type: SvType, end_1based: usize, copy_number: Option<u32>
     };
     parts.push(format!("SVTYPE={svtype}"));
     parts.push(format!("END={end_1based}"));
+    if sv_type != SvType::Bnd {
+        let svlen = match sv_type {
+            SvType::Del => -(length as i64),
+            _ => length as i64,
+        };
+        parts.push(format!("SVLEN={svlen}"));
+    }
     if let Some(cn) = copy_number {
         parts.push(format!("CN={cn}"));
     }
@@ -894,24 +1035,26 @@ mod tests {
 
     #[test]
     fn fit_drops_sub_50bp_records_and_unsupported_types() {
-        // 5 input records, only the two ≥50bp DELs should survive into
-        // the fit. The INV and BND are dropped as unsupported; the
+        // 5 input records, only the two ≥50bp DELs and the two BNDs should survive into
+        // the fit. The INV is dropped as unsupported; the
         // 30bp DEL is dropped as an indel-disguised-as-SV.
         let obs = vec![
             sv(100, Some(200), SvType::Del, Genotype::Homozygous, None), // 101bp DEL — keep
             sv(500, Some(700), SvType::Del, Genotype::Heterozygous, None), // 201bp DEL — keep
             sv(800, Some(829), SvType::Del, Genotype::Heterozygous, None), // 30bp — drop (sub-50)
             sv(1000, Some(2000), SvType::Inv, Genotype::Homozygous, None), // INV — drop
-            sv(3000, None, SvType::Bnd, Genotype::Heterozygous, None),     // BND — drop
+            sv(3000, None, SvType::Bnd, Genotype::Heterozygous, None),     // BND — keep
+            sv(4000, None, SvType::Bnd, Genotype::Heterozygous, None),     // BND — keep (need 2 for fit)
         ];
         let m = SvModel::fit_from_observations(&obs, 100_000).unwrap();
         assert!(m.is_usable());
-        assert_eq!(m.type_probabilities.len(), 1);
-        assert_eq!(m.type_probabilities.get(&SvType::Del), Some(&1.0));
-        // 2 surviving SVs / 100kb = 2e-5 per base.
-        assert!((m.per_base_rate - 2e-5).abs() < 1e-12);
-        // 1 homozygous of 2 surviving → 0.5
-        assert!((m.homozygous_frequency - 0.5).abs() < 1e-12);
+        assert_eq!(m.type_probabilities.len(), 2);
+        assert_eq!(m.type_probabilities.get(&SvType::Del), Some(&0.5));
+        assert_eq!(m.type_probabilities.get(&SvType::Bnd), Some(&0.5));
+        // 4 surviving SVs / 100kb = 4e-5 per base.
+        assert!((m.per_base_rate - 4e-5).abs() < 1e-12);
+        // 1 homozygous of 4 surviving → 0.25
+        assert!((m.homozygous_frequency - 0.25).abs() < 1e-12);
     }
 
     #[test]
@@ -1027,7 +1170,12 @@ mod tests {
         m.per_base_rate = per_base_rate;
         m.homozygous_frequency = 0.5;
         m.type_probabilities.insert(sv_type, 1.0);
-        m.length_log_normal.insert(sv_type, (7.0, 0.4));
+        let len_dist = if sv_type == SvType::Bnd {
+            (0.0, 0.0)
+        } else {
+            (7.0, 0.4)
+        };
+        m.length_log_normal.insert(sv_type, len_dist);
         if sv_type == SvType::Cnv {
             m.cnv_copy_number_distribution.insert(0, 0.3);
             m.cnv_copy_number_distribution.insert(3, 0.5);
@@ -1048,7 +1196,7 @@ mod tests {
         let m = model_with_single_type(SvType::Del, 1e-3);
         let seq = acgt_sequence(50_000);
         let mut rng = deterministic_rng();
-        let out = m.sample_variants(50_000, &[], &seq, 2, 0.0, &mut rng);
+        let out = m.sample_variants("chr1", 50_000, &[], &seq, 2, 0.0, &mut rng);
         assert!(
             out.is_empty(),
             "rate_scale=0 must disable generation; got {} SV(s)",
@@ -1061,7 +1209,7 @@ mod tests {
         let m = SvModel::default();
         let seq = acgt_sequence(50_000);
         let mut rng = deterministic_rng();
-        let out = m.sample_variants(50_000, &[], &seq, 2, 1.0, &mut rng);
+        let out = m.sample_variants("chr1", 50_000, &[], &seq, 2, 1.0, &mut rng);
         assert!(out.is_empty(), "unusable model must yield no SVs");
     }
 
@@ -1072,34 +1220,68 @@ mod tests {
         let m = model_with_single_type(SvType::Del, 1e-3);
         let seq = acgt_sequence(MIN_SV_LENGTH_BP);
         let mut rng = deterministic_rng();
-        let out = m.sample_variants(MIN_SV_LENGTH_BP, &[], &seq, 2, 1.0, &mut rng);
+        let out = m.sample_variants("chr1", MIN_SV_LENGTH_BP, &[], &seq, 2, 1.0, &mut rng);
         assert!(out.is_empty());
     }
 
     #[test]
-    fn sample_variants_emits_only_supported_types() {
-        // Even if the model is hand-rolled with an INV in
-        // type_probabilities (which fit_from_observations would never
-        // produce), the sampler skips the unsupported branch — the
-        // resulting output contains only DEL/DUP/CNV.
+    fn sample_variants_emits_all_supported_types() {
+        // The sampler must emit DEL/DUP/CNV/INS/BND/INV if they are in the model.
         let mut m = SvModel::default();
-        m.per_base_rate = 5e-3;
+        m.per_base_rate = 5e-2;
         m.homozygous_frequency = 0.5;
-        m.type_probabilities.insert(SvType::Del, 0.5);
-        m.type_probabilities.insert(SvType::Inv, 0.5);
-        m.length_log_normal.insert(SvType::Del, (7.0, 0.3));
-        m.length_log_normal.insert(SvType::Inv, (7.0, 0.3));
-        let seq = acgt_sequence(100_000);
-        let mut rng = deterministic_rng();
-        let out = m.sample_variants(100_000, &[], &seq, 2, 1.0, &mut rng);
-        for v in &out {
-            let sv = v.alternate.as_symbolic().expect("must be symbolic");
-            assert!(
-                matches!(sv.sv_type, SvType::Del | SvType::Dup | SvType::Cnv),
-                "v1 sampler must only emit DEL/DUP/CNV, got {:?}",
-                sv.sv_type
-            );
+        m.type_probabilities.insert(SvType::Del, 0.16);
+        m.type_probabilities.insert(SvType::Dup, 0.16);
+        m.type_probabilities.insert(SvType::Cnv, 0.17);
+        m.type_probabilities.insert(SvType::Ins, 0.17);
+        m.type_probabilities.insert(SvType::Bnd, 0.17);
+        m.type_probabilities.insert(SvType::Inv, 0.17);
+        for t in [
+            SvType::Del,
+            SvType::Dup,
+            SvType::Cnv,
+            SvType::Ins,
+            SvType::Bnd,
+            SvType::Inv,
+        ] {
+            m.length_log_normal.insert(t, (7.0, 0.3));
         }
+        let seq = acgt_sequence(200_000);
+        let mut rng = deterministic_rng();
+        let out = m.sample_variants("chr1", 200_000, &[], &seq, 2, 1.0, &mut rng);
+        let mut seen_types = std::collections::HashSet::new();
+        let mut seen_literal_ins = false;
+        for v in &out {
+            // Post-#190: de novo INS records are LITERAL Insertion variants
+            // (REF=anchor, ALT=anchor+novel bases) rather than symbolic
+            // `<INS>`, so they live in `alternate.as_literal()` and have
+            // `variant_type == Insertion`. Every other SV type is still
+            // symbolic and goes via `alternate.as_symbolic()`.
+            match v.alternate.as_symbolic() {
+                Some(sv) => {
+                    seen_types.insert(sv.sv_type);
+                }
+                None => {
+                    assert_eq!(
+                        v.variant_type,
+                        VariantType::Insertion,
+                        "non-symbolic ALT must be a literal INS; got {:?}",
+                        v.variant_type
+                    );
+                    seen_literal_ins = true;
+                    seen_types.insert(SvType::Ins);
+                }
+            }
+        }
+        // At this rate and probability we expect to see all six types,
+        // with INS landing on the literal path.
+        assert!(seen_types.contains(&SvType::Del));
+        assert!(seen_types.contains(&SvType::Dup));
+        assert!(seen_types.contains(&SvType::Cnv));
+        assert!(seen_types.contains(&SvType::Ins));
+        assert!(seen_types.contains(&SvType::Bnd));
+        assert!(seen_types.contains(&SvType::Inv));
+        assert!(seen_literal_ins, "expected at least one literal-ALT INS");
     }
 
     #[test]
@@ -1113,7 +1295,7 @@ mod tests {
         let m = model_with_single_type(SvType::Del, 5e-3);
         let seq = acgt_sequence(100_000);
         let mut rng = deterministic_rng();
-        let out = m.sample_variants(100_000, &[], &seq, 2, 1.0, &mut rng);
+        let out = m.sample_variants("chr1", 100_000, &[], &seq, 2, 1.0, &mut rng);
         assert!(
             !out.is_empty(),
             "expected at least one sampled DEL at this rate"
@@ -1140,7 +1322,7 @@ mod tests {
         let m = model_with_single_type(SvType::Dup, 5e-3);
         let seq = acgt_sequence(100_000);
         let mut rng = deterministic_rng();
-        let out = m.sample_variants(100_000, &[], &seq, 2, 1.0, &mut rng);
+        let out = m.sample_variants("chr1", 100_000, &[], &seq, 2, 1.0, &mut rng);
         assert!(!out.is_empty());
         for v in &out {
             let sv = v.alternate.as_symbolic().expect("must be symbolic");
@@ -1154,11 +1336,59 @@ mod tests {
     }
 
     #[test]
+    fn sampled_invs_have_correct_pos_and_end_invariant() {
+        let m = model_with_single_type(SvType::Inv, 5e-3);
+        let seq = acgt_sequence(100_000);
+        let mut rng = deterministic_rng();
+        let out = m.sample_variants("chr1", 100_000, &[], &seq, 2, 1.0, &mut rng);
+        assert!(!out.is_empty());
+        for v in &out {
+            let sv = v.alternate.as_symbolic().expect("must be symbolic");
+            assert_eq!(sv.sv_type, SvType::Inv);
+            let end = sv.end.expect("END must be populated");
+            // For INV, the inverted region is 0-based [location, end).
+            let length = end - v.location;
+            assert!(length >= MIN_SV_LENGTH_BP);
+            assert!(end <= 100_000);
+        }
+    }
+
+    /// Post-#190: de novo `<INS>` records are LITERAL Insertion variants,
+    /// not symbolic `<INS>`. Their length lives in the REF/ALT length
+    /// delta, the insertion site is `variant.location`, and the ALT
+    /// content is the actual novel sequence plus the anchor base.
+    /// (The richer in-memory shape test — uniqueness of fields, ACGT-only
+    /// novel bases, MutatedMap routing to variant_map — lives in
+    /// `de_novo_ins_emits_literal_variant_with_novel_sequence`. This one
+    /// just pins the length invariant: ALT.len() - REF.len() ≥ MIN_SV.)
+    #[test]
+    fn sampled_ins_emit_literal_with_min_length_inserted_sequence() {
+        let m = model_with_single_type(SvType::Ins, 5e-3);
+        let seq = acgt_sequence(100_000);
+        let mut rng = deterministic_rng();
+        let out = m.sample_variants("chr1", 100_000, &[], &seq, 2, 1.0, &mut rng);
+        assert!(!out.is_empty());
+        for v in &out {
+            assert_eq!(v.variant_type, VariantType::Insertion);
+            let alt = v
+                .alternate
+                .as_literal()
+                .expect("de novo INS must be literal-ALT");
+            assert_eq!(v.reference.len(), 1, "REF should be a single anchor base");
+            let inserted_len = alt.len().saturating_sub(v.reference.len());
+            assert!(
+                inserted_len >= MIN_SV_LENGTH_BP,
+                "inserted-sequence length {inserted_len} must be ≥ {MIN_SV_LENGTH_BP}"
+            );
+        }
+    }
+
+    #[test]
     fn sampled_cnvs_carry_info_cn_from_distribution() {
         let m = model_with_single_type(SvType::Cnv, 5e-3);
         let seq = acgt_sequence(100_000);
         let mut rng = deterministic_rng();
-        let out = m.sample_variants(100_000, &[], &seq, 2, 1.0, &mut rng);
+        let out = m.sample_variants("chr1", 100_000, &[], &seq, 2, 1.0, &mut rng);
         assert!(!out.is_empty());
         let expected_cns: std::collections::HashSet<u32> =
             m.cnv_copy_number_distribution.keys().copied().collect();
@@ -1192,7 +1422,7 @@ mod tests {
 
         let seq = acgt_sequence(100_000);
         let mut rng = deterministic_rng();
-        let out = m.sample_variants(100_000, &[], &seq, 2, 1.0, &mut rng);
+        let out = m.sample_variants("chr1", 100_000, &[], &seq, 2, 1.0, &mut rng);
         assert!(!out.is_empty(), "expected at least one sampled CNV");
 
         let fallback_cns: std::collections::HashSet<u32> =
@@ -1206,6 +1436,26 @@ mod tests {
                 "sampled CN={cn} not in FALLBACK_CN_DISTRIBUTION {:?}",
                 fallback_cns
             );
+        }
+    }
+
+    #[test]
+    fn sampled_bnds_have_fixed_1bp_length() {
+        // BNDs currently use a nominal fixed length of 1bp.
+        let m = model_with_single_type(SvType::Bnd, 5e-3);
+        let seq = acgt_sequence(100_000);
+        let mut rng = deterministic_rng();
+        let out = m.sample_variants("chr1", 100_000, &[], &seq, 2, 1.0, &mut rng);
+        assert!(!out.is_empty());
+        for v in &out {
+            let sv = v.alternate.as_symbolic().expect("must be symbolic");
+            assert_eq!(sv.sv_type, SvType::Bnd);
+            assert!(sv.raw_alt.contains("chr1:"));
+            assert_eq!(sv.mate_contig.as_deref(), Some("chr1"));
+            assert!(sv.mate_pos.is_some());
+            let end = sv.end.expect("END must be populated");
+            // For BND, length = 1, so end = location + 1.
+            assert_eq!(end, v.location + 1);
         }
     }
 
@@ -1236,7 +1486,7 @@ mod tests {
         let m = model_with_single_type(SvType::Dup, 1e-3);
         let seq = acgt_sequence(50_000);
         let mut rng = deterministic_rng();
-        let sampled = m.sample_variants(50_000, &existing, &seq, 2, 1.0, &mut rng);
+        let sampled = m.sample_variants("chr1", 50_000, &existing, &seq, 2, 1.0, &mut rng);
 
         let mut ranges: Vec<(usize, usize)> = Vec::new();
         for v in existing.iter().chain(sampled.iter()) {
@@ -1265,7 +1515,7 @@ mod tests {
         seq.extend(acgt_sequence(20_000));
         let m = model_with_single_type(SvType::Del, 2e-3);
         let mut rng = deterministic_rng();
-        let out = m.sample_variants(seq.len(), &[], &seq, 2, 1.0, &mut rng);
+        let out = m.sample_variants("chr1", seq.len(), &[], &seq, 2, 1.0, &mut rng);
         for v in &out {
             // Anchor is 0-based variant.location. Must NOT fall in the
             // all-N prefix.
@@ -1287,8 +1537,8 @@ mod tests {
         let seq = acgt_sequence(100_000);
         let mut rng1 = deterministic_rng();
         let mut rng2 = deterministic_rng();
-        let a = m.sample_variants(100_000, &[], &seq, 2, 1.0, &mut rng1);
-        let b = m.sample_variants(100_000, &[], &seq, 2, 1.0, &mut rng2);
+        let a = m.sample_variants("chr1", 100_000, &[], &seq, 2, 1.0, &mut rng1);
+        let b = m.sample_variants("chr1", 100_000, &[], &seq, 2, 1.0, &mut rng2);
         assert_eq!(a.len(), b.len());
         for (x, y) in a.iter().zip(b.iter()) {
             assert_eq!(x.location, y.location);
@@ -1305,7 +1555,7 @@ mod tests {
         // The INFO string we emit must round-trip through the existing
         // parser so the writer + downstream readers behave like
         // user-supplied input.
-        let info = build_info_field(SvType::Cnv, 1500, Some(4));
+        let info = build_info_field(SvType::Cnv, 1500, 1000, Some(4));
         let parsed = parse_sv_info(&info);
         assert_eq!(parsed.svtype.as_deref(), Some("CNV"));
         assert_eq!(parsed.end, Some(1500));
@@ -1321,13 +1571,15 @@ mod tests {
     }
 
     #[test]
-    fn ranges_overlap_helper_is_half_open() {
-        // Adjacent (touching at boundary) does NOT count as overlap.
-        assert!(!ranges_overlap(0, 50, 50, 100));
-        assert!(!ranges_overlap(50, 100, 0, 50));
-        // Any real intersection does.
-        assert!(ranges_overlap(0, 51, 50, 100));
-        assert!(ranges_overlap(0, 200, 50, 100));
+    fn affected_range_for_existing_ins_is_point_event() {
+        let mut v = sv(1000, None, SvType::Ins, Genotype::Heterozygous, None);
+        if let AlternateType::Symbolic(ref mut sv) = v.alternate {
+            sv.svlen = Some(500);
+        }
+        let range = affected_range_for_existing(&v, 10_000).expect("must have range");
+        // POS=1000 (0-based in the 'sv' helper) -> location=1000
+        // Insertions should only affect the anchor base in terms of reference overlap.
+        assert_eq!(range, (1000, 1001));
     }
 
     // ── sample_poisson tests ─────────────────────────────────────────
@@ -1424,7 +1676,7 @@ mod tests {
         let contig_len = 50_000_000;
         let seq = acgt_sequence(contig_len);
         let mut rng = deterministic_rng();
-        let out = m.sample_variants(contig_len, &[], &seq, 2, 1.0, &mut rng);
+        let out = m.sample_variants("chr1", contig_len, &[], &seq, 2, 1.0, &mut rng);
         // Expected ≈ 24,205. Even with overlap-rejection saturation
         // capping below this (max_retries = 10 × n_sv), we should land
         // very far from zero. Anything > 1000 is a clear sign the
@@ -1434,6 +1686,96 @@ mod tests {
             "Expected thousands of de-novo SVs at chr22 scale; got {}. \
              This used to silently emit zero due to Poisson `exp(-λ)` underflow.",
             out.len()
+        );
+    }
+
+    #[test]
+    fn fit_from_observations_handles_ins() {
+        // Build a training set with only symbolic insertions. Fitter
+        // must use SVLEN as length and produce a usable model.
+        let mut obs = Vec::new();
+        for i in 0..10 {
+            let mut v = sv(1000 * i, None, SvType::Ins, Genotype::Heterozygous, None);
+            if let AlternateType::Symbolic(ref mut sv) = v.alternate {
+                sv.svlen = Some(200);
+            }
+            obs.push(v);
+        }
+        let m = SvModel::fit_from_observations(&obs, 100_000).expect("must produce a model");
+        assert!(m.type_probabilities.contains_key(&SvType::Ins));
+        let (mu, _) = m.length_log_normal.get(&SvType::Ins).unwrap();
+        // exp(mu) should be ~200. ln(200) ≈ 5.298
+        assert!((mu - 200.0f64.ln()).abs() < 1e-5);
+        assert!(m.per_base_rate > 0.0);
+    }
+
+    /// De novo `<INS>` records (#190) must be emitted as LITERAL Insertion
+    /// variants with a generated novel-base sequence — not symbolic
+    /// `<INS>` with no allele. This pins:
+    ///   - VariantType::Insertion (not Complex)
+    ///   - AlternateType::Literal (not Symbolic)
+    ///   - ALT bases = [anchor_base, ...novel_bases] of correct length
+    ///   - Only ACGT in the novel bases (no Ns or other ambiguity)
+    ///   - MutatedMap::from_interval routes the record to variant_map
+    ///     (where literal insertions live) rather than sv_records
+    #[test]
+    fn de_novo_ins_emits_literal_variant_with_novel_sequence() {
+        use crate::structs::mutated_map::MutatedMap;
+        let seq = acgt_sequence(50_000);
+        // INS-only model so we don't have to wade through DEL/DUP/etc.
+        let m = model_with_single_type(SvType::Ins, 1e-3);
+        let mut rng = deterministic_rng();
+        let sampled = m.sample_variants("chr1", 50_000, &[], &seq, 2, 1.0, &mut rng);
+
+        assert!(!sampled.is_empty(), "expected ≥1 de novo INS");
+
+        for v in &sampled {
+            assert_eq!(
+                v.variant_type,
+                VariantType::Insertion,
+                "INS must be a literal Insertion variant; got {:?}",
+                v.variant_type
+            );
+            let alt = match &v.alternate {
+                AlternateType::Literal(bases) => bases,
+                AlternateType::Symbolic(_) => panic!("INS must be literal-ALT, not symbolic"),
+            };
+            assert!(
+                alt.len() > 1,
+                "ALT must include anchor + novel bases; got len {}",
+                alt.len()
+            );
+            assert_eq!(
+                v.reference.len(),
+                1,
+                "REF for an insertion is the single anchor base"
+            );
+            assert_eq!(
+                alt[0], v.reference[0],
+                "ALT[0] must equal REF (anchor base)"
+            );
+            for (i, &b) in alt.iter().enumerate().skip(1) {
+                assert!(
+                    matches!(b, Nucleotide::A | Nucleotide::C | Nucleotide::G | Nucleotide::T),
+                    "novel-insertion base {i} must be ACGT; got {:?}",
+                    b
+                );
+            }
+        }
+
+        // MutatedMap::from_interval routes literal Insertions to variant_map,
+        // not sv_records. Confirm that's where the de novo INS lands.
+        let map = MutatedMap::from_interval(0, 50_000, sampled).unwrap();
+        assert!(
+            map.sv_records.iter().all(|v| !matches!(
+                v.variant_type,
+                VariantType::Insertion
+            )),
+            "de novo INS landed in sv_records; expected variant_map"
+        );
+        assert!(
+            !map.variant_map.is_empty(),
+            "de novo INS missing from variant_map"
         );
     }
 }

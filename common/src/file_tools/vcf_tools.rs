@@ -78,6 +78,28 @@ pub fn write_vcf(
         &mut buffer,
         "##ALT=<ID=INS,Description=\"Insertion of novel sequence\">"
     )?;
+    writeln!(&mut buffer, "##ALT=<ID=DUP,Description=\"Duplication\">")?;
+    writeln!(&mut buffer, "##ALT=<ID=INV,Description=\"Inversion\">")?;
+    writeln!(
+        &mut buffer,
+        "##ALT=<ID=CNV,Description=\"Copy number variant\">"
+    )?;
+    writeln!(
+        &mut buffer,
+        "##INFO=<ID=SVTYPE,Number=1,Type=String,Description=\"Type of structural variant\">"
+    )?;
+    writeln!(
+        &mut buffer,
+        "##INFO=<ID=SVLEN,Number=.,Type=Integer,Description=\"Difference in length between REF and ALT alleles\">"
+    )?;
+    writeln!(
+        &mut buffer,
+        "##INFO=<ID=END,Number=1,Type=Integer,Description=\"End position of the variant described in this record\">"
+    )?;
+    writeln!(
+        &mut buffer,
+        "##INFO=<ID=CN,Number=1,Type=Integer,Description=\"Copy number of segment\">"
+    )?;
     writeln!(
         &mut buffer,
         "##INFO=<ID=NEAT_PROVENANCE,Number=1,Type=String,\
@@ -129,6 +151,15 @@ pub fn write_vcf(
             records.extend(block_map.sv_records.iter());
         }
         records.sort_by_key(|v| v.location);
+        // Defense in depth: if a variant somehow ends up in both
+        // variant_map AND sv_records (bypassing MutatedMap::from_interval's
+        // bin-routing), dedup by (location, ref, alt) before writing so we
+        // don't emit it twice. See test_write_vcf_avoid_duplicating_symbolic_variants.
+        records.dedup_by(|a, b| {
+            a.location == b.location
+                && a.reference == b.reference
+                && a.alternate == b.alternate
+        });
 
         for variant in records {
             let alt_str = match &variant.alternate {
@@ -792,6 +823,24 @@ chr1\t150\t.\tG\t<DEL>\t60\tPASS\tSVTYPE=DEL;END=300\tGT\t1/1\n";
     }
 
     #[test]
+    fn test_read_vcf_symbolic_inv() {
+        let vcf_content = "\
+##fileformat=VCFv4.1\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n\
+chr1\t500\t.\tA\t<INV>\t60\tPASS\tSVTYPE=INV;END=2500\tGT\t0/1\n";
+        let mut tmp = tempfile::Builder::new().suffix(".vcf").tempfile().unwrap();
+        write!(tmp, "{}", vcf_content).unwrap();
+        let records = read_vcf(tmp.path().to_path_buf()).unwrap();
+        let v = &records.get("chr1").unwrap()[0];
+        assert_eq!(v.variant_type, VariantType::Complex);
+        let sv = v.alternate.as_symbolic().unwrap();
+        assert_eq!(sv.sv_type, SvType::Inv);
+        assert_eq!(sv.end, Some(2500));
+        // span() = END - POS + 1 = 2500 - 500 + 1 = 2001
+        assert_eq!(sv.span(500), Some(2001));
+    }
+
+    #[test]
     fn test_read_vcf_symbolic_svtype_disagreement_still_parses() {
         // If SVTYPE conflicts with the ALT tag, we trust the ALT and warn.
         // The variant is still produced (we don't drop the record).
@@ -857,6 +906,190 @@ chr2\t250\t.\tG\tC\t60\tPASS\t.\tGT\t1|1\n";
         let records = read_vcf(path).unwrap();
         assert_eq!(records.get("chr1").unwrap().len(), 1);
         assert_eq!(records.get("chr2").unwrap().len(), 1);
+    }
+
+    /// `MutatedMap::from_interval` routes symbolic ALTs to `sv_records`
+    /// and literal ALTs to `variant_map` — a variant is never in both bins
+    /// via the public API. This test manually constructs the malformed
+    /// state (variant in both bins) to confirm the writer is robust to it
+    /// even when someone bypasses `from_interval`. write_vcf dedups by
+    /// `variant.location` before emission as defense-in-depth.
+    #[test]
+    fn test_write_vcf_avoid_duplicating_symbolic_variants() {
+        use crate::structs::variants::{AlternateType, Provenance, SvData, SvType, Genotype};
+        let sv = Variant {
+            variant_type: VariantType::Complex,
+            location: 100,
+            reference: vec![Nucleotide::A],
+            alternate: AlternateType::Symbolic(SvData::new("<DEL>", SvType::Del)),
+            genotype_str: "1/1".to_string(),
+            genotype: Genotype::Homozygous,
+            id: None,
+            quality_score: None,
+            filter: None,
+            info: None,
+            format: Vec::new(),
+            sample: Vec::new(),
+            provenance: Provenance::Denovo,
+        };
+
+        // Manually construct a MutatedMap where the same SV is in both variant_map AND sv_records.
+        // This simulates the problematic state described in the issue.
+        let mut variant_map = HashMap::new();
+        variant_map.insert(100usize, sv.clone());
+        let map = MutatedMap {
+            flagged_positions: vec![100],
+            block_interval: (0, 1000),
+            variant_map,
+            sv_records: vec![sv],
+        };
+
+        let mut maps = HashMap::new();
+        maps.insert("chr1".to_string(), vec![map]);
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let output = temp_dir.path().join("dupe.vcf");
+        write_vcf(
+            &maps,
+            &vec!["chr1".to_string()],
+            &HashMap::from([("chr1".to_string(), 1000usize)]),
+            &PathBuf::from("ref.fa"),
+            false,
+            &output,
+            &HashMap::new(),
+        ).unwrap();
+
+        let body: Vec<String> = crate::file_tools::file_io::read_gzip_lines(&output)
+            .unwrap()
+            .map(|l| l.unwrap())
+            .collect();
+
+        let variant_lines: Vec<_> = body.iter().filter(|l| l.contains("\t101\t")).collect();
+        assert_eq!(variant_lines.len(), 1, "Expected only 1 entry for the variant at position 101, but found: {:?}", variant_lines);
+    }
+
+    #[test]
+    fn test_read_vcf_all_breakend_forms_round_trip() {
+        // Test all 4 VCF 4.2 breakend forms
+        let alts = vec![
+            "T[chr2:300[",
+            "G]chr2:400]",
+            "]chr1:100]C",
+            "[chr1:200[A",
+            "G.",
+            ".A",
+            "GTC[2:1000[",
+        ];
+
+        let vcf_content = format!("\
+##fileformat=VCFv4.2
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE
+chr1\t100\tbnd_U\tT\t{}\t60\tPASS\tSVTYPE=BND;MATEID=bnd_V\tGT\t0/1
+chr1\t200\tbnd_W\tG\t{}\t60\tPASS\tSVTYPE=BND;MATEID=bnd_X\tGT\t0/1
+chr2\t300\tbnd_V\tC\t{}\t60\tPASS\tSVTYPE=BND;MATEID=bnd_U\tGT\t0/1
+chr2\t400\tbnd_X\tA\t{}\t60\tPASS\tSVTYPE=BND;MATEID=bnd_W\tGT\t0/1
+chr1\t500\t.\tG\t{}\t60\tPASS\tSVTYPE=BND\tGT\t0/1
+chr1\t600\t.\tA\t{}\t60\tPASS\tSVTYPE=BND\tGT\t0/1
+chr2\t700\t.\tGTC\t{}\t60\tPASS\tSVTYPE=BND\tGT\t0/1
+", alts[0], alts[1], alts[2], alts[3], alts[4], alts[5], alts[6]);
+
+        let mut tmp = tempfile::Builder::new().suffix(".vcf").tempfile().unwrap();
+        write!(tmp, "{}", vcf_content).unwrap();
+        let records = read_vcf(tmp.path().to_path_buf()).unwrap();
+        
+        let chr1_variants = records.get("chr1").unwrap();
+        let chr2_variants = records.get("chr2").unwrap();
+        
+        assert_eq!(chr1_variants.len(), 4);
+        assert_eq!(chr2_variants.len(), 3);
+
+        // Round trip check
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut maps = HashMap::new();
+        
+        let mut chr1_records = Vec::new();
+        for v in chr1_variants {
+            chr1_records.push(v.clone());
+        }
+        let map1 = MutatedMap::from_interval(0, 1000, chr1_records).unwrap();
+        maps.insert("chr1".to_string(), vec![map1]);
+
+        let mut chr2_records = Vec::new();
+        for v in chr2_variants {
+            chr2_records.push(v.clone());
+        }
+        let map2 = MutatedMap::from_interval(0, 1000, chr2_records).unwrap();
+        maps.insert("chr2".to_string(), vec![map2]);
+
+        let output = temp_dir.path().join("bnd_rt.vcf");
+        write_vcf(
+            &maps,
+            &vec!["chr1".to_string(), "chr2".to_string()],
+            &HashMap::from([("chr1".to_string(), 1000usize), ("chr2".to_string(), 1000usize)]),
+            &PathBuf::from("ref.fa"),
+            false,
+            &output,
+            &HashMap::new(),
+        ).unwrap();
+
+        let body: Vec<String> = crate::file_tools::file_io::read_gzip_lines(&output)
+            .unwrap()
+            .map(|l| l.unwrap())
+            .collect();
+
+        for alt in alts {
+            assert!(
+                body.iter().any(|l| l.contains(alt)),
+                "expected ALT {} to round-trip; got: {:?}",
+                alt,
+                body
+            );
+        }
+    }
+
+    #[test]
+    fn test_write_vcf_bnd_variant_round_trips() {
+        use crate::structs::variants::{AlternateType, Provenance, SvData, SvType, Genotype};
+        let bnd_alt = "G]17:198982]";
+        let sv = Variant {
+            variant_type: VariantType::BND,
+            location: 100,
+            reference: vec![Nucleotide::G],
+            alternate: AlternateType::Symbolic(SvData::new(bnd_alt, SvType::Bnd)),
+            genotype_str: "0/1".to_string(),
+            genotype: Genotype::Heterozygous,
+            id: None,
+            quality_score: None,
+            filter: None,
+            info: Some("MATEID=test".to_string()),
+            format: vec!["GT".to_string()],
+            sample: vec!["0/1".to_string()],
+            provenance: Provenance::InputVcf,
+        };
+
+        let map = MutatedMap::from_interval(0, 1000, vec![sv]).unwrap();
+        let mut maps = HashMap::new();
+        maps.insert("chr1".to_string(), vec![map]);
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let output = temp_dir.path().join("bnd.vcf");
+        write_vcf(
+            &maps,
+            &vec!["chr1".to_string()],
+            &HashMap::from([("chr1".to_string(), 1000usize)]),
+            &PathBuf::from("ref.fa"),
+            false,
+            &output,
+            &HashMap::new(),
+        ).unwrap();
+
+        let body: Vec<String> = crate::file_tools::file_io::read_gzip_lines(&output)
+            .unwrap()
+            .map(|l| l.unwrap())
+            .collect();
+
+        let bnd_line = body.iter().find(|l| l.contains(bnd_alt)).expect("BND ALT not found in output VCF");
+        assert!(bnd_line.contains("MATEID=test"), "INFO field (MATEID) not preserved in output VCF: {}", bnd_line);
     }
 
     #[test]

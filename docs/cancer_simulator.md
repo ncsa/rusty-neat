@@ -101,16 +101,16 @@ The one feature NEAT 2.1 had that rneat does not is `HIGH_MUT_REGIONS` — a per
 
 ## SV gap analysis
 
-The cancer MVP's credibility depends on rneat being able to generate the SVs that define cancer karyotypes. v1.10.1 generates `<DEL>` / `<DUP>` / `<CNV>` (covering the coverage-altering axis) but not `<INS>` / `<INV>` / `<BND>` (the structural axis — which is what most clinically-recognizable cancer SVs depend on).
+The cancer MVP's credibility depends on rneat being able to generate the SVs that define cancer karyotypes. v1.10.1 generated `<DEL>` / `<DUP>` / `<CNV>` (covering the coverage-altering axis); **v1.12.0 closes the structural axis** by adding `<INS>` / `<INV>` / `<BND>` — which is what most clinically-recognizable cancer SVs depend on.
 
-| Tier | Ticket | Gap | Cancer relevance | Effort |
+| Tier | Ticket | Gap | Cancer relevance | Status |
 |---|---|---|---|---|
-| **1** | **#187** | `<BND>` translocations with junction reads | **Critical** — BCR-ABL, PML-RARA, EWSR1-FLI1, MYC-IGH, TMPRSS2-ERG, etc. | Medium-high |
-| **1** | **#188** | `<INV>` inversions with read-strand flipping | Moderate — inv(16) AML, inv(3) MDS, focal inversions in solid tumors | Medium |
-| **2** | **#189** | Verify whole-arm / whole-chromosome aneuploidy via existing DEL/DUP | **High** (universal in cancer) but mostly verification, not new code | Low |
-| **2** | **#190** | De novo `<INS>` with novel-sequence generation | Moderate — L1 retrotransposition (lung, colorectal, HCC); viral integrations (HPV, HBV, EBV) | Low |
-| **3** | **#191** | Complex rearrangement patterns (chromothripsis, chromoplexy, BFB) | **High in specific cancers** (sarcoma, GBM, prostate) — but requires correlated multi-event sampler | Medium-high (design first) |
-| **3** | **#192** | ecDNA / double minutes | **High in some aggressive cancers** (~25–50% of GBM) but needs first-class extrachromosomal data-model concept | High (design first) |
+| **1** | **#187** | `<BND>` translocations with junction reads | **Critical** — BCR-ABL, PML-RARA, EWSR1-FLI1, MYC-IGH, TMPRSS2-ERG, etc. | ✅ Shipped in v1.12.0 |
+| **1** | **#188** | `<INV>` inversions with read-strand flipping | Moderate — inv(16) AML, inv(3) MDS, focal inversions in solid tumors | ✅ Shipped in v1.12.0 |
+| **2** | **#189** | Verify whole-arm / whole-chromosome aneuploidy via existing DEL/DUP | **High** (universal in cancer) but mostly verification, not new code | ✅ Resolved in v1.10.3 |
+| **2** | **#190** | De novo `<INS>` with novel-sequence generation | Moderate — L1 retrotransposition (lung, colorectal, HCC); viral integrations (HPV, HBV, EBV) | ✅ Shipped in v1.12.0 (random-novel-sequence MVP) |
+| **3** | **#191** | Complex rearrangement patterns (chromothripsis, chromoplexy, BFB) | **High in specific cancers** (sarcoma, GBM, prostate) — but requires correlated multi-event sampler | Design pending |
+| **3** | **#192** | ecDNA / double minutes | **High in some aggressive cancers** (~25–50% of GBM) but needs first-class extrachromosomal data-model concept | Design pending |
 
 ## Roadmap
 
@@ -128,12 +128,18 @@ The cancer MVP's credibility depends on rneat being able to generate the SVs tha
 
 **Exit criterion:** running the orchestration script with reasonable defaults produces a merged FASTQ that a current somatic SNV caller (Mutect2 or Strelka) calls into a VCF that scores reasonably well against the origin-tagged truth.
 
-### Stage 2 — cancer SV credibility
-6. **#187** — `<BND>` translocations with junction reads.
-7. **#188** — `<INV>` inversions with strand flipping.
-8. **#190** — de novo `<INS>` with novel sequence.
+### Stage 2 — cancer SV credibility (shipped in v1.12.0)
+6. ✅ **#187** — `<BND>` translocations with junction reads. Chimeric-pair generation via `process_chimeric_variants` → `generate_chimeric_pair` → `get_bnd_pieces` + `get_stitched_sequence`, correctly handling the four VCF 4.2 breakend orientation forms (`t[p[`, `t]p]`, `[p[t`, `]p]t`). Paired-BND deduplication via canonical-ID HashSet.
+7. ✅ **#188** — `<INV>` inversions with strand flipping. Two-junction model (start of inversion + end of inversion), each independently sampling reads. `generate_inv_pair` + `get_inv_pieces` handle orientation flipping per junction. Smarter fragment-length sampling + graceful `TruncatedRead` handling shipped alongside, applied to BND too.
+8. ✅ **#190** — de novo `<INS>` with novel sequence. Emitted as LITERAL Insertion records (`REF="A"`, `ALT="A<novel-bases>"`) — same shape Manta / DELLY produce when they resolve the inserted sequence. Routes through the existing literal-insertion machinery. Novel sequence drawn from single-base composition of a ±250 bp window around the anchor.
 
-**Exit criterion:** a current somatic SV caller (GRIDSS or Manta) calls translocation breakpoints from the simulated data with high enough recall that the simulator could plausibly be used as a benchmark fixture.
+**Exit criterion:** a current somatic SV caller (GRIDSS or Manta) calls translocation breakpoints from the simulated data with high enough recall that the simulator could plausibly be used as a benchmark fixture. **Status:** functionally validated against a synthetic 5 kb fixture (see v1.12.0 CHANGELOG); a real-caller benchmark (Manta / DELLY swapped into `tools/cancer_benchmark.sh` for Mutect2) is the natural v1.12.1 follow-up.
+
+#### Known limitations carried into v1.12.0
+- **Breakpoint double-counting.** The regular per-contig pass still generates reads covering BND / INV breakpoint positions (it reads from the unbroken reference), so the breakpoint locus ends up with regular reads PLUS junction reads — roughly 2× coverage for homozygous variants, closer to correct for heterozygous. A proper fix would teach the regular pass to skip the broken-allele fraction at these positions; deferred to v2.
+- **Default model has no BND / INV.** The bundled gnomAD-SV-derived `default_sv_model()` filters BND / INV out at training time. Users wanting these in default runs must either train a model from a corpus that includes them (PCAWG consensus calls) or supply BND / INV records via `input_vcf:`.
+- **`FORMAT/AD/DP/AF` asymmetric across SV types.** Symbolic SVs (BND, INV, DEL, DUP, CNV) emit `.,.:.:.` placeholders since span-based depth doesn't fit a point-based counter. INS is now literal and gets real counts.
+- **No mobile-element library for de novo INS.** Insertions are random novel sequence, not drawn from L1 / Alu / SVA / HERV consensus. Library-driven path is a #190 v2 extension; viral integration is a separate design problem.
 
 ### Stage 3 — advanced cancer patterns (defer until stage 2 lands)
 9. **#191** — chromothripsis / chromoplexy / BFB design pass.

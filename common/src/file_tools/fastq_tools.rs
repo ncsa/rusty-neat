@@ -188,19 +188,20 @@ pub fn write_block_fastq<T: Write, W: Write>(
             Err(e) => return Err(e),
         };
 
-        write_read_to_fastq(&r1_record, buffer1)?;
-        if let Some(ref mut bam) = bam_writer {
-            bam.stage_read_record(&r1_record)
-                .map_err(|e| FastqToolsError::BamError(e.to_string()))?;
-        }
-
-        if paired_ended {
+        // Generate r2 BEFORE writing r1, so that a TruncatedRead on r2
+        // skips BOTH reads together. Otherwise r1 lands in buffer1 with
+        // no matching r2 in buffer2, and BWA-MEM aborts with "paired
+        // reads have different names" when the streams desync. The
+        // failure mode was always reachable but became common after #221
+        // (the literal-DEL skip+D-op fix), which legitimately advances
+        // seq_index past the deleted bases and exhausts the buffer for
+        // long deletions near a fragment edge.
+        let r2_record = if paired_ended {
             let quality_scores_2 =
                 quality_score_model.generate_quality_scores(effective_read_len, rng)?;
             let r2_pos = abs_end.saturating_sub(effective_read_len);
             let tlen_r2 = -((abs_end - abs_start) as i32);
-
-            let r2_record = match generate_read(
+            match generate_read(
                 &reverse_complement(fragment),
                 &reads2_flagged,
                 &read2_variants,
@@ -218,14 +219,25 @@ pub fn write_block_fastq<T: Write, W: Write>(
                 true,
                 ad_counter,
             ) {
-                Ok(record) => record,
+                Ok(record) => Some(record),
                 Err(FastqToolsError::TruncatedRead(msg)) => {
                     debug!("{}", msg);
+                    // Drop r1 alongside r2 so the streams stay in sync.
                     continue;
                 }
                 Err(e) => return Err(e),
-            };
+            }
+        } else {
+            None
+        };
 
+        write_read_to_fastq(&r1_record, buffer1)?;
+        if let Some(ref mut bam) = bam_writer {
+            bam.stage_read_record(&r1_record)
+                .map_err(|e| FastqToolsError::BamError(e.to_string()))?;
+        }
+
+        if let Some(r2_record) = r2_record {
             write_read_to_fastq(&r2_record, buffer2)?;
             if let Some(ref mut bam) = bam_writer {
                 bam.stage_read_record(&r2_record)

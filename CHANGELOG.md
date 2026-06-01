@@ -1,3 +1,54 @@
+6/1/2026
+========
+## rneat v1.13.0
+
+### Minor release: symbolic SVs now emit split-read + discordant-PE signal, literal long deletions land in CIGAR
+
+Closes #220 and #221. v1.12.1's validation revealed that the v1.12.0 SV pipeline produced truth records but no detectable signal for split-read/PE-discordant SV callers like Manta — 0% recall on the bundled-model somatic SVs. This release closes that gap for DEL/DUP/CNV and fixes a separate pre-existing bug where literal long deletions from the standard indel_model appeared in the truth VCF but not in the FASTQ.
+
+#### #221 — Literal long deletions now produce CIGAR D-ops
+- **Bug.** In `generate_read`, the alt-allele branch wrote the 1-byte ALT for a literal Deletion but never advanced `seq_index` past the deleted REF bases. For a REF=77bp / ALT=1bp variant the read continued transcribing the deleted bases from the unbroken reference and emitted CIGAR `<read_length>M` with no D op — leaving the deletion completely invisible to downstream callers despite rneat's own AD counter reporting alt support.
+- **Fix.** Apply the same skip+D-op pattern that `SequencingErrorType::DeletionError` already uses, capped at the remaining fragment buffer. Pure 5-line change in `common/src/file_tools/fastq_tools.rs`. Pinned by `test_literal_long_deletion_emits_d_ops` (asserts ≥49 D ops for a 50-bp homozygous deletion).
+- **Impact.** Pre-existing bug since v1.10+. Affected every gen-reads run whose indel_model produced deletions long enough to be caller-relevant (typically ≥10bp). Most visible in cancer benchmarks where the COSMIC-trained indel distribution has a long tail.
+
+#### #220 — Symbolic DEL/DUP/CNV gain chimeric junction reads
+- **Gap.** Pre-v1.13.0 symbolic `<DEL>` / `<DUP>` / `<CNV>` records only modulated depth via `build_coverage_multipliers`. Manta, DELLY, GRIDSS and similar split-read/PE-discordant SV callers need junction-spanning reads to call SVs reliably; depth alone isn't enough. v1.12.0 already had chimeric paths for BND (#187) and INV (#188), but DEL/DUP/CNV were depth-only.
+- **Implementation.** Extends `process_chimeric_variants` in `rneat/src/gen_reads/utils/runner.rs` with three new branches:
+  - **DEL.** `generate_del_pair` + `get_del_pieces` stitch REF[..=POS] (anchor included) with REF[END..] (post-deletion). BWA aligns the result as discordant PE pairs (mate distance overshoots by END-POS) and split-read alignments (soft-clip at POS realigns to REF[END..]).
+  - **DUP (tandem).** `generate_dup_pair` + `get_dup_pieces` stitch REF[end-k..end] with REF[location..location+k] — the tandem-copy boundary. BWA sees the inverted-coordinate signature (end before start) and emits split-read or wrong-orientation PE signal.
+  - **CNV.** Dispatches to the DEL or DUP path based on whether INFO/CN is below or above the diploid baseline. CN=0 → DEL-like; CN=4 → DUP-like with the magnitude of CN deviation driving coverage scale. CNVs without INFO/CN are skipped with a debug log.
+- **Pinned by** new integration tests `rneat/tests/del_chimeric.rs`, `rneat/tests/dup_chimeric.rs`, and `rneat/tests/cnv_chimeric.rs` (the last covers both CN<ploidy and CN>ploidy dispatch with cross-type negative assertions).
+
+#### Bug fix: PE pair-sync regression exposed by #221
+- **Bug.** In `write_block_fastq`, if `generate_read` returned `TruncatedRead` for r2, the function would `continue` the fragment loop — but r1 had already been written to buffer1. This desynced the r1/r2 streams and BWA-MEM aborted with `paired reads have different names`. Always reachable in principle; became common after #221's literal-DEL skip+D-op fix legitimately advances seq_index past the deleted bases and can exhaust the buffer for long deletions near a fragment edge.
+- **Fix.** Generate r2 BEFORE writing r1; if r2 returns TruncatedRead, drop r1 alongside it. r1 and r2 now succeed together or fail together. Caught and resolved during chr22 end-to-end validation (BWA error on first pass, clean run after the fix).
+
+#### Cancer SV benchmark: Manta recall now meets v1.13.0 acceptance criterion (≥50% on DEL/DUP)
+Same chr22 PE 30× / purity 0.5 / sv-rate-scale 50 fixture used in v1.12.1 validation. Comparison of Manta somatic SV recall (±500bp position match, type-aware):
+
+| SV type | v1.12.1 recall | v1.13.0 recall |
+|---------|----------------|----------------|
+| DEL     | 0/32 (0%)      | **21/39 (54%)** |
+| DUP     | 0/13 (0%)      | **12/22 (55%)** |
+| CNV     | 0/2 (0%)       | **1/1 (100%)**  |
+| INV     | 0/5 (0%)       | 0/4 (0%) — unchanged, deeper caller limitation |
+| BND     | 0/32 (0%)      | 0/35 (0%) — unchanged, deeper caller limitation |
+| **TOTAL** | **0/84 (0%)** | **34/101 (34%)** |
+
+Precision: 100% — every Manta PASS somatic call matched a real truth record at ±500bp.
+
+#### Known limitations carried into v1.13.0
+- **INV and BND still at 0% Manta recall.** The v1.12.0 chimeric paths emit junction reads, but Manta's somatic INV/BND detection thresholds appear too strict for the simulated junctions at this coverage. Tracked as a v1.13.1 follow-up: design either stronger PE signal (e.g., truly discordant orientation) or document the alternative caller (GRIDSS, DELLY) to use.
+- **Breakpoint double-counting.** The regular per-contig pass still generates unbroken-reference reads at SV breakpoints. For homozygous SVs the breakpoint locus ends up with regular reads PLUS junction reads — roughly 2× coverage at the boundary. Doesn't affect Manta's call decisions for DEL/DUP (verified by the recall numbers above) but inflates depth at the junction. Tracked as a v1.13.1 follow-up.
+
+#### Tests
+- 328 lib + 223 binary unit tests pass.
+- NEW unit test: `test_literal_long_deletion_emits_d_ops`.
+- NEW integration tests: `del_chimeric.rs` (1), `dup_chimeric.rs` (1), `cnv_chimeric.rs` (2).
+- v1.12.0 SV integration tests still passing (`bnd_fastq.rs`, `bnd_roundtrip.rs`, `inv_fastq.rs`, `multi_sv_integration.rs`, `cosmic_bundle.rs`).
+
+---
+
 5/31/2026
 =========
 ## rneat v1.12.1

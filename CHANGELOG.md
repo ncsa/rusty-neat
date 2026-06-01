@@ -1,3 +1,27 @@
+5/31/2026
+=========
+## rneat v1.12.1
+
+### Patch release: cancer SV model bundled into the COSMIC tumor artifact
+
+Closes #217. Before this patch the bundled `tools/cosmic_v104_pancancer_model.json.gz` had `sv_model: null`, so `cancer_simulate.sh`'s tumor pass produced zero symbolic SVs even with `--sv-rate-scale > 0`. The v1.12.0 BND / INV / INS pipeline was wired up but inert when driven by the bundled tumor model — the only way to exercise it was to train a custom model or supply BND / INV through `input_vcf:`.
+
+#### What changed
+- **NEW `tools/inject_cancer_sv_model.py`.** Injects a literature-derived `sv_model` component into any `MutationModel` JSON. Parameters are pan-cancer PCAWG defaults (Li et al., *Nature* 578, 112–121, 2020): `per_base_rate = 3.8e-8` (≈ 110 somatic SVs / tumor over 2.9 Gb), type distribution 35% DEL / 17% DUP / 35% BND / 8% INV / 4% INS / 1% CNV (BND over-represented vs gnomAD-derived germline default's 19%), length log-normals centered on cancer-typical medians (DEL ~5 kb, DUP ~30 kb, INV ~22 kb, CNV ~1 Mb, INS ~300 bp), and a bimodal copy-number distribution covering both homozygous loss (CN=0) and high-level amplification (CN=5+).
+- **Re-packaged `tools/cosmic_v104_pancancer_model.json.gz`** (9.2 KB → 9.8 KB) with the injected `sv_model`. Existing SNV/indel parameters are unchanged — this is purely additive.
+- **Regression test `rneat/tests/cosmic_bundle.rs`.** Two tests: one asserts the bundled file deserializes with a non-null `sv_model` carrying all six SV types and cancer-typical rates (catches accidental copy-from-germline-default); a second runs `gen-reads` end-to-end with the bundle wired in via `mutation_model:` + high `sv_rate_scale` and confirms symbolic / BND records reach the output VCF.
+- **`tools/cancer_simulate.sh` help text** updated to reflect that the bundled tumor model now carries an SV component.
+
+#### Why heuristic literature values, not a data refit
+COSMIC GenomeScreensMutant is SNV/indel-only. A real cancer-SV refit needs a separate corpus — PCAWG consensus SV calls or COSMIC StructVar — and is tracked at **#218** for v1.13. Shipping literature-derived defaults now means users can exercise the v1.12.0 BND / INV / INS pathways with `cancer_simulate.sh --sv-rate-scale 1.0` today; the v1.13 refit will fine-tune the rates without changing any code paths.
+
+#### Tests
+- 327 lib + 223 binary unit tests pass (unchanged from v1.12.0).
+- NEW `rneat/tests/cosmic_bundle.rs`: 2 tests, both passing.
+- v1.12.0 SV integration tests still passing (`bnd_fastq.rs`, `bnd_roundtrip.rs`, `inv_fastq.rs`, `multi_sv_integration.rs`).
+
+---
+
 5/30/2026
 =========
 ## rneat v1.12.0

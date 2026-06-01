@@ -104,10 +104,16 @@ Tumor-pass SV generation:
                      As of v1.12.0, gen-reads also emits BND translocations,
                      INV inversions, and de novo INS (literal insertions with
                      novel sequence) when --sv-rate-scale > 0 AND the supplied
-                     mutation model has those SV types in its pool. The bundled
-                     gnomAD-SV-derived default does NOT include BND or INV;
-                     train from PCAWG-style data or pass them via --germline-vcf
-                     to exercise the new chimeric-read pathways.
+                     mutation model has those SV types in its pool.
+
+                     As of v1.12.1, the bundled COSMIC tumor model
+                     (tools/cosmic_v104_pancancer_model.json.gz) carries a
+                     literature-derived (PCAWG, Li et al. 2020) sv_model
+                     component covering all six SV types. The germline default
+                     (default_sv_model) was already populated; before v1.12.1
+                     the COSMIC model's sv_model was null, so the tumor pass
+                     silently produced zero symbolic SVs. See #218 for the
+                     follow-up plan to refit from a real cancer-SV corpus.
 
                      Known caveat: chimeric BND/INV junction reads are
                      generated on top of regular reference reads at the same

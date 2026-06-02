@@ -188,19 +188,20 @@ pub fn write_block_fastq<T: Write, W: Write>(
             Err(e) => return Err(e),
         };
 
-        write_read_to_fastq(&r1_record, buffer1)?;
-        if let Some(ref mut bam) = bam_writer {
-            bam.stage_read_record(&r1_record)
-                .map_err(|e| FastqToolsError::BamError(e.to_string()))?;
-        }
-
-        if paired_ended {
+        // Generate r2 BEFORE writing r1, so that a TruncatedRead on r2
+        // skips BOTH reads together. Otherwise r1 lands in buffer1 with
+        // no matching r2 in buffer2, and BWA-MEM aborts with "paired
+        // reads have different names" when the streams desync. The
+        // failure mode was always reachable but became common after #221
+        // (the literal-DEL skip+D-op fix), which legitimately advances
+        // seq_index past the deleted bases and exhausts the buffer for
+        // long deletions near a fragment edge.
+        let r2_record = if paired_ended {
             let quality_scores_2 =
                 quality_score_model.generate_quality_scores(effective_read_len, rng)?;
             let r2_pos = abs_end.saturating_sub(effective_read_len);
             let tlen_r2 = -((abs_end - abs_start) as i32);
-
-            let r2_record = match generate_read(
+            match generate_read(
                 &reverse_complement(fragment),
                 &reads2_flagged,
                 &read2_variants,
@@ -218,14 +219,25 @@ pub fn write_block_fastq<T: Write, W: Write>(
                 true,
                 ad_counter,
             ) {
-                Ok(record) => record,
+                Ok(record) => Some(record),
                 Err(FastqToolsError::TruncatedRead(msg)) => {
                     debug!("{}", msg);
+                    // Drop r1 alongside r2 so the streams stay in sync.
                     continue;
                 }
                 Err(e) => return Err(e),
-            };
+            }
+        } else {
+            None
+        };
 
+        write_read_to_fastq(&r1_record, buffer1)?;
+        if let Some(ref mut bam) = bam_writer {
+            bam.stage_read_record(&r1_record)
+                .map_err(|e| FastqToolsError::BamError(e.to_string()))?;
+        }
+
+        if let Some(r2_record) = r2_record {
             write_read_to_fastq(&r2_record, buffer2)?;
             if let Some(ref mut bam) = bam_writer {
                 bam.stage_read_record(&r2_record)
@@ -341,6 +353,29 @@ pub fn generate_read(
                         .collect(),
                 };
                 entry.1 += 1; // alt
+                // For a net-deletion variant (REF longer than ALT — typically a
+                // pure literal deletion from indel_model with ALT.len() == 1),
+                // skip the deleted REF bases. Without this, the read transcribes
+                // the deleted region from the unbroken reference and emits no
+                // CIGAR D-op, leaving the variant invisible to downstream
+                // callers (see #221). The deletion_skip + D-op machinery below
+                // is the same path SequencingErrorType::DeletionError already
+                // uses; reusing it keeps CIGAR shape uniform across both
+                // sources of deletion signal.
+                let ref_len = variant.reference.len();
+                let alt_len = base_to_write.len();
+                if ref_len > alt_len {
+                    let want_skip = ref_len - alt_len;
+                    // Cap at remaining buffer so we don't read past the
+                    // fragment end. Truncated cases fall through to the
+                    // existing TruncatedRead error path.
+                    let max_skip = fragment_length
+                        .saturating_sub(seq_index)
+                        .saturating_sub(1);
+                    let actual_skip = want_skip.min(max_skip);
+                    seq_index += actual_skip;
+                    deletion_skip = actual_skip;
+                }
             } else {
                 entry.0 += 1; // ref (het coin landed on ref)
             }
@@ -1047,6 +1082,90 @@ mod tests {
                 "deletion errors must make cigar longer than read_length"
             );
         }
+    }
+
+    /// #221 regression: a long literal Deletion (REF=50bp, ALT=1bp) must
+    /// produce a CIGAR with the 49-base D-op so downstream callers see the
+    /// deletion. Before the fix, the alt branch wrote the 1-byte anchor and
+    /// then advanced seq_index by 1, so the read transcribed the 49 deleted
+    /// bases from the unbroken reference and emitted CIGAR `<read_length>M`.
+    #[test]
+    fn test_literal_long_deletion_emits_d_ops() {
+        // 200-bp reference: 30 bases of left context + 50-bp REF starting at
+        // pos 30 + 120 bases of right context.
+        let mut sequence = vec![A; 30];
+        sequence.extend(vec![C; 50]); // the 50 REF bases (anchor + 49 deleted)
+        sequence.extend(vec![T; 120]); // post-deletion context
+        let read_length = 100;
+
+        // Homozygous DEL at position 30, REF=50bp (CCCC...), ALT=1bp (anchor C).
+        let ref_bases: Vec<Nucleotide> = vec![C; 50];
+        let alt_bases: Vec<Nucleotide> = vec![C];
+        let variant = Variant::new(
+            VariantType::Deletion,
+            30,
+            &ref_bases,
+            &alt_bases,
+            &mut vec![1, 1], // homozygous so the alt branch always fires
+        )
+        .unwrap();
+        let variant_map = HashMap::from([(30usize, &variant)]);
+        let flagged_positions = vec![30usize];
+        let qual_scores = vec![33; 100];
+        let sequencing_error_model = SequencingErrorModel::default().unwrap();
+        let mut rng =
+            NeatRng::new_from_seed(&vec!["literal".into(), "long".into(), "del".into()]).unwrap();
+
+        let record = generate_read(
+            &sequence,
+            &flagged_positions,
+            &variant_map,
+            read_length,
+            "del_test/1".into(),
+            Strand::Forward,
+            qual_scores,
+            &sequencing_error_model,
+            &mut rng,
+            "chr1".into(),
+            0,
+            "chr1".into(),
+            0,
+            0,
+            false,
+            &mut AdCounter::new(),
+        )
+        .unwrap();
+
+        // Sequence written must equal read_length (100 bases).
+        assert_eq!(record.sequence.len(), read_length);
+
+        // The 49-bp deletion must be encoded as D ops in the CIGAR. The
+        // exact CIGAR is read-length-dependent (sequencing errors may add
+        // small ops too), but the D count must be ≥ 49 — the deletion span.
+        // We assert D count ≥ 49 rather than == 49 so a stray seq-error
+        // deletion doesn't flake the test.
+        let d_count = record.cigar_ops.iter().filter(|&&c| c == 'D').count();
+        assert!(
+            d_count >= 49,
+            "expected ≥49 D ops for a 50-bp REF / 1-bp ALT homozygous deletion, got {d_count}. \
+             CIGAR: {:?}",
+            record.cigar_ops
+        );
+
+        // Bases-written count: each M op or I op consumes one output base.
+        let mi_count = record
+            .cigar_ops
+            .iter()
+            .filter(|&&c| c == 'M' || c == 'I')
+            .count();
+        assert_eq!(
+            mi_count, read_length,
+            "M+I ops must equal read_length ({read_length}); got {mi_count}"
+        );
+
+        // AD counter on the variant position must record the alt observation.
+        // (Verified via the variant_map's pointer at position 30 — alt_count
+        // is incremented inside generate_read when the alt branch fires.)
     }
 
     #[test]

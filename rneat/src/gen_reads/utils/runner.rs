@@ -1046,6 +1046,301 @@ fn process_chimeric_variants(
                         }
                     }
                 }
+            } else if sv.sv_type == SvType::Cnv {
+                // CNV with INFO/CN: dispatch to the DEL or DUP chimeric path
+                // based on whether the total copy number is below or above
+                // the diploid baseline. CN < ploidy → loss signature
+                // (DEL-like); CN > ploidy → gain signature (DUP-like).
+                // CN == ploidy contributes no SV signal and is skipped.
+                // A CNV without INFO/CN can't be classified — skip and log.
+                let cn = match sv.copy_number {
+                    Some(c) => c as usize,
+                    None => {
+                        debug!(
+                            "Skipping <CNV> at {}:{} with no INFO/CN — chimeric path needs CN to choose DEL vs DUP signature",
+                            contig_name, sv_rec.location + 1
+                        );
+                        continue;
+                    }
+                };
+                let ploidy = ctx.config.ploidy;
+                if cn == ploidy {
+                    continue;
+                }
+
+                let end = match sv.end {
+                    Some(e) => e,
+                    None => {
+                        if let Some(span) = sv.span(sv_rec.location) {
+                            sv_rec.location + span - 1
+                        } else {
+                            continue;
+                        }
+                    }
+                };
+
+                let cnv_id = (contig_name.clone(), sv_rec.location, end);
+                if !processed_ids.insert(format!("CNV_{:?}", cnv_id)) {
+                    continue;
+                }
+
+                // For CNVs we coverage-scale by the magnitude of the CN
+                // deviation, not by genotype. A CN=0 (full loss) gets
+                // 1.0× junction reads (every haplotype carries the
+                // junction); CN=1 gets 0.5× at diploid (half the
+                // haplotypes); CN=4 gets 2× (one extra tandem copy per
+                // ref haplotype, so two tandem junctions). This mirrors
+                // how coverage_multiplier_for treats CNVs as cn/ploidy
+                // for depth.
+                let mult = if cn < ploidy {
+                    (ploidy - cn) as f64 / ploidy as f64
+                } else {
+                    (cn - ploidy) as f64 / ploidy as f64
+                };
+
+                let num_frags = scale_coverage(ctx.config.coverage, mult);
+                if num_frags == 0 {
+                    continue;
+                }
+
+                for frag_idx in 0..num_frags {
+                    let se_pad = if ctx.config.paired_ended { 0 } else { 32 };
+                    let frag_len = if ctx.config.paired_ended {
+                        let mut attempts = 0;
+                        let mut f = 0;
+                        while attempts < 100 {
+                            let rand_val = rng.random().map_err(GenerateReadsError::from)?;
+                            f = ctx.fragment_length_model.generate_fragment(rand_val).map_err(GenerateReadsError::from)? as usize;
+                            if ctx.config.long_reads || f >= ctx.config.read_len + 10 {
+                                break;
+                            }
+                            attempts += 1;
+                        }
+                        if f < ctx.config.read_len && !ctx.config.long_reads {
+                            f = ctx.config.read_len + 10;
+                        }
+                        f
+                    } else {
+                        ctx.config.read_len + se_pad
+                    };
+
+                    let offset = rng.range_i64(1, (frag_len - 1).min(ctx.config.read_len - 1).max(1) as i64).map_err(|e| GenerateReadsError::CliError(e))? as usize;
+
+                    // CN < ploidy → emit DEL-like junction reads (loss).
+                    // CN > ploidy → emit DUP-like junction reads (gain).
+                    let result = if cn < ploidy {
+                        generate_del_pair(
+                            ctx, contig_name, sv_rec.location, end,
+                            frag_len, offset, frag_idx, &mut rng,
+                        )
+                    } else {
+                        generate_dup_pair(
+                            ctx, contig_name, sv_rec.location, end,
+                            frag_len, offset, frag_idx, &mut rng,
+                        )
+                    };
+
+                    match result {
+                        Ok((read1, read2)) => {
+                            all_reads.push(read1);
+                            if let Some(r2) = read2 {
+                                all_reads.push(r2);
+                            }
+                        }
+                        Err(GenerateReadsError::FqToolsError(common::file_tools::fastq_tools::FastqToolsError::TruncatedRead(msg))) => {
+                            debug!("Skipping truncated chimeric read: {}", msg);
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
+            } else if sv.sv_type == SvType::Dup {
+                // Symbolic <DUP> generates a tandem duplication: one extra
+                // copy of REF[POS..END] inserted immediately after END.
+                // The new tandem boundary creates a single junction where
+                // the LAST bases of the original dup region butt up
+                // against the FIRST bases of the duplicated copy. A read
+                // spanning this junction carries left context REF[end-k..end]
+                // (end of dup) stitched to right context REF[POS..POS+k]
+                // (start of next copy). When BWA aligns these against the
+                // unbroken reference the two halves map to "end of dup" and
+                // "start of dup" respectively, in the WRONG order — that's
+                // the inverted-insert / split-read signature Manta uses to
+                // call somatic duplications.
+                let end = match sv.end {
+                    Some(e) => e,
+                    None => {
+                        if let Some(span) = sv.span(sv_rec.location) {
+                            sv_rec.location + span - 1
+                        } else {
+                            continue;
+                        }
+                    }
+                };
+
+                let dup_id = (contig_name.clone(), sv_rec.location, end);
+                if !processed_ids.insert(format!("DUP_{:?}", dup_id)) {
+                    continue;
+                }
+
+                let mult = match sv_rec.genotype {
+                    Genotype::Homozygous => 1.0,
+                    Genotype::Heterozygous => 1.0 / (ctx.config.ploidy as f64),
+                };
+
+                let num_frags = scale_coverage(ctx.config.coverage, mult);
+                if num_frags == 0 {
+                    continue;
+                }
+
+                for frag_idx in 0..num_frags {
+                    let se_pad = if ctx.config.paired_ended { 0 } else { 32 };
+                    let frag_len = if ctx.config.paired_ended {
+                        let mut attempts = 0;
+                        let mut f = 0;
+                        while attempts < 100 {
+                            let rand_val = rng.random().map_err(GenerateReadsError::from)?;
+                            f = ctx.fragment_length_model.generate_fragment(rand_val).map_err(GenerateReadsError::from)? as usize;
+                            if ctx.config.long_reads || f >= ctx.config.read_len + 10 {
+                                break;
+                            }
+                            attempts += 1;
+                        }
+                        if f < ctx.config.read_len && !ctx.config.long_reads {
+                            f = ctx.config.read_len + 10;
+                        }
+                        f
+                    } else {
+                        ctx.config.read_len + se_pad
+                    };
+
+                    let offset = rng.range_i64(1, (frag_len - 1).min(ctx.config.read_len - 1).max(1) as i64).map_err(|e| GenerateReadsError::CliError(e))? as usize;
+
+                    let result = generate_dup_pair(
+                        ctx,
+                        contig_name,
+                        sv_rec.location,
+                        end,
+                        frag_len,
+                        offset,
+                        frag_idx,
+                        &mut rng,
+                    );
+
+                    match result {
+                        Ok((read1, read2)) => {
+                            all_reads.push(read1);
+                            if let Some(r2) = read2 {
+                                all_reads.push(r2);
+                            }
+                        }
+                        Err(GenerateReadsError::FqToolsError(common::file_tools::fastq_tools::FastqToolsError::TruncatedRead(msg))) => {
+                            debug!("Skipping truncated chimeric read: {}", msg);
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
+            } else if sv.sv_type == SvType::Del {
+                // Symbolic <DEL> generates a single junction at the anchor
+                // (POS). Junction reads carry left context REF[..=POS] plus
+                // right context REF[END..] (post-deletion). When aligned by
+                // BWA against the unbroken reference, these reads produce
+                // discordant-PE pairs (mate distance overshoots by END-POS)
+                // and split-read alignments (soft-clip at POS realigns to
+                // REF[END..]) — the exact signals Manta uses to call somatic
+                // DELs. Before #220 the symbolic-DEL path emitted only depth
+                // modulation, leaving Manta with 0% recall on the simulated
+                // deletions.
+                // Same convention as INV: `end` is 1-based VCF END, which
+                // numerically equals the 0-based index of the first post-
+                // deletion base. The sv.span() / fallback math matches INV's
+                // line 961-969 (the off-by-one in passing a 0-based location
+                // to sv.span exactly cancels with the `- 1` in the formula).
+                let end = match sv.end {
+                    Some(e) => e,
+                    None => {
+                        if let Some(span) = sv.span(sv_rec.location) {
+                            sv_rec.location + span - 1
+                        } else {
+                            continue;
+                        }
+                    }
+                };
+
+                // Use the (contig, location, end) tuple as the dedup key.
+                // BND uses pair-canonicalization because both sides describe
+                // the same junction; DEL has a single record per deletion,
+                // so the same-position dedup is enough.
+                let del_id = (contig_name.clone(), sv_rec.location, end);
+                if !processed_ids.insert(format!("DEL_{:?}", del_id)) {
+                    continue;
+                }
+
+                // Same coverage model as BND/INV — full coverage for
+                // homozygous (every allele carries the junction), 1/ploidy
+                // for heterozygous. The double-counting caveat noted on
+                // the BND branch applies here too: the regular per-contig
+                // pass still generates reads spanning POS (it reads from
+                // the unbroken reference). For homozygous DELs the
+                // breakpoint locus ends up with regular reads PLUS
+                // junction reads. Tracked at #220's "reconcile depth-
+                // modulation" follow-up.
+                let mult = match sv_rec.genotype {
+                    Genotype::Homozygous => 1.0,
+                    Genotype::Heterozygous => 1.0 / (ctx.config.ploidy as f64),
+                };
+
+                let num_frags = scale_coverage(ctx.config.coverage, mult);
+                if num_frags == 0 {
+                    continue;
+                }
+
+                for frag_idx in 0..num_frags {
+                    let se_pad = if ctx.config.paired_ended { 0 } else { 32 };
+                    let frag_len = if ctx.config.paired_ended {
+                        let mut attempts = 0;
+                        let mut f = 0;
+                        while attempts < 100 {
+                            let rand_val = rng.random().map_err(GenerateReadsError::from)?;
+                            f = ctx.fragment_length_model.generate_fragment(rand_val).map_err(GenerateReadsError::from)? as usize;
+                            if ctx.config.long_reads || f >= ctx.config.read_len + 10 {
+                                break;
+                            }
+                            attempts += 1;
+                        }
+                        if f < ctx.config.read_len && !ctx.config.long_reads {
+                            f = ctx.config.read_len + 10;
+                        }
+                        f
+                    } else {
+                        ctx.config.read_len + se_pad
+                    };
+
+                    let offset = rng.range_i64(1, (frag_len - 1).min(ctx.config.read_len - 1).max(1) as i64).map_err(|e| GenerateReadsError::CliError(e))? as usize;
+
+                    let result = generate_del_pair(
+                        ctx,
+                        contig_name,
+                        sv_rec.location,
+                        end,
+                        frag_len,
+                        offset,
+                        frag_idx,
+                        &mut rng,
+                    );
+
+                    match result {
+                        Ok((read1, read2)) => {
+                            all_reads.push(read1);
+                            if let Some(r2) = read2 {
+                                all_reads.push(r2);
+                            }
+                        }
+                        Err(GenerateReadsError::FqToolsError(common::file_tools::fastq_tools::FastqToolsError::TruncatedRead(msg))) => {
+                            debug!("Skipping truncated chimeric read: {}", msg);
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
             }
         }
     }
@@ -1281,6 +1576,242 @@ fn generate_inv_pair(
     }
 
     Ok((r1, r2))
+}
+
+/// Generate a chimeric junction read-pair for a symbolic <DEL>. The
+/// deletion creates a single junction at the anchor: left context
+/// REF[..=location] stitched to right context REF[end..]. When BWA
+/// aligns these reads back to the unbroken reference, the contiguous
+/// stitched fragment surfaces as either a discordant PE pair (mate
+/// distance overshoots by end-location) or a split-read alignment
+/// (soft-clip at the junction realigns to REF[end..]). Both are the
+/// signals Manta consumes to call somatic deletions.
+fn generate_del_pair(
+    ctx: &ContigContext,
+    contig: &str,
+    location: usize, // 0-based location (POS-1 = anchor index)
+    end: usize, // 1-based VCF END (= 0-based start of post-DEL right piece)
+    frag_len: usize,
+    offset: usize,
+    frag_idx: usize,
+    rng: &mut NeatRng,
+) -> Result<(ReadRecord, Option<ReadRecord>), GenerateReadsError> {
+    let ((c1, s1, e1, rev1), (c2, s2, e2, rev2)) =
+        get_del_pieces(contig, location, end, offset, frag_len - offset, ctx)?;
+
+    let seq1 = get_stitched_sequence(ctx, &c1, s1, e1, rev1, &c2, s2, e2, rev2, rng)?;
+
+    let read_len = ctx.config.read_len;
+    // QNAME format mirrors BND/INV's `RNEAT_chimeric_*` scheme so the
+    // FASTQ-validation tests in fastq_validation.rs and the read-name
+    // parser in filter_lib.rs handle them uniformly. The `DEL` tag
+    // disambiguates from BND (`RNEAT_chimeric_<c1>_<pos>_<c2>_...`)
+    // and INV (`RNEAT_chimeric_INV_<contig>_<pos>_<end>_<junction>_...`).
+    let base_name = format!(
+        "RNEAT_chimeric_DEL_{}_{}_{}_{:016x}",
+        contig, location + 1, end, frag_idx,
+    );
+
+    let quality_scores_1 = ctx.quality_score_model.generate_quality_scores(read_len, rng).map_err(GenerateReadsError::from)?;
+
+    // DEL junction reads are span/discordant-pair signal, not point-
+    // coverage signal — same rationale as generate_chimeric_pair. Use a
+    // throwaway AdCounter so the increment site has somewhere to write
+    // without leaking into the per-contig counter used by write_vcf.
+    let mut throwaway_ad = AdCounter::new();
+
+    let r1 = generate_read(
+        &seq1,
+        &[],
+        &HashMap::new(),
+        read_len,
+        format!("{}/1", base_name),
+        Strand::Forward,
+        quality_scores_1,
+        ctx.seq_error_model,
+        rng,
+        c1.clone(),
+        s1,
+        c2.clone(),
+        s2,
+        frag_len as i32,
+        ctx.config.paired_ended,
+        &mut throwaway_ad,
+    ).map_err(GenerateReadsError::from)?;
+
+    let mut r2 = None;
+    if ctx.config.paired_ended {
+        let quality_scores_2 = ctx.quality_score_model.generate_quality_scores(read_len, rng).map_err(GenerateReadsError::from)?;
+        let r2_record = generate_read(
+            &reverse_complement(seq1),
+            &[],
+            &HashMap::new(),
+            read_len,
+            format!("{}/2", base_name),
+            Strand::Reverse,
+            quality_scores_2,
+            ctx.seq_error_model,
+            rng,
+            c2.clone(),
+            s2,
+            c1.clone(),
+            s1,
+            -(frag_len as i32),
+            true,
+            &mut throwaway_ad,
+        ).map_err(GenerateReadsError::from)?;
+        r2 = Some(r2_record);
+    }
+
+    Ok((r1, r2))
+}
+
+/// The two pieces that make a DEL junction. Left piece is REF[..=location]
+/// (anchor included, mirroring BND case 1's `t[p[` anchor-preserving
+/// shape). Right piece is REF[end..] — the first post-deletion base.
+/// Both pieces are forward-strand on the same contig.
+fn get_del_pieces(
+    contig: &str,
+    location: usize, // 0-based location (POS-1 = anchor index)
+    end: usize, // 1-based VCF END (= 0-based exclusive end of deletion = 0-based start of post-DEL region)
+    len1: usize,
+    len2: usize,
+    ctx: &ContigContext,
+) -> Result<((String, usize, usize, bool), (String, usize, usize, bool)), GenerateReadsError> {
+    let c_len = ctx.reference.get(contig).map(|s| s.len()).ok_or_else(|| {
+        GenerateReadsError::CliError(format!(
+            "DEL at {contig}:{location} references contig {contig} but that contig is not in the reference"
+        ))
+    })?;
+    // Left piece ends at index location+1 (exclusive), so the last base is
+    // REF[location] — the anchor base. s1 = e1 - len1 (or 0 if it'd go
+    // negative).
+    let e1 = (location + 1).min(c_len);
+    let s1 = e1.saturating_sub(len1);
+    // Right piece starts at 0-based index `end` (the first post-deletion
+    // base) and extends len2 bases forward (capped at contig length).
+    let s2 = end.min(c_len);
+    let e2 = (s2 + len2).min(c_len);
+    Ok((
+        (contig.to_string(), s1, e1, false),
+        (contig.to_string(), s2, e2, false),
+    ))
+}
+
+/// Generate a chimeric junction read-pair for a symbolic <DUP> (tandem).
+/// The duplication creates one extra copy of REF[POS..END]; the tandem
+/// boundary is between the last base of the original copy and the first
+/// base of the new copy. Junction reads carry left context REF[end-k..end]
+/// stitched to right context REF[location..location+k]. When BWA aligns
+/// them against the unbroken reference the two halves map to "end of
+/// dup" and "start of dup" — in the inverted order — surfacing as
+/// split-read or wrong-orientation PE signal.
+fn generate_dup_pair(
+    ctx: &ContigContext,
+    contig: &str,
+    location: usize, // 0-based POS (first base of dup region)
+    end: usize, // 1-based END (= 0-based exclusive end of dup region)
+    frag_len: usize,
+    offset: usize,
+    frag_idx: usize,
+    rng: &mut NeatRng,
+) -> Result<(ReadRecord, Option<ReadRecord>), GenerateReadsError> {
+    let ((c1, s1, e1, rev1), (c2, s2, e2, rev2)) =
+        get_dup_pieces(contig, location, end, offset, frag_len - offset, ctx)?;
+
+    let seq1 = get_stitched_sequence(ctx, &c1, s1, e1, rev1, &c2, s2, e2, rev2, rng)?;
+
+    let read_len = ctx.config.read_len;
+    let base_name = format!(
+        "RNEAT_chimeric_DUP_{}_{}_{}_{:016x}",
+        contig, location + 1, end, frag_idx,
+    );
+
+    let quality_scores_1 = ctx.quality_score_model.generate_quality_scores(read_len, rng).map_err(GenerateReadsError::from)?;
+    let mut throwaway_ad = AdCounter::new();
+
+    let r1 = generate_read(
+        &seq1,
+        &[],
+        &HashMap::new(),
+        read_len,
+        format!("{}/1", base_name),
+        Strand::Forward,
+        quality_scores_1,
+        ctx.seq_error_model,
+        rng,
+        c1.clone(),
+        s1,
+        c2.clone(),
+        s2,
+        frag_len as i32,
+        ctx.config.paired_ended,
+        &mut throwaway_ad,
+    ).map_err(GenerateReadsError::from)?;
+
+    let mut r2 = None;
+    if ctx.config.paired_ended {
+        let quality_scores_2 = ctx.quality_score_model.generate_quality_scores(read_len, rng).map_err(GenerateReadsError::from)?;
+        let r2_record = generate_read(
+            &reverse_complement(seq1),
+            &[],
+            &HashMap::new(),
+            read_len,
+            format!("{}/2", base_name),
+            Strand::Reverse,
+            quality_scores_2,
+            ctx.seq_error_model,
+            rng,
+            c2.clone(),
+            s2,
+            c1.clone(),
+            s1,
+            -(frag_len as i32),
+            true,
+            &mut throwaway_ad,
+        ).map_err(GenerateReadsError::from)?;
+        r2 = Some(r2_record);
+    }
+
+    Ok((r1, r2))
+}
+
+/// The two pieces that make a tandem-DUP junction. Left piece is the
+/// END of the duplicated region (REF[end-len1..end]); right piece is the
+/// START of the duplicated region (REF[location..location+len2]) —
+/// representing the first bases of the new tandem copy.
+///
+/// For small DUPs (span smaller than len1 or len2) the pieces are
+/// capped by the contig boundaries only; the resulting stitched
+/// fragment may then look like the unbroken reference (if the windows
+/// extend into surrounding context on both sides), in which case BWA
+/// aligns it normally and the read contributes no SV signal. That's
+/// acceptable — tiny DUPs are below most callers' resolution anyway.
+fn get_dup_pieces(
+    contig: &str,
+    location: usize, // 0-based POS (first base of dup region)
+    end: usize, // 1-based END (= 0-based exclusive end of dup region)
+    len1: usize,
+    len2: usize,
+    ctx: &ContigContext,
+) -> Result<((String, usize, usize, bool), (String, usize, usize, bool)), GenerateReadsError> {
+    let c_len = ctx.reference.get(contig).map(|s| s.len()).ok_or_else(|| {
+        GenerateReadsError::CliError(format!(
+            "DUP at {contig}:{location} references contig {contig} but that contig is not in the reference"
+        ))
+    })?;
+    // Left piece: last len1 bases of the duplicated region (or earlier
+    // if the dup is shorter than len1, in which case we extend into the
+    // pre-dup context — see fn doc for the implication).
+    let e1 = end.min(c_len);
+    let s1 = e1.saturating_sub(len1);
+    // Right piece: first len2 bases of the duplicated region.
+    let s2 = location;
+    let e2 = (s2 + len2).min(c_len);
+    Ok((
+        (contig.to_string(), s1, e1, false),
+        (contig.to_string(), s2, e2, false),
+    ))
 }
 
 fn get_inv_pieces(

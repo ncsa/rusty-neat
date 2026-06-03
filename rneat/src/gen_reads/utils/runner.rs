@@ -931,7 +931,7 @@ fn process_chimeric_variants(
                         ctx.config.read_len + se_pad
                     };
 
-                    let offset = rng.range_i64(1, (frag_len - 1).min(ctx.config.read_len - 1).max(1) as i64).map_err(|e| GenerateReadsError::CliError(e))? as usize;
+                    let offset = balanced_chimeric_offset(frag_len, ctx.config.read_len, &mut rng)?;
 
                     let result = generate_chimeric_pair(
                         ctx,
@@ -1019,7 +1019,7 @@ fn process_chimeric_variants(
                     // junction number disambiguates the QNAMEs that
                     // generate_inv_pair emits.
                     for junction in 1..=2 {
-                        let offset = rng.range_i64(1, (frag_len - 1).min(ctx.config.read_len - 1).max(1) as i64).map_err(|e| GenerateReadsError::CliError(e))? as usize;
+                        let offset = balanced_chimeric_offset(frag_len, ctx.config.read_len, &mut rng)?;
                         let result = generate_inv_pair(
                             ctx,
                             contig_name,
@@ -1124,7 +1124,7 @@ fn process_chimeric_variants(
                         ctx.config.read_len + se_pad
                     };
 
-                    let offset = rng.range_i64(1, (frag_len - 1).min(ctx.config.read_len - 1).max(1) as i64).map_err(|e| GenerateReadsError::CliError(e))? as usize;
+                    let offset = balanced_chimeric_offset(frag_len, ctx.config.read_len, &mut rng)?;
 
                     // CN < ploidy → emit DEL-like junction reads (loss).
                     // CN > ploidy → emit DUP-like junction reads (gain).
@@ -1213,7 +1213,7 @@ fn process_chimeric_variants(
                         ctx.config.read_len + se_pad
                     };
 
-                    let offset = rng.range_i64(1, (frag_len - 1).min(ctx.config.read_len - 1).max(1) as i64).map_err(|e| GenerateReadsError::CliError(e))? as usize;
+                    let offset = balanced_chimeric_offset(frag_len, ctx.config.read_len, &mut rng)?;
 
                     let result = generate_dup_pair(
                         ctx,
@@ -1315,7 +1315,7 @@ fn process_chimeric_variants(
                         ctx.config.read_len + se_pad
                     };
 
-                    let offset = rng.range_i64(1, (frag_len - 1).min(ctx.config.read_len - 1).max(1) as i64).map_err(|e| GenerateReadsError::CliError(e))? as usize;
+                    let offset = balanced_chimeric_offset(frag_len, ctx.config.read_len, &mut rng)?;
 
                     let result = generate_del_pair(
                         ctx,
@@ -2257,6 +2257,36 @@ fn split_region_by_multipliers(
         }
     }
     out
+}
+
+/// Pick a chimeric-junction offset that splits `frag_len` so both
+/// pieces are at least `read_len / 4` bases long. The offset controls
+/// how the stitched fragment is divided into left and right reference
+/// pieces (`len1 = offset`, `len2 = frag_len - offset`). When offset is
+/// too small or too large, BWA aligns the read as a regular alignment
+/// with the dominant piece and emits a short / low-MAPQ split alignment
+/// for the minority piece — which Manta filters out of its candidate
+/// pool (MAPQ < 20). The `read_len / 4` floor matches BWA-MEM's typical
+/// anchor threshold of ~30-40 bp for confident split alignment.
+///
+/// Added for #224. Before this constraint the offset was sampled
+/// uniformly from `[1, min(frag_len-1, read_len-1)]`, which produced
+/// chimeric reads with offset=1 or 2 about 1-2% of the time —
+/// individually small but enough to drag the BND candidate-pool below
+/// Manta's somatic threshold across many junctions.
+fn balanced_chimeric_offset(
+    frag_len: usize,
+    read_len: usize,
+    rng: &mut NeatRng,
+) -> Result<usize, GenerateReadsError> {
+    let min_offset = (read_len / 4).max(1);
+    // Don't constrain past where the fragment can support both pieces.
+    let max_offset = frag_len.saturating_sub(min_offset);
+    let lo = min_offset as i64;
+    let hi = max_offset.max(min_offset + 1) as i64;
+    rng.range_i64(lo, hi)
+        .map(|v| v as usize)
+        .map_err(GenerateReadsError::CliError)
 }
 
 /// Scales a base coverage value by a non-negative multiplier, rounding to the

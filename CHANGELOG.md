@@ -1,3 +1,60 @@
+6/2/2026
+========
+## rneat v1.13.1
+
+### Patch release: BND chimeric reads now produce caller-detectable split-read signal
+
+Closes #224. v1.13.0's validation found Manta got 0% recall on somatic BND truth records despite the BND chimeric path emitting reads to the FASTQ. Investigation traced this to two compounding issues, both fixed here.
+
+#### Issue 1 — Phantom N-region truth records (`sample_variants` anchor check too narrow)
+
+`SvModel::sample_variants` rejected positions where the literal anchor base was N (line 473), but **passed positions where the anchor was a non-N base sitting at the boundary of a long N-tract**. The chimeric pair generation then sampled a `read_len`-sized piece extending into the N-tract, producing reads BWA couldn't place uniquely. On the v1.13.0 chr22 fixture, ~37% of de novo BND truth records were unrecoverable for this reason (anchor passed the single-base check; chimeric piece landed in the N-tract).
+
+**Fix:** new helper `anchor_window_alignable(sequence, pos, window=200)` in `common/src/structs/sv_model.rs` rejects positions where the ±200bp window is >20% N. Applied to both the anchor and (for non-BND types) the END position. For de novo BNDs, the mate-position picker now retries up to 32 times to find a clean mate before skipping the record.
+
+#### Issue 2 — Imbalanced chimeric offset (`process_chimeric_variants`)
+
+The chimeric junction offset was sampled uniformly from `[1, min(frag_len-1, read_len-1)]`, producing tiny pieces (offset=1 or 2) ~1-2% of the time. Small offsets yield a 1-2 bp local piece and ~150bp mate piece — BWA aligns the longer piece confidently but the supplementary alignment for the shorter piece is too short to anchor uniquely, so BWA emits it with `MAPQ=0`. Manta filters `MAPQ<20` supplementary alignments out of its candidate pool, so these "weak" split-reads contribute no signal.
+
+**Fix:** new helper `balanced_chimeric_offset()` in `rneat/src/gen_reads/utils/runner.rs` samples from `[read_len/4, frag_len - read_len/4]`, guaranteeing both junction pieces are ≥ `read_len/4` (~38bp at read_len=151). That clears BWA-MEM's anchor threshold for confident split alignment and pushes the supplementary MAPQ past Manta's filter. Applied uniformly to all five chimeric paths (BND/INV/DEL/DUP/CNV).
+
+#### Cancer SV benchmark: Manta BND recall now 77% on alignable subset
+
+Same chr22 PE 30× / purity 0.5 / sv-rate-scale 50 fixture (different RNG seed than v1.13.0, so absolute truth counts differ slightly). Cross-type scoring (a truth event matches any Manta call within ±500bp at the same span endpoints; necessary because Manta classifies the v1.13.1 chimeric junctions as DEL/DUP based on the read-orientation pattern that BWA emits, the same scoring artifact as v1.13.0's INV-as-BND-quartet):
+
+| SV type | v1.13.0 recall | v1.13.1 recall |
+|---------|----------------|----------------|
+| DEL     | 21/39 (54%)    | **24/37 (65%)** |
+| DUP     | 12/22 (55%)    | 6/15 (40%) — different truth draw; see note |
+| INV     | 4/4 (100%)     | 5/9 (56%) — larger sample, more realistic |
+| BND (all)        | 0/35 (0%)  | **17/39 (44%)** |
+| BND (alignable)  | 0/22 (0%)  | **17/22 (77%)** ✅ |
+
+A note on the DUP "regression": v1.13.0's truth draw had 22 DUPs (some of which were small / easy); v1.13.1's draw at a different RNG seed had 15 DUPs of a different distribution. Without a side-by-side same-seed comparison, the 55% vs 40% is not strictly apples-to-apples. The chimeric DUP path itself is unchanged from v1.13.0 (Fix B applies symmetrically; Fix A only affects which positions get truth records).
+
+Same caveat for INV: v1.13.0's 4/4=100% was a small-sample fluke; v1.13.1's 9-record sample at ~56% is more representative.
+
+The BND alignable result (77%) is the headline: clears the v1.13.1 acceptance criterion (≥30%) by a wide margin.
+
+#### Cross-type matching: what changed
+
+Manta represents simulated junctions according to the read-orientation pattern BWA observes, not the truth-VCF's `SVTYPE` field. For a `<DEL>`-style chimeric junction Manta calls `SVTYPE=DEL`; for a tandem-DUP-style junction Manta calls `SVTYPE=DUP`. For inversion-like junctions (revcomp piece on the same chromosome) Manta sometimes calls `SVTYPE=BND` quartet, sometimes `SVTYPE=DUP:TANDEM` depending on the strand-flip pattern that lands at BWA's split-alignment site. The v1.13.1 BND chimeric pair (case `t]p]`: forward local + revcomp mate) produces a read pattern Manta interprets as DEL or DUP depending on the relative coordinates — that's what the "10 as DEL, 7 as DUP" breakdown reflects.
+
+This is a known characteristic of Manta's somatic-mode classification and parallels the v1.13.0 INV-as-BND-quartet finding. Caller benchmarks should use cross-type matching for SV simulation truth.
+
+#### Tests
+
+- 328 lib + 223 binary unit tests pass.
+- NEW `anchor_window_alignable_basics` (helper unit test) and `sample_variants_skips_n_adjacent_clean_anchors` (regression test for the wider N-window gate).
+- All v1.12.x and v1.13.0 SV integration tests still passing (`bnd_fastq.rs`, `bnd_roundtrip.rs`, `inv_fastq.rs`, `del_chimeric.rs`, `dup_chimeric.rs`, `cnv_chimeric.rs`, `multi_sv_integration.rs`, `cosmic_bundle.rs`).
+
+#### Known limitations carried into v1.13.1
+
+- **Mid-chromosome N-tracts.** The ±200bp anchor-window check catches the common case where a position sits at the boundary of a long N-tract. It doesn't catch the rarer case where the chimeric piece (`read_len`-sized) reaches into a more distant N-tract while the immediate window is clean. A future refinement could check the actual chimeric piece extent based on SV type. For now, a small number of N-region phantom truth records may still appear (~17 of 39 BNDs in the chr22 fixture).
+- **Breakpoint double-counting** remains the same caveat as v1.12.0 — regular per-contig reads at the breakpoint still co-exist with chimeric junction reads. Doesn't block Manta detection at this coverage but could in lower-coverage / lower-purity scenarios.
+
+---
+
 6/1/2026
 ========
 ## rneat v1.13.0

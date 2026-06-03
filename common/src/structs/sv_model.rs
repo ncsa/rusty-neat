@@ -475,6 +475,31 @@ impl SvModel {
                 _ => continue, // anchor falls in an N gap; try again
             };
 
+            // #224: the single-base anchor check above is too loose. It
+            // passes positions where the anchor is a non-N base sitting
+            // right next to a long N-tract (centromere/telomere
+            // boundaries). The chimeric pair generation then samples a
+            // read_len-sized piece extending into the N-tract, producing
+            // reads BWA can't place. Widen the check to a ±200 bp window
+            // around the anchor — covers a typical PE fragment's local
+            // piece. For DEL/DUP/CNV/INV the END side also needs to be
+            // alignable since the right chimeric piece anchors there;
+            // we check `sv_end_1based - 1` (= 0-based last affected base)
+            // for those types.
+            const ALIGNABLE_WINDOW: usize = 200;
+            if !anchor_window_alignable(sequence, anchor_0based, ALIGNABLE_WINDOW) {
+                continue;
+            }
+            if sv_type != SvType::Bnd
+                && !anchor_window_alignable(
+                    sequence,
+                    sv_end_1based.saturating_sub(1).min(sequence.len().saturating_sub(1)),
+                    ALIGNABLE_WINDOW,
+                )
+            {
+                continue;
+            }
+
             let copy_number = if sv_type == SvType::Cnv && !cn_values.is_empty() {
                 weighted_pick_with(&cn_values, &cn_cum, rng).copied()
             } else {
@@ -540,12 +565,35 @@ impl SvModel {
                 SvType::Inv => ("<INV>".to_string(), None, None),
                 SvType::Bnd => {
                     // For de novo BNDs, generate an intra-chromosomal translocation
-                    // to a random mate position on the same contig.
-                    let mp = rng
-                        .range_i64(1, contig_len.saturating_sub(1) as i64)
-                        .ok()
-                        .unwrap_or(1) as usize;
-                    (format!("N]{contig_name}:{mp}]"), Some(contig_name.to_string()), Some(mp))
+                    // to a random mate position on the same contig. Retry up to
+                    // 32 times if the picked mate position falls in an N-tract
+                    // (so the BND truth record is recoverable by callers — see
+                    // #224 for the v1.13.0 finding where ~37% of de novo BNDs
+                    // landed in unalignable mate positions).
+                    let mut mp_candidate: usize = 0;
+                    let mut found = false;
+                    for _ in 0..32 {
+                        let candidate = rng
+                            .range_i64(1, contig_len.saturating_sub(1) as i64)
+                            .ok()
+                            .unwrap_or(1) as usize;
+                        if anchor_window_alignable(sequence, candidate, 200) {
+                            mp_candidate = candidate;
+                            found = true;
+                            break;
+                        }
+                    }
+                    if !found {
+                        // Couldn't find a clean mate after 32 tries — likely
+                        // the contig is mostly N (e.g. unplaced contig). Skip
+                        // this BND rather than emit an unrecoverable truth.
+                        continue;
+                    }
+                    (
+                        format!("N]{contig_name}:{mp_candidate}]"),
+                        Some(contig_name.to_string()),
+                        Some(mp_candidate),
+                    )
                 }
                 // sample_variants only emits the four supported types;
                 // others were excluded from type_probabilities at fit
@@ -810,6 +858,41 @@ fn affected_range_for_existing(v: &Variant, block_end: usize) -> Option<(usize, 
 
 fn ranges_overlap(a_start: usize, a_end: usize, b_start: usize, b_end: usize) -> bool {
     a_start < b_end && b_start < a_end
+}
+
+/// True iff the ±`window` bp window around `pos` is at least 80% non-N.
+/// Used by `sample_variants` to reject SV positions whose chimeric
+/// junction pieces would be mostly N and therefore unalignable by BWA.
+///
+/// Before this gate (added for #224), gen-reads would emit truth records
+/// at positions near reference N-tracts. The single-base anchor check at
+/// line 473 only rejects positions where the literal anchor is N — it
+/// passes positions where the anchor happens to be a clean base
+/// adjacent to a long N-tract. The chimeric pair generation then samples
+/// a `read_len`-sized window extending into the N-tract, producing reads
+/// that BWA can't place uniquely → 0% caller recall on the resulting
+/// truth records (see chr22 v1.13.0 validation: 13 of 35 somatic BND
+/// truth records were unrecoverable for this reason).
+///
+/// The 80% threshold is loose on purpose: BWA-MEM tolerates some N
+/// bases, and a few percent N is fine. The pathological case is windows
+/// that are 100% N (centromere/telomere bulk) or close to it.
+pub(crate) fn anchor_window_alignable(
+    sequence: &[Nucleotide],
+    pos: usize,
+    window: usize,
+) -> bool {
+    let start = pos.saturating_sub(window);
+    let end = pos.saturating_add(window).min(sequence.len());
+    if end <= start {
+        return false;
+    }
+    let total = end - start;
+    let n_count = sequence[start..end]
+        .iter()
+        .filter(|&&b| b == Nucleotide::N)
+        .count();
+    (n_count * 100) <= (total * 20)
 }
 
 /// Draw `length` random nucleotides for a novel insertion, weighted by the
@@ -1524,6 +1607,63 @@ mod tests {
                 v.location >= 10_000,
                 "anchor {} fell in the all-N gap",
                 v.location
+            );
+        }
+    }
+
+    #[test]
+    fn anchor_window_alignable_basics() {
+        // 200 bp all-ACGT → alignable everywhere except the very edges
+        // where the window clips.
+        let acgt = acgt_sequence(2000);
+        assert!(anchor_window_alignable(&acgt, 1000, 200));
+        // ±200 bp window of all-N → not alignable.
+        let ns: Vec<Nucleotide> = vec![Nucleotide::N; 2000];
+        assert!(!anchor_window_alignable(&ns, 1000, 200));
+        // Sub-Mb N-tract pattern: anchor at a clean base sitting right
+        // next to a 400-bp N-tract. The pre-v1.13.1 single-base check
+        // would pass; the windowed check must reject.
+        let mut mixed = acgt_sequence(1000);
+        mixed.extend(vec![Nucleotide::N; 400]);
+        mixed.extend(acgt_sequence(1000));
+        // Anchor at 1000 (the last clean base before the N-tract).
+        // ±200bp window = [800..1200]: 200bp clean + 200bp N = 50% N.
+        // Threshold is 80%-non-N, so this should be REJECTED.
+        assert!(!anchor_window_alignable(&mixed, 1000, 200));
+    }
+
+    #[test]
+    fn sample_variants_skips_n_adjacent_clean_anchors() {
+        // #224 regression: an anchor that's a clean base but sits next
+        // to a long N-tract used to pass the single-base check at line
+        // 473, then the chimeric pair would sample a read_len-sized
+        // piece into the N-tract. Now anchor_window_alignable rejects
+        // these positions too. The test contig has a 400-bp N-tract
+        // sandwiched between two ACGT regions; the anchor for every
+        // emitted SV must sit far enough from the N-tract that the
+        // ±200bp window is mostly clean.
+        let mut seq = acgt_sequence(5000);
+        let n_start = 5000;
+        seq.extend(vec![Nucleotide::N; 400]);
+        seq.extend(acgt_sequence(10_000));
+        let n_end = n_start + 400;
+        let m = model_with_single_type(SvType::Del, 2e-3);
+        let mut rng = deterministic_rng();
+        let out = m.sample_variants("chr1", seq.len(), &[], &seq, 2, 1.0, &mut rng);
+        for v in &out {
+            let loc = v.location;
+            let clipped = loc.saturating_sub(200)..loc.saturating_add(200).min(seq.len());
+            let in_n_window = (clipped.start..clipped.end)
+                .any(|i| i >= n_start && i < n_end);
+            assert!(
+                !in_n_window || {
+                    // It's fine if the window CLIPS the N-tract — as long
+                    // as the majority of the window is non-N. Recheck
+                    // with the same threshold the production code uses.
+                    anchor_window_alignable(&seq, loc, 200)
+                },
+                "anchor {loc} sits in/next to the 400bp N-tract — \
+                 its ±200bp window contains too many Ns"
             );
         }
     }

@@ -24,21 +24,23 @@ Closes #220 and #221. v1.12.1's validation revealed that the v1.12.0 SV pipeline
 - **Fix.** Generate r2 BEFORE writing r1; if r2 returns TruncatedRead, drop r1 alongside it. r1 and r2 now succeed together or fail together. Caught and resolved during chr22 end-to-end validation (BWA error on first pass, clean run after the fix).
 
 #### Cancer SV benchmark: Manta recall now meets v1.13.0 acceptance criterion (≥50% on DEL/DUP)
-Same chr22 PE 30× / purity 0.5 / sv-rate-scale 50 fixture used in v1.12.1 validation. Comparison of Manta somatic SV recall (±500bp position match, type-aware):
+Same chr22 PE 30× / purity 0.5 / sv-rate-scale 50 fixture used in v1.12.1 validation. Comparison of Manta somatic SV recall (±500bp position match, with INV→BND-quartet matching since Manta reports inversions as paired BND records, not `<INV>`):
 
 | SV type | v1.12.1 recall | v1.13.0 recall |
 |---------|----------------|----------------|
 | DEL     | 0/32 (0%)      | **21/39 (54%)** |
 | DUP     | 0/13 (0%)      | **12/22 (55%)** |
 | CNV     | 0/2 (0%)       | **1/1 (100%)**  |
-| INV     | 0/5 (0%)       | 0/4 (0%) — unchanged, deeper caller limitation |
-| BND     | 0/32 (0%)      | 0/35 (0%) — unchanged, deeper caller limitation |
-| **TOTAL** | **0/84 (0%)** | **34/101 (34%)** |
+| INV     | 0/5 (0%)       | **4/4 (100%)** — detected as Manta BND quartets |
+| BND     | 0/32 (0%)      | 0/35 (0%) — caller doesn't pick up the chimeric junctions |
+| **TOTAL** | **0/84 (0%)** | **38/101 (38%)** |
 
 Precision: 100% — every Manta PASS somatic call matched a real truth record at ±500bp.
 
+A note on the INV scoring: Manta emits inversions as a pair of paired BND records (4 total per INV — start junction and end junction, each described from both sides) rather than as a single `<INV>` record. A type-strict matcher scores INV truth against `<INV>` calls and gets 0%, which is what we initially reported. The corrected matcher recognizes the BND-quartet representation and finds all 4 truth INVs were detected.
+
 #### Known limitations carried into v1.13.0
-- **INV and BND still at 0% Manta recall.** The v1.12.0 chimeric paths emit junction reads, but Manta's somatic INV/BND detection thresholds appear too strict for the simulated junctions at this coverage. Tracked as a v1.13.1 follow-up: design either stronger PE signal (e.g., truly discordant orientation) or document the alternative caller (GRIDSS, DELLY) to use.
+- **BND still at 0% Manta recall.** Of the 35 somatic BND truth records, ~15 have at least one endpoint in chr22's N-rich centromere/telomere region (where coverage drops to zero because BWA can't align all-N reads — this is a reference-structure limitation, not an rneat bug). Of the remaining ~20 alignable BNDs, BND chimeric reads ARE present in the tumor BAM at the breakpoint positions, but Manta doesn't pick them up as somatic calls. Tracked at #224 — likely needs either stronger junction signal (higher num_frags multiplier for BND) or a caller that's less conservative for short-fragment BND signatures (GRIDSS).
 - **Breakpoint double-counting.** The regular per-contig pass still generates unbroken-reference reads at SV breakpoints. For homozygous SVs the breakpoint locus ends up with regular reads PLUS junction reads — roughly 2× coverage at the boundary. Doesn't affect Manta's call decisions for DEL/DUP (verified by the recall numbers above) but inflates depth at the junction. Tracked as a v1.13.1 follow-up.
 
 #### Tests

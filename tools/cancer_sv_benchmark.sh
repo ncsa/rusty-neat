@@ -60,12 +60,16 @@ TRUTH_VCF=""
 OUTPUT_DIR="sv_benchmark_out"
 THREADS="4"
 DOCKER="docker"
-# Default truth filter for SV scoring: keep only records that ARE SVs
-# (symbolic ALTs or literal indels with |size_delta| >= 50 bp), AND restrict
-# to somatic-tagged records so we measure somatic SV calling, not
-# germline-subtraction. Set --truth-filter '' to score against the full
-# truth (useful when the truth VCF has no NEAT_ORIGIN annotation).
-TRUTH_FILTER='(TYPE="other" || abs(ILEN) >= 50) && INFO/NEAT_ORIGIN="somatic"'
+# Default truth filter for SV scoring: keep only SYMBOLIC SV records
+# (INFO/SVTYPE present — i.e. <DEL>/<DUP>/<INV>/<CNV>/<BND>/<INS> from the
+# sv_model), AND restrict to somatic-tagged records so we measure somatic SV
+# calling. We deliberately EXCLUDE literal large indels (the old filter's
+# `abs(ILEN) >= 50` arm): those come from the SNP/indel side of the model, are
+# scored by the SNV/indel benchmark (cancer_benchmark.sh), and a structural
+# caller like Manta is not expected to emit them — leaving them in tanks the
+# apparent recall (they all become false negatives). Set --truth-filter '' to
+# score against the full truth (e.g. when the truth has no NEAT_ORIGIN/SVTYPE).
+TRUTH_FILTER='INFO/SVTYPE!="." && INFO/NEAT_ORIGIN="somatic"'
 
 usage() {
     cat <<'EOF'
@@ -322,13 +326,65 @@ if [[ -d "$TRUVARI_DIR" ]]; then
     rm -rf "$TRUVARI_DIR"
 fi
 echo ">> Scoring Manta somaticSV against filtered truth via truvari bench..."
+# Flags tuned for REALISTIC symbolic SVs (PCAWG-derived sizes: DEL median ~115kb,
+# events up to several Mb). truvari's defaults were calibrated for small,
+# sequence-resolved SVs and silently drop ours:
+#   --pctseq 0       symbolic <DEL>/<DUP>/... carry no ALT sequence to compare;
+#                    the default 0.7 filters every unresolved SV (recall→0).
+#   --sizemax 3e8    default 50,000 excludes our large SVs from BOTH truth and
+#                    calls; raise above chr length so nothing is size-excluded.
+#   --typeignore     Manta cross-classifies junctions (e.g. inversions emitted
+#                    as BND pairs, BNDs as DEL/DUP); match on position+size, not
+#                    label. Mirrors the v1.13.1 cross-type scoring rationale.
+#   --refdist 500    breakpoint tolerance, matching v1.13.1's ±500bp.
+# NOTE: truvari still does not score BND-type records — see the BND-specific
+# positional pass (step 5c) below for translocation recall.
 SOMATIC_SV_REL="${SOMATIC_SV_VCF#$OUTPUT_DIR/}"
 run_in "$TRUVARI_IMG" truvari bench \
     -b "/work/$SCORING_TRUTH_NAME" \
     -c "/work/$SOMATIC_SV_REL" \
     -o "/work/$(basename "$TRUVARI_DIR")" \
     -f "/refs/$REF_NAME" \
-    --passonly
+    --passonly --pctseq 0 --typeignore --refdist 500 --pctsize 0.5 \
+    --sizemax 300000000 --sizefilt 50
+
+# ── 5c. Positional recall for BND + INV (truvari can't score either) ─────
+# Translocations and inversions are detected by Manta but emitted as BND-form
+# junctions, which truvari drops (and re-labels as DEL/DUP). Reproduce
+# v1.13.1's positional matcher: a somatic truth record is "recovered" if Manta
+# emits ANY PASS breakpoint within ±BP_WINDOW bp of one of its breakpoints
+# (POS for BND; POS or END for INV, whose two junctions Manta calls
+# separately). Pure awk on bcftools-query output.
+BP_WINDOW=500
+# Manta PASS breakpoints: POS for every call, plus END for span calls (DEL/DUP)
+# — a re-labeled junction boundary still counts.
+MANTA_BP_POS="$OUTPUT_DIR/manta_breakpoints.txt"
+run_in "$BCFTOOLS_IMG" sh -c \
+    "bcftools view -H -f PASS '/work/$SOMATIC_SV_REL' \
+     | awk '{print \$1\"\t\"\$2; if(match(\$8,/END=[0-9]+/)){e=substr(\$8,RSTART+4,RLENGTH-4); print \$1\"\t\"e}}'" \
+     > "$MANTA_BP_POS" || true
+score_positional() {  # svtype  check_end(0|1)
+    local svtype="$1" check_end="$2"
+    local truth_pos="$OUTPUT_DIR/truth_${svtype}_pos.txt"
+    run_in "$BCFTOOLS_IMG" sh -c \
+        "bcftools view -H -i 'INFO/SVTYPE=\"$svtype\" && INFO/NEAT_ORIGIN=\"somatic\"' '/truth_in/$TRUTH_NAME' \
+         | awk '{p=\$2; e=p; if(match(\$8,/END=[0-9]+/))e=substr(\$8,RSTART+4,RLENGTH-4); print \$1\"\t\"p\"\t\"e}'" \
+        > "$truth_pos" || true
+    awk -v W="$BP_WINDOW" -v CE="$check_end" '
+        NR==FNR { split($0,a,"\t"); pos[$1] = pos[$1]" "a[2]; next }
+        { tot++; split(pos[$1], cand, " "); found=0
+          for (i in cand) if (cand[i]!="") {
+              if ((($2-cand[i])<=W && (cand[i]-$2)<=W) ||
+                  (CE=="1" && ($3-cand[i])<=W && (cand[i]-$3)<=W)) { found=1; break } }
+          hit += found }
+        END { if (tot>0) printf "%d/%d = %.0f%%", hit+0, tot, 100*hit/tot; else print "none in truth" }
+    ' "$MANTA_BP_POS" "$truth_pos"
+}
+echo ">> Scoring somatic BND + INV recall positionally (±${BP_WINDOW}bp, cross-type)..."
+BND_RECALL=$(score_positional BND 0)
+INV_RECALL=$(score_positional INV 1)
+echo "    Somatic BND positional recall: $BND_RECALL"
+echo "    Somatic INV positional recall: $INV_RECALL"
 
 # ── Summary ─────────────────────────────────────────────────────────────
 cat <<EOF

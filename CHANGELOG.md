@@ -1,5 +1,40 @@
 6/6/2026
 ========
+## rneat v1.14.2
+
+### Per-tissue cancer SV models (#202)
+
+Tissue-specific tumor SV models, stratifying the v1.14.0/v1.14.1 PCAWG SvModel by
+primary site. Three are bundled alongside the pan-cancer model:
+`tools/cosmic_pancancer_sv_{BRCA,skin,lung}.json.gz`. Each is the pan-cancer
+COSMIC SNP/indel base with an `sv_model` fitted from that tissue's PCAWG donors.
+
+- `tools/build_pcawg_sv_vcf.py` gains `--sample-sheet` / `--projects` /
+  `--tissue-label`: filter the somatic BEDPE/CNA donors to a tissue via
+  `aliquot_id → dcc_project_code` (from `pcawg_sample_sheet.tsv`). gnomAD INS is
+  germline and never filtered.
+- `tools/build_per_tissue_sv_models.sh` drives build → `gen-mut-model` →
+  normalize per tissue.
+- `tools/fetch_pcawg_sv_corpus.sh` now also fetches `pcawg_sample_sheet.tsv`.
+
+Tissue → PCAWG projects (SV-donor counts): **BRCA** → `BRCA` (211); **skin** →
+`SKCM-US,MELA-AU` (106); **lung** → `LUAD-US,LUSC-US` (85). PCAWG's project codes
+diverge from TCGA's and SKCM/LUAD alone are underpowered (~37 each), so skin/lung
+group related project codes. The fits show expected tissue signal: BRCA is
+**DUP-dominant** (Dup 0.317, the tandem-duplicator phenotype) at ~2× SV burden;
+skin is **BND-enriched** (0.306); lung is **DEL-dominant** (0.349).
+
+Pick one at run time:
+`cancer_simulate.sh --tumor-model tools/cosmic_pancancer_sv_BRCA.json.gz …`.
+
+**Scope:** only the **SV component** is tissue-specific — the SNP/indel side stays
+pan-cancer COSMIC (per-tissue SNP/indel via MC3/COSMIC-classification is the
+remaining open half of #202). INS length is shared from the gnomAD-derived base
+(germline, tissue-agnostic); INS and focal-CNV *rates* stay pan-cancer literature
+values, so a tissue's CNV fraction shifts mainly because its SV burden differs.
+
+6/6/2026
+========
 ## rneat v1.14.1
 
 ### Patch release: cancer-simulation fixes following the v1.14.0 PCAWG refit

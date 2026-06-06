@@ -1,3 +1,62 @@
+6/6/2026
+========
+## rneat v1.14.1
+
+### Patch release: cancer-simulation fixes following the v1.14.0 PCAWG refit
+
+Three corrections to the v1.14.0 cancer-simulation path: a read-generation
+performance fix, a realistic default somatic mutation rate, and the long-standing
+breakpoint double-counting fix.
+
+#### Read-generation performance: O(log V) variant lookup (#233)
+
+`write_block_fastq` scanned the entire contig's `variant_map` for every fragment
+to find the variants overlapping each read — O(fragments × variants). With dense
+models this dominated read generation: the bundled COSMIC tumor model's
+corpus-aggregated rate (~5.5e-3 → ~220k SNVs on chr22) made the
+`cancer_simulate.sh` tumor pass run ~22–27 min where the normal pass took
+minutes. `MutatedMap.flagged_positions` is now kept sorted and the two read
+windows are located by `partition_point` binary search (and `is_flagged` uses
+`binary_search`), turning the per-read lookup into O(log V + hits). Output is
+byte-identical (same variant set per read, consumed by key). Measured on chr22
+cov2 with the COSMIC model: read-gen **23–27 min → ~27 s (~55×)**. Benefits any
+high-variant-density run (deep coverage, dense `input_vcf`), not just cancer.
+
+#### Realistic default tumor somatic mutation rate (#235)
+
+The de-novo mutations added in `cancer_simulate.sh`'s tumor pass are somatic
+(germline is carried through via `input_vcf`), but most tumor models — including
+the bundled COSMIC model (~5.5e-3) — carry a corpus-aggregated rate that
+overstates single-tumor burden by ~50–500×. `--tumor-mutation-rate` now
+**defaults to 1e-5** (typical solid tumor, ~10 SNVs/Mb) instead of the model's
+fitted rate. On the chr22 fixture this drops somatic SNVs from ~278k to ~507.
+Pass `--tumor-mutation-rate model` to defer to the model's own fitted rate. This
+is the SNP/indel rate only — SV burden (`sv_model.per_base_rate × --sv-rate-scale`)
+and the normal-pass germline rate are unchanged.
+
+**Behavioral change:** runs that relied on the old model-fitted default will now
+emit far fewer (realistic) somatic SNVs unless `--tumor-mutation-rate model` is
+passed.
+
+#### Breakpoint double-counting fix (#236)
+
+The chimeric pass emits junction-spanning reads for every chimeric SV junction,
+but the regular per-contig pass also covered those breakpoints from the unbroken
+reference, so a homozygous junction sat at ~2× coverage (het ~1.5×) — the caveat
+carried since v1.12.0. The regular pass now drops the broken-allele fraction of
+read-pairs that cross a junction (a pair crosses when its R1 `[start,start+rl)`
+or R2 `[end−rl,end)` window contains the junction; gap junctions are left alone),
+so total junction depth ≈ coverage. Covers **BND, INV, DEL, and CNV-loss**;
+**DUP and CNV-gain are intentionally not suppressed** — their chimeric junction
+is the tandem boundary (END→POS), a novel adjacency the regular linear pass never
+reproduces, so it isn't double-counted. No-op (and no RNG drawn) for contigs
+without suppressible SVs, so non-SV runs are byte-for-byte unchanged.
+
+**Behavioral change:** simulated depth at homozygous BND/INV/DEL/CNV-loss
+junctions drops from ~2× to ~1× coverage. SV-caller recall is unaffected (the
+chimeric junction reads — the actual detection signal — are retained; only the
+redundant reference reads are removed).
+
 6/5/2026
 ========
 ## rneat v1.14.0

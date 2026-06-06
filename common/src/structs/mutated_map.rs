@@ -64,6 +64,13 @@ impl MutatedMap {
             variant_map.insert(location, variant);
             flagged_positions.push(location);
         }
+        // Keep sorted so `is_flagged` and the read-window overlap query in
+        // `write_block_fastq` can binary-search instead of scanning every
+        // variant. With dense models (e.g. the corpus-aggregated COSMIC tumor
+        // rate at ~5.5e-3 → ~220k SNVs on chr22) the old linear scans made
+        // read writing O(fragments × variants); sorting once here makes the
+        // per-read lookup O(log V + hits).
+        flagged_positions.sort_unstable();
         Ok(MutatedMap {
             flagged_positions,
             block_interval: (start, end),
@@ -73,7 +80,9 @@ impl MutatedMap {
     }
 
     pub fn is_flagged(&self, position: &usize) -> bool {
-        self.flagged_positions.contains(position)
+        // flagged_positions is kept sorted by from_interval, so binary-search
+        // rather than a linear scan (called per-base in the chimeric subseq path).
+        self.flagged_positions.binary_search(position).is_ok()
     }
 
     pub fn contains(&self, (x, y): (usize, usize)) -> bool {

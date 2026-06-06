@@ -139,6 +139,10 @@ impl CancerConfig {
         }
 
         cfg.validate()?;
+        // Create the output directory up front (unlike gen-reads, the cancer path
+        // builds its per-pass RunConfigurations directly and bypasses the YAML
+        // parser's dir-creation arm). create_dir_all is a no-op if it exists.
+        std::fs::create_dir_all(&cfg.output_dir).map_err(GenCancerReadsError::Io)?;
         Ok(cfg)
     }
 
@@ -309,6 +313,21 @@ mod tests {
             CancerConfig::from_scrape(s),
             Err(GenCancerReadsError::PerPassCoverageZero { .. })
         ));
+    }
+
+    #[test]
+    fn from_scrape_creates_missing_output_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let nested = tmp.path().join("a/b/cancer_out");
+        assert!(!nested.exists());
+        let mut s = base_scrape();
+        s.insert(
+            "output_dir".into(),
+            Value::String(nested.to_string_lossy().into()),
+        );
+        let cfg = CancerConfig::from_scrape(s).unwrap();
+        assert!(nested.is_dir(), "output_dir should be created (create_dir_all)");
+        assert_eq!(cfg.output_dir, nested);
     }
 
     #[test]

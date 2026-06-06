@@ -41,3 +41,70 @@ pub fn tag_and_concat(inputs: &[(&Path, &str)], out: &Path) -> Result<(), GenCan
     w.finish()?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Read;
+
+    fn write_gz(path: &Path, body: &str) {
+        let f = File::create(path).unwrap();
+        let mut w = GzEncoder::new(f, Compression::default());
+        w.write_all(body.as_bytes()).unwrap();
+        w.finish().unwrap();
+    }
+
+    fn read_gz(path: &Path) -> String {
+        let mut s = String::new();
+        MultiGzDecoder::new(File::open(path).unwrap())
+            .read_to_string(&mut s)
+            .unwrap();
+        s
+    }
+
+    #[test]
+    fn tag_and_concat_prefixes_headers_and_preserves_records() {
+        let dir = tempfile::tempdir().unwrap();
+        let n = dir.path().join("n.fastq.gz");
+        let t = dir.path().join("t.fastq.gz");
+        let out = dir.path().join("merged.fastq.gz");
+
+        // Note the second record's QUALITY line is "@@@@" (Phred '@' = Q31).
+        // A naive "prefix every line starting with '@'" would corrupt it — the
+        // function must key on record position (line 1 of every 4), not the
+        // leading character.
+        write_gz(
+            &n,
+            "@RNEAT_generated_chr1_100_170/1\nACGT\n+\nIIII\n\
+             @RNEAT_generated_chr1_200_270/1\nTTTT\n+\n@@@@\n",
+        );
+        write_gz(
+            &t,
+            "@RNEAT_generated_chr1_100_170/1\nGGGG\n+\nIIII\n",
+        );
+
+        tag_and_concat(&[(&n as &Path, "N"), (&t as &Path, "T")], &out).unwrap();
+        let merged = read_gz(&out);
+        let lines: Vec<&str> = merged.lines().collect();
+
+        // 2 normal records + 1 tumor record = 12 lines.
+        assert_eq!(lines.len(), 12, "merged record count");
+
+        // Headers (line 1 of each record) are tag-prefixed, normal block first.
+        assert_eq!(lines[0], "@N_RNEAT_generated_chr1_100_170/1");
+        assert_eq!(lines[4], "@N_RNEAT_generated_chr1_200_270/1");
+        assert_eq!(lines[8], "@T_RNEAT_generated_chr1_100_170/1");
+
+        // Sequence / separator / quality lines pass through untouched — crucially
+        // the "@@@@" quality line is NOT prefixed.
+        assert_eq!(lines[1], "ACGT");
+        assert_eq!(lines[6], "+");
+        assert_eq!(lines[7], "@@@@", "quality line starting with '@' must not be tagged");
+        assert_eq!(lines[9], "GGGG");
+
+        // The same coordinate (chr1_100_170) appears under both N_ and T_ — which
+        // is the whole point: tagging prevents the QNAME collision.
+        assert!(merged.contains("@N_RNEAT_generated_chr1_100_170/1"));
+        assert!(merged.contains("@T_RNEAT_generated_chr1_100_170/1"));
+    }
+}

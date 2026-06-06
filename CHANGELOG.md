@@ -28,6 +28,23 @@ design + decisions: `docs/cancer_simulator_native_plan.md`.
 `tools/cancer_simulate.sh` is retained as the reference implementation and for
 the Docker-based caller benchmarks, pending a same-seed parity test.
 
+### Configurable de novo SV length cap (#229)
+
+The de novo SV sampler rejected drawn lengths above a hardcoded `contig_len / 4`
+— a cap that keeps its overlap-rejection search tractable on chromosome-scale
+references. On small contigs (bacteria, viruses) that cap sits below the trained
+DEL median, starving DEL/DUP/INV draws and routing structural signal into BND;
+it also blocked any attempt to model large or aneuploid events.
+
+The cap is now a `gen-reads` config knob, **`sv_max_length_fraction`** (default
+`0.25`). The default reproduces the historical `contig_len / 4` behavior
+bit-for-bit, so existing configs are unaffected. Raise it toward `1.0` for small
+contigs or to admit large de novo events — the sampler scales its retry budget
+proportionally and its starvation warning now reports the active cap and
+fraction. Only de novo SVs are affected; `input_vcf` SVs are untouched. See the
+new structural-variants section in `template_config/gen_reads_template.yml` and
+the updated aneuploidy notes in `docs/cancer_simulator.md`.
+
 6/6/2026
 ========
 ## rneat v1.14.2

@@ -799,6 +799,7 @@ fn generate_mutated_map(
             sequence,
             config.ploidy,
             config.sv_rate_scale,
+            config.sv_max_length_fraction,
             &mut rng,
         );
         sv_variants.extend(de_novo);

@@ -1,6 +1,8 @@
 # Native cancer simulator: `rneat gen-cancer-reads` implementation plan
 
-Status: **planned, not implemented**. Drafted 2026-06-04.
+Status: **implemented** (2026-06-06, #239) — `rneat gen-cancer-reads` ships the
+design below. `tools/cancer_simulate.sh` is kept until the native path has a
+same-seed parity test against it. Drafted 2026-06-04.
 
 This is the v2 step the cancer-simulator design doc deferred
 (`docs/cancer_simulator.md:15-25`): porting the `tools/cancer_simulate.sh`
@@ -188,9 +190,20 @@ drive matching (normalization / left-align) instead of exact-key.
 ~6 new files, ~4 small `main.rs` edits, plus tests. Most of the subcommand is a
 thin driver over `run_neat`; new logic is confined to `fastq_merge` + `vcf_merge`.
 
-## Open questions (decide when picking this up)
-1. `vcf_merge` exact-key matching vs reusing `sweep()` normalization.
-2. Bake `Vec<Subclone>` N-way shape into `CancerConfig` now, or defer.
+## Resolved decisions (2026-06-06; tracked in #239)
+1. **`vcf_merge` uses exact-key `(contig, pos, ref, alt)` matching**, not
+   `compare_vcfs::sweep()`. Both inputs are rneat-golden VCFs with identical
+   representation — the tumor pass carries normal's germline verbatim via
+   `input_vcf` (tagged `NEAT_PROVENANCE=input`), somatic are `denovo` — so there
+   is no cross-tool representation drift requiring `sweep()`'s positional/
+   normalized matching. Exact-key is correct and avoids coupling to compare_vcfs.
+   Origin rules: tumor `denovo` → `somatic`; tumor `input` → `shared`; normal key
+   absent from tumor → `germline`. Revisit only if inputs ever become
+   external/called VCFs.
+2. **Strict tumor/normal for v1; N-way subclonal deferred.** Matches the
+   validated 2-population orchestration; N-way needs shared-mutation tracking +
+   an N-way merge + its own validation. `CancerConfig` is shaped around `purity`
+   so a future `subclones:` list is an additive, non-breaking extension.
 
 ## Orthogonal / out of scope
 - Junction-read double-counting and symbolic-SV `AD/DP/AF` placeholders

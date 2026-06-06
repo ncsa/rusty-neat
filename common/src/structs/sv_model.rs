@@ -352,6 +352,7 @@ impl SvModel {
         sequence: &[Nucleotide],
         ploidy: usize,
         rate_scale: f64,
+        max_length_fraction: f64,
         rng: &mut NeatRng,
     ) -> Vec<Variant> {
         if rate_scale <= 0.0 || !rate_scale.is_finite() {
@@ -432,8 +433,22 @@ impl SvModel {
             .filter_map(|v| affected_range_for_existing(v, contig_len))
             .collect();
 
-        let upper_len = (contig_len / 4).max(MIN_SV_LENGTH_BP);
-        let max_retries = (n_sv.saturating_mul(10)).max(20);
+        // #229: SV length cap = contig_len * max_length_fraction. Default 0.25
+        // (contig_len/4) keeps overlap rejection tractable on chromosome-scale
+        // references; raise toward 1.0 for small contigs (bacteria/viruses,
+        // where 0.25 sits below the default DEL median and starves DEL/DUP/INV)
+        // or native aneuploidy. A non-finite / non-positive value falls back to
+        // 0.25 (the historical behavior).
+        let frac = if max_length_fraction.is_finite() && max_length_fraction > 0.0 {
+            max_length_fraction
+        } else {
+            0.25
+        };
+        let upper_len = ((contig_len as f64 * frac) as usize).max(MIN_SV_LENGTH_BP);
+        // Bigger SVs are harder to place without overlap, so scale the retry
+        // budget with the fraction relative to the 0.25 baseline.
+        let retry_mult = (frac / 0.25).max(1.0);
+        let max_retries = ((n_sv as f64 * 10.0 * retry_mult) as usize).max(20);
         let mut out: Vec<Variant> = Vec::with_capacity(n_sv);
         let mut retries = 0usize;
 
@@ -637,10 +652,13 @@ impl SvModel {
         if out.len() < n_sv {
             warn!(
                 "SvModel: requested {} de novo SV(s) but only placed {} after {} retries \
-                 (overlap rejection or N-anchor rejection saturated)",
+                 (overlap / N-anchor rejection saturated; cap = {}bp at \
+                 max_length_fraction={:.2}). On small contigs, raise sv_max_length_fraction.",
                 n_sv,
                 out.len(),
-                retries
+                retries,
+                upper_len,
+                frac
             );
         } else {
             info!(
@@ -1279,7 +1297,7 @@ mod tests {
         let m = model_with_single_type(SvType::Del, 1e-3);
         let seq = acgt_sequence(50_000);
         let mut rng = deterministic_rng();
-        let out = m.sample_variants("chr1", 50_000, &[], &seq, 2, 0.0, &mut rng);
+        let out = m.sample_variants("chr1", 50_000, &[], &seq, 2, 0.0, 0.25, &mut rng);
         assert!(
             out.is_empty(),
             "rate_scale=0 must disable generation; got {} SV(s)",
@@ -1292,7 +1310,7 @@ mod tests {
         let m = SvModel::default();
         let seq = acgt_sequence(50_000);
         let mut rng = deterministic_rng();
-        let out = m.sample_variants("chr1", 50_000, &[], &seq, 2, 1.0, &mut rng);
+        let out = m.sample_variants("chr1", 50_000, &[], &seq, 2, 1.0, 0.25, &mut rng);
         assert!(out.is_empty(), "unusable model must yield no SVs");
     }
 
@@ -1303,7 +1321,7 @@ mod tests {
         let m = model_with_single_type(SvType::Del, 1e-3);
         let seq = acgt_sequence(MIN_SV_LENGTH_BP);
         let mut rng = deterministic_rng();
-        let out = m.sample_variants("chr1", MIN_SV_LENGTH_BP, &[], &seq, 2, 1.0, &mut rng);
+        let out = m.sample_variants("chr1", MIN_SV_LENGTH_BP, &[], &seq, 2, 1.0, 0.25, &mut rng);
         assert!(out.is_empty());
     }
 
@@ -1331,7 +1349,7 @@ mod tests {
         }
         let seq = acgt_sequence(200_000);
         let mut rng = deterministic_rng();
-        let out = m.sample_variants("chr1", 200_000, &[], &seq, 2, 1.0, &mut rng);
+        let out = m.sample_variants("chr1", 200_000, &[], &seq, 2, 1.0, 0.25, &mut rng);
         let mut seen_types = std::collections::HashSet::new();
         let mut seen_literal_ins = false;
         for v in &out {
@@ -1368,6 +1386,50 @@ mod tests {
     }
 
     #[test]
+    fn sample_variants_length_cap_is_configurable() {
+        // #229: the SV length cap is `contig_len * max_length_fraction`.
+        // Build a DEL-only model whose lengths cluster tightly around 3000bp
+        // (well above the default 0.25 cap on an 8kb contig, which is 2000bp,
+        // but comfortably below the 1.0 cap of 8000bp). With the default
+        // fraction every DEL exceeds the cap and is rejected, so the sampler
+        // starves and emits nothing. Raising the fraction to 1.0 lets the same
+        // draws through. This is the small-contig / aneuploidy case from #229.
+        let mut m = SvModel::default();
+        m.per_base_rate = 2e-3;
+        m.homozygous_frequency = 0.5;
+        m.type_probabilities.insert(SvType::Del, 1.0);
+        // e^8.006 ≈ 3000bp, sigma 0.08 → essentially all draws in [2400, 3750].
+        m.length_log_normal.insert(SvType::Del, (8.006, 0.08));
+
+        let contig_len = 8000;
+        let seq = acgt_sequence(contig_len);
+
+        // Default cap (0.25 → 2000bp): every DEL is too long → starved.
+        let mut rng = deterministic_rng();
+        let capped = m.sample_variants("chr1", contig_len, &[], &seq, 2, 1.0, 0.25, &mut rng);
+        assert!(
+            capped.is_empty(),
+            "with the default 0.25 cap all DELs exceed contig_len/4 and are rejected; \
+             got {} variants",
+            capped.len()
+        );
+
+        // Full-length cap (1.0 → 8000bp): the same draws now fit and are emitted.
+        let mut rng = deterministic_rng();
+        let uncapped = m.sample_variants("chr1", contig_len, &[], &seq, 2, 1.0, 1.0, &mut rng);
+        assert!(
+            !uncapped.is_empty(),
+            "raising sv_max_length_fraction to 1.0 should let the ~3kb DELs through"
+        );
+        for v in &uncapped {
+            assert_eq!(
+                v.alternate.as_symbolic().expect("symbolic SV").sv_type,
+                SvType::Del
+            );
+        }
+    }
+
+    #[test]
     fn sampled_dels_have_correct_anchor_and_end_invariant() {
         // For each generated DEL: variant.location is the 0-based anchor
         // (just before the deletion), sv.end is 1-based inclusive
@@ -1378,7 +1440,7 @@ mod tests {
         let m = model_with_single_type(SvType::Del, 5e-3);
         let seq = acgt_sequence(100_000);
         let mut rng = deterministic_rng();
-        let out = m.sample_variants("chr1", 100_000, &[], &seq, 2, 1.0, &mut rng);
+        let out = m.sample_variants("chr1", 100_000, &[], &seq, 2, 1.0, 0.25, &mut rng);
         assert!(
             !out.is_empty(),
             "expected at least one sampled DEL at this rate"
@@ -1405,7 +1467,7 @@ mod tests {
         let m = model_with_single_type(SvType::Dup, 5e-3);
         let seq = acgt_sequence(100_000);
         let mut rng = deterministic_rng();
-        let out = m.sample_variants("chr1", 100_000, &[], &seq, 2, 1.0, &mut rng);
+        let out = m.sample_variants("chr1", 100_000, &[], &seq, 2, 1.0, 0.25, &mut rng);
         assert!(!out.is_empty());
         for v in &out {
             let sv = v.alternate.as_symbolic().expect("must be symbolic");
@@ -1423,7 +1485,7 @@ mod tests {
         let m = model_with_single_type(SvType::Inv, 5e-3);
         let seq = acgt_sequence(100_000);
         let mut rng = deterministic_rng();
-        let out = m.sample_variants("chr1", 100_000, &[], &seq, 2, 1.0, &mut rng);
+        let out = m.sample_variants("chr1", 100_000, &[], &seq, 2, 1.0, 0.25, &mut rng);
         assert!(!out.is_empty());
         for v in &out {
             let sv = v.alternate.as_symbolic().expect("must be symbolic");
@@ -1449,7 +1511,7 @@ mod tests {
         let m = model_with_single_type(SvType::Ins, 5e-3);
         let seq = acgt_sequence(100_000);
         let mut rng = deterministic_rng();
-        let out = m.sample_variants("chr1", 100_000, &[], &seq, 2, 1.0, &mut rng);
+        let out = m.sample_variants("chr1", 100_000, &[], &seq, 2, 1.0, 0.25, &mut rng);
         assert!(!out.is_empty());
         for v in &out {
             assert_eq!(v.variant_type, VariantType::Insertion);
@@ -1471,7 +1533,7 @@ mod tests {
         let m = model_with_single_type(SvType::Cnv, 5e-3);
         let seq = acgt_sequence(100_000);
         let mut rng = deterministic_rng();
-        let out = m.sample_variants("chr1", 100_000, &[], &seq, 2, 1.0, &mut rng);
+        let out = m.sample_variants("chr1", 100_000, &[], &seq, 2, 1.0, 0.25, &mut rng);
         assert!(!out.is_empty());
         let expected_cns: std::collections::HashSet<u32> =
             m.cnv_copy_number_distribution.keys().copied().collect();
@@ -1505,7 +1567,7 @@ mod tests {
 
         let seq = acgt_sequence(100_000);
         let mut rng = deterministic_rng();
-        let out = m.sample_variants("chr1", 100_000, &[], &seq, 2, 1.0, &mut rng);
+        let out = m.sample_variants("chr1", 100_000, &[], &seq, 2, 1.0, 0.25, &mut rng);
         assert!(!out.is_empty(), "expected at least one sampled CNV");
 
         let fallback_cns: std::collections::HashSet<u32> =
@@ -1528,7 +1590,7 @@ mod tests {
         let m = model_with_single_type(SvType::Bnd, 5e-3);
         let seq = acgt_sequence(100_000);
         let mut rng = deterministic_rng();
-        let out = m.sample_variants("chr1", 100_000, &[], &seq, 2, 1.0, &mut rng);
+        let out = m.sample_variants("chr1", 100_000, &[], &seq, 2, 1.0, 0.25, &mut rng);
         assert!(!out.is_empty());
         for v in &out {
             let sv = v.alternate.as_symbolic().expect("must be symbolic");
@@ -1569,7 +1631,7 @@ mod tests {
         let m = model_with_single_type(SvType::Dup, 1e-3);
         let seq = acgt_sequence(50_000);
         let mut rng = deterministic_rng();
-        let sampled = m.sample_variants("chr1", 50_000, &existing, &seq, 2, 1.0, &mut rng);
+        let sampled = m.sample_variants("chr1", 50_000, &existing, &seq, 2, 1.0, 0.25, &mut rng);
 
         let mut ranges: Vec<(usize, usize)> = Vec::new();
         for v in existing.iter().chain(sampled.iter()) {
@@ -1598,7 +1660,7 @@ mod tests {
         seq.extend(acgt_sequence(20_000));
         let m = model_with_single_type(SvType::Del, 2e-3);
         let mut rng = deterministic_rng();
-        let out = m.sample_variants("chr1", seq.len(), &[], &seq, 2, 1.0, &mut rng);
+        let out = m.sample_variants("chr1", seq.len(), &[], &seq, 2, 1.0, 0.25, &mut rng);
         for v in &out {
             // Anchor is 0-based variant.location. Must NOT fall in the
             // all-N prefix.
@@ -1649,7 +1711,7 @@ mod tests {
         let n_end = n_start + 400;
         let m = model_with_single_type(SvType::Del, 2e-3);
         let mut rng = deterministic_rng();
-        let out = m.sample_variants("chr1", seq.len(), &[], &seq, 2, 1.0, &mut rng);
+        let out = m.sample_variants("chr1", seq.len(), &[], &seq, 2, 1.0, 0.25, &mut rng);
         for v in &out {
             let loc = v.location;
             let clipped = loc.saturating_sub(200)..loc.saturating_add(200).min(seq.len());
@@ -1677,8 +1739,8 @@ mod tests {
         let seq = acgt_sequence(100_000);
         let mut rng1 = deterministic_rng();
         let mut rng2 = deterministic_rng();
-        let a = m.sample_variants("chr1", 100_000, &[], &seq, 2, 1.0, &mut rng1);
-        let b = m.sample_variants("chr1", 100_000, &[], &seq, 2, 1.0, &mut rng2);
+        let a = m.sample_variants("chr1", 100_000, &[], &seq, 2, 1.0, 0.25, &mut rng1);
+        let b = m.sample_variants("chr1", 100_000, &[], &seq, 2, 1.0, 0.25, &mut rng2);
         assert_eq!(a.len(), b.len());
         for (x, y) in a.iter().zip(b.iter()) {
             assert_eq!(x.location, y.location);
@@ -1816,7 +1878,7 @@ mod tests {
         let contig_len = 50_000_000;
         let seq = acgt_sequence(contig_len);
         let mut rng = deterministic_rng();
-        let out = m.sample_variants("chr1", contig_len, &[], &seq, 2, 1.0, &mut rng);
+        let out = m.sample_variants("chr1", contig_len, &[], &seq, 2, 1.0, 0.25, &mut rng);
         // Expected ≈ 24,205. Even with overlap-rejection saturation
         // capping below this (max_retries = 10 × n_sv), we should land
         // very far from zero. Anything > 1000 is a clear sign the
@@ -1865,7 +1927,7 @@ mod tests {
         // INS-only model so we don't have to wade through DEL/DUP/etc.
         let m = model_with_single_type(SvType::Ins, 1e-3);
         let mut rng = deterministic_rng();
-        let sampled = m.sample_variants("chr1", 50_000, &[], &seq, 2, 1.0, &mut rng);
+        let sampled = m.sample_variants("chr1", 50_000, &[], &seq, 2, 1.0, 0.25, &mut rng);
 
         assert!(!sampled.is_empty(), "expected ≥1 de novo INS");
 

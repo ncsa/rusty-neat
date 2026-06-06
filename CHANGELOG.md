@@ -1,5 +1,52 @@
 6/6/2026
 ========
+## rneat v1.15.0
+
+### Native `rneat gen-cancer-reads` subcommand (#239)
+
+Tumor/normal cancer simulation is now a first-class subcommand — a native port
+of `tools/cancer_simulate.sh` with **no `bcftools`/`awk` runtime dependency**.
+`rneat gen-cancer-reads -c <config.yml>` runs two `gen-reads` passes over the
+same reference (normal at `(1-purity)*C`; tumor at `purity*C`, sharing the
+normal's germline) and merges them:
+
+- **Tagged FASTQs** — each pass's read names are prefixed `N_`/`T_` before
+  concatenation, so normal/tumor reads at the same coordinate don't collide as
+  QNAMEs (which MarkDuplicates silently drops).
+- **Origin-tagged truth VCF** — the two golden VCFs are merged into
+  `<prefix>_merged_truth.vcf.gz` with `INFO/NEAT_ORIGIN ∈ {germline, somatic,
+  shared}`, resolved from `NEAT_PROVENANCE` via an exact `(contig,pos,ref,alt)`
+  key (tumor `denovo` → somatic, tumor `input` → shared, normal-only → germline).
+
+The tumor pass defaults `tumor_mutation_rate` to **1e-5** (typical somatic
+burden; `model` defers to the model's fitted rate), and automatically inherits
+the breakpoint double-count fix (it lives in the shared `run_neat` path). v1
+models a single tumor/normal split; N-way subclonal mixtures are a future
+additive extension. Config template: `template_config/gen_cancer_reads_template.yml`;
+design + decisions: `docs/cancer_simulator_native_plan.md`.
+
+`tools/cancer_simulate.sh` is retained as the reference implementation and for
+the Docker-based caller benchmarks, pending a same-seed parity test.
+
+### Configurable de novo SV length cap (#229)
+
+The de novo SV sampler rejected drawn lengths above a hardcoded `contig_len / 4`
+— a cap that keeps its overlap-rejection search tractable on chromosome-scale
+references. On small contigs (bacteria, viruses) that cap sits below the trained
+DEL median, starving DEL/DUP/INV draws and routing structural signal into BND;
+it also blocked any attempt to model large or aneuploid events.
+
+The cap is now a `gen-reads` config knob, **`sv_max_length_fraction`** (default
+`0.25`). The default reproduces the historical `contig_len / 4` behavior
+bit-for-bit, so existing configs are unaffected. Raise it toward `1.0` for small
+contigs or to admit large de novo events — the sampler scales its retry budget
+proportionally and its starvation warning now reports the active cap and
+fraction. Only de novo SVs are affected; `input_vcf` SVs are untouched. See the
+new structural-variants section in `template_config/gen_reads_template.yml` and
+the updated aneuploidy notes in `docs/cancer_simulator.md`.
+
+6/6/2026
+========
 ## rneat v1.14.2
 
 ### Per-tissue cancer SV models (#202)

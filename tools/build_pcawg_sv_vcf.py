@@ -76,14 +76,46 @@ def open_maybe_gz(path):
     return open(path, "r")
 
 
+def aliquot_of(fp):
+    """BEDPE/CNA per-donor files are named <aliquot_id>.<...>; return the UUID."""
+    return os.path.basename(fp).split(".")[0]
+
+
+def load_tissue_aliquots(sample_sheet, projects):
+    """Set of tumor aliquot_ids whose dcc_project_code starts with any of
+    `projects`. Matching is by prefix, so 'BRCA' picks up BRCA-US/UK/EU while an
+    explicit group like ['SKCM-US', 'MELA-AU'] (skin melanoma) also works.
+    Sourced from PCAWG's pcawg_sample_sheet.tsv (aliquot_id, dcc_project_code)."""
+    prefixes = tuple(projects)
+    allowed = set()
+    with open_maybe_gz(sample_sheet) as fh:
+        header = fh.readline().rstrip("\n").split("\t")
+        try:
+            i_aliquot = header.index("aliquot_id")
+            i_project = header.index("dcc_project_code")
+        except ValueError:
+            log("!! sample sheet missing aliquot_id / dcc_project_code columns")
+            return allowed
+        for line in fh:
+            f = line.rstrip("\n").split("\t")
+            if len(f) <= max(i_aliquot, i_project):
+                continue
+            if f[i_project].startswith(prefixes):
+                allowed.add(f[i_aliquot])
+    log(f"   tissue filter: {len(allowed)} aliquots match {list(projects)}")
+    return allowed
+
+
 # ── PCAWG BEDPE → DEL/DUP/INV/BND ────────────────────────────────────────
-def parse_bedpe(bedpe_dir, chr_prefix, records, counts):
+def parse_bedpe(bedpe_dir, chr_prefix, records, counts, allowed=None):
     files = sorted(glob.glob(os.path.join(bedpe_dir, "**", "*.bedpe.gz"),
                              recursive=True))
     if not files:
         log(f"!! no *.bedpe.gz under {bedpe_dir}")
     donors = 0
     for fp in files:
+        if allowed is not None and aliquot_of(fp) not in allowed:
+            continue
         donors += 1
         with gzip.open(fp, "rt") as fh:
             for line in fh:
@@ -171,7 +203,7 @@ def sample_id_from_cna_path(fp):
 
 
 # ── PCAWG CNA segments → focal non-neutral CNV ───────────────────────────
-def parse_cna(cna_dir, ploidy, chr_prefix, max_focal_bp, records, counts):
+def parse_cna(cna_dir, ploidy, chr_prefix, max_focal_bp, records, counts, allowed=None):
     files = sorted(glob.glob(os.path.join(cna_dir, "**", "*.somatic.cna.txt"),
                              recursive=True))
     if not files:
@@ -182,6 +214,8 @@ def parse_cna(cna_dir, ploidy, chr_prefix, max_focal_bp, records, counts):
     donors = 0
     missing_ploidy = 0
     for fp in files:
+        if allowed is not None and aliquot_of(fp) not in allowed:
+            continue
         donors += 1
         sid = sample_id_from_cna_path(fp)
         sample_ploidy = ploidy.get(sid)
@@ -316,6 +350,15 @@ def main():
                          "0 = no cap. Default 3,000,000.")
     ap.add_argument("--no-chr-prefix", action="store_true",
                     help="emit bare chrom names (1/X/M) instead of chr-prefixed")
+    ap.add_argument("--sample-sheet",
+                    help="pcawg_sample_sheet.tsv (aliquot_id -> dcc_project_code). "
+                         "Required with --projects for per-tissue filtering.")
+    ap.add_argument("--projects",
+                    help="comma-separated dcc_project_code prefixes to include "
+                         "(e.g. 'BRCA' for BRCA-US/UK/EU, or 'SKCM-US,MELA-AU' for "
+                         "skin melanoma). Omit for pan-cancer (all donors).")
+    ap.add_argument("--tissue-label",
+                    help="label recorded in the sidecar (e.g. BRCA, skin, lung)")
     args = ap.parse_args()
 
     chr_prefix = not args.no_chr_prefix
@@ -323,8 +366,20 @@ def main():
     counts = {"DEL": 0, "DUP": 0, "INV": 0, "BND": 0, "CNV": 0, "INS": 0,
               "_cn_hist": {}}
 
+    # Per-tissue filter: restrict the somatic BEDPE/CNA donors to a tissue's
+    # aliquots. gnomAD INS is germline (tissue-agnostic) so it is never filtered.
+    allowed = None
+    if args.projects:
+        if not args.sample_sheet:
+            ap.error("--projects requires --sample-sheet")
+        projects = [p.strip() for p in args.projects.split(",") if p.strip()]
+        log(f">> Per-tissue filter: projects {projects}")
+        allowed = load_tissue_aliquots(args.sample_sheet, projects)
+        if not allowed:
+            ap.error(f"no aliquots matched --projects {projects}")
+
     log(">> Parsing PCAWG BEDPE (DEL/DUP/INV/BND)...")
-    parse_bedpe(args.bedpe_dir, chr_prefix, records, counts)
+    parse_bedpe(args.bedpe_dir, chr_prefix, records, counts, allowed)
 
     if args.cna_dir:
         if not args.purity_ploidy:
@@ -336,7 +391,7 @@ def main():
             ploidy = load_ploidy(args.purity_ploidy)
         log(">> Parsing PCAWG CNA (focal non-neutral CNV)...")
         parse_cna(args.cna_dir, ploidy, chr_prefix, args.cnv_max_focal_bp,
-                  records, counts)
+                  records, counts, allowed)
 
     if args.gnomad_ins_vcf:
         log(">> Parsing gnomAD-SV INS (length source)...")
@@ -355,6 +410,8 @@ def main():
         "donors_cnv": counts.get("_donors_cnv", 0),
         "cnv_copy_number_hist": counts["_cn_hist"],
         "notes": {
+            "tissue_label": args.tissue_label,
+            "projects": (args.projects.split(",") if args.projects else None),
             "ins_source": "gnomad-sv germline (length only; rate is literature)",
             "cnv_focal_max_bp": args.cnv_max_focal_bp,
             "per_donor_means": {

@@ -135,6 +135,18 @@ extract_into "${SV_DIR}/final_consensus_sv_bedpe_passonly.tcga.public.tgz" "${SV
 extract_into "${CNV_DIR}/consensus.20170119.somatic.cna.icgc.public.tar.gz" "${CNV_DIR}/icgc"
 extract_into "${CNV_DIR}/consensus.20170119.somatic.cna.tcga.public.tar.gz" "${CNV_DIR}/tcga"
 
+# ── Sample sheet: aliquot_id → dcc_project_code, for per-tissue filtering (#202) ──
+# (No published md5 in the consensus READMEs, so fetched without a checksum.)
+META_DIR="${OUT_DIR}/metadata"
+mkdir -p "$META_DIR"
+SAMPLE_SHEET="${META_DIR}/pcawg_sample_sheet.tsv"
+if [[ "$SKIP_EXISTING" == "true" && -s "$SAMPLE_SHEET" ]]; then
+    echo "   [have] pcawg_sample_sheet.tsv"
+else
+    echo "   [get ] pcawg_sample_sheet.tsv (donor→tissue metadata)"
+    aws_get "donors_and_biospecimens/pcawg_sample_sheet.tsv" "$SAMPLE_SHEET"
+fi
+
 N_BEDPE=$(find "${SV_DIR}/icgc" "${SV_DIR}/tcga" -name "*.bedpe.gz" 2>/dev/null | wc -l)
 N_CNA=$(find "${CNV_DIR}/icgc" "${CNV_DIR}/tcga" -name "*.cna.txt" -o -name "*.somatic.cna.txt" 2>/dev/null | wc -l)
 

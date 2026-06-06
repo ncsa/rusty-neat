@@ -1,4 +1,22 @@
 #!/usr/bin/env python3
+# ============================================================================
+# DEPRECATED as of v1.14.0 (#218). This script injects HAND-ROLLED literature
+# values. The bundled tumor model's sv_model is now DATA-DERIVED from the PCAWG
+# consensus SV/CNV callsets (+ gnomAD-SV for INS length) via this pipeline:
+#
+#   tools/fetch_pcawg_sv_corpus.sh        # download open-tier PCAWG SV + CNV
+#   tools/build_pcawg_sv_vcf.py           # -> symbolic-SV VCF (+ counts sidecar)
+#   rneat gen-mut-model -c <fit.yml>      # fit length / CN distributions
+#   tools/normalize_pcawg_sv_model.py     # per-tumor rate/type-mix + splice in
+#
+# The data refit corrected this script's heuristics substantially — e.g. INV
+# 0.08 -> 0.134 and BND 0.35 -> 0.232 (this file's "~35% BND" was a misreading
+# of the PCAWG breakdown; inversions are represented as paired junctions, which
+# the data pipeline de-duplicates). Kept only for historical reference and for
+# bootstrapping a null-sv_model model from scratch; do NOT use it to regenerate
+# the bundled model.
+# ============================================================================
+#
 # Inject a literature-derived cancer SvModel component into an rneat
 # MutationModel JSON (gzipped or plain). The bundled COSMIC tumor model
 # (tools/cosmic_v104_pancancer_model.json.gz) is trained from COSMIC

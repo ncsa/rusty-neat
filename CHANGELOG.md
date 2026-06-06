@@ -1,3 +1,101 @@
+6/5/2026
+========
+## rneat v1.14.0
+
+### Data-derived cancer SvModel refit from the PCAWG consensus callsets
+
+Closes #218. The bundled tumor model's `sv_model`
+(`tools/cosmic_v104_pancancer_model.json.gz`) was, through v1.13.x, a set of
+hand-rolled literature values injected by `tools/inject_cancer_sv_model.py`.
+This release replaces them with parameters **counted from real data**: the
+PCAWG consensus structural-variant and copy-number callsets (Li et al., *Nature*
+578, 2020; n=2,748 donors), with gnomAD-SV supplying the insertion length
+distribution.
+
+#### New data pipeline (replaces the hand-injection)
+
+| Tool | Role |
+|------|------|
+| `tools/fetch_pcawg_sv_corpus.sh` | Download the open-tier PCAWG consensus SV (BEDPE) + CNV (CNA) callsets from the ICGC-ARGO object store (`--endpoint-url https://object.genomeinformatics.org`) and verify checksums. |
+| `tools/build_pcawg_sv_vcf.py` | Convert BEDPE (DEL/DUP/INV/BND) + CNA (focal CNV) + gnomAD-SV (INS length) into one symbolic-SV VCF `gen-mut-model` can fit, plus a per-donor counts sidecar. |
+| `tools/normalize_pcawg_sv_model.py` | Apply per-tumor rate/type-mix corrections to the fit and splice the result into the bundled model. Data-derived successor to `inject_cancer_sv_model.py`. |
+
+`tools/inject_cancer_sv_model.py` is **deprecated** (banner added); it is kept
+only for historical reference / bootstrapping a null-`sv_model` model.
+
+#### What changed in the model
+
+Type probabilities, now counted rather than assumed:
+
+| type | v1.13.x (heuristic) | v1.14.0 (PCAWG) |
+|------|--------------------:|----------------:|
+| DEL  | 0.350 | 0.292 |
+| DUP  | 0.170 | 0.258 |
+| INV  | 0.080 | 0.134 |
+| BND  | 0.350 | 0.232 |
+| CNV  | 0.010 | 0.056 |
+| INS  | 0.040 | 0.028 |
+
+The refit ordering (DEL > DUP > BND > INV) now matches the published PCAWG
+ranking — deletions most common, tandem duplications second, with inversions an
+uncommon class. The old heuristic's "~35% BND / 8% INV" was a misreading of the
+PCAWG breakdown. The fitted per-base rate (3.46e-8) lands within 10% of the
+prior literature estimate (3.8e-8) — independent confirmation that value was
+well-calibrated, now grounded in counted observations. Length distributions and
+the CNV copy-number distribution are likewise fit from data; they are
+substantially larger than the old values (e.g. DEL median ~115 kb vs the prior
+~5 kb), reflecting genuine somatic SV sizes.
+
+##### Inversion double-count fix
+
+A balanced inversion appears in PCAWG BEDPE as **two** junction rows (one
+head-to-head `h2hINV`, one tail-to-tail `t2tINV`). The first adapter pass counted
+each as a separate inversion, ~2x over-representing INV (0.235 vs the corrected
+0.134). The per-donor `h2h ~= t2t` counts confirm the pairing; `build_pcawg_sv_vcf.py`
+now counts one INV per `h2hINV` and skips its `t2tINV` partner.
+
+#### chr22 caller-recall validation (no regression)
+
+Same fixture family as v1.13.1 (chr22, PE 30x, purity 0.5, sv-rate-scale 50),
+refit tumor model, Manta in tumor/normal mode:
+
+| SV type | recall | acceptance |
+|---------|--------|------------|
+| DEL | 17/28 = 61% | >=50% PASS |
+| DUP | 14/25 = 56% | >=30% PASS |
+| CNV | 2/3 = 67%   | — |
+| INV | 3/7 = 43% (positional) | detected PASS |
+| BND | 14/32 = 44% (positional, all somatic) | alignable >=30% PASS |
+
+#### Benchmark scoring fixes (`tools/cancer_sv_benchmark.sh`)
+
+The realistic (large) SV sizes exposed scoring gaps in the stock truvari path
+that silently reported 0% recall. Fixed:
+
+- **Truth filter** now keeps only symbolic SV records (`INFO/SVTYPE`), excluding
+  literal large indels that belong to the SNV/indel benchmark and otherwise
+  count as false negatives for a structural caller.
+- **truvari flags** `--pctseq 0` (symbolic ALTs carry no sequence), `--sizemax
+  3e8` (default 50 kb excluded realistic SVs), `--typeignore`, `--refdist 500`.
+- **New positional BND + INV recall pass** (step 5c): truvari does not score
+  BND-type records, and Manta emits translocations/inversions as BND-form
+  junctions. A ±500 bp cross-type matcher (reproducing v1.13.1's method)
+  reports their recall.
+
+#### Known limitations / caveats
+
+- **INS rate is literature, not counted.** PCAWG retrotransposition (MEI) calls
+  are controlled-access; gnomAD-SV supplies the INS *length* distribution
+  (germline, but mobile-element sizes transfer), while the INS *fraction*
+  (~0.028) remains a somatic literature estimate. INS content is still random
+  novel sequence (#190).
+- **CNV rate is literature, not counted.** Raw focal-CNA segments (~135/donor)
+  are segmentation, not discrete events; the CNV `type_probability` uses a
+  literature per-tumor count while the CN distribution (capped at 10) and length
+  are data-derived.
+- **Aneuploidy** (whole-arm/chromosome CNV) remains on the depth-modulation /
+  `input_vcf:` path (#189), not the SvModel sampler.
+
 6/2/2026
 ========
 ## rneat v1.13.1

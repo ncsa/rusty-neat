@@ -39,7 +39,13 @@ PURITY="0.5"
 NORMAL_MODEL=""
 TUMOR_MODEL=""
 NORMAL_MUTATION_RATE=""
-TUMOR_MUTATION_RATE=""
+# Default the tumor pass to a realistic per-tumor SOMATIC rate rather than the
+# model's fitted rate. The de-novo mutations added in the tumor pass are somatic
+# (germline is carried through via input_vcf), and most tumor models — including
+# the bundled COSMIC pan-cancer model (~5.5e-3) — carry a corpus-aggregated rate
+# that overstates single-tumor burden by ~50-500x. 1e-5 ≈ a typical solid tumor.
+# Pass `--tumor-mutation-rate model` to defer to the model's own fitted rate.
+TUMOR_MUTATION_RATE="1e-5"
 GERMLINE_VCF=""
 READ_LEN="151"
 PAIRED_END="false"
@@ -74,14 +80,22 @@ recommended for any non-toy run — see issue #186):
   --normal-model     Path to a .json.gz mutation model for the normal pass
   --tumor-model      Path to a .json.gz mutation model for the tumor pass
 
-Mutation-rate overrides (optional; each pass uses its model's fitted rate if
-omitted). Useful when the supplied model's rate is corpus-aggregated rather
-than per-tumor — e.g. the bundled COSMIC pan-cancer model fits to ~5.5e-3 per
-bp ("fraction of bp with any observed mutation across the COSMIC catalog"),
-which inflates a single-tumor simulation by ~50–500×. Realistic per-tumor
-rates are ~1e-5 (typical solid tumor) to ~1e-4 (high-burden / MSI).
-  --normal-mutation-rate  Override the normal pass's per-base mutation rate
-  --tumor-mutation-rate   Override the tumor pass's per-base mutation rate
+Mutation-rate overrides:
+  --normal-mutation-rate  Override the normal pass's per-base mutation rate.
+                          Omitted → the normal model's fitted (germline) rate,
+                          which is the right magnitude for germline burden.
+  --tumor-mutation-rate   The tumor pass's per-base SOMATIC mutation rate.
+                          DEFAULT: 1e-5 (typical solid tumor). The de-novo
+                          mutations added in the tumor pass are somatic, and most
+                          tumor models carry a corpus-aggregated rate that
+                          overstates single-tumor burden by ~50–500× — e.g. the
+                          bundled COSMIC pan-cancer model fits ~5.5e-3 per bp
+                          ("fraction of bp mutated anywhere across the COSMIC
+                          catalog"), which would emit ~hundreds of thousands of
+                          SNVs per tumor. Realistic per-tumor rates: ~1e-5
+                          (typical solid tumor) to ~1e-4 (high-burden / MSI).
+                          Pass `--tumor-mutation-rate model` to instead defer to
+                          the tumor model's own fitted rate.
 
 Germline VCF (optional):
   --germline-vcf     A VCF to use as the shared germline. If omitted, pass 1
@@ -270,6 +284,15 @@ if [[ -z "$GERMLINE_VCF" ]]; then
 fi
 
 # ── Pass 2: tumor ────────────────────────────────────────────────────────
+# `--tumor-mutation-rate model` opts out of the realistic-rate default and lets
+# the tumor pass use whatever rate the model fitted (write_config omits the
+# mutation_rate line when the value is empty).
+if [[ "$TUMOR_MUTATION_RATE" == "model" ]]; then
+    TUMOR_MUTATION_RATE=""
+    echo ">> Tumor mutation rate: using the model's fitted rate (--tumor-mutation-rate model)"
+else
+    echo ">> Tumor mutation rate: ${TUMOR_MUTATION_RATE} per bp (somatic; override with --tumor-mutation-rate)"
+fi
 echo ">> Pass 2: tumor at ${TUMOR_COVERAGE}× coverage (germline from ${GERMLINE_VCF})"
 TUMOR_CONFIG="${OUTPUT_DIR}/${TUMOR_PREFIX}.yml"
 write_config "$TUMOR_CONFIG" "$TUMOR_PREFIX" "$TUMOR_COVERAGE" \

@@ -102,25 +102,28 @@ long-term architecture (it also deletes the entire chimeric special-case path
 and the double-count can't exist), but its memory cost and blast radius make it a
 separate redesign, not this fix.
 
-## Scope: BND/INV first; DEL/DUP/CNV considered
+## Scope: BND/INV + DEL/CNV-loss suppressed; DUP/CNV-gain intentionally not
 
-The user-named bug is BND/INV (the coverage-neutral types → clean 2×). But the
-same two-pass double-count exists for **DEL/DUP/CNV**, which *also* run through
-`process_chimeric_variants` (`generate_del_pair`/`generate_dup_pair`) while
-*also* modulating coverage. Their interior coverage is handled by the
-multipliers, but flank reads that read *across* the breakpoint into the
-deleted/duplicated span still leak from the regular pass on top of the chimeric
-junction reads — a smaller, partially-masked version of the same issue.
+**Implemented** (`collect_suppressible_junctions` / `suppress_junction_double_count`):
 
-The per-fragment mechanism generalizes to all of them **if** the suppression
-`broken_fraction` for each junction is set to exactly that type's chimeric
-`mult` (read `generate_del_pair`/`generate_dup_pair`/the CNV branch to confirm
-each — they are CN-derived, not simply 1.0/het). Recommendation: **implement and
-validate BND/INV first** (clean, matches the documented caveat), then extend the
-same junction list to DEL/DUP/CNV with per-type fractions as a fast follow-up,
-guarding against double-correcting against the coverage multipliers (the
-multiplier handles interior depth; suppression handles junction-crossing pairs —
-they target different reads, so they compose, but this must be tested).
+- **BND** — one point junction at POS, `broken_fraction` = genotype mult (1.0 / 1/ploidy).
+- **INV** — two junctions (POS and END), genotype mult.
+- **DEL** — one junction at POS (the anchor), genotype mult. A read spanning the
+  whole deletion also covers POS, so the single POS junction suffices; the deleted
+  interior is already coverage-zeroed by the multiplier, and suppression handles
+  the flank reads crossing POS that leak on top. The two mechanisms target
+  different reads, so they compose (verified by the full suite passing).
+- **CNV-loss** (cn < ploidy) — DEL-like: one POS junction at `(ploidy − cn)/ploidy`
+  (matches the chimeric CNV branch's mult exactly; CN=0 → 1.0).
+
+**Intentionally NOT suppressed:**
+
+- **DUP** and **CNV-gain** (cn ≥ ploidy). Their chimeric junction is the *tandem
+  boundary* (END→POS) — a **novel adjacency** that the regular linear pass never
+  reproduces, so it is not double-counted. (The extra-copy *depth* is handled by
+  the coverage multiplier; a separate, subtler boundary-coverage question for
+  tandem dups exists but is out of scope for the chimeric double-count fix.)
+- **INS** — literal insertion, no junction double-count.
 
 ## Test plan
 

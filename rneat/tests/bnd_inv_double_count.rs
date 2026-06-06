@@ -1,13 +1,15 @@
-//! End-to-end test for the BND/INV breakpoint double-counting fix.
+//! End-to-end test for the breakpoint double-counting fix (BND/INV + DEL/CNV-loss).
 //!
-//! The chimeric pass emits junction-spanning reads for every BND/INV junction.
-//! Before the fix, the regular per-contig pass *also* covered those junctions
-//! from the unbroken reference (BND/INV are coverage-neutral), so a homozygous
-//! junction sat at ~2x coverage. The fix drops the broken-allele fraction of
-//! regular pairs that cross a junction; for a homozygous junction that's all of
-//! them, so afterward NO regular read (`RNEAT_generated_`) should span the
-//! junction, while interior / flank positions keep normal coverage and the
-//! chimeric junction reads (`RNEAT_chimeric_`) are still emitted.
+//! The chimeric pass emits junction-spanning reads for every chimeric SV
+//! junction. Before the fix the regular per-contig pass *also* covered those
+//! breakpoints from the unbroken reference, so a homozygous junction sat at ~2x
+//! coverage. The fix drops the broken-allele fraction of regular pairs that
+//! cross a junction; for a homozygous junction that's all of them, so afterward
+//! NO regular read (`RNEAT_generated_`) should span the breakpoint, while
+//! interior / flank positions keep normal coverage and the chimeric junction
+//! reads (`RNEAT_chimeric_`) are still emitted. (DUP / CNV-gain make a novel
+//! tandem adjacency that linear reads never reproduce, so they are not
+//! suppressed and aren't tested here.)
 
 mod common;
 
@@ -20,9 +22,9 @@ const READ_LEN: usize = 151;
 
 /// Run a homozygous INV at H1N1_HA:[start,end] (1-based) and return all
 /// FASTQ read-name lines (line 1 of every 4-line record).
-fn run_hom_inv(test_name: &str, sv_start: usize, sv_end: usize) -> Vec<String> {
+fn run_hom_sv(test_name: &str, svtype: &str, sv_start: usize, sv_end: usize) -> Vec<String> {
     let (_dir, work) = fresh_workdir();
-    let input_vcf = work.join("input_inv.vcf");
+    let input_vcf = work.join("input_sv.vcf");
     {
         let mut f = std::fs::File::create(&input_vcf).unwrap();
         writeln!(f, "##fileformat=VCFv4.2").unwrap();
@@ -32,7 +34,7 @@ fn run_hom_inv(test_name: &str, sv_start: usize, sv_end: usize) -> Vec<String> {
         writeln!(f, "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS").unwrap();
         writeln!(
             f,
-            "H1N1_HA\t{sv_start}\t.\tA\t<INV>\t60\tPASS\tSVTYPE=INV;END={sv_end}\tGT\t1/1"
+            "H1N1_HA\t{sv_start}\t.\tA\t<{svtype}>\t60\tPASS\tSVTYPE={svtype};END={sv_end}\tGT\t1/1"
         )
         .unwrap();
     }
@@ -82,7 +84,7 @@ fn regular_reads_covering(qnames: &[String], pos: usize) -> usize {
 #[test]
 fn homozygous_inv_junctions_have_no_regular_crossing_reads() {
     // INV at H1N1_HA 1-based [400, 799] → 0-based junctions at 399 and 798.
-    let qnames = run_hom_inv("hom_inv_dc", 400, 799);
+    let qnames = run_hom_sv("hom_inv_dc", "INV", 400, 799);
 
     // Sanity: the chimeric junction reads are still emitted (we only removed
     // the redundant regular reference reads, not the junction signal).
@@ -113,5 +115,37 @@ fn homozygous_inv_junctions_have_no_regular_crossing_reads() {
         cross_end, 0,
         "homozygous INV end junction (799) must have no regular crossing reads; \
          interior control = {interior}"
+    );
+}
+
+#[test]
+fn homozygous_del_breakpoint_has_no_regular_crossing_reads() {
+    // DEL at H1N1_HA 1-based [400, 799] → 0-based anchor/breakpoint at 399.
+    // The deleted interior is coverage-zeroed (homozygous), but flank reads
+    // crossing the anchor used to leak on top of the chimeric DEL junction reads.
+    let qnames = run_hom_sv("hom_del_dc", "DEL", 400, 799);
+
+    // Chimeric DEL junction reads are still emitted.
+    let chimeric = qnames
+        .iter()
+        .filter(|l| l.contains("RNEAT_chimeric_DEL_H1N1_HA_"))
+        .count();
+    assert!(chimeric > 0, "expected chimeric DEL junction reads, got 0");
+
+    // Left flank keeps normal coverage.
+    let flank = regular_reads_covering(&qnames, 150);
+    assert!(flank > 0, "left flank should retain regular coverage");
+
+    // No regular read crosses the deletion breakpoint (homozygous → all dropped),
+    // and the deleted interior produces no regular reads (coverage-zeroed).
+    let cross = regular_reads_covering(&qnames, 399);
+    let interior = regular_reads_covering(&qnames, 600);
+    assert_eq!(
+        cross, 0,
+        "homozygous DEL breakpoint (399) must have no regular crossing reads"
+    );
+    assert_eq!(
+        interior, 0,
+        "deleted interior (600) must have no regular reads (coverage-zeroed)"
     );
 }

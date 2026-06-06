@@ -157,6 +157,25 @@ gc_bias_normalize_coverage: true
 # (default: false)
 long_reads: false
 
+# --------------- structural variants (de novo) ---------------
+
+# Scale applied to the mutation model's per-base structural-variant (SV) rate.
+# 0.0 (the default) disables de novo SV generation entirely — only SVs supplied
+# via input_vcf flow through. Values > 0 enable sampling from the model's
+# sv_model (if present): 1.0 reproduces the trained corpus rate, larger values
+# stress-test SV handling. Requires a mutation_model whose sv_model is populated.
+# (default: 0.0)
+sv_rate_scale: 0.0
+
+# Maximum de novo SV length, expressed as a fraction of each contig's length.
+# The sampler rejects drawn lengths above contig_len * sv_max_length_fraction to
+# keep its overlap-rejection search tractable on chromosome-scale references.
+# The default 0.25 (contig_len / 4) is correct for human chromosomes. Raise it
+# toward 1.0 for small contigs (bacteria, viruses) — where 0.25 sits below the
+# default DEL median and starves DEL/DUP/INV into BND — or to model native
+# aneuploidy. Only affects de novo SVs, never input_vcf SVs. (default: 0.25)
+sv_max_length_fraction: 0.25
+
 # --------------- performance ---------------
 
 # Maximum number of threads to use for parallel contig processing.

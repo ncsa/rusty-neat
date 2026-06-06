@@ -57,15 +57,17 @@ now counts one INV per `h2hINV` and skips its `t2tINV` partner.
 #### chr22 caller-recall validation (no regression)
 
 Same fixture family as v1.13.1 (chr22, PE 30x, purity 0.5, sv-rate-scale 50),
-refit tumor model, Manta in tumor/normal mode:
+refit tumor model, Manta in tumor/normal mode. Pooled across 3 RNG seeds
+(DEL/DUP/CNV via truvari with `--pctseq 0 --typeignore --sizemax 3e8`;
+INV/BND via the positional cross-type pass, since truvari cannot score BND):
 
-| SV type | recall | acceptance |
-|---------|--------|------------|
-| DEL | 17/28 = 61% | >=50% PASS |
-| DUP | 14/25 = 56% | >=30% PASS |
-| CNV | 2/3 = 67%   | — |
-| INV | 3/7 = 43% (positional) | detected PASS |
-| BND | 14/32 = 44% (positional, all somatic) | alignable >=30% PASS |
+| SV type | pooled recall (3 seeds) | per-seed range | acceptance |
+|---------|-------------------------|----------------|------------|
+| DEL | 42/71 = 59% | 48-68% | >=50% PASS (pooled; one seed marginal at 48%, within binomial noise at n~21) |
+| DUP | 46/70 = 66% | 56-76% | >=30% PASS |
+| CNV | 17/22 = 77% | 67-80% | — |
+| INV | 15/25 = 60% (positional) | 43-71% | detected PASS |
+| BND | 34/87 = 39% (positional, all somatic) | 32-44% | alignable >=30% PASS |
 
 #### Benchmark scoring fixes (`tools/cancer_sv_benchmark.sh`)
 

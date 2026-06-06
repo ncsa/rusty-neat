@@ -24,6 +24,8 @@ Why this approach:
 
 A native subcommand is **not** an explicit non-goal — it's a v2+ option pending validation that the orchestration approach produces samples that real somatic callers handle correctly.
 
+**Update (#239): the native subcommand `rneat gen-cancer-reads` is now implemented** — the orchestration validated cleanly (Mutect2 SNV + Manta SV recall), so the two-pass flow is now a first-class subcommand: `rneat gen-cancer-reads -c <yaml>` runs both passes and merges them (tagged FASTQs + an origin-tagged truth VCF), with no `bcftools`/`awk` runtime dependency. Config template: `template_config/gen_cancer_reads_template.yml`; design + decisions: `docs/cancer_simulator_native_plan.md`. `tools/cancer_simulate.sh` is retained until a same-seed parity test against the native path lands.
+
 ## Data flow
 
 ```

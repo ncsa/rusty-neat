@@ -85,6 +85,11 @@ pub struct RunConfiguration {
     // `MutationModel.sv_model` (if present); 1.0 reproduces the trained
     // corpus rate, larger values stress-test SV handling.
     pub sv_rate_scale: f64,
+    // Max de novo SV length as a fraction of contig length (#229). Default 0.25
+    // (contig_len/4) keeps overlap rejection tractable on chromosome-scale
+    // references; raise toward 1.0 for small contigs (bacteria/viruses) or
+    // native aneuploidy. Only affects de novo SV sampling, not input_vcf SVs.
+    pub sv_max_length_fraction: f64,
 }
 
 impl Default for RunConfiguration {
@@ -123,6 +128,7 @@ impl Default for RunConfiguration {
             num_threads: None,
             long_reads: false,
             sv_rate_scale: 0.0,
+            sv_max_length_fraction: 0.25,
         }
     }
 }
@@ -464,6 +470,14 @@ impl RunConfiguration {
                             )
                         })?;
                     }
+                    "sv_max_length_fraction" => {
+                        config.sv_max_length_fraction = value.as_f64().ok_or_else(|| {
+                            GenerateReadsError::ConfigReadError(
+                                "sv_max_length_fraction".to_string(),
+                                "float".to_string(),
+                            )
+                        })?;
+                    }
                     _ => continue,
                 },
             }
@@ -660,6 +674,7 @@ mod tests {
             num_threads: None,
             long_reads: false,
             sv_rate_scale: 0.0,
+            sv_max_length_fraction: 0.25,
         };
 
         println!("{:?}", test_configuration);
@@ -827,6 +842,29 @@ mod tests {
         .unwrap();
         let cfg = RunConfiguration::from_yaml_file(&yaml).unwrap();
         assert!((cfg.sv_rate_scale - 0.75).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_sv_max_length_fraction_default() {
+        // Default 0.25 reproduces the historical contig_len/4 cap bit-for-bit
+        // (#229) so existing configs see no behavior change.
+        let config = RunConfiguration::default();
+        assert_eq!(config.sv_max_length_fraction, 0.25);
+    }
+
+    #[test]
+    fn test_yaml_parses_sv_max_length_fraction() {
+        let dir = tempfile::tempdir().unwrap();
+        let yaml = dir.path().join("c.yml");
+        std::fs::write(
+            &yaml,
+            "reference: test_data/references/H1N1.fa\n\
+             output_dir: ./\n\
+             sv_max_length_fraction: 1.0\n",
+        )
+        .unwrap();
+        let cfg = RunConfiguration::from_yaml_file(&yaml).unwrap();
+        assert!((cfg.sv_max_length_fraction - 1.0).abs() < 1e-12);
     }
 
     #[test]

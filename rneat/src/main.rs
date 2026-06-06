@@ -7,6 +7,7 @@ extern crate simplelog;
 
 pub mod compare_vcfs;
 pub mod filter_reads;
+pub mod gen_cancer_reads;
 pub mod gen_bam_models;
 pub mod gen_frag_length_model;
 pub mod gen_gc_bias_model;
@@ -28,6 +29,7 @@ use thiserror::Error;
 use crate::{
     compare_vcfs::errors::CompareVcfsError, filter_reads::errors::FilterReadsError,
     gen_bam_models::errors::GenBamModelsError,
+    gen_cancer_reads::errors::GenCancerReadsError,
     gen_frag_length_model::errors::GenFragLengthModelError,
     gen_gc_bias_model::errors::GenGcBiasModelError, gen_mut_model::errors::GenMutationModelError,
     gen_reads::errors::GenerateReadsError, gen_seq_error_model::errors::GenSeqErrorModelError,
@@ -54,9 +56,11 @@ pub enum NeatErrors {
     GenBamModels(#[from] GenBamModelsError),
     #[error("Error while comparing VCFs {0}")]
     CompareVcfs(#[from] CompareVcfsError),
+    #[error("Error while generating cancer read dataset {0}")]
+    GenCancerReads(#[from] GenCancerReadsError),
 }
 
-fn neat_commands() -> [Command; 8] {
+fn neat_commands() -> [Command; 9] {
     // These are the submodule commands. Any new commands added should go here.
     let configuration_arg = Arg::new("configuration_yaml")
         .long("configuration-yaml")
@@ -98,6 +102,10 @@ fn neat_commands() -> [Command; 8] {
             .arg(&configuration_arg),
         Command::new("compare-vcfs")
             .about("Compare a NEAT-simulated golden VCF against a downstream variant-caller VCF")
+            .arg_required_else_help(true)
+            .arg(&configuration_arg),
+        Command::new("gen-cancer-reads")
+            .about("Simulate a tumor/normal mixture (two gen-reads passes + merge)")
             .arg_required_else_help(true)
             .arg(&configuration_arg),
     ]
@@ -387,6 +395,29 @@ fn main() -> Result<(), NeatErrors> {
                 match result {
                     Err(error) => return Err(NeatErrors::CompareVcfs(error)),
                     Ok(()) => info!("rneat compare-vcfs completed successfully"),
+                }
+            }
+        }
+        Some(("gen-cancer-reads", _)) => {
+            if let Some(("gen-cancer-reads", cmd)) = subcommand
+                && cmd.contains_id("configuration_yaml")
+            {
+                let file = cmd
+                    .get_one::<PathBuf>("configuration_yaml")
+                    .expect("Must provide a path with configuration-yaml")
+                    .to_path_buf();
+
+                if !file.is_file() {
+                    return Err(NeatErrors::GenCancerReads(GenCancerReadsError::ConfigError(
+                        "Must supply a valid configuration file to run gen-cancer-reads!"
+                            .to_string(),
+                    )));
+                }
+                info!("Running gen-cancer-reads to simulate a tumor/normal mixture.");
+                let result = gen_cancer_reads::main(&file);
+                match result {
+                    Err(error) => return Err(NeatErrors::GenCancerReads(error)),
+                    Ok(()) => info!("rneat gen-cancer-reads completed successfully"),
                 }
             }
         }

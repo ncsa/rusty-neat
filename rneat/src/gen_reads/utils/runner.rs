@@ -539,6 +539,23 @@ fn process_contig(
         block_frags
     };
 
+    // Breakpoint double-counting fix: the chimeric pass emits junction-spanning
+    // read-pairs for every BND/INV junction, but the regular pass above also
+    // covers those positions from the unbroken reference (BND/INV are
+    // coverage-neutral — coverage_multiplier_for returns 1.0). Left alone, a
+    // homozygous junction lands at ~2x coverage (regular + junction reads), a
+    // het at ~1.5x. Drop the broken-allele fraction of regular pairs that cross
+    // a junction so total junction depth ≈ coverage. No-op when the contig has
+    // no BND/INV records (returns the input untouched, consuming no RNG).
+    let block_fragments = suppress_bnd_inv_double_count(
+        block_fragments,
+        &mutated_map.sv_records,
+        ctx.config.ploidy,
+        ctx.config.read_len,
+        ctx.config.paired_ended,
+        &mut rng,
+    )?;
+
     let mut contig_files_r1: Vec<PathBuf> = Vec::new();
     let mut contig_files_r2: Vec<PathBuf> = Vec::new();
 
@@ -2089,6 +2106,116 @@ fn exclude_positions(
     result
 }
 
+/// Collects `(position_0based, broken_fraction)` for every BND and INV junction
+/// in `sv_records`, sorted by position. A BND contributes one junction (its
+/// POS); an INV contributes two (its POS and its END) — mirroring the two
+/// junctions `process_chimeric_variants` emits for an inversion. `broken_fraction`
+/// is the chimeric pass's `mult`: 1.0 homozygous, 1/ploidy heterozygous — the
+/// fraction of alleles that carry the junction.
+///
+/// END for an INV is computed exactly as the chimeric INV branch does
+/// (`sv.end`, else POS + span − 1 via `SvData::span`) so the suppression window
+/// references the same base the chimeric reads were placed against.
+fn collect_bnd_inv_junctions(sv_records: &[Variant], ploidy: usize) -> Vec<(usize, f64)> {
+    let ploidy_f = (ploidy.max(1)) as f64;
+    let mut junctions: Vec<(usize, f64)> = Vec::new();
+    for v in sv_records {
+        let sv = match v.alternate.as_symbolic() {
+            Some(s) => s,
+            None => continue,
+        };
+        let broken_fraction = match v.genotype {
+            Genotype::Homozygous => 1.0,
+            Genotype::Heterozygous => 1.0 / ploidy_f,
+        };
+        match sv.sv_type {
+            SvType::Bnd => junctions.push((v.location, broken_fraction)),
+            SvType::Inv => {
+                junctions.push((v.location, broken_fraction));
+                let end = match sv.end {
+                    Some(e) => e,
+                    None => match sv.span(v.location) {
+                        Some(span) if span > 0 => v.location + span - 1,
+                        _ => continue,
+                    },
+                };
+                junctions.push((end, broken_fraction));
+            }
+            // DEL/DUP/CNV/INS handled elsewhere (their coverage multipliers
+            // modulate interior depth); a uniform junction treatment for them is
+            // a documented follow-up — see docs/breakpoint_double_counting_fix_plan.md.
+            _ => continue,
+        }
+    }
+    junctions.sort_unstable_by_key(|&(p, _)| p);
+    junctions
+}
+
+/// Largest `broken_fraction` among junctions whose position falls in the
+/// half-open read window `[lo, hi)`. `positions` must be `junctions` projected
+/// to positions (kept sorted) so the window can be located by binary search.
+fn max_broken_fraction_in_window(
+    junctions: &[(usize, f64)],
+    positions: &[usize],
+    lo: usize,
+    hi: usize,
+) -> f64 {
+    let i = positions.partition_point(|&p| p < lo);
+    let j = positions.partition_point(|&p| p < hi);
+    junctions[i..j]
+        .iter()
+        .map(|&(_, bf)| bf)
+        .fold(0.0_f64, f64::max)
+}
+
+/// Removes the broken-allele fraction of regular read-pairs that cross a BND/INV
+/// junction, so junction depth isn't double-counted against the chimeric pass.
+///
+/// A pair `(start, end)` crosses junction `j` when its R1 window
+/// `[start, start + read_len)` — or, paired-end, its R2 window
+/// `[end − read_len, end)` — contains `j`. Junctions in the unsequenced insert
+/// gap don't cross a sequenced read and are left alone. Homozygous junctions
+/// (broken_fraction = 1.0) drop the pair outright and consume no RNG;
+/// heterozygous junctions drop with probability `broken_fraction`. When the
+/// contig has no BND/INV records the input is returned untouched (no RNG drawn),
+/// so non-SV / DEL-DUP-only runs are byte-for-byte unaffected.
+fn suppress_bnd_inv_double_count(
+    fragments: Vec<(usize, usize)>,
+    sv_records: &[Variant],
+    ploidy: usize,
+    read_len: usize,
+    paired_ended: bool,
+    rng: &mut NeatRng,
+) -> Result<Vec<(usize, usize)>, GenerateReadsError> {
+    let junctions = collect_bnd_inv_junctions(sv_records, ploidy);
+    if junctions.is_empty() {
+        return Ok(fragments);
+    }
+    let positions: Vec<usize> = junctions.iter().map(|&(p, _)| p).collect();
+    let mut kept: Vec<(usize, usize)> = Vec::with_capacity(fragments.len());
+    for (start, end) in fragments {
+        let mut bf =
+            max_broken_fraction_in_window(&junctions, &positions, start, start + read_len);
+        if paired_ended && end > read_len {
+            bf = bf.max(max_broken_fraction_in_window(
+                &junctions,
+                &positions,
+                end - read_len,
+                end,
+            ));
+        }
+        if bf <= 0.0 {
+            kept.push((start, end)); // crosses no junction
+        } else if bf >= 1.0 {
+            continue; // homozygous: every allele broken — drop, no RNG draw
+        } else if rng.random()? >= bf {
+            kept.push((start, end)); // heterozygous: survived the drop coin
+        }
+        // else: heterozygous and dropped
+    }
+    Ok(kept)
+}
+
 /// Builds a sorted, contiguous list of `(start, end, multiplier)` coverage
 /// segments spanning `[0, block_end)`. Default multiplier is `1.0`; each
 /// symbolic SV multiplies the multiplier in its span (overlapping SVs compose
@@ -2472,6 +2599,91 @@ mod tests {
             provenance: common::structs::variants::Provenance::Denovo,
             sample: vec![],
         }
+    }
+
+    #[test]
+    fn test_collect_bnd_inv_junctions() {
+        // BND (homozygous) at 100 → one junction (100, 1.0).
+        // INV (heterozygous, ploidy 2) over [200, 300] → (200, 0.5) and (300, 0.5).
+        let bnd = sv_variant_with_span(100, 0, SvType::Bnd, Genotype::Homozygous, None);
+        let inv = sv_variant_with_span(200, 300, SvType::Inv, Genotype::Heterozygous, None);
+        let j = collect_bnd_inv_junctions(&[inv, bnd], 2);
+        assert_eq!(j.len(), 3, "BND→1 junction, INV→2");
+        // sorted by position
+        assert_eq!(j[0].0, 100);
+        assert!((j[0].1 - 1.0).abs() < 1e-9, "homozygous broken_fraction = 1.0");
+        assert_eq!(j[1].0, 200);
+        assert!((j[1].1 - 0.5).abs() < 1e-9, "het broken_fraction = 1/ploidy");
+        assert_eq!(j[2].0, 300);
+        assert!((j[2].1 - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_collect_ignores_del_dup_cnv() {
+        // DEL/DUP/CNV are coverage-modulated elsewhere — not junction-suppressed here.
+        let del = sv_variant_with_span(100, 200, SvType::Del, Genotype::Homozygous, None);
+        let dup = sv_variant_with_span(300, 400, SvType::Dup, Genotype::Homozygous, None);
+        let cnv = sv_variant_with_span(500, 600, SvType::Cnv, Genotype::Homozygous, Some(0));
+        assert!(collect_bnd_inv_junctions(&[del, dup, cnv], 2).is_empty());
+    }
+
+    #[test]
+    fn test_suppress_homozygous_drops_crossing_keeps_flank() {
+        // Single-end, read_len 100, homozygous BND junction at 500.
+        let bnd = sv_variant_with_span(500, 0, SvType::Bnd, Genotype::Homozygous, None);
+        let frags = vec![
+            (450, 550), // R1 [450,550) contains 500 → crosses → drop
+            (300, 400), // flank-left → keep
+            (600, 700), // flank-right → keep
+        ];
+        let mut rng = NeatRng::new_from_seed(&vec!["bp".to_string()]).unwrap();
+        let kept =
+            suppress_bnd_inv_double_count(frags, &[bnd], 2, 100, false, &mut rng).unwrap();
+        assert_eq!(kept, vec![(300, 400), (600, 700)]);
+    }
+
+    #[test]
+    fn test_suppress_no_sv_returns_unchanged() {
+        // No BND/INV → input returned verbatim, no RNG consumed.
+        let frags = vec![(0, 100), (200, 300)];
+        let mut rng = NeatRng::new_from_seed(&vec!["bp".to_string()]).unwrap();
+        let kept =
+            suppress_bnd_inv_double_count(frags.clone(), &[], 2, 100, false, &mut rng).unwrap();
+        assert_eq!(kept, frags);
+    }
+
+    #[test]
+    fn test_suppress_paired_gap_not_crossed() {
+        // Paired, read_len 100. Fragment [400,700]: R1 [400,500), R2 [600,700).
+        // A junction at 550 sits in the unsequenced gap [500,600) → NOT crossed.
+        let in_gap = sv_variant_with_span(550, 0, SvType::Bnd, Genotype::Homozygous, None);
+        let mut rng = NeatRng::new_from_seed(&vec!["bp".to_string()]).unwrap();
+        let kept =
+            suppress_bnd_inv_double_count(vec![(400, 700)], &[in_gap], 2, 100, true, &mut rng)
+                .unwrap();
+        assert_eq!(kept, vec![(400, 700)], "gap junction must not suppress");
+        // A junction at 450 sits in R1 → crossed → dropped.
+        let in_r1 = sv_variant_with_span(450, 0, SvType::Bnd, Genotype::Homozygous, None);
+        let kept2 =
+            suppress_bnd_inv_double_count(vec![(400, 700)], &[in_r1], 2, 100, true, &mut rng)
+                .unwrap();
+        assert!(kept2.is_empty(), "R1-crossing pair must be suppressed");
+    }
+
+    #[test]
+    fn test_suppress_heterozygous_partial() {
+        // Het junction (broken_fraction 0.5): over many identical crossing pairs
+        // ~half survive. Deterministic seed; assert neither ~0 nor ~all.
+        let het = sv_variant_with_span(500, 0, SvType::Bnd, Genotype::Heterozygous, None);
+        let frags: Vec<(usize, usize)> = vec![(450usize, 550usize); 1000];
+        let mut rng = NeatRng::new_from_seed(&vec!["bp het".to_string()]).unwrap();
+        let kept =
+            suppress_bnd_inv_double_count(frags, &[het], 2, 100, false, &mut rng).unwrap();
+        assert!(
+            (300..700).contains(&kept.len()),
+            "expected ~50% of 1000 het-crossing pairs kept, got {}",
+            kept.len()
+        );
     }
 
     #[test]

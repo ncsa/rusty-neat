@@ -9,7 +9,6 @@ mod common;
 use common::{fresh_workdir, h1n1_reference, rneat};
 use flate2::read::MultiGzDecoder;
 use std::io::{BufRead, BufReader};
-use std::io::Write as _;
 
 fn read_gz_lines(path: &std::path::Path) -> Vec<String> {
     let r = BufReader::new(MultiGzDecoder::new(std::fs::File::open(path).unwrap()));

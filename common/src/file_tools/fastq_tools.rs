@@ -116,18 +116,30 @@ pub fn write_block_fastq<T: Write, W: Write>(
         let mut reads1_flagged: Vec<usize> = Vec::new();
         let mut read2_variants: HashMap<usize, &Variant> = HashMap::new();
         let mut reads2_flagged: Vec<usize> = Vec::new();
-        for (pos, variant) in &block_map.variant_map {
-            if (start..(start + effective_read_len)).contains(pos) {
-                let var_pos = pos - start;
-                read1_variants.insert(var_pos, variant);
-                reads1_flagged.push(var_pos);
-            }
-            if end > effective_read_len
-                && paired_ended
-                && ((end - effective_read_len)..end).contains(pos)
-            {
+        // Only the variants overlapping this fragment's two read windows matter.
+        // block_map.flagged_positions is sorted (from_interval), so binary-search
+        // each window instead of scanning every variant on the contig. The old
+        // full-map scan made this O(fragments × variants) — pathological with
+        // dense models (~220k SNVs on chr22 from the COSMIC tumor rate).
+        let flagged = &block_map.flagged_positions;
+        // R1 window: [start, start + effective_read_len); var offset = pos - start.
+        let r1_lo = flagged.partition_point(|&p| p < start);
+        let r1_hi = flagged.partition_point(|&p| p < start + effective_read_len);
+        for &pos in &flagged[r1_lo..r1_hi] {
+            let var_pos = pos - start;
+            read1_variants.insert(var_pos, &block_map.variant_map[&pos]);
+            reads1_flagged.push(var_pos);
+        }
+        // R2 window: [end - effective_read_len, end); R2 is reverse-stranded so
+        // var offset = (end - 1) - pos. Guard end > effective_read_len so the
+        // window start doesn't underflow (matches the original condition).
+        if paired_ended && end > effective_read_len {
+            let w_lo = end - effective_read_len;
+            let r2_lo = flagged.partition_point(|&p| p < w_lo);
+            let r2_hi = flagged.partition_point(|&p| p < end);
+            for &pos in &flagged[r2_lo..r2_hi] {
                 let var_pos = (end - 1) - pos;
-                read2_variants.insert(var_pos, variant);
+                read2_variants.insert(var_pos, &block_map.variant_map[&pos]);
                 reads2_flagged.push(var_pos);
             }
         }

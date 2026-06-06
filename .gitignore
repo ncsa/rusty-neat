@@ -15,10 +15,6 @@
 
 # AI junk
 .mcp.json
-.gitnexus
-CLAUDE.md
-AGENTS.md
-.claude/
 /gnomad_validation_work/
 
 # Test drift dumps (written by model_parity when a baseline mismatches)

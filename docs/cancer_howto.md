@@ -1,7 +1,8 @@
 # Cancer simulation how-to
 
-Operational guide to `rneat gen-cancer-reads`. Design rationale and the
-mutation-rate / SV calibration details live in
+The following guide to `rneat gen-cancer-reads` should give you some ideas on how to use rneat to simula cancer reads 
+and test your cancer pipelines. This is based on previous work done by NCSA and ICGC/ARGO and needs real testing to 
+validate it works as expected. Design rationale and the mutation-rate / SV calibration details live in
 [`cancer_simulator.md`](cancer_simulator.md).
 
 ## Pipeline

@@ -1,3 +1,11 @@
+6/7/2026
+========
+## rneat v1.16.1
+
+## Soliciting feedback
+Added a form soliciting feedback from users on `rneat` real world uses and and other feedback 
+that doesn't require direct action. For bugs and features, continue to use those templates on github.
+
 6/6/2026
 ========
 ## rneat v1.16.0

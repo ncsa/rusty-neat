@@ -24,6 +24,9 @@ completing #202. Three full models are bundled:
   **lung** sits between (~3.6%).
 - `cosmic_pancancer_sv_{BRCA,skin,lung}.json.gz` (pan-cancer SNP/indel + per-tissue
   SV) are retained as the `sv_model` donor for the graft step.
+- `docs/cancer_howto.md` reorganized around training a model from your own somatic
+  VCF (`gen-mut-model` → `tumor_model:`), with the public-corpus adapters as a
+  convenience path.
 
 This completes the core cancer-modeling epic (#129); the remaining advanced-SV
 items (#191/#192) are tracked separately as Expanded-realism enhancements.

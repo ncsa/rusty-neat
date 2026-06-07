@@ -1,37 +1,31 @@
 # Cancer simulation how-to
 
-A practical, copy-paste guide to simulating tumor/normal sequencing data with
-`rneat gen-cancer-reads`. For the design rationale, mutation-rate calibration
-math, and the SV roadmap, see [`cancer_simulator.md`](cancer_simulator.md).
+The following guide to `rneat gen-cancer-reads` should give you some ideas on how to use rneat to simula cancer reads 
+and test your cancer pipelines. This is based on previous work done by NCSA and ICGC/ARGO and needs real testing to 
+validate it works as expected. Design rationale and the mutation-rate / SV calibration details live in
+[`cancer_simulator.md`](cancer_simulator.md).
 
-## What it does
+## Pipeline
 
-A real tumor biopsy is a **mixture**: some fraction of cells are tumor (carrying
-germline + somatic variants), the rest are normal-tissue contamination (germline
-only). `rneat gen-cancer-reads` reproduces this in one command by running two
-`gen-reads` passes over the same reference and merging them:
+`gen-cancer-reads` runs two `gen-reads` passes over one reference and merges them:
 
 ```
-                      coverage          variants
-  normal pass   →   (1 − purity)·C   →  germline only
-  tumor  pass   →     purity·C       →  germline (shared) + somatic (de novo)
-                                         │
-            merge: tag reads N_/T_, concatenate, and
-            combine the two truth VCFs with origin tags
-                                         ▼
-   <prefix>_merged_r1.fastq.gz   ← feed this to your aligner + somatic caller
-   <prefix>_merged_truth.vcf.gz  ← score the caller against this
+  normal pass   cov = (1 − purity)·C    germline only
+  tumor  pass   cov = purity·C          germline (shared) + somatic (de novo)
+        │
+        merge: tag reads N_/T_, concatenate; combine the two golden VCFs with origin tags
+        ▼
+  <prefix>_merged_r1.fastq.gz    → aligner + somatic caller
+  <prefix>_merged_truth.vcf.gz   → INFO/NEAT_ORIGIN ∈ {germline, somatic, shared}
 ```
 
-The tumor pass consumes the normal pass's golden VCF as its germline, so both
-populations share the same patient germline — biologically correct, and what lets
-a somatic caller separate germline from somatic. No `bcftools`/`awk` needed; the
-merge is native Rust.
+The tumor pass consumes the normal pass's golden VCF as its germline (`input_vcf`),
+so both populations carry the same germline. No `bcftools`/`awk` runtime
+dependency — the merge is native.
 
 ## Quick start
 
-Smoke test on the bundled ~14 kb H1N1 reference — finishes in seconds and proves
-your build works end-to-end:
+Smoke test on the bundled H1N1 reference (seconds; proves the build works):
 
 ```bash
 cat > cancer.yml <<'YAML'
@@ -49,43 +43,87 @@ overwrite_output: true
 YAML
 
 rneat gen-cancer-reads -c cancer.yml
-ls cancer_out/
-# smoketest_normal.vcf.gz   smoketest_tumor.vcf.gz
-# smoketest_normal_r1.fastq.gz  ...  smoketest_merged_r1.fastq.gz  smoketest_merged_r2.fastq.gz
-# smoketest_merged_truth.vcf.gz
 ```
 
-Copy `template_config/gen_cancer_reads_template.yml` as a fully-commented starting
-point for your own config.
+`template_config/gen_cancer_reads_template.yml` is the fully-commented config.
 
 ## Output files
 
-| File | What it is |
+| File | Contents |
 |---|---|
-| `<prefix>_merged_r1.fastq.gz` (+ `_r2`) | **The deliverable.** `N_`/`T_`-tagged, concatenated reads — the simulated tumor biopsy. Feed this to your aligner. |
-| `<prefix>_merged_truth.vcf.gz` | Origin-tagged truth set. Every record carries `INFO/NEAT_ORIGIN ∈ {germline, somatic, shared}`. Score your caller against this. |
-| `<prefix>_normal.vcf.gz` | Germline-only truth (the patient's genome). |
+| `<prefix>_merged_r1.fastq.gz` (+ `_r2`) | `N_`/`T_`-tagged, concatenated reads — the simulated biopsy. Feed to your aligner. |
+| `<prefix>_merged_truth.vcf.gz` | Origin-tagged truth: `INFO/NEAT_ORIGIN ∈ {germline, somatic, shared}`. Score against this. |
+| `<prefix>_normal.vcf.gz` | Germline-only truth. |
 | `<prefix>_tumor.vcf.gz` | Germline + somatic truth. |
-| `<prefix>_normal_r1.fastq.gz`, `<prefix>_tumor_r1.fastq.gz` | Per-pass reads (set `keep_per_pass: false` to delete after merge). |
+| `<prefix>_{normal,tumor}_r1.fastq.gz` | Per-pass reads (`keep_per_pass: false` deletes after merge). |
 
-The `N_`/`T_` read-name tags matter: without them a normal and a tumor read
-sampled at the same coordinate get identical QNAMEs, which Picard MarkDuplicates
-silently drops — halving effective coverage at those loci.
+The `N_`/`T_` read-name tags prevent same-coordinate QNAME collisions between the
+two passes (which MarkDuplicates would otherwise drop).
+
+## Train your own model
+
+`gen-cancer-reads` is model-driven: each pass takes a `.json.gz` mutation model
+(`tumor_model:` / `normal_model:`). The bundled models are starting points — for
+real work, train from your own somatic calls.
+
+`rneat gen-mut-model` fits a model from a reference plus a single-sample VCF:
+
+```bash
+cat > my_tumor.yml <<'YAML'
+reference: /path/to/GRCh38.fa
+vcf_file: /path/to/your_somatic_calls.vcf.gz
+output_file: my_tumor_model.json.gz
+overwrite_output: true
+YAML
+rneat gen-mut-model -c my_tumor.yml
+```
+
+Input VCF expectations:
+
+- single-sample, `GT` in `FORMAT`; contig names match the reference;
+- SNPs and indels are fit by REF/ALT length class — multi-base REF **and** ALT
+  (complex) records are skipped;
+- symbolic SV records (`<DEL>` / `<DUP>` / `<CNV>` / `<INV>` / `<BND>` with
+  `SVTYPE` / `END` / `SVLEN`) are fit into an `sv_model` when present, which is
+  what `sv_rate_scale` draws from at simulation time;
+- `bed_file:` restricts the fit to regions; `transition_matrix_file:` overrides the
+  inferred SNP transition matrix. See `template_config/gen_mut_model_template.yml`.
+
+The fitted `mutation_rate` is `variant_count / reference_length` — corpus-aggregated
+if the VCF pools many tumors, so treat it as a spectrum descriptor, not a per-tumor
+rate. Set per-tumor somatic burden at simulation time with `tumor_mutation_rate`
+(see config knobs). Then:
+
+```yaml
+tumor_model: my_tumor_model.json.gz
+# normal_model: my_germline_model.json.gz   # optional; default = built-in germline model
+```
+
+### Public-corpus adapters
+
+If you don't have your own calls, these convert public corpora into a trainable VCF
+and chain into `gen-mut-model` (`--train --reference`):
+
+| Adapter | Corpus | Notes |
+|---|---|---|
+| `tools/fetch_cosmic_corpus.sh` | COSMIC GenomeScreensMutant | SNV + indel; academic login |
+| `tools/fetch_tumor_corpus.sh` | TCGA MC3 PUBLIC | SNV only; open |
+| `tools/fetch_cosmic_per_tissue_corpus.sh` + `tools/build_per_tissue_models.sh` | COSMIC, per `PRIMARY_SITE` | builds the per-tissue models below |
+
+Pre-bundled, ready to use as `tumor_model:` without any download:
+`tools/cosmic_per_tissue_{BRCA,skin,lung}.json.gz` (per-tissue SNP/indel + SV) and
+`tools/cosmic_v104_pancancer_model.json.gz` (pan-cancer).
 
 ## Worked examples
 
-All examples assume `rneat` is on your `PATH` and a reference at
-`~/code/data/chr22.fa` (any `.fa`/`.fa.gz` works).
+Assume `rneat` on `PATH` and a reference at `~/code/data/GRCh38.fa`.
 
-### 1. Realistic WGS tumor/normal with the bundled COSMIC model
-
-70% purity, 60× combined coverage, somatic SNVs/indels from the pan-cancer COSMIC
-model at a realistic per-tumor rate (the `1e-5` default):
+### Tumor/normal with your own model
 
 ```bash
-cat > brca_wgs.yml <<'YAML'
-reference: ~/code/data/chr22.fa
-output_dir: ./brca_out
+cat > run.yml <<'YAML'
+reference: ~/code/data/GRCh38.fa
+output_dir: ./out
 output_prefix: tumor70
 total_coverage: 60
 purity: 0.7
@@ -93,154 +131,80 @@ read_len: 151
 paired_ended: true
 fragment_mean: 350
 fragment_st_dev: 50
-tumor_model: tools/cosmic_v104_pancancer_model.json.gz
+tumor_model: my_tumor_model.json.gz
 tumor_mutation_rate: 1e-5
-rng_seed: brca-demo
+rng_seed: run1
 overwrite_output: true
 YAML
-
-rneat gen-cancer-reads -c brca_wgs.yml
+rneat gen-cancer-reads -c run.yml
 ```
 
-### 2. Tissue-specific SVs (breast) with structural variants enabled
+### With structural variants
 
-Bundled per-tissue SV models stratify the SV catalog by primary site
-(`tools/cosmic_pancancer_sv_{BRCA,skin,lung}.json.gz` — BRCA is DUP-dominant, skin
-BND-enriched, lung DEL-dominant). Turn on de novo SV generation with
-`sv_rate_scale`:
+Enable de novo SVs with `sv_rate_scale` (requires an `sv_model` in the tumor model
+— present in your fit if the training VCF carried symbolic SVs, and in the bundled
+per-tissue models):
 
-```bash
-cat > brca_sv.yml <<'YAML'
-reference: ~/code/data/chr22.fa
-output_dir: ./brca_sv_out
-output_prefix: brca_sv
-total_coverage: 60
-purity: 0.7
-read_len: 151
-paired_ended: true
-fragment_mean: 350
-fragment_st_dev: 50
-tumor_model: tools/cosmic_pancancer_sv_BRCA.json.gz
-sv_rate_scale: 1.0          # 1.0 = the model's nominal rate; higher stress-tests SV callers
-rng_seed: brca-sv-demo
-overwrite_output: true
-YAML
-
-rneat gen-cancer-reads -c brca_sv.yml
+```yaml
+tumor_model: tools/cosmic_per_tissue_BRCA.json.gz
+sv_rate_scale: 1.0       # 1.0 = the model's nominal rate; higher stress-tests SV callers
 ```
 
-### 3. One germline, many tumor scenarios
+### One germline, many tumor scenarios
 
-To compare callers across purities while holding the patient germline fixed,
-generate the germline once, then point each run at it via `germline_vcf:`. Any
-normal-pass golden VCF (or a real germline VCF) works:
+Fix the germline once and sweep purity/depth by pointing each run at the same
+`germline_vcf:` (any normal-pass golden, or a real germline VCF):
 
 ```bash
-# Reuse an existing germline truth as the shared germline:
 for p in 0.3 0.5 0.8; do
-  cat > scenario_$p.yml <<YAML
-reference: ~/code/data/chr22.fa
-output_dir: ./purity_sweep
-output_prefix: purity_$p
-total_coverage: 60
-purity: $p
-read_len: 151
-paired_ended: true
-fragment_mean: 350
-fragment_st_dev: 50
-germline_vcf: ./brca_out/tumor70_normal.vcf.gz
-tumor_model: tools/cosmic_v104_pancancer_model.json.gz
-rng_seed: sweep-$p
-overwrite_output: true
-YAML
-  rneat gen-cancer-reads -c scenario_$p.yml
+  sed "s/^purity:.*/purity: $p/; s/^output_prefix:.*/output_prefix: p$p/" run.yml \
+    | sed "/^tumor_mutation_rate:/a germline_vcf: ./out/tumor70_normal.vcf.gz" \
+    > run_$p.yml
+  rneat gen-cancer-reads -c run_$p.yml
 done
 ```
 
-### 4. Low-purity sample
+## Benchmarking
 
-Poor-yield biopsies can be <30% tumor. Just lower `purity` — but keep
-`total_coverage` high enough that the tumor pass (`purity·C`) doesn't round to a
-useless depth:
+Docker-based scoring pipelines, reads → scored caller in one command:
 
 ```bash
-# purity 0.2 at 100x → 80x normal / 20x tumor
-rneat gen-cancer-reads -c <(sed 's/^purity:.*/purity: 0.2/; s/^total_coverage:.*/total_coverage: 100/' brca_wgs.yml)
-```
-
-> **Small / viral references:** the de novo SV sampler caps SV length at
-> `contig_len/4` by default. On bacterial or viral contigs that starves the larger
-> SV types. Raise it per the structural-variants section of
-> `template_config/gen_reads_template.yml` (`sv_max_length_fraction`) — though note
-> that knob lives on `gen-reads`; for cancer SV work on small contigs, supply the
-> events through a `germline_vcf:`/input VCF instead.
-
-## Benchmarking a somatic caller
-
-The repo ships Docker-based scoring pipelines so you can go from simulated reads
-to a scored caller in one command.
-
-**SNV/indel** — BWA-MEM → Mutect2 → `som.py`:
-
-```bash
+# SNV/indel: BWA-MEM → Mutect2 → som.py
 tools/cancer_benchmark.sh \
-    --reference   ~/code/data/chr22.fa \
-    --normal-fastq ./brca_out/tumor70_normal_r1.fastq.gz \
-    --tumor-fastq  ./brca_out/tumor70_merged_r1.fastq.gz \
-    --truth-vcf    ./brca_out/tumor70_merged_truth.vcf.gz \
-    --output-dir   ./benchmark_out
-```
+    --reference ~/code/data/GRCh38.fa \
+    --normal-fastq ./out/tumor70_normal_r1.fastq.gz \
+    --tumor-fastq  ./out/tumor70_merged_r1.fastq.gz \
+    --truth-vcf    ./out/tumor70_merged_truth.vcf.gz \
+    --output-dir   ./bench
 
-**Structural variants** — BWA-MEM → Manta → `truvari`:
-
-```bash
+# SV: BWA-MEM → Manta → truvari
 tools/cancer_sv_benchmark.sh \
-    --reference   ~/code/data/chr22.fa \
-    --normal-fastq ./brca_sv_out/brca_sv_normal_r1.fastq.gz \
-    --tumor-fastq  ./brca_sv_out/brca_sv_merged_r1.fastq.gz \
-    --truth-vcf    ./brca_sv_out/brca_sv_merged_truth.vcf.gz \
-    --output-dir   ./sv_benchmark_out
+    --reference ~/code/data/GRCh38.fa \
+    --normal-fastq ./out/tumor70_normal_r1.fastq.gz \
+    --tumor-fastq  ./out/tumor70_merged_r1.fastq.gz \
+    --truth-vcf    ./out/tumor70_merged_truth.vcf.gz \
+    --output-dir   ./sv_bench
 ```
 
-Because the truth VCF carries `INFO/NEAT_ORIGIN`, you can filter to somatic-only
-records before scoring (the benchmark scripts expose `--truth-filter`), giving
-clean somatic TP/FP/FN without germline contaminating the numbers.
+`INFO/NEAT_ORIGIN` lets you filter the truth to somatic-only before scoring
+(`--truth-filter`).
 
-## Training your own tumor model
+## Config knobs
 
-The bundled COSMIC pan-cancer model is a convenience. To fit a model from a corpus
-you control, the two shipped adapters chain into `rneat gen-mut-model`:
-
-```bash
-# Open-tier TCGA MC3 (no registration; SNPs only):
-tools/fetch_tumor_corpus.sh   # → writes a normalized VCF
-# Or COSMIC GenomeScreensMutant (academic registration; SNV + indel):
-tools/fetch_cosmic_corpus.sh
-
-# then train:
-rneat gen-mut-model -c your_gen_mut_model_config.yml
-```
-
-Point `tumor_model:` at the resulting `.json.gz`.
-
-## Calibration notes
-
-- **Somatic rate.** `tumor_mutation_rate` defaults to `1e-5` (typical solid
-  tumor; `~1e-4` for high-burden/MSI). Corpus-aggregated model rates (e.g. the
-  COSMIC model's ~5.5e-3) measure "fraction of bp mutated *anywhere across the
-  catalog*" and overstate per-tumor burden by 50–500×, so the de novo somatic rate
-  is set here, not taken from the model. Pass `tumor_mutation_rate: model` only if
-  you deliberately want the model's fitted rate.
-- **Purity drives VAF.** Somatic variant allele fractions scale with `purity`;
-  sweep it (example 3) to test a caller's low-VAF sensitivity.
-- **Reproducibility.** `rng_seed` seeds both passes (suffixed `-normal`/`-tumor`).
-  The same seed + config reproduces a run; the seed used is printed to the log.
+| Key | Effect |
+|---|---|
+| `purity` | tumor cell fraction in (0,1); tumor pass = `purity·total_coverage`. Drives somatic VAF. |
+| `total_coverage` | combined merged depth. Keep high enough that `purity·C` doesn't round to a useless depth. |
+| `tumor_mutation_rate` | per-base somatic rate. Default `1e-5`. `model` = use the model's fitted rate. |
+| `normal_mutation_rate` | per-base germline rate. Default = the model's fitted rate. |
+| `sv_rate_scale` | de novo SV multiplier; `0` = off, `1.0` = the model's `sv_model` rate. |
+| `germline_vcf` | fixed shared germline instead of de-novo generation. |
+| `rng_seed` | seeds both passes (suffixed `-normal`/`-tumor`); printed to the log. |
+| `keep_per_pass` | keep per-pass FASTQs (`false` = merged only). |
 
 ## Relationship to `tools/cancer_simulate.sh`
 
-The native subcommand is a drop-in replacement for the original shell
-orchestrator. They are verified to produce equivalent output by the parity test
-`rneat/tests/cancer_parity.rs` (identical merged-FASTQ record multisets, per-pass
-golden VCFs, and origin classifications). The shell script is retained for now as
-the reference implementation and for the Docker benchmark wiring; prefer the
-native subcommand for new work.
+The native subcommand is a drop-in replacement for the original shell orchestrator,
+verified equivalent by `rneat/tests/cancer_parity.rs` (identical merged-FASTQ record
+multisets, per-pass golden VCFs, and origin classifications). The script is retained
+for the Docker benchmark wiring; prefer the subcommand for new work.

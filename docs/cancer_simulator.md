@@ -157,30 +157,49 @@ These are documented here so future work has a record of what's been decided vs 
 - **Mutation signatures (COSMIC SBS).** Cancer mutation patterns are dominated by tissue- and exposure-specific signatures (UV → SBS7 in melanoma, tobacco → SBS4 in lung, MMR deficiency → SBS6/15 in colorectal, etc.). rneat's trinucleotide-frequency model can in principle capture these per-corpus, but explicit signature support (load a COSMIC SBS profile, mix signatures at known proportions) is a separate enhancement.
 - **Variant allele fraction (VAF) annotation in the truth VCF.** **Shipped via #176.** Golden VCFs now carry `FORMAT/GT:AD:DP:AF` on every literal SNP/indel record, populated from a per-variant allelic-depth counter incremented by the gen-reads fragment loop at the existing per-read coin-flip site (`fastq_tools.rs::generate_read`). Symbolic SVs emit `.` placeholders for AD/DP/AF since their depth semantics are span-based, not point-based — that's tracked as a separate v2 enhancement. Realistic `FILTER` values (`LowQual` etc.) were left out of v1; everything is still `PASS`.
 - **Cancer-specific SvModel defaults.** First shipped in v1.12.1 (#217) as a *literature-derived* `sv_model` injection (`tools/inject_cancer_sv_model.py`, now deprecated). **Replaced in v1.14.0 (#218) with a data-derived refit**: the bundled tumor model's `sv_model` is counted from the PCAWG consensus SV/CNV callsets (Li et al. 2020, n=2,748 donors) with gnomAD-SV supplying INS length, via `tools/fetch_pcawg_sv_corpus.sh` → `tools/build_pcawg_sv_vcf.py` → `gen-mut-model` → `tools/normalize_pcawg_sv_model.py`. The refit corrected the heuristic type mix (notably INV 0.08→0.134, BND 0.35→0.232) to match the published PCAWG ranking (DEL>DUP>BND>INV); the fitted per-base rate 3.46e-8 confirmed the prior 3.8e-8 estimate. INS and focal-CNV *rates* remain literature estimates (PCAWG MEI calls are controlled-access; focal-CNA segment counts are segmentation, not discrete events). The germline-side `default_sv_model()` stays gnomAD-derived. See CHANGELOG v1.14.0.
-- **Per-tissue SV models (#202).** **Shipped.** Three tissue-specific tumor models
-  are bundled alongside the pan-cancer one:
-  `tools/cosmic_pancancer_sv_{BRCA,skin,lung}.json.gz`. Each is the pan-cancer
-  COSMIC SNP/indel base with a `sv_model` fitted from that tissue's PCAWG donors.
-  `tools/build_pcawg_sv_vcf.py` gained `--sample-sheet` + `--projects` (filtering
-  donors by `aliquot_id → dcc_project_code` via `pcawg_sample_sheet.tsv`), and
-  `tools/build_per_tissue_sv_models.sh` drives build→fit→normalize per tissue.
+- **Per-tissue tumor models (#202).** **Shipped — both halves now tissue-specific.**
+  Three complete tissue models are bundled alongside the pan-cancer one:
+  `tools/cosmic_per_tissue_{BRCA,skin,lung}.json.gz`. Each pairs a **per-tissue
+  COSMIC SNP/indel spectrum** with a **per-tissue `sv_model`**.
 
-  Tissue → PCAWG project codes (SV-donor counts): **BRCA** → `BRCA` (211);
-  **skin** → `SKCM-US,MELA-AU` (106, melanoma); **lung** → `LUAD-US,LUSC-US` (85).
-  PCAWG's codes diverge from TCGA's and SKCM/LUAD alone are underpowered (~37
-  each), so skin/lung group the related projects. The fits show expected
-  tissue-specific signal — BRCA is **DUP-dominant** (Dup 0.317, the tandem-
-  duplicator phenotype) at ~2× SV burden; skin is **BND-enriched** (0.306);
-  lung is **DEL-dominant** (0.349).
+  *SV half (first shipped in #237).* The `sv_model` is fitted from that tissue's
+  PCAWG donors. `tools/build_pcawg_sv_vcf.py` gained `--sample-sheet` + `--projects`
+  (filtering donors by `aliquot_id → dcc_project_code` via `pcawg_sample_sheet.tsv`),
+  and `tools/build_per_tissue_sv_models.sh` drives build→fit→normalize per tissue,
+  emitting `tools/cosmic_pancancer_sv_{BRCA,skin,lung}.json.gz` (pan-cancer SNP/indel
+  base + per-tissue SV). Tissue → PCAWG project codes (SV-donor counts): **BRCA** →
+  `BRCA` (211); **skin** → `SKCM-US,MELA-AU` (106, melanoma); **lung** →
+  `LUAD-US,LUSC-US` (85). PCAWG's codes diverge from TCGA's and SKCM/LUAD alone are
+  underpowered (~37 each), so skin/lung group related projects. The fits show
+  expected signal — BRCA **DUP-dominant** (Dup 0.317, the tandem-duplicator
+  phenotype) at ~2× SV burden; skin **BND-enriched** (0.306); lung **DEL-dominant**
+  (0.349).
 
-  Pick one at run time: `cancer_simulate.sh --tumor-model tools/cosmic_pancancer_sv_BRCA.json.gz`.
+  *SNP/indel half (#202 completion).* Each tissue's SNP/indel spectrum is trained
+  from its COSMIC GenomeScreensMutant subset. Because the COSMIC VCF is
+  tissue-aggregated, the split uses the sample-level **TSV** export:
+  `tools/fetch_cosmic_per_tissue_corpus.sh` reads the Classification file
+  (`COSMIC_PHENOTYPE_ID → PRIMARY_SITE`), collects every COSV mutation ID seen in
+  that tissue's phenotypes from the mutant TSV, and filters the GenomeScreensMutant
+  VCF (which carries VCF-anchored alleles, so indels need no re-anchoring) down to
+  those IDs. `tools/build_per_tissue_models.sh` orchestrates the full chain
+  (fetch → `gen-mut-model` train → `tools/graft_sv_model.py` grafts the per-tissue
+  `sv_model` on). The fits reproduce known tissue biology: **skin** is the most
+  SNV-dominated (melanoma's UV-driven C>T; indels only ~1.6% of records), while
+  **breast** carries the most indels (~5.2%); **lung** sits between (~3.6%).
 
-  Caveats: only the **SV component** is tissue-specific — the SNP/indel side stays
-  pan-cancer COSMIC (per-tissue SNP/indel is the MC3/COSMIC-classification half of
-  #202, still open; COSMIC's classification file is a separate academic download).
-  INS length is shared from the gnomAD-derived base (germline, tissue-agnostic);
-  INS and focal-CNV *rates* remain pan-cancer literature values, so a tissue's CNV
-  fraction shifts mainly because its SV burden (the denominator) differs.
+  Pick one at run time: `gen-cancer-reads` with
+  `tumor_model: tools/cosmic_per_tissue_BRCA.json.gz`.
+
+  Caveats: the bundled `mutation_rate` is COSMIC-corpus-aggregated (fraction of bp
+  mutated across that tissue's catalog), so it overstates single-tumor burden — set
+  per-tumor burden via `tumor_mutation_rate` (defaults to 1e-5); what's genuinely
+  per-tissue is the *spectrum* (trinucleotide context, indel ratio, SV mix). INS
+  length is shared from the gnomAD-derived base (germline, tissue-agnostic); INS and
+  focal-CNV *rates* remain pan-cancer literature values, so a tissue's CNV fraction
+  shifts mainly because its SV burden (the denominator) differs. The
+  `cosmic_pancancer_sv_*` files (pan-cancer SNP/indel + per-tissue SV) are retained
+  as the `sv_model` donor for the graft step.
 
 ## References
 

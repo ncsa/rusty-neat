@@ -29,7 +29,9 @@ fragment_st_dev: 50     # required when paired_ended
 
 # ── Models (optional) ─────────────────────────────────────────────────────
 # normal_model: /path/to/germline_model.json.gz   # default: built-in germline model
-# tumor_model: tools/cosmic_pancancer_sv_BRCA.json.gz   # per-tissue SV models available
+# tumor_model: tools/cosmic_per_tissue_BRCA.json.gz   # per-tissue models: BRCA / skin / lung
+#                                                     # (per-tissue SNP/indel + per-tissue SV).
+#                                                     # tools/cosmic_v104_pancancer_model.json.gz = pan-cancer.
 
 # ── Somatic mutation rate (optional) ──────────────────────────────────────
 # The tumor pass's de-novo mutations are SOMATIC. Default 1e-5 (typical solid

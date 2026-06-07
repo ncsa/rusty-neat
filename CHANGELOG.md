@@ -1,5 +1,38 @@
 6/6/2026
 ========
+## rneat v1.16.0
+
+### Per-tissue tumor models completed — SNP/indel half (#202)
+
+The per-tissue cancer models are now tissue-specific in **both** halves. #237
+shipped the per-tissue `sv_model`; this adds the per-tissue SNP/indel spectrum,
+completing #202. Three full models are bundled:
+`tools/cosmic_per_tissue_{BRCA,skin,lung}.json.gz`.
+
+- **`tools/fetch_cosmic_per_tissue_corpus.sh`** — builds a per-tissue COSMIC
+  SNP/indel corpus. The COSMIC GenomeScreensMutant VCF is tissue-aggregated, so the
+  split joins the sample-level **TSV** (`COSMIC_PHENOTYPE_ID`) to the Classification
+  file (`PRIMARY_SITE`) to collect each tissue's COSV mutation IDs, then filters the
+  VCF (which already carries VCF-anchored alleles — no indel re-anchoring) to those
+  IDs. Reuses the pan-cancer adapter's filtering (drop complex/ambiguous, chr-prefix,
+  dedup).
+- **`tools/graft_sv_model.py`** — grafts a per-tissue `sv_model` onto a per-tissue
+  SNP/indel base. **`tools/build_per_tissue_models.sh`** orchestrates the full chain
+  (fetch → `gen-mut-model` train → graft).
+- The fits reproduce known tissue biology: **skin**/melanoma is the most
+  SNV-dominated (UV C>T; ~1.6% indels), **breast** carries the most indels (~5.2%),
+  **lung** sits between (~3.6%).
+- `cosmic_pancancer_sv_{BRCA,skin,lung}.json.gz` (pan-cancer SNP/indel + per-tissue
+  SV) are retained as the `sv_model` donor for the graft step.
+- `docs/cancer_howto.md` reorganized around training a model from your own somatic
+  VCF (`gen-mut-model` → `tumor_model:`), with the public-corpus adapters as a
+  convenience path.
+
+This completes the core cancer-modeling epic (#129); the remaining advanced-SV
+items (#191/#192) are tracked separately as Expanded-realism enhancements.
+
+6/6/2026
+========
 ## rneat v1.15.1
 
 ### Cancer wrap-up: parity test, output-dir fix, how-to guide

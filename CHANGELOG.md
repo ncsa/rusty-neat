@@ -1,5 +1,29 @@
 6/6/2026
 ========
+## rneat v1.15.1
+
+### Cancer wrap-up: parity test, output-dir fix, how-to guide
+
+Tying off the native `gen-cancer-reads` work (#239):
+
+- **`gen-cancer-reads` now creates `output_dir` if it doesn't exist** (via
+  `create_dir_all`), matching `gen-reads`. Previously the cancer path built its
+  per-pass configs directly and skipped the YAML parser's dir-creation step, so a
+  non-existent `output_dir` failed mid-run with a bare `NotFound`.
+- **Parity test** (`rneat/tests/cancer_parity.rs`): runs the native subcommand and
+  `tools/cancer_simulate.sh` over the same reference/seed/purity and asserts they
+  produce identical merged-FASTQ record multisets, per-pass golden VCF bodies, and
+  origin-tagged truth-VCF `(chrom,pos,ref,alt,NEAT_ORIGIN)` sets. This is the proof
+  gating eventual retirement of the shell script.
+- **`fastq_merge` unit test** covering read-name tagging, including the case where
+  a quality line begins with `@` (must not be tagged).
+- **New copy-paste guide** `docs/cancer_howto.md` with worked examples
+  (WGS tumor/normal, per-tissue SV models, purity sweeps, low-purity samples),
+  output reference, benchmarking, and model training. The README cancer section is
+  trimmed to a short intro pointing at it.
+
+6/6/2026
+========
 ## rneat v1.15.0
 
 ### Native `rneat gen-cancer-reads` subcommand (#239)

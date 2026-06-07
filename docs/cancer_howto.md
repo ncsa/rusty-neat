@@ -102,10 +102,12 @@ YAML
 rneat gen-cancer-reads -c brca_wgs.yml
 ```
 
-### 2. Tissue-specific SVs (breast) with structural variants enabled
+### 2. Tissue-specific model (breast) with structural variants enabled
 
-Bundled per-tissue SV models stratify the SV catalog by primary site
-(`tools/cosmic_pancancer_sv_{BRCA,skin,lung}.json.gz` — BRCA is DUP-dominant, skin
+Bundled **per-tissue models** stratify *both* halves by primary site
+(`tools/cosmic_per_tissue_{BRCA,skin,lung}.json.gz`): a per-tissue COSMIC
+SNP/indel spectrum (e.g. skin/melanoma is UV-C>T-heavy and SNV-dominated; breast
+carries more indels) paired with a per-tissue `sv_model` (BRCA DUP-dominant, skin
 BND-enriched, lung DEL-dominant). Turn on de novo SV generation with
 `sv_rate_scale`:
 
@@ -120,7 +122,7 @@ read_len: 151
 paired_ended: true
 fragment_mean: 350
 fragment_st_dev: 50
-tumor_model: tools/cosmic_pancancer_sv_BRCA.json.gz
+tumor_model: tools/cosmic_per_tissue_BRCA.json.gz
 sv_rate_scale: 1.0          # 1.0 = the model's nominal rate; higher stress-tests SV callers
 rng_seed: brca-sv-demo
 overwrite_output: true

@@ -26,6 +26,38 @@ worked examples, output reference, benchmarking, and model training. Design
 rationale and calibration caveats live in
 [`docs/cancer_simulator.md`](docs/cancer_simulator.md).
 
+## How `rneat` compares to NEAT
+
+`rneat` is a Rust port of NEAT that tracks the NEAT feature set while adding a
+native cancer workflow and a focus on speed and low memory use. The table below
+compares the original Python 2 NEAT (the 2.x "genReads" line), the current
+Python 3 NEAT 4.x, and `rneat`.
+
+|                                            | **NEAT 2.x** (genReads)        | **NEAT 4.x**                              | **`rneat`**                                              |
+| ------------------------------------------ | ------------------------------ | ----------------------------------------- | -------------------------------------------------------- |
+| Latest version                             | 2.1                            | 4.5.3                                      | 1.16.0                                                   |
+| Language                                   | Python 2                       | Python 3                                  | Rust                                                     |
+| FASTQ reads (single / paired)              | ✅                             | ✅                                        | ✅                                                       |
+| Golden BAM + VCF truth set                 | ✅                             | ✅                                        | ✅                                                       |
+| SNPs + indels                              | ✅                             | ✅                                        | ✅                                                       |
+| Structural variants                        | Input VCF only (no native SV)  | Native: inversions, translocations, duplications | Native: BND, INV, INS, **CNV**                    |
+| Native tumor / normal cancer workflow      | ❌                             | ❌                                        | ✅ `gen-cancer-reads` (purity mix + origin-tagged truth) |
+| Cancer / per-tissue models                 | ❌                             | ❌                                        | ✅ pan-cancer + BRCA / skin / lung (COSMIC / PCAWG)      |
+| Empirical mutation model (trinucleotide)   | ✅                             | ✅                                        | ✅                                                       |
+| Sequencing error model                     | ✅                             | ✅                                        | ✅                                                       |
+| Fragment-length + GC-bias models           | ✅                             | ✅                                        | ✅ (incl. one-pass `gen-bam-models`)                     |
+| BED targeting / VCF variant insertion      | ✅                             | ✅                                        | ✅                                                       |
+| Parallelism                                | Manual job sharding (`--job`)  | Multiprocessing (`--threads`): genome split into ~8 chunks/thread, then stitched | Multithreading (rayon) |
+| VCF comparison tooling                      | Bundled scripts                | ✅ `compare-vcfs`                          | ✅ `compare-vcfs`                                        |
+| I/O / memory                               | Temp files                     | Temp files                                | Streaming writes, low-memory focus                       |
+| Distribution                               | GitHub source                  | GitHub / PyPI                             | GitHub + binaries; Bioconda (in review)                  |
+
+**Citations.** NEAT: Stephens et al. (2016), *PLOS ONE* 11(11):e0167047,
+[doi:10.1371/journal.pone.0167047](https://doi.org/10.1371/journal.pone.0167047);
+and Allen et al. (2026), *Journal of Open Source Software* 11(121):9056,
+[doi:10.21105/joss.09056](https://doi.org/10.21105/joss.09056). `rneat`:
+[doi:10.5281/zenodo.20100558](https://doi.org/10.5281/zenodo.20100558).
+
 # How to use `rneat`
 
 ## Prerequisites

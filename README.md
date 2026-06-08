@@ -5,6 +5,9 @@ We have spent some dedicated time toward gearing the current version of `rneat` 
 
 The most recent version of `rneat` includes adding in the utilities to allow users to generate their own models for running `rneat`. It also now outputs a golden BAM file with ideal alignments, accepts a BED file for filtering the genome down to target regions for read creation, a more accurate coverage tool, and the ability to read in custom variants from a VCF file and insert them into the code. We swapped out the temp file writing method for a file streaming method that seems to work even faster and does not take up as much space on disk, avoiding expensive disk I/O of previous versions. We've done numerous benchmarks and tests on the data, but we look forward to user feedback on how well the output reproduces their data on a statistical level.
 
+Find us on Zenodo:
+[![DOI](https://zenodo.org/badge/765847780.svg)](https://doi.org/10.5281/zenodo.20100558)
+
 ## Cancer simulation
 
 `rneat` simulates tumor / normal sequencing data end-to-end. The
@@ -855,7 +858,3 @@ paired-ended         0:13.30        1126.8      354%
   Paired/single peak-RSS ratio:  1.16x  (970.4 MB → 1126.8 MB)
 ──────────────────────────────────────────────────────────────────────
 ```
-
-**Zenodo release**
-
-[![DOI](https://zenodo.org/badge/765847780.svg)](https://doi.org/10.5281/zenodo.20100558)

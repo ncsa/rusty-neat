@@ -1,0 +1,47 @@
+cff-version: 1.2.0
+title: >-
+  rneat (rusty-neat): a Rust toolkit for simulating NGS read
+  data, including tumor/normal cancer sequencing
+message: >-
+  If you use this software, please cite it using the
+  metadata from this file.
+type: software
+authors:
+  - given-names: Joshua
+    family-names: Allen
+    email: jallen17@illinois.edu
+    affiliation: National Center for Supercomputing Applications, University of Illinois Urbana-Champaign
+    orcid: 'https://orcid.org/0009-0008-0002-5239'
+  - given-names: Mikolaj
+    family-names: Kowalik
+    # orcid: 'https://orcid.org/0000-0000-0000-0000'  # TODO: add ORCID
+  - name: "NEAT Contributors"
+repository-code: 'https://github.com/ncsa/rusty-neat'
+url: 'https://github.com/ncsa/rusty-neat'
+abstract: >-
+  rneat is a Rust port and extension of NEAT that generates
+  simulated next-generation sequencing data in FASTQ and VCF
+  formats with the statistical properties of real datasets,
+  along with a golden BAM/VCF truth set of inserted variants
+  and ideal alignments. It adds structural-variant simulation
+  (CNV, BND, INV, INS, and others) and an end-to-end
+  tumor/normal cancer workflow (gen-cancer-reads) that merges
+  two read passes at a configurable purity and emits an
+  origin-tagged truth VCF for benchmarking somatic and
+  structural-variant callers, with an emphasis on low memory
+  use and short CPU time.
+keywords:
+  - bioinformatics
+  - ngs-simulation
+  - cancer-genomics
+  - structural-variants
+  - variant-calling
+  - fastq
+  - vcf
+  - rust
+license: BSD-3-Clause
+version: 1.16.0
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.20100558
+    description: Concept DOI for all versions of rneat

@@ -35,7 +35,7 @@ line), the current Python 3 NEAT 4.x, and `rneat`.
 
 |                                            | **NEAT 2.x** (genReads)        | **NEAT 4.x**                              | **`rneat`**                                              |
 | ------------------------------------------ | ------------------------------ | ----------------------------------------- | -------------------------------------------------------- |
-| Latest version                             | 2.1                            | 4.5.3                                      | 1.16.0                                                   |
+| Latest version                             | 2.1                            | 4.5.3                                      | 1.17.0                                                   |
 | Language                                   | Python 2                       | Python 3                                  | Rust                                                     |
 | FASTQ reads (single / paired)              | ✅                             | ✅                                        | ✅                                                       |
 | Golden BAM + VCF truth set                 | ✅                             | ✅                                        | ✅                                                       |

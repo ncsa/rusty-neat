@@ -29,6 +29,9 @@ const BLOCK_SIZE: usize = 256 * 1024;
 pub struct BlockGzWriter<W: Write> {
     inner: W,
     buf: Vec<u8>,
+    /// Reused scratch buffer for compressed output, so we don't allocate a fresh
+    /// buffer per block (which adds allocator pressure that hurts multi-thread).
+    out: Vec<u8>,
     compressor: Compressor,
     finished: bool,
     /// Whether any gzip member has been emitted. If none has by finalize time,
@@ -46,6 +49,7 @@ impl<W: Write> BlockGzWriter<W> {
         Self {
             inner,
             buf: Vec::with_capacity(BLOCK_SIZE),
+            out: Vec::new(),
             compressor: Compressor::new(CompressionLvl::default()),
             finished: false,
             wrote_any: false,
@@ -55,12 +59,14 @@ impl<W: Write> BlockGzWriter<W> {
     /// Compress `block` (which may be empty) as one gzip member and write it.
     fn emit_member(&mut self, block: &[u8]) -> io::Result<()> {
         let bound = self.compressor.gzip_compress_bound(block.len());
-        let mut out = vec![0u8; bound];
+        if self.out.len() < bound {
+            self.out.resize(bound, 0);
+        }
         let n = self
             .compressor
-            .gzip_compress(block, &mut out)
+            .gzip_compress(block, &mut self.out)
             .map_err(|e| io::Error::other(format!("libdeflate gzip compression failed: {e:?}")))?;
-        self.inner.write_all(&out[..n])?;
+        self.inner.write_all(&self.out[..n])?;
         self.wrote_any = true;
         Ok(())
     }

@@ -33,6 +33,58 @@ fn quality_lines(fastq_path: &std::path::Path) -> Vec<String> {
 }
 
 #[test]
+fn gen_reads_output_is_byte_identical_across_thread_counts() {
+    // Regression guard for the sub-contig chunking path: with a small chunk_size
+    // the multi-segment H1N1 reference splits into several chunks per contig.
+    // Output (R1 AND R2) must be byte-identical regardless of num_threads, and
+    // free of duplicate read names. This catches the class of bug where a chunk
+    // wrote to a shared temp file / a path was merged once per chunk, which
+    // duplicated reads and raced under parallelism.
+    let run = |threads: usize, prefix: &str| -> (std::path::PathBuf, std::path::PathBuf) {
+        let (dir, out) = fresh_workdir();
+        std::mem::forget(dir); // keep the temp dir alive for the duration of the test
+        let mut config = GenReadsConfig::new(h1n1_reference(), out.clone(), prefix);
+        config.paired_ended = true;
+        config.coverage = 20;
+        config.read_len = 50;
+        config.rng_seed = "chunk determinism seed".to_string();
+        config.num_threads = Some(threads);
+        config.chunk_size = Some(500); // force several chunks per ~1.7 kb segment
+        let yaml = config.write_yaml();
+        rneat()
+            .args(["gen-reads", "-c"])
+            .arg(yaml.path())
+            .assert()
+            .success();
+        (
+            out.join(format!("{prefix}_r1.fastq.gz")),
+            out.join(format!("{prefix}_r2.fastq.gz")),
+        )
+    };
+
+    let (r1_t1, r2_t1) = run(1, "t1");
+    let (r1_t4, r2_t4) = run(4, "t4");
+
+    for (a, b, which) in [(&r1_t1, &r1_t4, "R1"), (&r2_t1, &r2_t4, "R2")] {
+        let la = read_gzip_fastq_lines(a);
+        let lb = read_gzip_fastq_lines(b);
+        assert!(!la.is_empty(), "{which}: no reads produced");
+        assert_eq!(
+            la, lb,
+            "{which} differs between 1-thread and 4-thread runs (same seed) — chunking is not thread-count-invariant",
+        );
+        // No duplicate read names (the duplication symptom of the temp-file bug).
+        let names: Vec<&String> = la.iter().step_by(4).collect();
+        let unique: HashSet<&&String> = names.iter().collect();
+        assert_eq!(
+            names.len(),
+            unique.len(),
+            "{which}: duplicate read names present",
+        );
+    }
+}
+
+#[test]
 fn gen_reads_with_default_model_produces_well_formed_fastq() {
     // Smoke test: run gen-reads end-to-end through the real binary with all defaults
     // (no custom error model, no input VCF) and verify the output is well-formed

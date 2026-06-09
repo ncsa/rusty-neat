@@ -82,6 +82,7 @@ pub struct GenReadsConfig {
     pub rng_seed: String,
     pub sequence_error_model: Option<PathBuf>,
     pub num_threads: Option<usize>,
+    pub chunk_size: Option<usize>,
     pub input_vcf: Option<PathBuf>,
     pub mutation_rate: Option<f64>,
     pub mutation_model: Option<PathBuf>,
@@ -103,6 +104,7 @@ impl GenReadsConfig {
             rng_seed: "integration phase two".to_string(),
             sequence_error_model: None,
             num_threads: None,
+            chunk_size: None,
             input_vcf: None,
             mutation_rate: None,
             mutation_model: None,
@@ -125,6 +127,10 @@ impl GenReadsConfig {
         };
         let threads_section = match self.num_threads {
             Some(n) => format!("num_threads: {n}\n"),
+            None => String::new(),
+        };
+        let chunk_size_section = match self.chunk_size {
+            Some(n) => format!("chunk_size: {n}\n"),
             None => String::new(),
         };
         let input_vcf_section = match &self.input_vcf {
@@ -155,7 +161,7 @@ impl GenReadsConfig {
              output_filename: {name}\n\
              overwrite_output: true\n\
              rng_seed: {seed}\n\
-             {pair}{model}{threads}{ivcf}{mrate}{mmodel}{svscale}",
+             {pair}{model}{threads}{chunksz}{ivcf}{mrate}{mmodel}{svscale}",
             ref_ = self.reference.display(),
             rl = self.read_len,
             cov = self.coverage,
@@ -168,6 +174,7 @@ impl GenReadsConfig {
             pair = pair_section,
             model = model_section,
             threads = threads_section,
+            chunksz = chunk_size_section,
             ivcf = input_vcf_section,
             mrate = mutation_rate_section,
             mmodel = mutation_model_section,

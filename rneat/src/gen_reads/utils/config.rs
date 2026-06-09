@@ -76,6 +76,11 @@ pub struct RunConfiguration {
     pub(crate) gc_bias_normalize_coverage: bool,
     // maximum threads for parallel contig processing (None = rayon default = all cores)
     pub num_threads: Option<usize>,
+    // Target size (bp) of a parallel sub-contig chunk. None = auto (scaled to the
+    // genome size); Some(0) = disable chunking (one chunk per whole contig);
+    // Some(n) = fixed n bp. Independent of num_threads, so output is identical
+    // across thread counts.
+    pub chunk_size: Option<usize>,
     // when true, fragments shorter than read_len are kept and produce truncated reads
     // (long-read platforms); when false, such fragments are discarded (short-read default)
     pub long_reads: bool,
@@ -126,6 +131,7 @@ impl Default for RunConfiguration {
             gc_bias_model: None,
             gc_bias_normalize_coverage: true,
             num_threads: None,
+            chunk_size: None,
             long_reads: false,
             sv_rate_scale: 0.0,
             sv_max_length_fraction: 0.25,
@@ -454,6 +460,14 @@ impl RunConfiguration {
                             )
                         })? as usize);
                     }
+                    "chunk_size" => {
+                        config.chunk_size = Some(value.as_u64().ok_or_else(|| {
+                            GenerateReadsError::ConfigReadError(
+                                "chunk_size".to_string(),
+                                "integer".to_string(),
+                            )
+                        })? as usize);
+                    }
                     "long_reads" => {
                         config.long_reads = value.as_bool().ok_or_else(|| {
                             GenerateReadsError::ConfigReadError(
@@ -672,6 +686,7 @@ mod tests {
             gc_bias_model: None,
             gc_bias_normalize_coverage: true,
             num_threads: None,
+            chunk_size: None,
             long_reads: false,
             sv_rate_scale: 0.0,
             sv_max_length_fraction: 0.25,

@@ -236,13 +236,24 @@ pub fn run_neat(
     // *within* a large chromosome, not just across contigs. Chunk size is
     // independent of num_threads, so output is identical regardless of thread
     // count. Each contig's sequence is shared across its chunks via the cache.
+    let total_genome_len: usize = ctx.reference.values().map(|s| s.len()).sum();
+    let chunk_size = resolve_chunk_size(config, total_genome_len);
+    info!(
+        "\t>Sub-contig chunk size: {} bp{}",
+        chunk_size,
+        match config.chunk_size {
+            None => " (auto)",
+            Some(0) => " (chunking disabled — one chunk per contig)",
+            Some(_) => " (configured)",
+        }
+    );
     let seq_cache = SeqBlockCache::new(&ctx.reference, &contig_order_in_file);
     let chunk_work: Vec<ChunkWork> = contig_order_in_file
         .iter()
         .enumerate()
         .flat_map(|(contig_idx, name)| {
             let contig_len = ctx.reference.get(name).map(|s| s.len()).unwrap_or(0);
-            split_contig_into_chunks(contig_len)
+            split_contig_into_chunks(contig_len, chunk_size)
                 .into_iter()
                 .enumerate()
                 .map(move |(chunk_idx, (chunk_start, chunk_end))| ChunkWork {
@@ -431,9 +442,30 @@ pub fn run_neat(
     Ok(files_written.clone())
 }
 
-/// Target size (bp) of a parallel sub-contig chunk. Fixed and independent of
-/// `num_threads`, so generated output is byte-identical across thread counts.
-const CHUNK_TARGET: usize = 10_000_000;
+/// Auto chunk-sizing bounds. The chunk size is derived from the *genome* size
+/// (not the thread count) so output stays byte-identical across thread counts,
+/// while still scaling: small genomes get small chunks (so a single contig
+/// still parallelizes), large genomes get larger chunks (so the chunk — and
+/// temp-file — count stays bounded instead of exploding into millions).
+const CHUNK_AUTO_TARGET_CHUNKS: usize = 256;
+const CHUNK_AUTO_MIN: usize = 1_000_000; // 1 Mbp floor — below this, boundary overhead dominates
+const CHUNK_AUTO_MAX: usize = 25_000_000; // 25 Mbp cap — keeps chunk count bounded on huge genomes
+
+/// Pick a sub-contig chunk size (bp) from the total genome length, aiming for
+/// ~`CHUNK_AUTO_TARGET_CHUNKS` chunks genome-wide, clamped to [MIN, MAX].
+fn auto_chunk_size(total_genome_len: usize) -> usize {
+    (total_genome_len / CHUNK_AUTO_TARGET_CHUNKS).clamp(CHUNK_AUTO_MIN, CHUNK_AUTO_MAX)
+}
+
+/// Resolve the effective chunk size from config: `None` → auto (genome-scaled);
+/// `Some(0)` → disable chunking (one chunk per whole contig); `Some(n)` → fixed.
+fn resolve_chunk_size(config: &RunConfiguration, total_genome_len: usize) -> usize {
+    match config.chunk_size {
+        None => auto_chunk_size(total_genome_len),
+        Some(0) => usize::MAX, // one chunk spans the whole contig
+        Some(n) => n,
+    }
+}
 
 /// One unit of parallel read-generation work: a sub-range of a contig.
 struct ChunkWork {
@@ -460,13 +492,14 @@ struct ChunkData {
     ad_counter: AdCounter,
 }
 
-/// Split a contig of `len` bp into evenly-sized chunks of ~`CHUNK_TARGET` bp.
+/// Split a contig of `len` bp into evenly-sized chunks of ~`chunk_size` bp.
 /// An empty contig yields a single `[0, 0)` chunk so it still produces a result.
-fn split_contig_into_chunks(len: usize) -> Vec<(usize, usize)> {
+fn split_contig_into_chunks(len: usize, chunk_size: usize) -> Vec<(usize, usize)> {
     if len == 0 {
         return vec![(0, 0)];
     }
-    let n = len.div_ceil(CHUNK_TARGET).max(1);
+    let chunk_size = chunk_size.max(1);
+    let n = len.div_ceil(chunk_size).max(1);
     let base = len / n;
     let rem = len % n;
     let mut out = Vec::with_capacity(n);
@@ -738,7 +771,7 @@ fn process_chunk(
             let mut file_to_write_2 = PathBuf::from(ctx.working_dir);
             file_to_write_2.push(format!(
                 "temp_{}_{:010}_{:010}_r2_tmp.fastq.gz",
-                contig_name, current_block.ref_start, current_block.ref_end,
+                contig_name, chunk_start, chunk_end,
             ));
             let file2 = append_to_file(&file_to_write_2)?;
             let writer2 = BufWriter::new(&file2);

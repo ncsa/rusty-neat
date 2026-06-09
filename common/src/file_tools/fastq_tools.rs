@@ -4,7 +4,6 @@
 //! This one needs a major overhaul, it is autogenerating quality scores etc.
 //! Will wait to get other things set up first
 use crate::rng::{NeatRng, NeatRngError};
-use flate2::read::MultiGzDecoder;
 use log::debug;
 use std::collections::HashMap;
 use std::fs::File;
@@ -13,7 +12,6 @@ use std::path::PathBuf;
 use thiserror::Error;
 
 use crate::file_tools::bam_writer::BamRecordStager;
-use crate::file_tools::block_gz::BlockGzWriter;
 use crate::file_tools::file_io::append_to_file;
 use crate::models::quality_scores::QualityScoreModel;
 use crate::models::sequencing_error_model::{
@@ -282,22 +280,22 @@ pub fn combine_temp_fastqs(
 }
 
 fn stream_gzip_files(files: &[PathBuf], output: &PathBuf) -> Result<(), FastqToolsError> {
-    let out_file = append_to_file(output)?;
-    // libdeflate block-gzip is much faster than streaming zlib for the final
-    // re-compression pass. Temp files may be multi-member gzip, so decode with
-    // MultiGzDecoder (GzDecoder stops after the first member).
-    let mut writer = BufWriter::new(BlockGzWriter::new(out_file));
+    // The per-contig temp files are each already a complete (multi-member) gzip
+    // stream. gzip streams concatenate, so the final file is just the raw bytes
+    // of every temp appended in order — no decompress, no recompress. This drops
+    // an entire compression pass (each read is compressed once, in the parallel
+    // per-contig write, instead of twice) and turns the previously single-
+    // threaded combine into pure I/O.
+    let mut out_file = BufWriter::new(append_to_file(output)?);
     for file in files {
-        let f = File::open(file).map_err(|e| FastqToolsError::FastqReadError(e.to_string()))?;
-        let mut decoder = MultiGzDecoder::new(BufReader::new(f));
-        std::io::copy(&mut decoder, &mut writer)
+        let mut f = BufReader::new(
+            File::open(file).map_err(|e| FastqToolsError::FastqReadError(e.to_string()))?,
+        );
+        std::io::copy(&mut f, &mut out_file)
             .map_err(|e| FastqToolsError::FastqWriteError(e.to_string()))?;
     }
-    // Flush BufWriter into the BlockGzWriter, then finalize the last gzip block.
-    let enc = writer
-        .into_inner()
-        .map_err(|e| FastqToolsError::FastqWriteError(e.to_string()))?;
-    enc.finish()
+    out_file
+        .flush()
         .map_err(|e| FastqToolsError::FastqWriteError(e.to_string()))?;
     Ok(())
 }

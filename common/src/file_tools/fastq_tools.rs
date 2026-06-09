@@ -4,9 +4,6 @@
 //! This one needs a major overhaul, it is autogenerating quality scores etc.
 //! Will wait to get other things set up first
 use crate::rng::{NeatRng, NeatRngError};
-use flate2::Compression;
-use flate2::read::GzDecoder;
-use flate2::write::GzEncoder;
 use log::debug;
 use std::collections::HashMap;
 use std::fs::File;
@@ -78,13 +75,13 @@ pub fn reverse_complement(sequence: Vec<Nucleotide>) -> Vec<Nucleotide> {
     rev_comp
 }
 
-pub fn write_block_fastq<T: Write, W: Write>(
+pub fn write_block_fastq<B1: Write, B2: Write>(
     block_fragments: Vec<(usize, usize)>,
     block_map: &MutatedMap,
     sequence_block: &SequenceBlock,
     paired_ended: bool,
-    buffer1: &mut GzEncoder<T>,
-    buffer2: &mut GzEncoder<W>,
+    buffer1: &mut B1,
+    buffer2: &mut B2,
     read_length: usize,
     long_reads: bool,
     read_name_prefix: &str,
@@ -283,15 +280,23 @@ pub fn combine_temp_fastqs(
 }
 
 fn stream_gzip_files(files: &[PathBuf], output: &PathBuf) -> Result<(), FastqToolsError> {
-    let out_file = append_to_file(output)?;
-    let enc = GzEncoder::new(out_file, Compression::default());
-    let mut writer = BufWriter::new(enc);
+    // The per-contig temp files are each already a complete (multi-member) gzip
+    // stream. gzip streams concatenate, so the final file is just the raw bytes
+    // of every temp appended in order — no decompress, no recompress. This drops
+    // an entire compression pass (each read is compressed once, in the parallel
+    // per-contig write, instead of twice) and turns the previously single-
+    // threaded combine into pure I/O.
+    let mut out_file = BufWriter::new(append_to_file(output)?);
     for file in files {
-        let f = File::open(file).map_err(|e| FastqToolsError::FastqReadError(e.to_string()))?;
-        let mut decoder = GzDecoder::new(BufReader::new(f));
-        std::io::copy(&mut decoder, &mut writer)
+        let mut f = BufReader::new(
+            File::open(file).map_err(|e| FastqToolsError::FastqReadError(e.to_string()))?,
+        );
+        std::io::copy(&mut f, &mut out_file)
             .map_err(|e| FastqToolsError::FastqWriteError(e.to_string()))?;
     }
+    out_file
+        .flush()
+        .map_err(|e| FastqToolsError::FastqWriteError(e.to_string()))?;
     Ok(())
 }
 
@@ -463,9 +468,9 @@ pub fn generate_read(
     })
 }
 
-pub fn write_read_to_fastq<T: Write>(
+pub fn write_read_to_fastq<W: Write>(
     record: &ReadRecord,
-    buffer: &mut GzEncoder<T>,
+    buffer: &mut W,
 ) -> Result<(), FastqToolsError> {
     buffer.write_all(format!("@{}\n", record.name).as_bytes())?;
     buffer.write_all(record.sequence.as_bytes())?;
@@ -486,6 +491,8 @@ pub fn quality_scores_to_char_vec(array: &[usize]) -> Result<Vec<u8>, FastqTools
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flate2::Compression;
+    use flate2::write::GzEncoder;
     use crate::file_tools::bam_writer::{BamRecordStager, BamWriter};
     use crate::file_tools::file_io::{VectorBuffer, create_output_file, read_gzip_lines};
     use crate::structs::nucleotides::Nucleotide::*;

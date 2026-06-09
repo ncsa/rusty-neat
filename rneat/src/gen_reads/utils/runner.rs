@@ -2681,6 +2681,57 @@ mod tests {
     use common::structs::variants::AlternateType;
 
     #[test]
+    fn test_split_contig_into_chunks_covers_contig_without_gaps_or_overlap() {
+        // 1 Mbp chunks over a 2.5 Mbp contig → 3 even chunks, contiguous, covering [0, len).
+        let chunks = split_contig_into_chunks(2_500_000, 1_000_000);
+        assert_eq!(chunks.len(), 3);
+        assert_eq!(chunks.first().unwrap().0, 0);
+        assert_eq!(chunks.last().unwrap().1, 2_500_000);
+        for w in chunks.windows(2) {
+            assert_eq!(w[0].1, w[1].0, "chunks must be contiguous (no gap/overlap)");
+        }
+        // Even split: sizes differ by at most 1.
+        let sizes: Vec<usize> = chunks.iter().map(|(s, e)| e - s).collect();
+        assert!(sizes.iter().max().unwrap() - sizes.iter().min().unwrap() <= 1);
+    }
+
+    #[test]
+    fn test_split_contig_into_chunks_edge_cases() {
+        // Contig smaller than the chunk size → a single whole-contig chunk.
+        assert_eq!(split_contig_into_chunks(500, 1_000_000), vec![(0, 500)]);
+        // Empty contig → one [0,0) chunk so it still yields a result.
+        assert_eq!(split_contig_into_chunks(0, 1_000_000), vec![(0, 0)]);
+        // chunk_size 0 is treated as 1 (guarded) and must not divide-by-zero.
+        assert!(!split_contig_into_chunks(10, 0).is_empty());
+    }
+
+    #[test]
+    fn test_auto_chunk_size_scales_and_clamps() {
+        // Small genome clamps to the floor so a single contig still parallelizes.
+        assert_eq!(auto_chunk_size(4_600_000), CHUNK_AUTO_MIN);
+        // Huge genome clamps to the cap so chunk count stays bounded.
+        assert_eq!(auto_chunk_size(10_000_000_000), CHUNK_AUTO_MAX);
+        // Mid-range scales linearly (≈ total / target chunks).
+        let mid = auto_chunk_size(1_000_000_000);
+        assert!(mid > CHUNK_AUTO_MIN && mid < CHUNK_AUTO_MAX);
+        assert_eq!(mid, 1_000_000_000 / CHUNK_AUTO_TARGET_CHUNKS);
+    }
+
+    #[test]
+    fn test_resolve_chunk_size_config_modes() {
+        let mut cfg = RunConfiguration::default();
+        // None → auto.
+        cfg.chunk_size = None;
+        assert_eq!(resolve_chunk_size(&cfg, 100_000_000), auto_chunk_size(100_000_000));
+        // Some(0) → disabled (one chunk spans the whole contig).
+        cfg.chunk_size = Some(0);
+        assert_eq!(resolve_chunk_size(&cfg, 100_000_000), usize::MAX);
+        // Some(n) → fixed.
+        cfg.chunk_size = Some(5_000_000);
+        assert_eq!(resolve_chunk_size(&cfg, 100_000_000), 5_000_000);
+    }
+
+    #[test]
     fn test_intersect_with_bed() {
         let r1 = SequenceMap::from(RegionType::NonNRegion, 100, 200);
         let r2 = SequenceMap::from(RegionType::NonNRegion, 300, 400);

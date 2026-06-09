@@ -1,13 +1,15 @@
 # Sub-contig chunking for multicore read generation (prototype)
 
-> **Status (implemented):** done on `feature/subcontig-chunking`. Two deviations
-> from the original plan below: (1) chunk size is **adaptive to genome size**
-> (≈ genome/256, clamped to [1 Mbp, 25 Mbp]) rather than a fixed 10 Mbp, with a
-> `chunk_size` config override (`0` disables); still independent of thread count.
-> (2) A real bug was caught by determinism testing: the R2 temp file was named
-> with whole-contig coords, so chunks of a multi-chunk contig shared one R2 file
-> and duplicated/raced R2 reads — fixed to use chunk coords. Output is now
-> verified byte-identical across thread counts (unit + e2e regression tests).
+> **Status: implemented, then DISABLED BY DEFAULT.** The machinery works and is
+> correct, but benchmarking showed it does not help (read generation is
+> memory-bandwidth bound — see **Conclusion** at the end). It ships behind an
+> opt-in `chunk_size: <n>` config key, off by default. Notable findings along
+> the way: (1) a real determinism bug was caught by testing — the R2 temp file
+> was named with whole-contig coords, so chunks of a multi-chunk contig shared
+> one R2 file and duplicated/raced R2 reads (fixed to use chunk coords); output
+> is now verified byte-identical across thread counts. (2) Chunk-0 uses the
+> plain per-contig RNG derivation, so with chunking off the read stream is
+> identical to the pre-chunking (develop) behaviour.
 
 
 ## Motivation
@@ -61,7 +63,54 @@ whole contig.
   crossing read-pairs split across two chunks, slightly perturbing suppression.
   Interior junctions (the vast majority) are unaffected.
 
-## Target
+## Target (hypothesis going in)
 c_elegans 8-core: **380 s → ~150–200 s**, memory no worse than the current
 ~520 MB. Validate determinism (same seed ⇒ identical FASTQ regardless of
 `num_threads`) and full test suite green.
+
+## Conclusion (outcome — chunking does NOT help; disabled by default)
+
+The hypothesis was wrong. Chunking delivered no multicore speedup, and the
+investigation revealed why: **read generation is memory-bandwidth bound, not
+CPU/parallelism-granularity bound.**
+
+Benchmark (NEAT 4.5.3 vs rneat, 8-core desktop, c_elegans 97 Mbp, paired-end
+10×, 3-rep medians; rneat timings cross-checked with a same-session develop-vs-
+branch A/B):
+
+| config | c_elegans 1-thread | c_elegans 8-thread |
+| --- | --- | --- |
+| rneat, chunking off (= develop) | ~365 s | ~400 s |
+| rneat, chunking on (auto ~1 Mbp) | — | ~440 s |
+| NEAT 4 | 1162 s | 331 s |
+
+Evidence the bottleneck is bandwidth, not parallelism granularity:
+
+1. **rneat 8-thread is *slower* than 1-thread regardless of chunking** (~400 s vs
+   ~365 s), and develop shows the same — adding cores cannot help when there is
+   no spare memory throughput. This is inherent, not a chunking artifact.
+2. **Finer chunking monotonically worsened wall time** (25 Mbp → 396 s, 5 Mbp →
+   431 s, 1 Mbp → 441 s): more, smaller work-items add overhead with no headroom
+   to exploit.
+3. **Swapping the global allocator to mimalloc changed nothing** (8-thread ~392 s
+   vs ~400 s), ruling out allocator contention. The remaining cost is raw memory
+   traffic — per-fragment `get_subseq().to_owned()` + `reverse_complement()`
+   copies plus gzip, all bandwidth-heavy.
+
+Why NEAT 4 "wins" multicore (1162 → 331 s, 3.5×) while rneat is flat: NEAT is
+CPU-bound (Python interpreter overhead) and has abundant headroom to parallelize
+into — but it only parallelizes far enough to *catch up* to rneat's already-fast
+single thread (~365 s). rneat starts near the hardware bandwidth ceiling, so it
+has little to gain.
+
+**Decision:** keep the chunking machinery (correct, tested, deterministic) but
+default it **off** behind `chunk_size`, for the niche where it might help
+(CPU-bound configs, or genomes dominated by one chromosome on a machine with
+spare bandwidth). Do not advertise multicore speed.
+
+**The only real lever for more throughput** would be cutting per-read memory
+traffic in the generation hot loop (reuse fragment buffers instead of allocating
++ copying per read; avoid the `reverse_complement` allocation). That reduces
+bandwidth demand and would help *single-threaded* performance too — but it is a
+substantial hot-loop rewrite with uncertain payoff, and single-thread is already
+~3× faster than NEAT 4. Not pursued here.

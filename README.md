@@ -337,6 +337,30 @@ num_threads: 1
 
 Omit `num_threads` (or set it to `.`) to restore the default all-cores behaviour.
 
+**Thread count and hardware — fewer threads can be faster:**
+
+Read generation moves a lot of data relative to the arithmetic it does, so it is
+largely **memory-bandwidth bound**. On a typical desktop or laptop (which has
+only a couple of memory channels), a single `rneat` thread can already saturate
+much of the available memory bandwidth — so adding cores yields little speedup
+and, past a point, can even run *slower* as threads contend for the memory bus.
+In our desktop benchmarks, large references ran about as fast (sometimes faster)
+on **1–4 threads** as on all 8.
+
+Practical guidance:
+
+- **Desktop / laptop:** try `num_threads: 1` (or a small number) and compare — it
+  is often as fast or faster than all-cores for a single large run, and leaves
+  cores free for other work. If you are simulating **many samples**, running
+  several single-threaded `rneat` jobs in parallel typically beats one
+  many-threaded job.
+- **HPC nodes** with many memory channels (and multiple sockets) have far more
+  aggregate bandwidth, so higher `num_threads` scales better there.
+- Either way, the same reads are generated regardless of `num_threads` (the seed
+  fixes the read content per contig; only their order within the file may
+  differ), so it is safe to tune the thread count purely for speed on your
+  hardware.
+
 **BAM output is fully parallel:**
 
 `rneat` uses a per-contig temp-file strategy: each contig worker writes its alignment records to a private temporary BAM body file, then a single concatenation pass assembles them in reference order into the final coordinate-sorted BAM.

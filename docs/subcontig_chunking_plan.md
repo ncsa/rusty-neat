@@ -104,9 +104,25 @@ single thread (~365 s). rneat starts near the hardware bandwidth ceiling, so it
 has little to gain.
 
 **Decision:** keep the chunking machinery (correct, tested, deterministic) but
-default it **off** behind `chunk_size`, for the niche where it might help
-(CPU-bound configs, or genomes dominated by one chromosome on a machine with
-spare bandwidth). Do not advertise multicore speed.
+default it **off** behind `chunk_size`. Do not advertise multicore speed.
+
+**When chunking might still help (the niche it's kept for).** Both conditions
+should hold, otherwise leave it off:
+
+1. **Few/one large contig** — the reference is dominated by one or a few big
+   chromosomes, so per-contig parallelism leaves cores idle (single-chromosome
+   assemblies; one chromosome dwarfing the rest). With many contigs, per-contig
+   parallelism already fills the cores and chunking only adds overhead.
+2. **Spare memory bandwidth relative to cores** — a multi-socket / many-channel
+   HPC node (far higher aggregate bandwidth than the commodity desktop these
+   benchmarks ran on), and/or compute-heavier settings (GC-bias-weighted
+   coverage, long-read mode, very high coverage) where per-read CPU work
+   dominates memory traffic, shifting the workload from bandwidth-bound toward
+   CPU-bound.
+
+Recommended starting point: `chunk_size ≈ longest_contig_bp / (4 × cores)`
+(~4 chunks/core on the dominant contig). Always A/B against the default on the
+target hardware and keep it only if wall time actually improves.
 
 **The only real lever for more throughput** would be cutting per-read memory
 traffic in the generation hot loop (reuse fragment buffers instead of allocating

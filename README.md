@@ -374,6 +374,24 @@ chunk_size: 0
 chunk_size: 5000000
 ```
 
+*When might it help?* Only when read generation is **CPU-bound** rather than
+memory-bandwidth bound — the opposite of what we measured on a typical desktop.
+Consider trying it when **both** are true:
+
+1. Your reference is dominated by **one or a few large contigs**, so the default
+   per-contig parallelism leaves most cores idle (e.g. a single-chromosome
+   assembly, or a genome where one chromosome dwarfs the rest).
+2. You have **memory bandwidth to spare relative to cores** — a multi-socket or
+   many-memory-channel HPC node rather than a commodity desktop — and/or you run
+   compute-heavier settings (GC-bias-weighted coverage, long-read mode, very high
+   coverage) where per-read CPU work dominates memory traffic.
+
+It is **not** worth enabling on a typical workstation, or on references with many
+contigs (those already parallelize per contig). Always benchmark on your own
+hardware: start with `chunk_size ≈ longest_contig_bp / (4 × cores)` (a few chunks
+per core), compare wall time against the default, and keep it only if it is
+actually faster.
+
 **BAM output is fully parallel:**
 
 `rneat` uses a per-contig temp-file strategy: each contig worker writes its alignment records to a private temporary BAM body file, then a single concatenation pass assembles them in reference order into the final coordinate-sorted BAM.

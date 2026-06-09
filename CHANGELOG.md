@@ -1,10 +1,50 @@
-6/7/2026
+6/9/2026
 ========
-## rneat v1.16.1
+## rneat v1.17.0
 
-## Soliciting feedback
-Added a form soliciting feedback from users on `rneat` real world uses and and other feedback 
-that doesn't require direct action. For bugs and features, continue to use those templates on github.
+### Faster FASTQ compression (libdeflate + single-pass combine)
+
+Gzip was ~25–27% of single-threaded wall time. Two changes cut that:
+
+- **libdeflate block-gzip** — a new `BlockGzWriter` compresses FASTQ output with
+  libdeflate (~2–3× faster than zlib for the same gzip) in independent ~256 KiB
+  gzip members. The result is a standard multi-member gzip file (read
+  transparently by `gunzip`, `zcat`, and downstream tools); memory stays bounded
+  to one block.
+- **Single-pass combine** — per-contig temp files are now byte-concatenated into
+  the final FASTQ instead of being decompressed and re-compressed, so each read
+  is compressed once (in the parallel per-contig write) instead of twice.
+
+Net effect: ~22% faster single-threaded read generation (e.g. the c_elegans
+benchmark dropped from ~365 s to ~283 s), with no multi-threaded regression and
+unchanged memory.
+
+### Deterministic, byte-identical FASTQ output (#251)
+
+For a given seed, FASTQ output is now byte-identical regardless of `num_threads`
+(previously the read *set* was stable but record order varied). Read names are
+unique per fragment and the final files are assembled in contig order.
+
+### Opt-in sub-contig chunking (#251)
+
+A new `chunk_size` config key can split contigs into sub-contig chunks so a
+single large chromosome can be worked by multiple cores. It is **disabled by
+default**: benchmarking showed read generation is memory-bandwidth bound, so
+chunking does not improve wall time on commodity hardware (and can mildly
+regress it). It is kept for CPU-bound or many-memory-channel scenarios. See the
+README "Parallel Processing" section, including guidance that **fewer threads
+can be faster** on bandwidth-limited desktops.
+
+### Packaging and docs
+
+- **`CITATION.cff`** and a **Bioconda recipe** (`conda-recipe/`) for one-command
+  installation (Bioconda submission in review).
+- A **NEAT 2 vs NEAT 4 vs rneat** comparison table in the README, framed around
+  rneat's durable advantages (native cancer workflow, low/flat memory,
+  reproducibility, single-binary deployment).
+- A **feedback form** for soliciting real-world `rneat` usage notes that don't
+  require direct action. For bugs and features, continue to use the GitHub
+  templates.
 
 6/6/2026
 ========

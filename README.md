@@ -29,9 +29,9 @@ rationale and calibration caveats live in
 ## How `rneat` compares to NEAT
 
 `rneat` is a Rust port of NEAT that tracks the NEAT feature set while adding a
-native cancer workflow and a focus on speed and low memory use. The table below
-compares the original Python 2 NEAT (the 2.x "genReads" line), the current
-Python 3 NEAT 4.x, and `rneat`.
+native cancer workflow, a low and flat memory footprint, and reproducible
+output. The table below compares the original Python 2 NEAT (the 2.x "genReads"
+line), the current Python 3 NEAT 4.x, and `rneat`.
 
 |                                            | **NEAT 2.x** (genReads)        | **NEAT 4.x**                              | **`rneat`**                                              |
 | ------------------------------------------ | ------------------------------ | ----------------------------------------- | -------------------------------------------------------- |
@@ -57,6 +57,21 @@ Python 3 NEAT 4.x, and `rneat`.
 and Allen et al. (2026), *Journal of Open Source Software* 11(121):9056,
 [doi:10.21105/joss.09056](https://doi.org/10.21105/joss.09056). `rneat`:
 [doi:10.5281/zenodo.20100558](https://doi.org/10.5281/zenodo.20100558).
+
+**Where `rneat` fits.** NEAT 4.x is a capable, actively developed simulator, and
+the two tools share most of their core feature set. `rneat` is the right choice
+when you want:
+
+- **Cancer simulation** — a native tumor/normal workflow (`gen-cancer-reads`)
+  with configurable purity and an origin-tagged truth VCF, plus CNVs and
+  per-tissue cancer models. This is `rneat`-only.
+- **Low, flat memory** — streaming FASTQ writes keep peak RSS small and roughly
+  constant across genome size and thread count, which matters on shared HPC
+  allocations.
+- **Reproducibility** — the same seed yields byte-identical FASTQ regardless of
+  the thread count.
+- **Easy deployment** — a single self-contained binary with no Python
+  environment to manage (and a Bioconda package in review).
 
 # How to use `rneat`
 
@@ -319,7 +334,11 @@ seqkit shuffle -2 sample_R1.fastq.gz sample_R2.fastq.gz \
 
 Parallel Processing
 ===================
-`rneat gen-reads` processes contigs in parallel by default using rayon's work-stealing thread pool. Each contig is an independent unit of work — variant generation, fragment sampling, and FASTQ writing all happen concurrently across contigs — so multi-core machines see roughly linear speedup up to the number of contigs in the reference.
+`rneat gen-reads` processes contigs in parallel by default using rayon's work-stealing thread pool. Each contig is an independent unit of work — variant generation, fragment sampling, and FASTQ/BAM writing all happen concurrently across contigs — so references with many contigs scale well across cores.
+
+Output is **byte-identical regardless of `num_threads`** (the same seed always produces the same reads in the same order), so you can change the thread count freely without affecting results.
+
+A note on scaling: read generation is largely **memory-bandwidth bound**, so on references dominated by one or a few large chromosomes the wall-time gain from extra cores is limited — the bottleneck is memory throughput, not CPU. An experimental sub-contig **chunk size** knob (below) can split a single chromosome across cores, but it is **disabled by default** because in our benchmarks it did not improve wall time and occasionally regressed it.
 
 **Thread count:**
 
@@ -356,10 +375,44 @@ Practical guidance:
   many-threaded job.
 - **HPC nodes** with many memory channels (and multiple sockets) have far more
   aggregate bandwidth, so higher `num_threads` scales better there.
-- Either way, the same reads are generated regardless of `num_threads` (the seed
-  fixes the read content per contig; only their order within the file may
-  differ), so it is safe to tune the thread count purely for speed on your
-  hardware.
+- Output is byte-identical regardless of `num_threads`, so it is safe to tune the
+  thread count purely for speed on your hardware.
+
+**Chunk size (experimental, opt-in):**
+
+By default each contig is one unit of work. Setting `chunk_size` splits contigs
+into sub-contig chunks so a single large chromosome can be worked by several
+cores at once. It is **off by default**: read generation is memory-bandwidth
+bound, so chunking did not improve wall time in our benchmarks (and added a
+little overhead). It is kept for CPU-bound or very-many-core scenarios where it
+may help. The size is in base pairs and independent of the thread count, so
+output stays byte-identical regardless of `num_threads`.
+
+```yaml
+# default — disabled (one chunk per whole contig); omit or set to . or 0
+chunk_size: 0
+
+# opt in: fixed chunk size in base pairs
+chunk_size: 5000000
+```
+
+*When might it help?* Only when read generation is **CPU-bound** rather than
+memory-bandwidth bound — the opposite of what we measured on a typical desktop.
+Consider trying it when **both** are true:
+
+1. Your reference is dominated by **one or a few large contigs**, so the default
+   per-contig parallelism leaves most cores idle (e.g. a single-chromosome
+   assembly, or a genome where one chromosome dwarfs the rest).
+2. You have **memory bandwidth to spare relative to cores** — a multi-socket or
+   many-memory-channel HPC node rather than a commodity desktop — and/or you run
+   compute-heavier settings (GC-bias-weighted coverage, long-read mode, very high
+   coverage) where per-read CPU work dominates memory traffic.
+
+It is **not** worth enabling on a typical workstation, or on references with many
+contigs (those already parallelize per contig). Always benchmark on your own
+hardware: start with `chunk_size ≈ longest_contig_bp / (4 × cores)` (a few chunks
+per core), compare wall time against the default, and keep it only if it is
+actually faster.
 
 **BAM output is fully parallel:**
 

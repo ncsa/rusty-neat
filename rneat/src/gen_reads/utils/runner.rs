@@ -64,24 +64,6 @@ struct ContigContext<'a> {
     max_del_lens: HashMap<String, usize>,
 }
 
-struct ContigResult {
-    idx: usize,
-    name: String,
-    len: usize,
-    data: Option<ProcessedContigData>,
-}
-
-struct ProcessedContigData {
-    mutated_map: MutatedMap,
-    r1_files: Vec<PathBuf>,
-    r2_files: Vec<PathBuf>,
-    bam_body_file: Option<PathBuf>,
-    // Per-contig allelic-depth accumulator populated by write_block_fastq.
-    // Keyed by per-contig position (matches Variant::location). Passed to
-    // write_vcf so the golden VCF can carry FORMAT/AD, FORMAT/DP, FORMAT/AF.
-    ad_counter: AdCounter,
-}
-
 pub fn run_neat(
     config: &RunConfiguration,
     rng: &mut NeatRng,
@@ -245,19 +227,67 @@ pub fn run_neat(
     let mut all_fastq_files: HashMap<String, (Vec<PathBuf>, Vec<PathBuf>)> = HashMap::new();
     let mut contig_order: Vec<String> = Vec::new();
     let mut fasta_lengths: HashMap<String, usize> = HashMap::new();
-    let mut bam_body_files: HashMap<String, PathBuf> = HashMap::new();
+    // Multiple BAM body files per contig (one per chunk); value is (chunk_start, path).
+    let mut bam_body_files: HashMap<String, Vec<(usize, PathBuf)>> = HashMap::new();
     let mut ad_counters: HashMap<String, AdCounter> = HashMap::new();
 
     info!("Generating simulated dataset");
 
-    // All contigs processed in parallel; BAM workers each write a temp body file.
-    let parallel_iter = contig_order_in_file.into_iter().enumerate().par_bridge().map(
-        |(idx, name)| -> Result<ContigResult, GenerateReadsError> {
-            let child_rng = ctx.base_rng.derive_child(idx as u64);
-            process_contig(idx, name, &ctx, child_rng)
-        },
-    );
-    let collected: Result<Vec<ContigResult>, _> = match config.num_threads {
+    // Flatten contigs into fixed-size sub-contig chunks so work parallelizes
+    // *within* a large chromosome, not just across contigs. Chunk size is
+    // independent of num_threads, so output is identical regardless of thread
+    // count. Each contig's sequence is shared across its chunks via the cache.
+    let chunk_size = resolve_chunk_size(config);
+    match config.chunk_size {
+        None | Some(0) => info!("\t>Sub-contig chunking: disabled (one chunk per contig)"),
+        Some(n) => info!("\t>Sub-contig chunking: enabled, chunk size {} bp", n),
+    }
+    let seq_cache = SeqBlockCache::new(&ctx.reference, &contig_order_in_file);
+    let chunk_work: Vec<ChunkWork> = contig_order_in_file
+        .iter()
+        .enumerate()
+        .flat_map(|(contig_idx, name)| {
+            let contig_len = ctx.reference.get(name).map(|s| s.len()).unwrap_or(0);
+            split_contig_into_chunks(contig_len, chunk_size)
+                .into_iter()
+                .enumerate()
+                .map(move |(chunk_idx, (chunk_start, chunk_end))| ChunkWork {
+                    contig_idx,
+                    chunk_idx,
+                    name: name.clone(),
+                    chunk_start,
+                    chunk_end,
+                })
+        })
+        .collect();
+
+    let parallel_iter = chunk_work
+        .into_par_iter()
+        .map(|w| -> Result<ChunkResult, GenerateReadsError> {
+            // Deterministic per-chunk seed. Chunk 0 (the only chunk when
+            // chunking is disabled) uses the plain per-contig derivation so its
+            // RNG stream — and therefore its reads — matches the pre-chunking
+            // behaviour exactly. Later chunks derive a sub-seed from it.
+            let child_rng = if w.chunk_idx == 0 {
+                ctx.base_rng.derive_child(w.contig_idx as u64)
+            } else {
+                ctx.base_rng
+                    .derive_child(w.contig_idx as u64)
+                    .derive_child(w.chunk_idx as u64)
+            };
+            let block = seq_cache.get(&w.name);
+            process_chunk(
+                w.contig_idx,
+                w.chunk_idx,
+                w.name,
+                w.chunk_start,
+                w.chunk_end,
+                block,
+                &ctx,
+                child_rng,
+            )
+        });
+    let collected: Result<Vec<ChunkResult>, _> = match config.num_threads {
         Some(n) => rayon::ThreadPoolBuilder::new()
             .num_threads(n)
             .build()
@@ -267,9 +297,9 @@ pub fn run_neat(
             .install(|| parallel_iter.collect()),
         None => parallel_iter.collect(),
     };
-    // par_bridge does not preserve order — restore contig order by idx.
     let mut results = collected?;
-    results.sort_unstable_by_key(|r| r.idx);
+    // Order by (contig, chunk_start) so BAM bodies concatenate coordinate-sorted.
+    results.sort_unstable_by_key(|r| (r.contig_idx, r.chunk_start));
 
     // Phase 3: Generate chimeric reads for BND junctions
     if config.produce_fastq || config.produce_bam {
@@ -279,15 +309,22 @@ pub fn run_neat(
     }
 
     for cr in results {
-        collect_contig_result(
+        collect_chunk_result(
             cr,
             &mut contig_order,
             &mut fasta_lengths,
-            &mut mutated_maps,
             &mut all_fastq_files,
             &mut bam_body_files,
             &mut ad_counters,
         );
+    }
+
+    // The golden VCF reads per-contig MutatedMaps from the shared Arc (chunks no
+    // longer carry their own clone).
+    for name in &contig_order {
+        if let Some(m) = ctx.mutated_maps.get(name) {
+            mutated_maps.insert(name.clone(), vec![m.clone()]);
+        }
     }
 
     info!("Read generation complete, producing output files");
@@ -295,8 +332,22 @@ pub fn run_neat(
     if config.produce_fastq {
         info!("Producing final fastq(s) file(s)");
 
+        // Concatenate in contig order (each contig's chunk files are already in
+        // chunk_start order), then the chimeric reads, so the FASTQ is
+        // byte-identical regardless of thread count — not just the same read set.
         let mut all_r1: Vec<PathBuf> = Vec::new();
         let mut all_r2: Vec<PathBuf> = Vec::new();
+        for name in &contig_order {
+            if let Some((r1_files, r2_files)) = all_fastq_files.remove(name) {
+                all_r1.extend(r1_files);
+                all_r2.extend(r2_files);
+            }
+        }
+        if let Some((r1_files, r2_files)) = all_fastq_files.remove("chimeric") {
+            all_r1.extend(r1_files);
+            all_r2.extend(r2_files);
+        }
+        // Safety net for any unexpected leftover keys.
         for (r1_files, r2_files) in all_fastq_files.into_values() {
             all_r1.extend(r1_files);
             all_r2.extend(r2_files);
@@ -353,10 +404,15 @@ pub fn run_neat(
             "Assembling BAM from {} temp body file(s)",
             bam_body_files.len()
         );
-        let ordered_bodies: Vec<PathBuf> = contig_order
-            .iter()
-            .filter_map(|name| bam_body_files.remove(name))
-            .collect();
+        // Concatenate bodies in (contig order, chunk_start) order so the
+        // assembled BAM stays coordinate-sorted across sub-contig chunks.
+        let mut ordered_bodies: Vec<PathBuf> = Vec::new();
+        for name in &contig_order {
+            if let Some(mut bodies) = bam_body_files.remove(name) {
+                bodies.sort_by_key(|(start, _)| *start);
+                ordered_bodies.extend(bodies.into_iter().map(|(_, path)| path));
+            }
+        }
         concat_temp_bams(bam_ctx, &ordered_bodies, bam_path)?;
         info!("Successfully wrote BAM file: {:?}", bam_path);
         files_written.push(bam_path.clone());
@@ -387,67 +443,180 @@ pub fn run_neat(
     Ok(files_written.clone())
 }
 
-fn process_contig(
-    idx: usize,
+/// Resolve the effective chunk size (bp) from config.
+///
+/// Sub-contig chunking is **disabled by default**: benchmarking showed rneat's
+/// read-generation loop is memory-bandwidth bound, so splitting a contig across
+/// cores does not improve wall time (and can mildly regress it). The machinery
+/// is kept behind an opt-in for CPU-bound or very-many-core scenarios.
+///
+/// - `None` (omitted)  → disabled: one chunk spans the whole contig (default).
+/// - `Some(0)`         → disabled (explicit).
+/// - `Some(n)` (n > 0) → fixed chunk size of `n` bp (opt-in).
+fn resolve_chunk_size(config: &RunConfiguration) -> usize {
+    match config.chunk_size {
+        None | Some(0) => usize::MAX, // one chunk spans the whole contig
+        Some(n) => n,
+    }
+}
+
+/// One unit of parallel read-generation work: a sub-range of a contig.
+struct ChunkWork {
+    contig_idx: usize,
+    chunk_idx: usize,
+    name: String,
+    chunk_start: usize,
+    chunk_end: usize,
+}
+
+/// Result of generating reads for one chunk.
+struct ChunkResult {
+    contig_idx: usize,
+    chunk_start: usize,
+    name: String,
+    len: usize, // full contig length (not chunk length)
+    data: Option<ChunkData>,
+}
+
+struct ChunkData {
+    r1_files: Vec<PathBuf>,
+    r2_files: Vec<PathBuf>,
+    bam_body_file: Option<PathBuf>,
+    ad_counter: AdCounter,
+}
+
+/// Split a contig of `len` bp into evenly-sized chunks of ~`chunk_size` bp.
+/// An empty contig yields a single `[0, 0)` chunk so it still produces a result.
+fn split_contig_into_chunks(len: usize, chunk_size: usize) -> Vec<(usize, usize)> {
+    if len == 0 {
+        return vec![(0, 0)];
+    }
+    let chunk_size = chunk_size.max(1);
+    let n = len.div_ceil(chunk_size).max(1);
+    let base = len / n;
+    let rem = len % n;
+    let mut out = Vec::with_capacity(n);
+    let mut start = 0;
+    for i in 0..n {
+        let this = base + usize::from(i < rem);
+        out.push((start, start + this));
+        start += this;
+    }
+    out
+}
+
+/// Lazily-built cache of full-contig `SequenceBlock`s shared across a contig's
+/// chunks. Each contig's sequence is cloned at most once (the `OnceLock`
+/// serializes the first build); all chunks of that contig share the `Arc`, so
+/// memory is one sequence copy per *built* contig — not per chunk.
+struct SeqBlockCache<'a> {
+    reference: &'a HashMap<String, Vec<Nucleotide>>,
+    cells: HashMap<String, std::sync::OnceLock<Arc<SequenceBlock>>>,
+}
+
+impl<'a> SeqBlockCache<'a> {
+    fn new(reference: &'a HashMap<String, Vec<Nucleotide>>, names: &[String]) -> Self {
+        let cells = names
+            .iter()
+            .map(|n| (n.clone(), std::sync::OnceLock::new()))
+            .collect();
+        Self { reference, cells }
+    }
+
+    /// Contigs are pre-validated (names come from the reference), so the build
+    /// closure is infallible.
+    fn get(&self, name: &str) -> Arc<SequenceBlock> {
+        let cell = self
+            .cells
+            .get(name)
+            .expect("chunk contig must be present in the sequence-block cache");
+        Arc::clone(cell.get_or_init(|| {
+            let sequence = self
+                .reference
+                .get(name)
+                .expect("chunk contig must exist in reference")
+                .clone();
+            let sequence_map = map_buffer(&sequence);
+            let ref_end = sequence.len();
+            Arc::new(SequenceBlock {
+                contig: name.to_string(),
+                ref_start: 0,
+                ref_end,
+                sequence,
+                sequence_map,
+            })
+        }))
+    }
+}
+
+fn process_chunk(
+    contig_idx: usize,
+    chunk_idx: usize,
     contig_name: String,
+    chunk_start: usize,
+    chunk_end: usize,
+    block: Arc<SequenceBlock>,
     ctx: &ContigContext,
     mut rng: NeatRng,
-) -> Result<ContigResult, GenerateReadsError> {
-    let sequence = ctx
-        .reference
-        .get(&contig_name)
-        .ok_or_else(|| {
-            GenerateReadsError::IoError(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!("Contig {} not found in reference", contig_name),
-            ))
-        })?
-        .clone();
-    let contig_len = sequence.len();
-    debug!("Processing {}", contig_name);
+) -> Result<ChunkResult, GenerateReadsError> {
+    let _ = chunk_idx; // reserved for diagnostics
+    let contig_len = block.ref_end;
+    debug!(
+        "Processing {} chunk [{}, {})",
+        contig_name, chunk_start, chunk_end
+    );
 
     if let Some(bed) = ctx.target_bed
         && !bed.contains_key(&contig_name)
     {
         debug!("Skipping {} — not in target BED", contig_name);
-        return Ok(ContigResult {
-            idx,
+        return Ok(ChunkResult {
+            contig_idx,
+            chunk_start,
             name: contig_name,
             len: contig_len,
             data: None,
         });
     }
 
-    if sequence.is_empty() {
+    if block.sequence.is_empty() {
         warn!("Contig {} has empty sequence, skipping", contig_name);
-        return Ok(ContigResult {
-            idx,
+        return Ok(ChunkResult {
+            contig_idx,
+            chunk_start,
             name: contig_name,
             len: contig_len,
             data: None,
         });
     }
 
-    let sequence_map = map_buffer(&sequence);
-    let current_block = SequenceBlock {
-        contig: contig_name.clone(),
-        ref_start: 0,
-        ref_end: contig_len,
-        sequence,
-        sequence_map,
-    };
+    // The full-contig SequenceBlock is shared across this contig's chunks.
+    let current_block = &*block;
 
     debug!("    > Generating bias map.");
     let raw_regions = current_block.get_non_n_regions();
-    let regions_of_interest: Vec<SequenceMap> = if let Some(bed) = ctx.target_bed {
+    let bed_regions: Vec<SequenceMap> = if let Some(bed) = ctx.target_bed {
         let contig_beds = bed.get(&contig_name).map(|v| v.as_slice()).unwrap_or(&[]);
         intersect_with_bed(&raw_regions, contig_beds, 0)
     } else {
         raw_regions.into_iter().cloned().collect()
     };
+    // Restrict this chunk to fragments ANCHORED in [chunk_start, chunk_end).
+    // Reads may still extend past chunk_end into the full shared sequence, so
+    // no read-content stitching is needed and coverage stays uniform: every
+    // fragment is owned by exactly one chunk (the one containing its anchor).
+    let regions_of_interest: Vec<SequenceMap> = bed_regions
+        .into_iter()
+        .filter_map(|r| {
+            let s = r.start.max(chunk_start);
+            let e = r.end.min(chunk_end);
+            (s < e).then(|| SequenceMap::from(r.region_type, s, e))
+        })
+        .collect();
     if regions_of_interest.is_empty() {
-        return Ok(ContigResult {
-            idx,
+        return Ok(ChunkResult {
+            contig_idx,
+            chunk_start,
             name: contig_name,
             len: contig_len,
             data: None,
@@ -472,16 +641,14 @@ fn process_contig(
         }
     }
 
-    let mutated_map = ctx
-        .mutated_maps
-        .get(&contig_name)
-        .ok_or_else(|| {
-            GenerateReadsError::IoError(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!("MutatedMap for {} not found", contig_name),
-            ))
-        })?
-        .clone();
+    // Borrow the shared per-contig MutatedMap (no per-chunk clone). The golden
+    // VCF reads it back from the shared Arc after the parallel phase.
+    let mutated_map = ctx.mutated_maps.get(&contig_name).ok_or_else(|| {
+        GenerateReadsError::IoError(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("MutatedMap for {} not found", contig_name),
+        ))
+    })?;
     let max_del_len = *ctx.max_del_lens.get(&contig_name).unwrap_or(&0);
 
     let block_fragments: Vec<(usize, usize)> = {
@@ -518,7 +685,7 @@ fn process_contig(
                     )?
                 } else {
                     generate_weighted_fragments(
-                        &current_block,
+                        current_block,
                         sub_start,
                         sub_end,
                         ctx.config.read_len,
@@ -570,8 +737,10 @@ fn process_contig(
 
     // Create a per-contig BAM body writer if BAM output is requested.
     let mut bam_body_writer: Option<BamBodyWriter> = if let Some(bam_ctx) = &ctx.bam_context {
-        let bam_temp_path =
-            PathBuf::from(ctx.working_dir).join(format!("temp_bam_{:06}_{}.bam", idx, contig_name));
+        let bam_temp_path = PathBuf::from(ctx.working_dir).join(format!(
+            "temp_bam_{:06}_{:010}_{}.bam",
+            contig_idx, chunk_start, contig_name
+        ));
         Some(BamBodyWriter::new(bam_temp_path, Arc::clone(bam_ctx))?)
     } else {
         None
@@ -583,7 +752,7 @@ fn process_contig(
         let mut file_to_write_1 = PathBuf::from(ctx.working_dir);
         file_to_write_1.push(format!(
             "temp_{}_{:010}_{:010}_r1_tmp.fastq.gz",
-            contig_name, current_block.ref_start, current_block.ref_end,
+            contig_name, chunk_start, chunk_end,
         ));
         let file1 = append_to_file(&file_to_write_1)?;
         let writer1 = BufWriter::new(&file1);
@@ -595,7 +764,7 @@ fn process_contig(
             let mut file_to_write_2 = PathBuf::from(ctx.working_dir);
             file_to_write_2.push(format!(
                 "temp_{}_{:010}_{:010}_r2_tmp.fastq.gz",
-                contig_name, current_block.ref_start, current_block.ref_end,
+                contig_name, chunk_start, chunk_end,
             ));
             let file2 = append_to_file(&file_to_write_2)?;
             let writer2 = BufWriter::new(&file2);
@@ -603,8 +772,8 @@ fn process_contig(
             debug!("Writing paired-ended contig fastq files");
             write_block_fastq(
                 block_fragments,
-                &mutated_map,
-                &current_block,
+                mutated_map,
+                current_block,
                 true,
                 &mut buffer1,
                 &mut buffer2,
@@ -625,8 +794,8 @@ fn process_contig(
             let mut buffer2 = GzEncoder::new(dummy_data, Compression::default());
             write_block_fastq(
                 block_fragments,
-                &mutated_map,
-                &current_block,
+                mutated_map,
+                current_block,
                 false,
                 &mut buffer1,
                 &mut buffer2,
@@ -654,8 +823,8 @@ fn process_contig(
         debug!("BAM-only: generating reads for {}", contig_name);
         write_block_fastq(
             block_fragments,
-            &mutated_map,
-            &current_block,
+            mutated_map,
+            current_block,
             ctx.config.paired_ended,
             &mut buf1,
             &mut buf2,
@@ -678,12 +847,12 @@ fn process_contig(
         None
     };
 
-    Ok(ContigResult {
-        idx,
+    Ok(ChunkResult {
+        contig_idx,
+        chunk_start,
         name: contig_name,
         len: contig_len,
-        data: Some(ProcessedContigData {
-            mutated_map,
+        data: Some(ChunkData {
             r1_files: contig_files_r1,
             r2_files: contig_files_r2,
             bam_body_file,
@@ -859,7 +1028,7 @@ fn generate_mutated_map(
 fn process_chimeric_variants(
     ctx: &ContigContext,
     mut rng: NeatRng,
-) -> Result<ContigResult, GenerateReadsError> {
+) -> Result<ChunkResult, GenerateReadsError> {
     let mut all_reads = Vec::new();
     let mut processed_ids = HashSet::new();
 
@@ -1421,12 +1590,12 @@ fn process_chimeric_variants(
         }
     }
 
-    Ok(ContigResult {
-        idx,
+    Ok(ChunkResult {
+        contig_idx: idx,
+        chunk_start: 0,
         name: contig_name,
         len: 0,
-        data: Some(ProcessedContigData {
-            mutated_map: MutatedMap::from_interval(0, 0, vec![]).map_err(GenerateReadsError::from)?,
+        data: Some(ChunkData {
             r1_files: contig_files_r1,
             r2_files: contig_files_r2,
             bam_body_file,
@@ -1975,16 +2144,15 @@ fn get_mutated_subseq(
     Ok(seq)
 }
 
-fn collect_contig_result(
-    cr: ContigResult,
+fn collect_chunk_result(
+    cr: ChunkResult,
     contig_order: &mut Vec<String>,
     fasta_lengths: &mut HashMap<String, usize>,
-    mutated_maps: &mut HashMap<String, Vec<MutatedMap>>,
     all_fastq_files: &mut HashMap<String, (Vec<PathBuf>, Vec<PathBuf>)>,
-    bam_body_files: &mut HashMap<String, PathBuf>,
+    bam_body_files: &mut HashMap<String, Vec<(usize, PathBuf)>>,
     ad_counters: &mut HashMap<String, AdCounter>,
 ) {
-    // `process_chimeric_variants` returns a pseudo ContigResult named
+    // `process_chimeric_variants` returns a pseudo ChunkResult named
     // "chimeric" with len=0 — a control-flow tag for organizing the
     // junction-spanning FASTQ/BAM outputs, NOT a real reference contig.
     // Its reads' positions are already keyed to real contigs (the BND
@@ -1993,22 +2161,35 @@ fn collect_contig_result(
     // into VCF-relevant accumulators. Leaving it in `contig_order` /
     // `fasta_lengths` produces a malformed `##contig=<ID=chimeric,length=0>`
     // header line that breaks strict downstream parsers like truvari.
+    //
+    // Results arrive sorted by (contig_idx, chunk_start), so the first chunk of
+    // each contig records its order/length; later chunks of the same contig
+    // accumulate their reads, AD counts, and BAM bodies.
     let is_chimeric_pseudo = cr.name == "chimeric" && cr.len == 0;
-    if !is_chimeric_pseudo {
+    if !is_chimeric_pseudo && !fasta_lengths.contains_key(&cr.name) {
         contig_order.push(cr.name.clone());
         fasta_lengths.insert(cr.name.clone(), cr.len);
     }
     if let Some(data) = cr.data {
         if !is_chimeric_pseudo {
-            mutated_maps.insert(cr.name.clone(), vec![data.mutated_map]);
-            ad_counters.insert(cr.name.clone(), data.ad_counter);
+            // Merge per-variant allelic depth across this contig's chunks.
+            let acc = ad_counters.entry(cr.name.clone()).or_default();
+            for (key, (ref_n, alt_n)) in data.ad_counter {
+                let slot = acc.entry(key).or_insert((0, 0));
+                slot.0 += ref_n;
+                slot.1 += alt_n;
+            }
         }
-        // FASTQ + BAM outputs from chimeric reads still need to flow into
-        // the final merge — they carry real per-real-contig records that
-        // just happened to be synthesized through the chimeric path.
-        all_fastq_files.insert(cr.name.clone(), (data.r1_files, data.r2_files));
+        // FASTQ outputs (order-independent) accumulate per contig; chimeric
+        // reads carry real per-real-contig records and still flow into the merge.
+        let entry = all_fastq_files.entry(cr.name.clone()).or_default();
+        entry.0.extend(data.r1_files);
+        entry.1.extend(data.r2_files);
         if let Some(bam_path) = data.bam_body_file {
-            bam_body_files.insert(cr.name, bam_path);
+            bam_body_files
+                .entry(cr.name)
+                .or_default()
+                .push((cr.chunk_start, bam_path));
         }
     }
 }
@@ -2491,6 +2672,45 @@ mod tests {
     use common::structs::bed_record::BedRecord;
     use common::structs::sequence_block::{RegionType, SequenceMap};
     use common::structs::variants::AlternateType;
+
+    #[test]
+    fn test_split_contig_into_chunks_covers_contig_without_gaps_or_overlap() {
+        // 1 Mbp chunks over a 2.5 Mbp contig → 3 even chunks, contiguous, covering [0, len).
+        let chunks = split_contig_into_chunks(2_500_000, 1_000_000);
+        assert_eq!(chunks.len(), 3);
+        assert_eq!(chunks.first().unwrap().0, 0);
+        assert_eq!(chunks.last().unwrap().1, 2_500_000);
+        for w in chunks.windows(2) {
+            assert_eq!(w[0].1, w[1].0, "chunks must be contiguous (no gap/overlap)");
+        }
+        // Even split: sizes differ by at most 1.
+        let sizes: Vec<usize> = chunks.iter().map(|(s, e)| e - s).collect();
+        assert!(sizes.iter().max().unwrap() - sizes.iter().min().unwrap() <= 1);
+    }
+
+    #[test]
+    fn test_split_contig_into_chunks_edge_cases() {
+        // Contig smaller than the chunk size → a single whole-contig chunk.
+        assert_eq!(split_contig_into_chunks(500, 1_000_000), vec![(0, 500)]);
+        // Empty contig → one [0,0) chunk so it still yields a result.
+        assert_eq!(split_contig_into_chunks(0, 1_000_000), vec![(0, 0)]);
+        // chunk_size 0 is treated as 1 (guarded) and must not divide-by-zero.
+        assert!(!split_contig_into_chunks(10, 0).is_empty());
+    }
+
+    #[test]
+    fn test_resolve_chunk_size_config_modes() {
+        let mut cfg = RunConfiguration::default();
+        // None (default) → disabled: one chunk spans the whole contig.
+        cfg.chunk_size = None;
+        assert_eq!(resolve_chunk_size(&cfg), usize::MAX);
+        // Some(0) → disabled (explicit).
+        cfg.chunk_size = Some(0);
+        assert_eq!(resolve_chunk_size(&cfg), usize::MAX);
+        // Some(n) → fixed opt-in chunk size.
+        cfg.chunk_size = Some(5_000_000);
+        assert_eq!(resolve_chunk_size(&cfg), 5_000_000);
+    }
 
     #[test]
     fn test_intersect_with_bed() {

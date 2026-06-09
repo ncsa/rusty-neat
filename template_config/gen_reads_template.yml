@@ -184,3 +184,13 @@ sv_max_length_fraction: 0.25
 # Set to 1 to disable parallelism entirely. Omit (or set to .) to use all available cores.
 # (default: auto)
 num_threads: .
+
+# Experimental, opt-in: target size (in base pairs) of a sub-contig chunk — the
+# unit of parallel work. Splitting a contig lets several cores share one large
+# chromosome. DISABLED BY DEFAULT: read generation is memory-bandwidth bound, so
+# chunking did not improve wall time in our benchmarks. The size is independent
+# of the thread count, so output is byte-identical regardless of num_threads.
+#   omit / . / 0 -> disabled: one chunk per whole contig (default)
+#   <integer>    -> opt in with a fixed chunk size in bp
+# (default: disabled)
+chunk_size: .

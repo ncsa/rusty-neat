@@ -1,3 +1,4 @@
+use common::file_tools::block_gz::BlockGzWriter;
 use common::file_tools::file_io::create_output_file;
 use common::rng::NeatRng;
 use common::structs::variants::{Genotype, SvType, VariantType};
@@ -586,7 +587,7 @@ fn process_contig(
         ));
         let file1 = append_to_file(&file_to_write_1)?;
         let writer1 = BufWriter::new(&file1);
-        let mut buffer1 = GzEncoder::new(writer1, Compression::default());
+        let mut buffer1 = BlockGzWriter::new(writer1);
         let bam_stager: Option<&mut dyn BamRecordStager> = bam_body_writer
             .as_mut()
             .map(|w| w as &mut dyn BamRecordStager);
@@ -598,7 +599,7 @@ fn process_contig(
             ));
             let file2 = append_to_file(&file_to_write_2)?;
             let writer2 = BufWriter::new(&file2);
-            let mut buffer2 = GzEncoder::new(writer2, Compression::default());
+            let mut buffer2 = BlockGzWriter::new(writer2);
             debug!("Writing paired-ended contig fastq files");
             write_block_fastq(
                 block_fragments,

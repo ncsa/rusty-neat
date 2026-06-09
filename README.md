@@ -319,7 +319,9 @@ seqkit shuffle -2 sample_R1.fastq.gz sample_R2.fastq.gz \
 
 Parallel Processing
 ===================
-`rneat gen-reads` processes contigs in parallel by default using rayon's work-stealing thread pool. Each contig is an independent unit of work — variant generation, fragment sampling, and FASTQ writing all happen concurrently across contigs — so multi-core machines see roughly linear speedup up to the number of contigs in the reference.
+`rneat gen-reads` processes the reference in parallel by default using rayon's work-stealing thread pool. The unit of work is a **sub-contig chunk**: each contig is split into fixed-size chunks (variant generation, fragment sampling, and FASTQ/BAM writing all happen concurrently across chunks), so multi-core machines see speedup even on references with one or a few large chromosomes — not just references with many contigs.
+
+The chunk size is derived from the **genome size**, not the thread count, so output is byte-identical regardless of `num_threads`. See **Chunk size** below to tune or disable it.
 
 **Thread count:**
 
@@ -336,6 +338,24 @@ num_threads: 1
 ```
 
 Omit `num_threads` (or set it to `.`) to restore the default all-cores behaviour.
+
+**Chunk size:**
+
+Contigs are split into chunks so a single large chromosome can be worked by many
+cores at once. The default size scales with the genome (≈ genome / 256, clamped
+to 1–25 Mbp) and is independent of the thread count, so the same seed yields
+byte-identical FASTQ regardless of how many threads you run.
+
+```yaml
+# auto (recommended) — omit or set to .
+chunk_size: .
+
+# fixed chunk size in base pairs (e.g. smaller chunks for finer load-balancing)
+chunk_size: 5000000
+
+# disable chunking entirely — one chunk per whole contig (legacy per-contig behaviour)
+chunk_size: 0
+```
 
 **BAM output is fully parallel:**
 

@@ -184,3 +184,13 @@ sv_max_length_fraction: 0.25
 # Set to 1 to disable parallelism entirely. Omit (or set to .) to use all available cores.
 # (default: auto)
 num_threads: .
+
+# Target size (in base pairs) of a sub-contig chunk — the unit of parallel work.
+# Contigs are split into chunks so a single large chromosome parallelizes across
+# cores instead of pinning one. The size is derived from the genome size (not the
+# thread count), so output is byte-identical regardless of num_threads.
+#   omit / .  -> auto: ~genome/256, clamped to [1 Mbp, 25 Mbp] (recommended)
+#   0         -> disable chunking (one chunk per whole contig)
+#   <integer> -> fixed chunk size in bp
+# (default: auto)
+chunk_size: .

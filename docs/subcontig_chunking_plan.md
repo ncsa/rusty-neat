@@ -1,5 +1,15 @@
 # Sub-contig chunking for multicore read generation (prototype)
 
+> **Status (implemented):** done on `feature/subcontig-chunking`. Two deviations
+> from the original plan below: (1) chunk size is **adaptive to genome size**
+> (≈ genome/256, clamped to [1 Mbp, 25 Mbp]) rather than a fixed 10 Mbp, with a
+> `chunk_size` config override (`0` disables); still independent of thread count.
+> (2) A real bug was caught by determinism testing: the R2 temp file was named
+> with whole-contig coords, so chunks of a multi-chunk contig shared one R2 file
+> and duplicated/raced R2 reads — fixed to use chunk coords. Output is now
+> verified byte-identical across thread counts (unit + e2e regression tests).
+
+
 ## Motivation
 `gen-reads` parallelizes per **contig** (one rayon task = one contig). On
 few-contig genomes the longest chromosome pins a single core. Benchmark

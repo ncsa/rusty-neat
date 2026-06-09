@@ -236,17 +236,11 @@ pub fn run_neat(
     // *within* a large chromosome, not just across contigs. Chunk size is
     // independent of num_threads, so output is identical regardless of thread
     // count. Each contig's sequence is shared across its chunks via the cache.
-    let total_genome_len: usize = ctx.reference.values().map(|s| s.len()).sum();
-    let chunk_size = resolve_chunk_size(config, total_genome_len);
-    info!(
-        "\t>Sub-contig chunk size: {} bp{}",
-        chunk_size,
-        match config.chunk_size {
-            None => " (auto)",
-            Some(0) => " (chunking disabled — one chunk per contig)",
-            Some(_) => " (configured)",
-        }
-    );
+    let chunk_size = resolve_chunk_size(config);
+    match config.chunk_size {
+        None | Some(0) => info!("\t>Sub-contig chunking: disabled (one chunk per contig)"),
+        Some(n) => info!("\t>Sub-contig chunking: enabled, chunk size {} bp", n),
+    }
     let seq_cache = SeqBlockCache::new(&ctx.reference, &contig_order_in_file);
     let chunk_work: Vec<ChunkWork> = contig_order_in_file
         .iter()
@@ -269,11 +263,17 @@ pub fn run_neat(
     let parallel_iter = chunk_work
         .into_par_iter()
         .map(|w| -> Result<ChunkResult, GenerateReadsError> {
-            // Deterministic per-chunk seed: contig index then chunk index.
-            let child_rng = ctx
-                .base_rng
-                .derive_child(w.contig_idx as u64)
-                .derive_child(w.chunk_idx as u64);
+            // Deterministic per-chunk seed. Chunk 0 (the only chunk when
+            // chunking is disabled) uses the plain per-contig derivation so its
+            // RNG stream — and therefore its reads — matches the pre-chunking
+            // behaviour exactly. Later chunks derive a sub-seed from it.
+            let child_rng = if w.chunk_idx == 0 {
+                ctx.base_rng.derive_child(w.contig_idx as u64)
+            } else {
+                ctx.base_rng
+                    .derive_child(w.contig_idx as u64)
+                    .derive_child(w.chunk_idx as u64)
+            };
             let block = seq_cache.get(&w.name);
             process_chunk(
                 w.contig_idx,
@@ -442,27 +442,19 @@ pub fn run_neat(
     Ok(files_written.clone())
 }
 
-/// Auto chunk-sizing bounds. The chunk size is derived from the *genome* size
-/// (not the thread count) so output stays byte-identical across thread counts,
-/// while still scaling: small genomes get small chunks (so a single contig
-/// still parallelizes), large genomes get larger chunks (so the chunk — and
-/// temp-file — count stays bounded instead of exploding into millions).
-const CHUNK_AUTO_TARGET_CHUNKS: usize = 256;
-const CHUNK_AUTO_MIN: usize = 1_000_000; // 1 Mbp floor — below this, boundary overhead dominates
-const CHUNK_AUTO_MAX: usize = 25_000_000; // 25 Mbp cap — keeps chunk count bounded on huge genomes
-
-/// Pick a sub-contig chunk size (bp) from the total genome length, aiming for
-/// ~`CHUNK_AUTO_TARGET_CHUNKS` chunks genome-wide, clamped to [MIN, MAX].
-fn auto_chunk_size(total_genome_len: usize) -> usize {
-    (total_genome_len / CHUNK_AUTO_TARGET_CHUNKS).clamp(CHUNK_AUTO_MIN, CHUNK_AUTO_MAX)
-}
-
-/// Resolve the effective chunk size from config: `None` → auto (genome-scaled);
-/// `Some(0)` → disable chunking (one chunk per whole contig); `Some(n)` → fixed.
-fn resolve_chunk_size(config: &RunConfiguration, total_genome_len: usize) -> usize {
+/// Resolve the effective chunk size (bp) from config.
+///
+/// Sub-contig chunking is **disabled by default**: benchmarking showed rneat's
+/// read-generation loop is memory-bandwidth bound, so splitting a contig across
+/// cores does not improve wall time (and can mildly regress it). The machinery
+/// is kept behind an opt-in for CPU-bound or very-many-core scenarios.
+///
+/// - `None` (omitted)  → disabled: one chunk spans the whole contig (default).
+/// - `Some(0)`         → disabled (explicit).
+/// - `Some(n)` (n > 0) → fixed chunk size of `n` bp (opt-in).
+fn resolve_chunk_size(config: &RunConfiguration) -> usize {
     match config.chunk_size {
-        None => auto_chunk_size(total_genome_len),
-        Some(0) => usize::MAX, // one chunk spans the whole contig
+        None | Some(0) => usize::MAX, // one chunk spans the whole contig
         Some(n) => n,
     }
 }
@@ -2706,29 +2698,17 @@ mod tests {
     }
 
     #[test]
-    fn test_auto_chunk_size_scales_and_clamps() {
-        // Small genome clamps to the floor so a single contig still parallelizes.
-        assert_eq!(auto_chunk_size(4_600_000), CHUNK_AUTO_MIN);
-        // Huge genome clamps to the cap so chunk count stays bounded.
-        assert_eq!(auto_chunk_size(10_000_000_000), CHUNK_AUTO_MAX);
-        // Mid-range scales linearly (≈ total / target chunks).
-        let mid = auto_chunk_size(1_000_000_000);
-        assert!(mid > CHUNK_AUTO_MIN && mid < CHUNK_AUTO_MAX);
-        assert_eq!(mid, 1_000_000_000 / CHUNK_AUTO_TARGET_CHUNKS);
-    }
-
-    #[test]
     fn test_resolve_chunk_size_config_modes() {
         let mut cfg = RunConfiguration::default();
-        // None → auto.
+        // None (default) → disabled: one chunk spans the whole contig.
         cfg.chunk_size = None;
-        assert_eq!(resolve_chunk_size(&cfg, 100_000_000), auto_chunk_size(100_000_000));
-        // Some(0) → disabled (one chunk spans the whole contig).
+        assert_eq!(resolve_chunk_size(&cfg), usize::MAX);
+        // Some(0) → disabled (explicit).
         cfg.chunk_size = Some(0);
-        assert_eq!(resolve_chunk_size(&cfg, 100_000_000), usize::MAX);
-        // Some(n) → fixed.
+        assert_eq!(resolve_chunk_size(&cfg), usize::MAX);
+        // Some(n) → fixed opt-in chunk size.
         cfg.chunk_size = Some(5_000_000);
-        assert_eq!(resolve_chunk_size(&cfg, 100_000_000), 5_000_000);
+        assert_eq!(resolve_chunk_size(&cfg), 5_000_000);
     }
 
     #[test]

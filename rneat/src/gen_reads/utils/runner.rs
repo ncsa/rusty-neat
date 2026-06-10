@@ -812,14 +812,14 @@ fn process_chunk(
         }
     } else if ctx.config.produce_bam {
         // BAM-only: generate reads and stage them into the BAM body writer.
-        // The FASTQ buffers drain into null sinks and are discarded.
+        // The FASTQ bytes are discarded, so write them to a null sink rather
+        // than compressing them into a throwaway buffer (the records still flow
+        // to the BAM writer via bam_stager).
         let bam_stager: Option<&mut dyn BamRecordStager> = bam_body_writer
             .as_mut()
             .map(|w| w as &mut dyn BamRecordStager);
-        let null1: VectorBuffer = VectorBuffer::new();
-        let null2: VectorBuffer = VectorBuffer::new();
-        let mut buf1 = GzEncoder::new(null1, Compression::default());
-        let mut buf2 = GzEncoder::new(null2, Compression::default());
+        let mut buf1 = std::io::sink();
+        let mut buf2 = std::io::sink();
         debug!("BAM-only: generating reads for {}", contig_name);
         write_block_fastq(
             block_fragments,

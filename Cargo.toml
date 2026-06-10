@@ -8,7 +8,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = '1.17.0'
+version = '1.17.1'
 edition = '2024'
 authors = ["Joshua Allen", "Mikolaj Kowalik", "See coauthors of Python Neat versions"]
 description = "Toolkit for generating simulated NGS read data in fastq and vcf formats. Feature set under development."
@@ -25,5 +25,10 @@ log = "0.4.21"
 tempfile = "3.14.0"
 flate2 = { version = "1.1.2", features = ["zlib-ng"], default-features = false }
 noodles = { version = "0.109.0", features = ["bam", "sam", "bgzf", "core"] }
+# Direct dep solely to enable noodles-bgzf's `libdeflate` backend (the `noodles`
+# umbrella has no passthrough feature for it). Cargo feature unification turns
+# libdeflate on for the bgzf used via `noodles::bgzf`, so BAM and .vcf.gz output
+# get the faster compressor too. Version tracks what noodles 0.109 resolves.
+noodles-bgzf = { version = "0.46", features = ["libdeflate"] }
 itertools = "0.14.0"
 rayon = "1.10"

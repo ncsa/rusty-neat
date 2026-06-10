@@ -11,17 +11,16 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::Path;
 
-use flate2::Compression;
 use flate2::read::MultiGzDecoder;
-use flate2::write::GzEncoder;
 
 use crate::gen_cancer_reads::errors::GenCancerReadsError;
+use common::file_tools::block_gz::BlockGzWriter;
 
 /// Stream each `(path, tag)` input, prefix the header line of every 4-line FASTQ
 /// record with `<tag>_`, and write the concatenation to `out` (gzip).
 pub fn tag_and_concat(inputs: &[(&Path, &str)], out: &Path) -> Result<(), GenCancerReadsError> {
     let f = File::create(out)?;
-    let mut w = GzEncoder::new(BufWriter::new(f), Compression::default());
+    let mut w = BlockGzWriter::new(BufWriter::new(f));
     for (path, tag) in inputs {
         let r = BufReader::new(MultiGzDecoder::new(File::open(path)?));
         for (i, line) in r.lines().enumerate() {
@@ -45,6 +44,8 @@ pub fn tag_and_concat(inputs: &[(&Path, &str)], out: &Path) -> Result<(), GenCan
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flate2::Compression;
+    use flate2::write::GzEncoder;
     use std::io::Read;
 
     fn write_gz(path: &Path, body: &str) {

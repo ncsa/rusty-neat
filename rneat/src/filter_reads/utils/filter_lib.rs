@@ -1,8 +1,7 @@
 use crate::filter_reads::errors::FilterReadsError;
+use common::file_tools::block_gz::BlockGzWriter;
 use common::structs::bed_record::BedRecord;
-use flate2::Compression;
 use flate2::read::MultiGzDecoder;
-use flate2::write::GzEncoder;
 use log::*;
 use std::collections::HashMap;
 use std::fs::File;
@@ -47,7 +46,7 @@ fn prep_files_for_filtering(
     file_in: &PathBuf,
     is_gzip: bool,
     file_out: &PathBuf,
-) -> Result<(ReaderType, GzEncoder<File>), FilterReadsError> {
+) -> Result<(ReaderType, BlockGzWriter<File>), FilterReadsError> {
     // Open file for reading.
     let lines: ReaderType = {
         if is_gzip {
@@ -57,7 +56,7 @@ fn prep_files_for_filtering(
         }
     };
     let out_file = create_output_file(file_out, true)?;
-    let buffer = GzEncoder::new(out_file, Compression::default());
+    let buffer = BlockGzWriter::new(out_file);
     Ok((lines, buffer))
 }
 

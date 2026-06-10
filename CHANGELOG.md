@@ -1,5 +1,19 @@
 6/9/2026
 ========
+## rneat v1.17.1
+
+### Faster compression across all subcommands
+
+v1.17.0 made `gen-reads` FASTQ output fast; this extends the same libdeflate
+speedup to the remaining output paths:
+
+- **BAM and `.vcf.gz`** now use libdeflate via the `noodles-bgzf` `libdeflate`
+  feature (the golden VCF and BAM writers previously used slower zlib).
+- **`gen-cancer-reads`** (the tumor/normal FASTQ merge) and **`filter-reads`**
+  FASTQ output now use the libdeflate `BlockGzWriter`.
+- **BAM-only runs** no longer compress the generated FASTQ into a discarded
+  buffer (it now goes to a null sink), removing wasted work.
+
 ## rneat v1.17.0
 
 ### Faster FASTQ compression (libdeflate + single-pass combine)

@@ -21,6 +21,8 @@ chrono = { workspace = true }
 thiserror = { workspace = true }
 flate2 = { workspace = true }
 noodles = { workspace = true }
+# Enables noodles-bgzf's libdeflate backend for BAM / .vcf.gz (feature unification).
+noodles-bgzf = { workspace = true }
 itertools = { workspace = true }
 bincode = "2.0.0-rc.3"
 statrs = "0.18.0"

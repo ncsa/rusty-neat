@@ -1,6 +1,6 @@
 6/15/2026
 =========
-## rneat (unreleased)
+## rneat v1.17.2
 
 ### Fix: reference N bases are now treated as gaps, not filled with random sequence
 

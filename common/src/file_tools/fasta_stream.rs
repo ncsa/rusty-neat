@@ -5,7 +5,6 @@ use crate::{
         nucleotides::{
             Nucleotide,
             Nucleotide::{N, X},
-            NucleotideSelector,
         },
         sequence_block::{RegionType, SequenceMap},
     },
@@ -172,20 +171,6 @@ pub fn map_buffer(sequence: &[Nucleotide]) -> Vec<SequenceMap> {
     };
     map.push(SequenceMap::from(region_type, region_start, region_end));
     map
-}
-
-/// Replaces each N base in `sequence` with a randomly sampled masked base in-place.
-pub fn apply_n_substitution(
-    sequence: &mut Vec<Nucleotide>,
-    selector: &NucleotideSelector,
-    rng: &mut NeatRng,
-) -> Result<(), NeatRngError> {
-    for base in sequence.iter_mut() {
-        if *base == N {
-            *base = selector.sample_bases(rng.random()?).get_masked();
-        }
-    }
-    Ok(())
 }
 
 /// Converts a raw FASTA sequence string to nucleotides, stochastically resolving

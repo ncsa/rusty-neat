@@ -201,6 +201,18 @@ pub fn write_iupac_fasta(path: &Path) {
     writeln!(f, ">chr1\n{}", seq).unwrap();
 }
 
+/// Writes a single-contig FASTA with two ACGT flanks separated by a hard N tract.
+/// Layout (1-based, inclusive): left flank [1, 240], N tract [241, 480],
+/// right flank [481, 720]. Used to assert the read/variant pipeline treats the
+/// N tract as an assembly gap (no anchors, no variants) rather than filling it.
+pub fn write_n_tract_fasta(path: &Path) {
+    use std::io::Write as _;
+    let flank: String = "ACGT".chars().cycle().take(240).collect();
+    let n_tract: String = "N".repeat(240);
+    let mut f = std::fs::File::create(path).unwrap();
+    writeln!(f, ">chr1\n{flank}{n_tract}{flank}").unwrap();
+}
+
 /// Build a `gen-seq-error-model` config YAML with a training FASTQ and (optionally)
 /// a bin set. Output model is written into `output_file`.
 pub fn write_gen_seq_error_model_config(

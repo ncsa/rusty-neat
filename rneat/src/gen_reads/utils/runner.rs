@@ -15,9 +15,7 @@ use crate::{
         file_tools::{
             bam_writer::{BamBodyWriter, BamContext, BamRecordStager, concat_temp_bams},
             bed_reader::read_bed,
-            fasta_stream::{
-                FastaStream, apply_n_substitution, map_buffer, resolve_iupac_bases,
-            },
+            fasta_stream::{FastaStream, map_buffer, resolve_iupac_bases},
             fastq_tools::{combine_temp_fastqs, write_block_fastq, generate_read, write_read_to_fastq, reverse_complement, Strand},
             file_io::{VectorBuffer, append_to_file},
             vcf_tools::{read_vcf, write_vcf},
@@ -29,7 +27,7 @@ use crate::{
         structs::{
             bed_record::BedRecord,
             mutated_map::{AdCounter, MutatedMap},
-            nucleotides::{Nucleotide, NucleotideSelector},
+            nucleotides::Nucleotide,
             read_record::ReadRecord,
             sequence_block::{RegionType, SequenceBlock, SequenceMap},
             variants::{Variant, SvData},
@@ -133,9 +131,6 @@ pub fn run_neat(
         None => GcBiasModel::default(),
     };
 
-    info!("Initialize Nucleotide selector");
-    let nuc_sub_model: NucleotideSelector = NucleotideSelector::new();
-
     let target_bed = match &config.target_bed {
         Some(path) => {
             info!("Loading target BED: {:?}", path);
@@ -160,14 +155,17 @@ pub fn run_neat(
     for (idx, result) in fasta.enumerate() {
         let (name, raw) = result?;
         let mut child_rng = rng.derive_child(idx as u64);
-        let (mut seq, iupac_count) = resolve_iupac_bases(&raw, &mut child_rng)?;
+        let (seq, iupac_count) = resolve_iupac_bases(&raw, &mut child_rng)?;
         if iupac_count > 0 {
             warn!(
                 "Contig {}: resolved {} IUPAC ambiguity base(s) to ACGT",
                 name, iupac_count
             );
         }
-        apply_n_substitution(&mut seq, &nuc_sub_model, &mut child_rng)?;
+        // N bases are left as-is. The non-N region machinery (map_buffer /
+        // get_non_n_regions) excludes them from read anchoring, mutation
+        // placement, and SV anchoring, so assembly gaps stay as coverage
+        // dropouts rather than being filled with fabricated sequence.
         contig_order_in_file.push(name.clone());
         reference_map.insert(name, seq);
     }

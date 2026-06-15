@@ -1,3 +1,28 @@
+6/15/2026
+=========
+## rneat v1.17.2
+
+### Fix: reference N bases are now treated as gaps, not filled with random sequence
+
+`gen-reads` previously overwrote **every** reference `N` with a random base at
+FASTA load time (`apply_n_substitution`). Because the region machinery treats
+masked bases as ordinary sequence (only `N`/`X` mark gaps), the loaded reference
+contained no `N` — so each contig became a single non-N region and the gap
+exclusions were silently bypassed:
+
+- read fragments were anchored across centromere/telomere N-tracts,
+- de-novo mutations were sampled inside N regions, and
+- the v1.13.1 SV alignability gate (#224), which counts only `N`, always passed
+  — making that fix inert in the real pipeline.
+
+N bases are now left as-is at load. The existing non-N machinery (`map_buffer` /
+`get_non_n_regions`) governs read anchoring, mutation placement, and SV
+anchoring, so assembly gaps remain coverage dropouts. Output FASTQ is still
+ACGTN-only (bases are unmasked at write time); reads spanning short interior N
+runs may emit `N`. The model-training subcommands (`gen-mut-model`,
+`gen-gc-bias`) already read raw sequence and were unaffected. Added an
+end-to-end regression test asserting no variants are placed inside an N tract.
+
 6/9/2026
 ========
 ## rneat v1.17.1

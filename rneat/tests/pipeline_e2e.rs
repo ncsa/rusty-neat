@@ -7,7 +7,8 @@ mod common;
 
 use common::{
     GenReadsConfig, fresh_workdir, h1n1_reference, read_gzip_fastq_lines, rneat,
-    write_gen_seq_error_model_config, write_iupac_fasta, write_synthetic_fastq_gz,
+    write_gen_seq_error_model_config, write_iupac_fasta, write_n_tract_fasta,
+    write_synthetic_fastq_gz,
 };
 use std::collections::HashSet;
 
@@ -334,6 +335,57 @@ fn gen_reads_with_iupac_reference_produces_no_iupac_in_output() {
             );
         }
     }
+}
+
+#[test]
+fn gen_reads_treats_n_tract_as_gap_no_variants_inside() {
+    // Regression for the N-handling fix: reference N bases are assembly gaps, not
+    // sequence to fill. A central N tract must be excluded from variant placement
+    // by the non-N region machinery. Pre-fix, `apply_n_substitution` overwrote every
+    // N with a random base at load time, so the entire contig became one NonNRegion
+    // and de-novo variants were sampled across the gap. The reference has flanks at
+    // 1-based [1, 240] and [481, 720] with a hard N tract at [241, 480].
+    let (_dir, work) = fresh_workdir();
+    let ref_path = work.join("n_tract_ref.fa");
+    write_n_tract_fasta(&ref_path);
+
+    let mut config = GenReadsConfig::new(ref_path, work.clone(), "n_tract_run");
+    config.coverage = 50;
+    config.produce_vcf = true;
+    // High rate so, pre-fix, many variants would have landed in the 240 bp gap.
+    config.mutation_rate = Some(0.05);
+    let yaml = config.write_yaml();
+    rneat()
+        .args(["gen-reads", "-c"])
+        .arg(yaml.path())
+        .assert()
+        .success();
+
+    let out_vcf_gz = work.join("n_tract_run.vcf.gz");
+    assert!(out_vcf_gz.exists(), "output VCF not produced: {out_vcf_gz:?}");
+    let vcf_lines: Vec<String> = {
+        use flate2::read::MultiGzDecoder;
+        use std::io::{BufRead, BufReader};
+        let r = BufReader::new(MultiGzDecoder::new(std::fs::File::open(&out_vcf_gz).unwrap()));
+        r.lines().map(|l| l.unwrap()).collect()
+    };
+
+    let variants_in_gap: Vec<&String> = vcf_lines
+        .iter()
+        .filter(|l| !l.starts_with('#'))
+        .filter(|l| {
+            l.split('\t')
+                .nth(1)
+                .and_then(|p| p.parse::<usize>().ok())
+                // 1-based N tract span [241, 480].
+                .map(|p| (241..=480).contains(&p))
+                .unwrap_or(false)
+        })
+        .collect();
+    assert!(
+        variants_in_gap.is_empty(),
+        "variants were placed inside the N tract [241, 480]; N regions must be excluded: {variants_in_gap:?}"
+    );
 }
 
 #[test]

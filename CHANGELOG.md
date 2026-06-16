@@ -1,3 +1,17 @@
+6/16/2026
+=========
+## rneat v1.17.3
+
+### Fix: Windows release build (VS2026 runner)
+
+The `windows-latest` GitHub runner was upgraded to the `windows-2025-vs2026`
+image (Visual Studio 2026), and the v1.17.2 Windows build failed with
+`couldn't determine visual studio generator` while compiling `libz-ng-sys` (the
+`zlib-ng` backend for `flate2`). The transitive `cmake` build dependency was
+pinned at 0.1.54, which predates VS2026 support. Bumped `cmake` to 0.1.58
+(VS2026 support landed in 0.1.55) via `Cargo.lock`; no source or other platform
+changes. Re-released as v1.17.3 to produce the missing Windows binary.
+
 6/15/2026
 =========
 ## rneat v1.17.2

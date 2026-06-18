@@ -5,7 +5,12 @@
 # What this does:
 #   1. Installs rustup + a stable toolchain into $HOME/.cargo (persists across jobs)
 #   2. Creates a conda env with NEAT 4 (the Python predecessor) for benchmarking
-#   3. Pulls the hap.py Apptainer image used by cancer_pipeline.sbatch
+#   3. Creates a conda env (bioinf) with tools not available as Delta modules:
+#        bcftools, bwa-mem2, gatk4
+#      Note: samtools and htslib (tabix/bgzip) ARE available as Delta modules
+#        (samtools/1.22-cce19.0.0 and htslib/1.22-gcc13.3.1) and are loaded
+#        by the SLURM jobs directly. bwa-mem2 and gatk are not available.
+#   4. Pulls the hap.py Apptainer image used by cancer_pipeline.sbatch
 #
 # Usage (from the repo root):
 #   bash scripts/delta/setup.sh
@@ -17,6 +22,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SIF_DIR="${SIF_DIR:-$SCRATCH/sif}"          # where to cache Apptainer .sif files
 CONDA_ENV_NAME="neat4"
+BIOINF_ENV_NAME="bioinf"
 
 echo "=== rusty-neat Delta setup ==="
 echo "Repo:    $REPO_ROOT"
@@ -50,13 +56,29 @@ else
     echo "      NEAT 4 installed: $(conda run -n $CONDA_ENV_NAME neat --version 2>&1 || echo 'check with: conda run -n $CONDA_ENV_NAME neat --version')"
 fi
 
-# ── 3. hap.py Apptainer image ───────────────────────────────────────────
+# ── 3. bioinf conda env (bwa-mem2, gatk4, bcftools) ────────────────────
+# samtools and htslib (tabix/bgzip) are available as Delta modules.
+# bcftools, bwa-mem2, and gatk4 are not — install via bioconda.
+if conda env list | grep -q "^${BIOINF_ENV_NAME} "; then
+    echo "[3/4] Conda env '$BIOINF_ENV_NAME' already exists — skipping."
+else
+    echo "[3/4] Creating bioinf conda env (bcftools, bwa-mem2, gatk4)..."
+    conda create -y -n "$BIOINF_ENV_NAME" \
+        -c bioconda -c conda-forge \
+        bcftools bwa-mem2 gatk4
+    echo "      Tools installed:"
+    conda run -n "$BIOINF_ENV_NAME" bcftools  --version | head -1
+    conda run -n "$BIOINF_ENV_NAME" bwa-mem2  version   2>&1 | head -1
+    conda run -n "$BIOINF_ENV_NAME" gatk      --version 2>&1 | head -1
+fi
+
+# ── 4. hap.py Apptainer image ───────────────────────────────────────────
 mkdir -p "$SIF_DIR"
 HAPPY_SIF="$SIF_DIR/happy_v0.3.12.sif"
 if [[ -f "$HAPPY_SIF" ]]; then
-    echo "[3/3] hap.py SIF already present: $HAPPY_SIF"
+    echo "[4/4] hap.py SIF already present: $HAPPY_SIF"
 else
-    echo "[3/3] Pulling hap.py image (this takes a few minutes)..."
+    echo "[4/4] Pulling hap.py image (this takes a few minutes)..."
     apptainer pull "$HAPPY_SIF" docker://jmcdani20/hap.py:v0.3.12
     echo "      Saved to: $HAPPY_SIF"
 fi

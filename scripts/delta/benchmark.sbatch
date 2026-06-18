@@ -32,7 +32,8 @@ REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 DATA_DIR="${DATA_DIR:-$SCRATCH/neat_data}"        # reference FASTAs live here
 OUTDIR="${OUTDIR:-$SCRATCH/benchmark_$SLURM_JOB_ID}"
 
-RNEAT_BIN="$REPO_ROOT/target/release/rneat"
+CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$SCRATCH/cargo-target/rusty-neat}"
+RNEAT_BIN="$CARGO_TARGET_DIR/release/rneat"
 CONDA_ENV_NAME="neat4"
 
 # Genomes to benchmark — label:fasta_path pairs. Smaller genomes run fast

@@ -21,28 +21,37 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SIF_DIR="${SIF_DIR:-$SCRATCH/sif}"          # where to cache Apptainer .sif files
+CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$SCRATCH/cargo-target/rusty-neat}"
 CONDA_ENV_NAME="neat4"
 BIOINF_ENV_NAME="bioinf"
 
 echo "=== rusty-neat Delta setup ==="
-echo "Repo:    $REPO_ROOT"
-echo "SIF dir: $SIF_DIR"
+echo "Repo:       $REPO_ROOT"
+echo "SIF dir:    $SIF_DIR"
+echo "Cargo target: $CARGO_TARGET_DIR"
 
-# ── 1. Rust toolchain ───────────────────────────────────────────────────
-if command -v cargo >/dev/null 2>&1; then
-    echo "[1/3] Rust already installed: $(rustc --version)"
+# ── 1. Rust toolchain + rneat binary ────────────────────────────────────
+# Check for a module first; fall back to rustup if absent.
+if module load rust 2>/dev/null; then
+    echo "[1/4] Rust module loaded: $(rustc --version)"
+elif command -v cargo >/dev/null 2>&1; then
+    echo "[1/4] Rust already installed via rustup: $(rustc --version)"
 else
-    echo "[1/3] Installing rustup..."
+    echo "[1/4] Installing rustup (no rust module found)..."
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
     source "$HOME/.cargo/env"
     echo "      $(rustc --version)"
 fi
+[[ -f "$HOME/.cargo/env" ]] && source "$HOME/.cargo/env"
 
-echo "[1/3] Building rneat release binary..."
+# Redirect build artifacts to $SCRATCH — a full release build generates
+# 10-15 GB of crate artifacts that would fill a typical HPC home quota.
+export CARGO_TARGET_DIR
+mkdir -p "$CARGO_TARGET_DIR"
+echo "[1/4] Building rneat release binary (artifacts → \$SCRATCH)..."
 cd "$REPO_ROOT"
-source "$HOME/.cargo/env"
 cargo build --release 2>&1 | tail -5
-echo "      Binary: $REPO_ROOT/target/release/rneat"
+echo "      Binary: $CARGO_TARGET_DIR/release/rneat"
 
 # ── 2. NEAT 4 conda env ─────────────────────────────────────────────────
 module load anaconda3_cpu 2>/dev/null || module load miniforge 2>/dev/null || true

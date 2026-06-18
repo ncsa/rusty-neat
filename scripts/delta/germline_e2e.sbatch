@@ -52,7 +52,8 @@ SV_RATE_SCALE=0
 
 HAPPY_SIF="${HAPPY_SIF:-$SCRATCH/sif/happy_v0.3.12.sif}"
 THREADS=$SLURM_CPUS_PER_TASK
-RNEAT_BIN="$REPO_ROOT/target/release/rneat"
+CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$SCRATCH/cargo-target/rusty-neat}"
+RNEAT_BIN="$CARGO_TARGET_DIR/release/rneat"
 PREFIX="sample"
 
 # ── Environment ─────────────────────────────────────────────────────────

@@ -1,3 +1,20 @@
+6/17/2026
+=========
+## rneat v1.17.4
+
+### Packaging: bundle third-party Rust license texts (Bioconda)
+
+Per conda-forge/Bioconda policy, the licenses of all (transitive) Rust
+dependencies are now bundled with the package. The Conda build runs
+`cargo-bundle-licenses` to produce `THIRDPARTY.yml`, which is shipped via
+`about.license_file` alongside `LICENSE.md`. A curated `THIRDPARTY.yml` is
+committed at the repo root and reused by the build with `--previous`, so the
+nine crates that publish no LICENSE file in their crate (the `noodles` family,
+`r-efi`, `vectorize`, `wasip2`) carry hand-filled canonical license texts;
+`--check-previous` fails the build if a future dependency change leaves a crate
+without a recorded license. No source or runtime behavior changes. Addresses
+the Bioconda recipe review (PR #66122).
+
 6/16/2026
 =========
 ## rneat v1.17.3

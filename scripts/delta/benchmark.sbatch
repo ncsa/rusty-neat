@@ -110,14 +110,18 @@ run_one() {
         rm -rf "$run_dir"; mkdir -p "$run_dir"
         echo "  [$tool] $label threads=$nthreads rep=$rep/$REPS"
 
+        # Capture the tool's real exit code without tripping `set -e`: the
+        # `|| ec=$?` keeps a failed run from aborting the whole sweep, so one
+        # bad config is recorded (exit!=0) rather than killing the job.
+        local ec=0
         if [[ "$tool" == "neat" ]]; then
             /usr/bin/time -v -o "$tf" "$NEAT_BIN" read-simulator -c "$cfg" \
-                -o "$run_dir" -p bench > "$log" 2>&1
+                -o "$run_dir" -p bench > "$log" 2>&1 || ec=$?
         else
-            /usr/bin/time -v -o "$tf" "$RNEAT_BIN" gen-reads -c "$cfg" > "$log" 2>&1
+            /usr/bin/time -v -o "$tf" "$RNEAT_BIN" gen-reads -c "$cfg" > "$log" 2>&1 || ec=$?
         fi
 
-        local ec=$? parsed wall rss
+        local parsed wall rss
         parsed=$(parse_time "$tf"); wall=${parsed% *}; rss=${parsed#* }
         printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
             "$label" "$size_mb" "$nthreads" "$tool" "$rep" "$wall" "$rss" "$ec" >> "$PERREP"

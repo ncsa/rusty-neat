@@ -29,6 +29,7 @@ set -euo pipefail
 
 # ── Paths (edit these) ──────────────────────────────────────────────────
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+source "$(dirname "$0")/lib_report.sh"            # archive_run() + durable RESULTS_DIR
 DATA_DIR="${DATA_DIR:-$SCRATCH/neat_data}"        # reference FASTAs live here
 OUTDIR="${OUTDIR:-$SCRATCH/benchmark_$SLURM_JOB_ID}"
 
@@ -192,3 +193,6 @@ echo "=== MEDIAN RESULTS (REPS=$REPS) ==="
 column -t -s$'\t' "$MEDIAN"
 echo
 echo "Full per-rep data: $PERREP"
+
+# Persist report artifacts off scratch + record provenance/resources.
+archive_run benchmark "$OUTDIR" median.tsv per_rep.tsv

@@ -37,6 +37,7 @@ set -euo pipefail
 
 # ── Parameters (edit these) ─────────────────────────────────────────────
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+source "$(dirname "$0")/lib_report.sh"   # archive_run() + durable RESULTS_DIR
 
 # Start with chr22 to validate the pipeline cheaply, then swap to GRCh38.
 REFERENCE="${REFERENCE:-$SCRATCH/neat_data/chr22.fa}"
@@ -208,3 +209,6 @@ EOF
 [[ -f "${SCORE_PREFIX}.summary.csv" ]] \
     && column -t -s',' "${SCORE_PREFIX}.summary.csv" \
     || echo "  (summary file not found)"
+
+# Persist report artifacts off scratch + record provenance/resources.
+archive_run germline "$OUTDIR" scored.summary.csv scored.extended.csv sim.yml

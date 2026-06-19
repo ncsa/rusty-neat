@@ -44,6 +44,7 @@ set -euo pipefail
 
 # ── Parameters ───────────────────────────────────────────────────────────
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+source "$(dirname "$0")/lib_report.sh"   # archive_run() + durable RESULTS_DIR
 
 # chr22 is the right size for a baseline: big enough to be meaningful, small
 # enough to run cheaply and repeat per release.
@@ -247,3 +248,6 @@ if [[ "$det_fastq" != "PASS" || "$det_vcf" != "PASS" ]]; then
     echo "WARNING: determinism check did NOT pass — investigate before relying on this baseline." >&2
 fi
 echo "Commit baseline.json alongside the release tag; diff future runs against it."
+
+# Persist report artifacts off scratch + record provenance/resources.
+archive_run baseline "$OUTDIR" baseline.json het_af_histogram.tsv bcftools_stats.txt

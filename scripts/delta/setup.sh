@@ -98,10 +98,20 @@ Setup complete.
 
 Next steps:
   1. Place reference genome(s) and input data in \$SCRATCH
-  2. Edit scripts/delta/benchmark.sbatch  — set ACCOUNT and DATA_DIR
-  3. Edit scripts/delta/cancer_pipeline.sbatch — set ACCOUNT, REFERENCE, etc.
-  4. Submit:
-       sbatch scripts/delta/benchmark.sbatch
-       sbatch scripts/delta/cancer_pipeline.sbatch
+  2. Set your ACCESS account in all jobs:
+       sed -i 's/<YOUR_ALLOCATION>/<your-account>/' scripts/delta/*.sbatch
+  3. (optional) Point results at durable storage for the ACCESS final report —
+     defaults to \${WORK:-\$HOME}/rneat-access-results (NOT scratch, which is purged):
+       export RESULTS_DIR=/projects/<account>/rneat-access-results
+  4. Submit jobs:
+       sbatch scripts/delta/baseline_capture.sbatch   # simulator baseline
+       sbatch scripts/delta/germline_e2e.sbatch       # SNP/indel recall
+       sbatch scripts/delta/benchmark.sbatch          # NEAT-vs-rneat throughput
+       sbatch scripts/delta/cancer_pipeline.sbatch    # somatic SNV/indel recall
+  5. Build the ACCESS final-report document once runs finish:
+       bash scripts/delta/collect_report.sh           # -> \$RESULTS_DIR/REPORT.md
 
+Each job persists its result artifacts + a provenance/resource manifest under
+\$RESULTS_DIR (off scratch); collect_report.sh aggregates them (incl. total
+core-hours ≈ SUs) into REPORT.md.
 EOF

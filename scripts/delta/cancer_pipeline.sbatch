@@ -41,6 +41,7 @@ set -euo pipefail
 
 # ── Parameters (edit these) ─────────────────────────────────────────────
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+source "$(dirname "$0")/lib_report.sh"   # archive_run() + durable RESULTS_DIR
 
 # Reference genome. For a smoke test use chr22; for a full-scale run swap
 # in GRCh38. Must be uncompressed (.fa, not .fa.gz) for BWA-MEM2 indexing.
@@ -245,3 +246,6 @@ Key outputs in $OUTDIR:
 Top-line results:
 EOF
 [[ -f "${SCORE_PREFIX}.stats.csv" ]] && column -t -s',' "${SCORE_PREFIX}.stats.csv" || echo "  (score file not found)"
+
+# Persist report artifacts off scratch + record provenance/resources.
+archive_run cancer "$OUTDIR" scored.stats.csv

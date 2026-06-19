@@ -117,6 +117,7 @@ fn main() -> Result<(), NeatErrors> {
         .multicall(true)
         .subcommand(
             Command::new("rneat")
+                .version(env!("CARGO_PKG_VERSION"))
                 .arg_required_else_help(true)
                 .subcommand_value_name("SUB-COMMAND")
                 .subcommand_help_heading("SUB-COMMANDS")

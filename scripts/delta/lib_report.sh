@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Shared reporting/persistence helpers for the Delta SLURM jobs.
 #
-# Source this from each *.sbatch AFTER REPO_ROOT/RNEAT_BIN/REFERENCE are set:
-#     source "$(dirname "$0")/lib_report.sh"
-# and call archive_run() once near the end of the job.
+# Source this from each *.sbatch right after REPO_ROOT is set:
+#     source "$REPO_ROOT/scripts/delta/lib_report.sh"
+# (NOT via $(dirname "$0") — under sbatch $0 is a spooled copy). Sourcing also
+# resolves the Delta filesystem paths below, so do it before any $SCRATCH use.
+# Call archive_run() once near the end of the job.
 #
 # WHY THIS EXISTS: the jobs do their heavy work in $SCRATCH, which Delta PURGES
 # (files untouched ~30 days are deleted). For the ACCESS final report we need
@@ -12,10 +14,23 @@
 # report artifacts off scratch and writes a run_manifest.tsv; collect_report.sh
 # later aggregates all runs into a single REPORT.md.
 
-# Durable results root. Defaults to the project/work filesystem (persists),
-# NEVER scratch. Override with RESULTS_DIR=... if your durable path differs
-# (on Delta this is typically /projects/<account>/... exposed as $WORK).
-RESULTS_DIR="${RESULTS_DIR:-${WORK:-$HOME}/rneat-access-results}"
+# ── Delta filesystem paths ───────────────────────────────────────────────
+# Delta does NOT export $SCRATCH/$WORK to jobs, and these scripts run under
+# `set -u`, so resolve them here (this file is sourced before any $SCRATCH use).
+# Layout (confirmed): scratch = /scratch/<project>/$USER (purged ~30 days);
+# durable project space = /projects/<project>/$USER.
+# Override by exporting SCRATCH / RESULTS_DIR, or by setting ACCESS_PROJECT.
+: "${USER:=$(id -un)}"
+: "${ACCESS_PROJECT:=bhrd}"
+: "${SCRATCH:=/scratch/$ACCESS_PROJECT/$USER}"
+if [[ -n "${SLURM_JOB_ID:-}" && ! -d "$SCRATCH" ]]; then
+    echo "ERROR: scratch dir '$SCRATCH' not found — export SCRATCH=... or set ACCESS_PROJECT=..." >&2
+    exit 1
+fi
+
+# Durable results root for the ACCESS final report — the project filesystem
+# (persists), NEVER scratch. Override with RESULTS_DIR=...
+RESULTS_DIR="${RESULTS_DIR:-/projects/$ACCESS_PROJECT/$USER/rneat-access-results}"
 
 # Emit five space-separated resource values for the current SLURM job:
 #   elapsed_s alloc_cpus alloc_nodes maxrss_kb core_hours

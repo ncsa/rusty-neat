@@ -32,6 +32,37 @@ fi
 # (persists), NEVER scratch. Override with RESULTS_DIR=...
 RESULTS_DIR="${RESULTS_DIR:-/projects/$ACCESS_PROJECT/$USER/rneat-access-results}"
 
+# ── conda activation (Delta) ─────────────────────────────────────────────
+# On Delta the miniforge module puts conda's legacy `activate` on PATH but NOT
+# `conda` itself, so `source activate` bootstraps the base env + shell
+# functions. Override the module with CONDA_MODULE=...; no-op if conda is
+# already available. The `set +u` is required: conda's activate scripts read
+# unbound vars (e.g. $PS1) and would abort under our `set -u`.
+setup_conda() {
+    command -v conda >/dev/null 2>&1 && return 0
+    module load "${CONDA_MODULE:-miniforge3-python}" 2>/dev/null || true
+    set +u
+    command -v conda >/dev/null 2>&1 || source activate 2>/dev/null || true
+    if ! command -v conda >/dev/null 2>&1 && [[ -n "${CONDA_PREFIX:-}" ]]; then
+        source "$CONDA_PREFIX/etc/profile.d/conda.sh" 2>/dev/null || true
+    fi
+    set -u
+    command -v conda >/dev/null 2>&1 || {
+        echo "ERROR: conda unavailable after 'module load ${CONDA_MODULE:-miniforge3-python}' + 'source activate'." >&2
+        echo "       Set CONDA_MODULE=<your module> or initialize conda before running." >&2
+        return 1
+    }
+}
+
+# set-u-safe environment activation (same unbound-var reason as above).
+conda_activate() {
+    set +u
+    conda activate "$1" || source activate "$1"
+    local rc=$?
+    set -u
+    return "$rc"
+}
+
 # Emit five space-separated resource values for the current SLURM job:
 #   elapsed_s alloc_cpus alloc_nodes maxrss_kb core_hours
 # Best-effort: prints zeros when not under SLURM or sacct is unavailable, so the

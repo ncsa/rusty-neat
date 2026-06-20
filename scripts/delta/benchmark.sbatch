@@ -61,8 +61,8 @@ REPS=3       # repetitions per config; median is reported
 
 # ── Environment ─────────────────────────────────────────────────────────
 source "$HOME/.cargo/env"
-module load anaconda3_cpu 2>/dev/null || module load miniforge 2>/dev/null || true
-conda activate "$CONDA_ENV_NAME"
+setup_conda
+conda_activate "$CONDA_ENV_NAME"
 NEAT_BIN="$(conda run -n "$CONDA_ENV_NAME" which neat 2>/dev/null || echo '')"
 
 NCORES=$SLURM_CPUS_PER_TASK

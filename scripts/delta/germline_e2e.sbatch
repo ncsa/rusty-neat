@@ -63,8 +63,8 @@ PREFIX="sample"
 source "$HOME/.cargo/env"
 module load samtools/1.22-cce19.0.0
 module load htslib/1.22-gcc13.3.1
-module load anaconda3_cpu 2>/dev/null || module load miniforge 2>/dev/null || true
-conda activate bioinf   # provides bwa-mem2, gatk4, bcftools (not available as modules)
+setup_conda
+conda_activate bioinf   # provides bwa-mem2, gatk4, bcftools (not available as modules)
 
 mkdir -p "$OUTDIR"
 REF_DIR="$(dirname "$REFERENCE")"

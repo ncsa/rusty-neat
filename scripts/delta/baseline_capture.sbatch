@@ -72,8 +72,8 @@ RNEAT_BIN="$CARGO_TARGET_DIR/release/rneat"
 source "$HOME/.cargo/env"
 module load samtools/1.22-cce19.0.0
 module load htslib/1.22-gcc13.3.1
-module load anaconda3_cpu 2>/dev/null || module load miniforge 2>/dev/null || true
-conda activate bioinf   # bcftools (mpileup/stats/query)
+setup_conda
+conda_activate bioinf   # bcftools (mpileup/stats/query)
 
 mkdir -p "$OUTDIR"
 DIR_A="$OUTDIR/run_t${THREADS_A}"

@@ -57,15 +57,18 @@ cargo build --release 2>&1 | tail -5
 echo "      Binary: $CARGO_TARGET_DIR/release/rneat"
 
 # ── 2. NEAT 4 conda env ─────────────────────────────────────────────────
-module load anaconda3_cpu 2>/dev/null || module load miniforge 2>/dev/null || true
+setup_conda   # load the conda module + bootstrap `conda` (Delta: miniforge3-python)
 
 if conda env list | grep -q "^${CONDA_ENV_NAME} "; then
-    echo "[2/3] Conda env '$CONDA_ENV_NAME' already exists — skipping."
+    echo "[2/4] Conda env '$CONDA_ENV_NAME' already exists — skipping."
 else
-    echo "[2/3] Creating conda env for NEAT 4..."
-    conda create -y -n "$CONDA_ENV_NAME" python=3.11
-    conda run -n "$CONDA_ENV_NAME" pip install neat-genreads
-    echo "      NEAT 4 installed: $(conda run -n $CONDA_ENV_NAME neat --version 2>&1 || echo 'check with: conda run -n $CONDA_ENV_NAME neat --version')"
+    # Install NEAT 4 from bioconda (the method NEAT's own README recommends):
+    # it pulls NEAT's conda-only runtime deps (e.g. bcftools), which a bare
+    # `pip install neat-genreads` into a python-only env would miss. No clone
+    # of the NEAT repo is needed. Only used by benchmark.sbatch.
+    echo "[2/4] Creating conda env for NEAT 4 (bioconda)..."
+    conda create -y -n "$CONDA_ENV_NAME" -c conda-forge -c bioconda neat
+    echo "      NEAT 4 installed: $(conda run -n "$CONDA_ENV_NAME" neat --version 2>&1 | head -1 || true)"
 fi
 
 # ── 3. bioinf conda env (bwa-mem2, gatk4, bcftools) ────────────────────

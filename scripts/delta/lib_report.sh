@@ -39,19 +39,28 @@ RESULTS_DIR="${RESULTS_DIR:-/projects/$ACCESS_PROJECT/$USER/rneat-access-results
 # already available. The `set +u` is required: conda's activate scripts read
 # unbound vars (e.g. $PS1) and would abort under our `set -u`.
 setup_conda() {
-    command -v conda >/dev/null 2>&1 && return 0
-    module load "${CONDA_MODULE:-miniforge3-python}" 2>/dev/null || true
-    set +u
-    command -v conda >/dev/null 2>&1 || source activate 2>/dev/null || true
-    if ! command -v conda >/dev/null 2>&1 && [[ -n "${CONDA_PREFIX:-}" ]]; then
-        source "$CONDA_PREFIX/etc/profile.d/conda.sh" 2>/dev/null || true
+    # 1. Make the `conda` command available (module + legacy `source activate`).
+    if ! command -v conda >/dev/null 2>&1; then
+        module load "${CONDA_MODULE:-miniforge3-python}" 2>/dev/null || true
+        set +u
+        command -v conda >/dev/null 2>&1 || source activate 2>/dev/null || true
+        set -u
     fi
-    set -u
     command -v conda >/dev/null 2>&1 || {
         echo "ERROR: conda unavailable after 'module load ${CONDA_MODULE:-miniforge3-python}' + 'source activate'." >&2
         echo "       Set CONDA_MODULE=<your module> or initialize conda before running." >&2
         return 1
     }
+    # 2. Install the activate hook. `module load`/`source activate` expose the
+    #    `conda` command but NOT the shell hook, so `conda activate <env>` errors
+    #    "Run 'conda init' before 'conda activate'" (seen on Delta — the
+    #    `|| source activate` fallback in conda_activate masked it). Sourcing
+    #    conda.sh is the scriptable equivalent of `conda init` and makes
+    #    `conda activate` work cleanly.
+    local base; base="$(conda info --base 2>/dev/null || true)"
+    if [[ -n "$base" && -f "$base/etc/profile.d/conda.sh" ]]; then
+        set +u; source "$base/etc/profile.d/conda.sh"; set -u
+    fi
 }
 
 # set-u-safe environment activation (same unbound-var reason as above).

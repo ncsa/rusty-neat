@@ -98,8 +98,8 @@ Setup complete.
 
 Next steps:
   1. Place reference genome(s) and input data in \$SCRATCH
-  2. Set your ACCESS account in all jobs:
-       sed -i 's/<YOUR_ALLOCATION>/<your-account>/' scripts/delta/*.sbatch
+  2. ACCESS account is preset to bhrd-delta-cpu in the *.sbatch files.
+     Override per-submit if needed:  sbatch --account=<other> scripts/delta/<job>.sbatch
   3. (optional) Point results at durable storage for the ACCESS final report —
      defaults to \${WORK:-\$HOME}/rneat-access-results (NOT scratch, which is purged):
        export RESULTS_DIR=/projects/<account>/rneat-access-results

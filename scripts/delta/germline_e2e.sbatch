@@ -24,7 +24,7 @@
 
 #SBATCH --job-name=rneat-germline
 #SBATCH --partition=cpu
-#SBATCH --account=<YOUR_ALLOCATION>
+#SBATCH --account=bhrd-delta-cpu
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=64

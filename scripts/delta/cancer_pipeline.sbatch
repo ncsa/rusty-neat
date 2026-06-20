@@ -40,8 +40,10 @@
 set -euo pipefail
 
 # ── Parameters (edit these) ─────────────────────────────────────────────
-REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-source "$(dirname "$0")/lib_report.sh"   # archive_run() + durable RESULTS_DIR
+# Under sbatch, $0 is a spooled copy — derive the repo from the submit dir
+# (run `sbatch` from the repo root) or override with RNEAT_REPO.
+REPO_ROOT="${RNEAT_REPO:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}}"
+source "$REPO_ROOT/scripts/delta/lib_report.sh"   # archive_run() + Delta path resolution
 
 # Reference genome. For a smoke test use chr22; for a full-scale run swap
 # in GRCh38. Must be uncompressed (.fa, not .fa.gz) for BWA-MEM2 indexing.

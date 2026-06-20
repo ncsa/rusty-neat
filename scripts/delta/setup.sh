@@ -20,6 +20,9 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+# Resolve Delta paths ($SCRATCH isn't exported on Delta). setup.sh runs
+# interactively, so $0 is reliable here (unlike the spooled sbatch jobs).
+source "$(dirname "$0")/lib_report.sh"
 SIF_DIR="${SIF_DIR:-$SCRATCH/sif}"          # where to cache Apptainer .sif files
 CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$SCRATCH/cargo-target/rusty-neat}"
 CONDA_ENV_NAME="neat4"

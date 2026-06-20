@@ -19,9 +19,14 @@
 #SBATCH --account=bhrd-delta-cpu
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=64
+#SBATCH --cpus-per-task=128
 #SBATCH --mem=240G
 #SBATCH --time=08:00:00
+# Exclusive node: this is the headline rneat-vs-NEAT4 performance comparison, so
+# we want the whole node to ourselves — co-located jobs add noise to wall-clock
+# and memory-bandwidth measurements. (Justified only for the benchmark; the
+# other jobs are I/O- or single-contig-bound and don't need it.)
+#SBATCH --exclusive
 #SBATCH --output=%x_%j.out
 #SBATCH --error=%x_%j.err
 
@@ -48,8 +53,8 @@ GENOMES=(
     "human:$DATA_DIR/GRCh38.fa"       # comment out if not staged
 )
 
-# Thread counts to test. 64 = full node; include 1 as the serial baseline.
-THREAD_MODES=(1 2 4 8 16 32 64)
+# Thread counts to test. 128 = full Delta CPU node; include 1 as the serial baseline.
+THREAD_MODES=(1 2 4 8 16 32 64 128)
 
 # Simulation parameters — must be identical between NEAT 4 and rneat for
 # a fair comparison.

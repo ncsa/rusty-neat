@@ -62,12 +62,13 @@ setup_conda   # load the conda module + bootstrap `conda` (Delta: miniforge3-pyt
 if conda env list | grep -q "^${CONDA_ENV_NAME} "; then
     echo "[2/4] Conda env '$CONDA_ENV_NAME' already exists — skipping."
 else
-    # Install NEAT 4 from bioconda (the method NEAT's own README recommends):
-    # it pulls NEAT's conda-only runtime deps (e.g. bcftools), which a bare
-    # `pip install neat-genreads` into a python-only env would miss. No clone
-    # of the NEAT repo is needed. Only used by benchmark.sbatch.
+    # Install NEAT 4 from bioconda (the method NEAT's own README recommends),
+    # plus bcftools: NEAT shells out to `bcftools sort` at runtime (see its
+    # environment.yml, bcftools==1.22*), but the bioconda `neat` package does NOT
+    # pull it — without it NEAT dies with FileNotFoundError: 'bcftools'. Used by
+    # benchmark.sbatch (throughput) and germline_e2e.sbatch (NEAT fidelity arm).
     echo "[2/4] Creating conda env for NEAT 4 (bioconda)..."
-    conda create -y -n "$CONDA_ENV_NAME" -c conda-forge -c bioconda neat
+    conda create -y -n "$CONDA_ENV_NAME" -c conda-forge -c bioconda neat bcftools
     echo "      NEAT 4 installed: $(conda run -n "$CONDA_ENV_NAME" neat --version 2>&1 | head -1 || true)"
 fi
 

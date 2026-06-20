@@ -82,9 +82,11 @@ else
         -c bioconda -c conda-forge \
         bcftools bwa-mem2 gatk4
     echo "      Tools installed:"
-    conda run -n "$BIOINF_ENV_NAME" bcftools  --version | head -1
-    conda run -n "$BIOINF_ENV_NAME" bwa-mem2  version   2>&1 | head -1
-    conda run -n "$BIOINF_ENV_NAME" gatk      --version 2>&1 | head -1
+    # `|| true`: head -1 closes the pipe after one line, so the tool gets
+    # SIGPIPE (exit 141) and `set -o pipefail` would otherwise abort setup.
+    conda run -n "$BIOINF_ENV_NAME" bcftools  --version 2>&1 | head -1 || true
+    conda run -n "$BIOINF_ENV_NAME" bwa-mem2  version   2>&1 | head -1 || true
+    conda run -n "$BIOINF_ENV_NAME" gatk      --version 2>&1 | head -1 || true
 fi
 
 # ── 4. hap.py Apptainer image ───────────────────────────────────────────

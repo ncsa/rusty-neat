@@ -335,10 +335,17 @@ pub fn generate_read(
     let mut seq_index = 0;
 
     'outer: while (seq_index < fragment_length) && (bases_written < read_length) {
-        let fragment_position = match read_strand {
-            Strand::Forward => seq_index,
-            Strand::Reverse => fragment_length - seq_index,
-        };
+        // Index variants by seq_index for BOTH strands. The caller already
+        // reverse-complements the fragment for reverse (R2) reads AND maps each
+        // variant's coordinate into that reversed sequence (var_pos = (end-1)-pos),
+        // so the variant base sits at `seq_index` here just like the forward read.
+        // The old `fragment_length - seq_index` for Reverse applied a second,
+        // erroneous reflection — the variant was looked up at the mirror position,
+        // so reverse reads carried REF at the true locus and the alt landed
+        // elsewhere. Net effect: alternate alleles only ever appeared on
+        // forward-strand reads, which strand-aware callers (e.g. Mutect2) correctly
+        // flag as strand bias and filter out.
+        let fragment_position = seq_index;
         let reference_base = sequence[seq_index].get_unmasked_base();
         let mut base_to_write: Vec<Nucleotide> = vec![reference_base];
         let mut deletion_skip: usize = 0;
@@ -899,6 +906,39 @@ mod tests {
         let (refs, alts) = ad[&5];
         assert_eq!(refs, 0, "homozygous SNP must produce zero ref reads");
         assert_eq!(alts, 50, "homozygous SNP must produce all alt reads");
+    }
+
+    /// Regression for the reverse-strand variant-placement bug: a reverse (R2)
+    /// read must apply the variant at `seq_index` (the caller already
+    /// reverse-complements the fragment and maps the variant coordinate into it),
+    /// NOT at the mirrored `fragment_length - seq_index`. With the old reflection
+    /// the variant fell outside the read window, so reverse reads silently
+    /// carried REF — alternate alleles only ever appeared on forward reads,
+    /// which Mutect2 (correctly) filtered as strand bias.
+    #[test]
+    fn test_generate_read_reverse_applies_variant() {
+        let sequence = make_sequence(30);
+        let read_length = 10;
+        let hom_snp =
+            Variant::new(VariantType::SNP, 5, &vec![T], &vec![C], &mut vec![1, 1]).unwrap();
+        let variant_map = HashMap::from([(5usize, &hom_snp)]);
+        let quality_scores = vec![40usize; read_length];
+        let model = SequencingErrorModel::default().unwrap();
+        let mut rng = NeatRng::new_from_seed(&vec!["rev".to_string()]).unwrap();
+        let mut ad: AdCounter = HashMap::new();
+        for i in 0..50 {
+            let _ = generate_read(
+                &sequence, &[5], &variant_map, read_length, format!("r{i}/2"),
+                Strand::Reverse, quality_scores.clone(), &model, &mut rng,
+                "chr1".to_string(), 0, "chr1".to_string(), 0, 0, true, &mut ad,
+            )
+            .unwrap();
+        }
+        let (refs, alts) = ad[&5];
+        // The pre-fix reflection put the lookup at index 25, outside the
+        // 10-base read, so alt would be 0 here. The fix applies it at index 5.
+        assert_eq!(refs, 0, "reverse homozygous SNP must produce zero ref reads");
+        assert_eq!(alts, 50, "reverse read must carry the alt (strand-bias regression)");
     }
 
     #[test]

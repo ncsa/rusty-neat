@@ -39,19 +39,28 @@ RESULTS_DIR="${RESULTS_DIR:-/projects/$ACCESS_PROJECT/$USER/rneat-access-results
 # already available. The `set +u` is required: conda's activate scripts read
 # unbound vars (e.g. $PS1) and would abort under our `set -u`.
 setup_conda() {
-    command -v conda >/dev/null 2>&1 && return 0
-    module load "${CONDA_MODULE:-miniforge3-python}" 2>/dev/null || true
-    set +u
-    command -v conda >/dev/null 2>&1 || source activate 2>/dev/null || true
-    if ! command -v conda >/dev/null 2>&1 && [[ -n "${CONDA_PREFIX:-}" ]]; then
-        source "$CONDA_PREFIX/etc/profile.d/conda.sh" 2>/dev/null || true
+    # 1. Make the `conda` command available (module + legacy `source activate`).
+    if ! command -v conda >/dev/null 2>&1; then
+        module load "${CONDA_MODULE:-miniforge3-python}" 2>/dev/null || true
+        set +u
+        command -v conda >/dev/null 2>&1 || source activate 2>/dev/null || true
+        set -u
     fi
-    set -u
     command -v conda >/dev/null 2>&1 || {
         echo "ERROR: conda unavailable after 'module load ${CONDA_MODULE:-miniforge3-python}' + 'source activate'." >&2
         echo "       Set CONDA_MODULE=<your module> or initialize conda before running." >&2
         return 1
     }
+    # 2. Install the activate hook. `module load`/`source activate` expose the
+    #    `conda` command but NOT the shell hook, so `conda activate <env>` errors
+    #    "Run 'conda init' before 'conda activate'" (seen on Delta — the
+    #    `|| source activate` fallback in conda_activate masked it). Sourcing
+    #    conda.sh is the scriptable equivalent of `conda init` and makes
+    #    `conda activate` work cleanly.
+    local base; base="$(conda info --base 2>/dev/null || true)"
+    if [[ -n "$base" && -f "$base/etc/profile.d/conda.sh" ]]; then
+        set +u; source "$base/etc/profile.d/conda.sh"; set -u
+    fi
 }
 
 # set-u-safe environment activation (same unbound-var reason as above).
@@ -72,19 +81,25 @@ _resource_values() {
     if [[ -z "$jid" ]] || ! command -v sacct >/dev/null 2>&1; then
         echo "0 0 0 0 0.0"; return
     fi
-    # First (allocation) line; ElapsedRaw is seconds, MaxRSS like 1234K/M/G.
-    local line elapsed cpus nodes maxrss
-    line=$(sacct -j "$jid" --noheader --parsable2 \
-        --format=ElapsedRaw,AllocCPUS,AllocNodes,MaxRSS 2>/dev/null | head -1)
-    elapsed=$(echo "$line" | cut -d'|' -f1); cpus=$(echo "$line" | cut -d'|' -f2)
-    nodes=$(echo "$line" | cut -d'|' -f3); maxrss=$(echo "$line" | cut -d'|' -f4)
-    elapsed=${elapsed:-0}; cpus=${cpus:-0}; nodes=${nodes:-0}
-    local rss_kb=0
-    case "$maxrss" in
-        *K) rss_kb=${maxrss%K} ;;
-        *M) rss_kb=$(awk -v v="${maxrss%M}" 'BEGIN{printf "%.0f", v*1024}') ;;
-        *G) rss_kb=$(awk -v v="${maxrss%G}" 'BEGIN{printf "%.0f", v*1048576}') ;;
-    esac
+    # Allocation line carries ElapsedRaw/AllocCPUS/AllocNodes.
+    local elapsed cpus nodes
+    read -r elapsed cpus nodes < <(
+        sacct -j "$jid" --noheader --parsable2 \
+            --format=ElapsedRaw,AllocCPUS,AllocNodes 2>/dev/null \
+        | head -1 | awk -F'|' '{print $1+0, $2+0, $3+0}')
+    : "${elapsed:=0}"; : "${cpus:=0}"; : "${nodes:=0}"
+    # MaxRSS is reported on the .batch/.extern SUB-steps, not the alloc line, so
+    # scan all rows and take the max (normalize K/M/G/T suffix to KB).
+    local rss_kb
+    rss_kb=$(sacct -j "$jid" --noheader --parsable2 --format=MaxRSS 2>/dev/null | awk '
+        { v=$1; if (v=="") next
+          u=substr(v,length(v),1); n=v
+          if      (u=="K") n=substr(v,1,length(v)-1)
+          else if (u=="M") n=substr(v,1,length(v)-1)*1024
+          else if (u=="G") n=substr(v,1,length(v)-1)*1048576
+          else if (u=="T") n=substr(v,1,length(v)-1)*1073741824
+          if (n+0>max) max=n+0 }
+        END { printf "%.0f", max+0 }')
     # Core-hours = elapsed_hours * allocated CPUs (≈ Delta CPU SUs).
     local core_hours
     core_hours=$(awk -v e="$elapsed" -v c="$cpus" 'BEGIN{printf "%.3f", (e/3600.0)*c}')

@@ -127,15 +127,17 @@ pub fn write_block_fastq<B1: Write, B2: Write>(
             read1_variants.insert(var_pos, &block_map.variant_map[&pos]);
             reads1_flagged.push(var_pos);
         }
-        // R2 window: [end - effective_read_len, end); R2 is reverse-stranded so
-        // var offset = (end - 1) - pos. Guard end > effective_read_len so the
-        // window start doesn't underflow (matches the original condition).
+        // R2 window: [end - effective_read_len, end). R2 is generated in FORWARD
+        // orientation over this right-end window (then the whole record is
+        // reverse-complemented), so the variant offset is the forward offset
+        // within the window, just like R1. Guard end > effective_read_len so the
+        // window start doesn't underflow.
         if paired_ended && end > effective_read_len {
             let w_lo = end - effective_read_len;
             let r2_lo = flagged.partition_point(|&p| p < w_lo);
             let r2_hi = flagged.partition_point(|&p| p < end);
             for &pos in &flagged[r2_lo..r2_hi] {
-                let var_pos = (end - 1) - pos;
+                let var_pos = pos - w_lo;
                 read2_variants.insert(var_pos, &block_map.variant_map[&pos]);
                 reads2_flagged.push(var_pos);
             }
@@ -210,13 +212,25 @@ pub fn write_block_fastq<B1: Write, B2: Write>(
                 quality_score_model.generate_quality_scores(effective_read_len, rng)?;
             let r2_pos = abs_end.saturating_sub(effective_read_len);
             let tlen_r2 = -((abs_end - abs_start) as i32);
+            // R2 covers the fragment's right end. Generate it FORWARD over that
+            // window — so SNP/insertion/deletion handling is identical to R1 and
+            // correct — then reverse-complement the whole record into a reverse
+            // read. Applying VCF-anchored indels during a reverse walk mis-placed
+            // them (insertion base order / deletion anchor), so reverse reads
+            // carried garbled indels; forward-generate-then-flip avoids that.
+            let r2_sub: &[Nucleotide] = match fragment.len().checked_sub(effective_read_len) {
+                Some(s) => &fragment[s..],
+                // Fragment shorter than a read: skip the pair to avoid an
+                // orphaned R1 (matches the TruncatedRead handling below).
+                None => continue,
+            };
             match generate_read(
-                &reverse_complement(fragment),
+                r2_sub,
                 &reads2_flagged,
                 &read2_variants,
                 effective_read_len,
                 format!("{}/2", base_name),
-                Strand::Reverse,
+                Strand::Forward,
                 quality_scores_2,
                 sequencing_error_model,
                 rng,
@@ -228,7 +242,7 @@ pub fn write_block_fastq<B1: Write, B2: Write>(
                 true,
                 ad_counter,
             ) {
-                Ok(record) => Some(record),
+                Ok(record) => Some(reverse_complement_record(record)),
                 Err(FastqToolsError::TruncatedRead(msg)) => {
                     debug!("{}", msg);
                     // Drop r1 alongside r2 so the streams stay in sync.
@@ -473,6 +487,29 @@ pub fn generate_read(
         mate_position,
         template_length,
     })
+}
+
+/// Turn a forward-generated read into its reverse-strand mate: reverse-complement
+/// the sequence and reverse the per-base CIGAR ops and qualities. R2 is generated
+/// forward over the fragment's right-end window (so SNP/insertion/deletion handling
+/// is identical to R1 and correct) and flipped here — this avoids the
+/// reverse-walk indel hazards (insertion base order, deletion anchor) that
+/// garbled indels on reverse reads.
+fn reverse_complement_record(mut record: ReadRecord) -> ReadRecord {
+    record.sequence = record
+        .sequence
+        .chars()
+        .rev()
+        .map(|c| match c {
+            'A' => 'T', 'C' => 'G', 'G' => 'C', 'T' => 'A',
+            'a' => 't', 'c' => 'g', 'g' => 'c', 't' => 'a',
+            other => other,
+        })
+        .collect();
+    record.cigar_ops.reverse();
+    record.quality_scores.reverse();
+    record.is_reverse = true;
+    record
 }
 
 pub fn write_read_to_fastq<W: Write>(
@@ -939,6 +976,30 @@ mod tests {
         // 10-base read, so alt would be 0 here. The fix applies it at index 5.
         assert_eq!(refs, 0, "reverse homozygous SNP must produce zero ref reads");
         assert_eq!(alts, 50, "reverse read must carry the alt (strand-bias regression)");
+    }
+
+    /// reverse_complement_record must reverse-complement the sequence and reverse
+    /// the per-base CIGAR + qualities (so a forward-generated R2 flips correctly).
+    #[test]
+    fn test_reverse_complement_record() {
+        let rec = ReadRecord {
+            name: "frag/2".to_string(),
+            sequence: "AACGT".to_string(),
+            quality_scores: vec![1, 2, 3, 4, 5],
+            cigar_ops: vec!['M', 'I', 'M', 'M', 'M'],
+            is_paired: true,
+            is_reverse: false,
+            contig: "chr1".to_string(),
+            position: 10,
+            mate_contig: "chr1".to_string(),
+            mate_position: 5,
+            template_length: -50,
+        };
+        let f = reverse_complement_record(rec);
+        assert_eq!(f.sequence, "ACGTT", "sequence must be reverse-complemented");
+        assert_eq!(f.quality_scores, vec![5, 4, 3, 2, 1], "qualities must be reversed");
+        assert_eq!(f.cigar_ops, vec!['M', 'M', 'M', 'I', 'M'], "CIGAR must be reversed");
+        assert!(f.is_reverse, "flipped record must be marked reverse");
     }
 
     #[test]

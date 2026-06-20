@@ -1,26 +1,29 @@
 #!/bin/bash
-# SLURM job: rneat germline end-to-end recall benchmark on Delta.
+# SLURM job: germline recall comparison — rneat vs NEAT 4 — on Delta.
 #
-# Simulates SNPs and indels only (no SVs) then runs the full downstream
-# germline variant-calling pipeline and scores precision/recall/F1 against
-# the rneat truth VCF. This establishes the baseline recall floor before
-# layering in SVs or cancer modeling.
+# For EACH simulator (rneat and NEAT 4), simulates SNP/indel-only germline reads
+# and runs the SAME downstream pipeline (BWA-MEM2 → GATK HaplotypeCaller → hap.py),
+# scoring the caller's recall/precision/F1 against THAT tool's own truth VCF. The
+# two summaries are reported side-by-side: "how well does a standard germline
+# caller recover each simulator's variants" — the fidelity half of goal 2
+# (performance is benchmark.sbatch).
 #
-# Stages:
-#   1. rneat gen-reads — SNP/indel only (sv_rate_scale: 0), paired-end, 30x
-#   2. BWA-MEM2 align → SAMtools sort/index
-#   3. GATK HaplotypeCaller (diploid germline, gVCF → VCF)
-#   4. Score with hap.py against rneat truth VCF (germline mode, not som.py)
+# Both tools use their DEFAULT mutation model (realistic Ts/Tv ~2.3 for each) and
+# identical coverage/read-length/fragment params, so the comparison is fair.
 #
-# Each stage is idempotent — existing outputs are skipped on re-run.
+# Stages per tool (all idempotent — existing outputs skipped on re-run):
+#   1. simulate (SNP/indel only) -> reads + truth VCF
+#   2. BWA-MEM2 align -> SAMtools sort/index
+#   3. GATK HaplotypeCaller (gVCF -> genotyped VCF)
+#   4. hap.py: called vs that tool's truth VCF
 #
-# Prerequisites: run scripts/delta/setup.sh once before submitting.
+# Prerequisites: run scripts/delta/setup.sh once (builds rneat, neat4 + bioinf
+# conda envs, hap.py SIF). Submit from the repo root.
 #
 # Usage:
 #   sbatch scripts/delta/germline_e2e.sbatch
-#
-# Overrides (no file edits needed):
-#   REFERENCE=/path/to/chr22.fa COVERAGE=30 sbatch scripts/delta/germline_e2e.sbatch
+#   REFERENCE=/path/ref.fa COVERAGE=30 TOOLS="rneat neat" sbatch scripts/delta/germline_e2e.sbatch
+#   TOOLS=rneat sbatch ...   # rneat only (skip the NEAT 4 arm)
 
 #SBATCH --job-name=rneat-germline
 #SBATCH --partition=cpu
@@ -29,68 +32,63 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=64
 #SBATCH --mem=240G
-#SBATCH --time=12:00:00
+#SBATCH --time=24:00:00
 #SBATCH --output=%x_%j.out
 #SBATCH --error=%x_%j.err
 
 set -euo pipefail
 
-# ── Parameters (edit these) ─────────────────────────────────────────────
+# ── Parameters ───────────────────────────────────────────────────────────
 # Under sbatch, $0 is a spooled copy — derive the repo from the submit dir
 # (run `sbatch` from the repo root) or override with RNEAT_REPO.
 REPO_ROOT="${RNEAT_REPO:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}}"
 source "$REPO_ROOT/scripts/delta/lib_report.sh"   # archive_run() + Delta path resolution
 
-# Start with chr22 to validate the pipeline cheaply, then swap to GRCh38.
 REFERENCE="${REFERENCE:-$SCRATCH/neat_data/chr22.fa}"
 OUTDIR="${OUTDIR:-$SCRATCH/germline_$SLURM_JOB_ID}"
+TOOLS="${TOOLS:-rneat neat}"          # which simulators to run + score
 
 COVERAGE="${COVERAGE:-30}"
 READ_LEN="${READ_LEN:-151}"
 FRAG_MEAN="${FRAG_MEAN:-350}"
 FRAG_SD="${FRAG_SD:-50}"
-# sv_rate_scale: 0 disables all symbolic SVs — SNP/indel only.
-# This is the key parameter that separates this job from cancer_pipeline.sbatch.
-SV_RATE_SCALE=0
 
 HAPPY_SIF="${HAPPY_SIF:-$SCRATCH/sif/happy_v0.3.12.sif}"
+NEAT_ENV="${NEAT_ENV:-neat4}"         # conda env with NEAT 4
 THREADS=$SLURM_CPUS_PER_TASK
 CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$SCRATCH/cargo-target/rusty-neat}"
 RNEAT_BIN="$CARGO_TARGET_DIR/release/rneat"
-PREFIX="sample"
 
 # ── Environment ─────────────────────────────────────────────────────────
 source "$HOME/.cargo/env"
 module load samtools/1.22-cce19.0.0
 module load htslib/1.22-gcc13.3.1
 setup_conda
-conda_activate bioinf   # provides bwa-mem2, gatk4, bcftools (not available as modules)
+conda_activate bioinf   # bwa-mem2, gatk4, bcftools (NEAT runs via `conda run -n $NEAT_ENV`)
 
 mkdir -p "$OUTDIR"
 REF_DIR="$(dirname "$REFERENCE")"
 REF_NAME="$(basename "$REFERENCE")"
 
-echo "=== rneat germline e2e: $SLURM_JOB_ID ==="
-echo "Reference:  $REFERENCE"
-echo "Output:     $OUTDIR"
-echo "Coverage:   ${COVERAGE}x  Read length: ${READ_LEN}bp  SV scale: $SV_RATE_SCALE"
-echo "Threads:    $THREADS"
+echo "=== germline fidelity comparison: $SLURM_JOB_ID ==="
+echo "Reference: $REFERENCE   Coverage: ${COVERAGE}x   Read: ${READ_LEN}bp   Threads: $THREADS"
+echo "Tools:     $TOOLS"
+echo "Output:    $OUTDIR"
 
-SIM_R1="$OUTDIR/${PREFIX}_r1.fastq.gz"
-SIM_R2="$OUTDIR/${PREFIX}_r2.fastq.gz"
-TRUTH_VCF="$OUTDIR/${PREFIX}.vcf.gz"
-ALIGNED_BAM="$OUTDIR/${PREFIX}.bam"
-RAW_GVCF="$OUTDIR/${PREFIX}.g.vcf.gz"
-CALLED_VCF="$OUTDIR/${PREFIX}.vcf.genotyped.gz"
-SCORE_PREFIX="$OUTDIR/scored"
+# ── Shared one-time reference indexing ───────────────────────────────────
+[[ -f "${REFERENCE}.fai" ]] || samtools faidx "$REFERENCE"
+if [[ ! -f "${REFERENCE}.bwt.2bit.64" && ! -f "${REFERENCE}.bwt" ]]; then
+    echo "Indexing reference for BWA-MEM2 (one-time)..."
+    bwa-mem2 index "$REFERENCE"
+fi
+REF_DICT="${REFERENCE%.fa}.dict"
+[[ -f "$REF_DICT" ]] || gatk CreateSequenceDictionary -R "$REFERENCE" 2>&1 | tail -2
 
-# ── Stage 1: Simulate (SNP/indel only) ──────────────────────────────────
-if [[ -f "$SIM_R1" && -f "$TRUTH_VCF" ]]; then
-    echo "[1/4] Simulation outputs already present — skipping."
-else
-    echo "[1/4] Simulating reads (SNP/indel only, sv_rate_scale=0)..."
-    SIM_CFG="$OUTDIR/sim.yml"
-    cat > "$SIM_CFG" <<YAML
+# ── Simulators (each writes <wd>/sample_r1/r2.fastq.gz + a truth VCF) ─────
+# rneat: SNP/indel only via sv_rate_scale=0; truth = sample.vcf.gz
+simulate_rneat() {
+    local wd="$1"
+    cat > "$wd/sim.yml" <<YAML
 reference: $REFERENCE
 read_len: $READ_LEN
 coverage: $COVERAGE
@@ -102,115 +100,119 @@ produce_fastq: true
 produce_vcf: true
 produce_bam: false
 overwrite_output: true
-output_dir: $OUTDIR
-output_filename: $PREFIX
-rng_seed: germline e2e delta
-sv_rate_scale: $SV_RATE_SCALE
+output_dir: $wd
+output_filename: sample
+rng_seed: germline fidelity delta
+sv_rate_scale: 0
 num_threads: $THREADS
 YAML
-    "$RNEAT_BIN" gen-reads -c "$SIM_CFG"
-    echo "[1/4] Simulation complete."
-fi
+    "$RNEAT_BIN" gen-reads -c "$wd/sim.yml"
+}
 
-# ── Stage 2: Align ───────────────────────────────────────────────────────
-if [[ -f "$ALIGNED_BAM" && -f "${ALIGNED_BAM}.bai" ]]; then
-    echo "[2/4] BAM already present — skipping alignment."
-else
-    echo "[2/4] Aligning reads..."
-    if [[ ! -f "${REFERENCE}.bwt.2bit.64" ]] && [[ ! -f "${REFERENCE}.bwt" ]]; then
-        echo "  Indexing reference (one-time, ~2 min)..."
-        bwa-mem2 index "$REFERENCE"
-    fi
-    [[ -f "${REFERENCE}.fai" ]] || samtools faidx "$REFERENCE"
+# NEAT 4: default variant model is already SNP/indel only (no symbolic SVs);
+# truth = sample_golden.vcf.gz. Runs in its own conda env.
+simulate_neat() {
+    local wd="$1"
+    cat > "$wd/sim.yml" <<YAML
+reference: $REFERENCE
+read_len: $READ_LEN
+coverage: $COVERAGE
+ploidy: 2
+paired_ended: true
+fragment_mean: $FRAG_MEAN
+fragment_st_dev: $FRAG_SD
+produce_fastq: true
+produce_vcf: true
+produce_bam: false
+rng_seed: 42
+overwrite_output: true
+YAML
+    conda run -n "$NEAT_ENV" neat read-simulator -c "$wd/sim.yml" -o "$wd" -p sample
+}
 
-    RG="@RG\tID:SAMPLE\tSM:SAMPLE\tLB:SAMPLE\tPL:ILLUMINA"
-    bwa-mem2 mem -t "$THREADS" -R "$RG" "$REFERENCE" "$SIM_R1" "$SIM_R2" \
-        2>"$OUTDIR/bwa.log" \
-        | samtools sort -@ "$THREADS" -o "$ALIGNED_BAM"
-    samtools index "$ALIGNED_BAM"
-    echo "[2/4] Alignment complete."
-fi
+# ── Shared align → call → score (scores against that tool's own truth) ────
+# align_call_score <tool> <wd> <r1> <r2> <truth_vcf>
+align_call_score() {
+    local tool="$1" wd="$2" r1="$3" r2="$4" truth="$5"
+    local bam="$wd/aligned.bam" gvcf="$wd/raw.g.vcf.gz" called="$wd/called.vcf.gz"
 
-# ── Stage 3: GATK HaplotypeCaller ────────────────────────────────────────
-# gVCF → genotyped VCF: two-step is more expensive but gives clean per-site
-# depth annotation used by hap.py for ROC-style analysis.
-if [[ -f "$CALLED_VCF" ]]; then
-    echo "[3/4] Genotyped VCF already present — skipping HaplotypeCaller."
-else
-    REF_DICT="${REFERENCE%.fa}.dict"
-    [[ -f "$REF_DICT" ]] || gatk CreateSequenceDictionary -R "$REFERENCE"
-
-    if [[ ! -f "$RAW_GVCF" ]]; then
-        echo "[3/4] Running HaplotypeCaller (gVCF mode)..."
-        gatk HaplotypeCaller \
-            -R "$REFERENCE" \
-            -I "$ALIGNED_BAM" \
-            -O "$RAW_GVCF" \
-            -ERC GVCF \
-            --native-pair-hmm-threads "$THREADS" \
-            2>&1 | tail -10
+    if [[ -f "$bam" && -f "$bam.bai" ]]; then
+        echo "  [$tool 2/3] BAM present — skipping alignment."
     else
-        echo "[3/4] gVCF already present — skipping to genotyping."
+        echo "  [$tool 2/3] BWA-MEM2 align..."
+        local rg="@RG\tID:$tool\tSM:$tool\tLB:$tool\tPL:ILLUMINA"
+        bwa-mem2 mem -t "$THREADS" -R "$rg" "$REFERENCE" "$r1" "$r2" 2>"$wd/bwa.log" \
+            | samtools sort -@ "$THREADS" -o "$bam"
+        samtools index "$bam"
     fi
 
-    echo "[3/4] Genotyping gVCF..."
-    gatk GenotypeGVCFs \
-        -R "$REFERENCE" \
-        -V "$RAW_GVCF" \
-        -O "$CALLED_VCF" \
-        2>&1 | tail -5
-    echo "[3/4] HaplotypeCaller complete."
-fi
+    if [[ -f "$called" ]]; then
+        echo "  [$tool 3/3] Called VCF present — skipping HaplotypeCaller."
+    else
+        echo "  [$tool 3/3] GATK HaplotypeCaller (gVCF -> genotyped)..."
+        [[ -f "$gvcf" ]] || gatk HaplotypeCaller -R "$REFERENCE" -I "$bam" -O "$gvcf" \
+            -ERC GVCF --native-pair-hmm-threads "$THREADS" 2>&1 | tail -5
+        gatk GenotypeGVCFs -R "$REFERENCE" -V "$gvcf" -O "$called" 2>&1 | tail -3
+    fi
 
-# ── Stage 4: Score with hap.py ───────────────────────────────────────────
-# hap.py in germline mode (not som.py) — evaluates diploid genotype calls.
-# No confident-regions BED needed for synthetic truth; hap.py evaluates the
-# entire reference. SNP and INDEL rows in the output are the numbers to watch.
-if [[ -f "${SCORE_PREFIX}.summary.csv" ]]; then
-    echo "[4/4] Scoring output already present — skipping."
-else
-    echo "[4/4] Scoring with hap.py (germline mode)..."
-    [[ -f "$HAPPY_SIF" ]] || { echo "hap.py SIF not found: $HAPPY_SIF — run setup.sh first" >&2; exit 1; }
+    if [[ -f "$wd/scored.summary.csv" ]]; then
+        echo "  [$tool score] hap.py output present — skipping."
+    else
+        echo "  [$tool score] hap.py (truth=$(basename "$truth"))..."
+        [[ -f "$HAPPY_SIF" ]] || { echo "hap.py SIF not found: $HAPPY_SIF — run setup.sh" >&2; exit 1; }
+        [[ -f "$truth.tbi" ]] || bcftools index -f -t "$truth"
+        # Truth + called both live in $wd, bind it to /work.
+        apptainer exec --bind "$REF_DIR:/refs:ro" --bind "$wd:/work" "$HAPPY_SIF" \
+            /opt/hap.py/bin/hap.py \
+                "/work/$(basename "$truth")" \
+                "/work/$(basename "$called")" \
+                -r "/refs/$REF_NAME" \
+                -o "/work/scored" \
+                --engine xcmp --no-roc
+    fi
+}
 
-    # Index the truth VCF if needed (hap.py requires a tabix index).
-    [[ -f "${TRUTH_VCF}.tbi" ]] || bcftools index -f -t "$TRUTH_VCF"
+# ── Per-tool pipeline ─────────────────────────────────────────────────────
+for tool in $TOOLS; do
+    wd="$OUTDIR/$tool"; mkdir -p "$wd"
+    r1="$wd/sample_r1.fastq.gz"; r2="$wd/sample_r2.fastq.gz"
+    echo
+    echo "──────── $tool ────────"
 
-    apptainer exec \
-        --bind "$REF_DIR:/refs:ro" \
-        --bind "$OUTDIR:/work" \
-        "$HAPPY_SIF" \
-        /opt/hap.py/bin/hap.py \
-            "/work/$(basename "$TRUTH_VCF")" \
-            "/work/$(basename "$CALLED_VCF")" \
-            -r "/refs/$REF_NAME" \
-            -o "/work/scored" \
-            --engine xcmp \
-            --no-roc
-    echo "[4/4] Scoring complete."
-fi
+    case "$tool" in
+        rneat)
+            truth="$wd/sample.vcf.gz"
+            if [[ -f "$r1" && -f "$truth" ]]; then echo "  [rneat 1/3] sim present — skipping."
+            else echo "  [rneat 1/3] simulating (SNP/indel only)..."; simulate_rneat "$wd"; fi
+            ;;
+        neat)
+            truth="$wd/sample_golden.vcf.gz"
+            if ! conda run -n "$NEAT_ENV" which neat >/dev/null 2>&1; then
+                echo "  [neat] NEAT 4 not found in env '$NEAT_ENV' — skipping NEAT arm." >&2
+                continue
+            fi
+            if [[ -f "$r1" && -f "$truth" ]]; then echo "  [neat 1/3] sim present — skipping."
+            else echo "  [neat 1/3] simulating (NEAT 4 default = SNP/indel)..."; simulate_neat "$wd"; fi
+            ;;
+        *) echo "  unknown tool '$tool' — skipping." >&2; continue ;;
+    esac
 
-# ── Summary ──────────────────────────────────────────────────────────────
-cat <<EOF
+    align_call_score "$tool" "$wd" "$r1" "$r2" "$truth"
+    # Stage the summary at the top level with a tool tag for the report.
+    [[ -f "$wd/scored.summary.csv" ]] && cp -f "$wd/scored.summary.csv" "$OUTDIR/${tool}_scored.summary.csv"
+done
 
-════════════════════════════════════════════════════════════════
-Germline e2e complete — Job $SLURM_JOB_ID
-
-Settings:
-  Reference:    $REFERENCE
-  Coverage:     ${COVERAGE}x  Paired-end: ${FRAG_MEAN}±${FRAG_SD}bp fragments
-  SV rate:      $SV_RATE_SCALE (0 = SNP/indel only)
-
-Key outputs in $OUTDIR:
-  Simulated reads:  ${PREFIX}_r1/r2.fastq.gz
-  Truth VCF:        ${PREFIX}.vcf.gz
-  Called VCF:       ${PREFIX}.vcf.genotyped.gz
-  hap.py summary:   scored.summary.csv   ← SNP / INDEL recall & precision
-
-Top-line results (SNP and INDEL rows are the signal):
-EOF
-[[ -f "${SCORE_PREFIX}.summary.csv" ]] \
-    && column -t -s',' "${SCORE_PREFIX}.summary.csv" \
-    || echo "  (summary file not found)"
+# ── Side-by-side summary ──────────────────────────────────────────────────
+echo
+echo "════════════════════════════════════════════════════════════════"
+echo "Germline fidelity comparison — Job $SLURM_JOB_ID  (${COVERAGE}x, $REF_NAME)"
+echo "Recall/precision/F1 of GATK recovering each simulator's truth set."
+for tool in $TOOLS; do
+    f="$OUTDIR/${tool}_scored.summary.csv"
+    echo
+    echo "### $tool"
+    [[ -f "$f" ]] && column -t -s',' "$f" || echo "  (no summary — arm skipped or failed)"
+done
 
 # Persist report artifacts off scratch + record provenance/resources.
-archive_run germline "$OUTDIR" scored.summary.csv scored.extended.csv sim.yml
+archive_run germline "$OUTDIR" rneat_scored.summary.csv neat_scored.summary.csv

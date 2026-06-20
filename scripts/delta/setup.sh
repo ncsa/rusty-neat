@@ -57,7 +57,7 @@ cargo build --release 2>&1 | tail -5
 echo "      Binary: $CARGO_TARGET_DIR/release/rneat"
 
 # ── 2. NEAT 4 conda env ─────────────────────────────────────────────────
-module load anaconda3_cpu 2>/dev/null || module load miniforge 2>/dev/null || true
+setup_conda   # load the conda module + bootstrap `conda` (Delta: miniforge3-python)
 
 if conda env list | grep -q "^${CONDA_ENV_NAME} "; then
     echo "[2/4] Conda env '$CONDA_ENV_NAME' already exists — skipping."

@@ -47,6 +47,12 @@ source "$REPO_ROOT/scripts/delta/lib_report.sh"   # archive_run() + Delta path r
 REFERENCE="${REFERENCE:-$SCRATCH/neat_data/chr22.fa}"
 OUTDIR="${OUTDIR:-$SCRATCH/germline_$SLURM_JOB_ID}"
 TOOLS="${TOOLS:-rneat neat}"          # which simulators to run + score
+# Seeds. Under `sbatch --array=1-3` (triplicate), each replicate gets a distinct
+# seed (independent draw) and SLURM spreads tasks across nodes; plain submit uses
+# the base seeds.
+SEED="${SEED:-germline fidelity delta}${SLURM_ARRAY_TASK_ID:+ rep$SLURM_ARRAY_TASK_ID}"
+NEAT_SEED="${NEAT_SEED:-42}"
+[[ -n "${SLURM_ARRAY_TASK_ID:-}" ]] && NEAT_SEED=$((NEAT_SEED + SLURM_ARRAY_TASK_ID))
 
 COVERAGE="${COVERAGE:-30}"
 READ_LEN="${READ_LEN:-151}"
@@ -102,7 +108,7 @@ produce_bam: false
 overwrite_output: true
 output_dir: $wd
 output_filename: sample
-rng_seed: germline fidelity delta
+rng_seed: $SEED
 sv_rate_scale: 0
 num_threads: $THREADS
 YAML
@@ -124,7 +130,7 @@ fragment_st_dev: $FRAG_SD
 produce_fastq: true
 produce_vcf: true
 produce_bam: false
-rng_seed: 42
+rng_seed: $NEAT_SEED
 overwrite_output: true
 YAML
     conda run -n "$NEAT_ENV" neat read-simulator -c "$wd/sim.yml" -o "$wd" -p sample

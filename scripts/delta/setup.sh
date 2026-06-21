@@ -59,18 +59,23 @@ echo "      Binary: $CARGO_TARGET_DIR/release/rneat"
 # ── 2. NEAT 4 conda env ─────────────────────────────────────────────────
 setup_conda   # load the conda module + bootstrap `conda` (Delta: miniforge3-python)
 
+# NEAT 4 + bcftools. NEAT shells out to `bcftools sort` at runtime (its
+# environment.yml pins bcftools==1.22*), but the bioconda `neat` package does
+# NOT pull it — without bcftools NEAT dies with FileNotFoundError: 'bcftools'.
+# Used by benchmark.sbatch (throughput) and germline_e2e.sbatch (NEAT fidelity
+# arm). If the env already exists, RETROFIT bcftools (a pre-existing neat4 from
+# before this was added wouldn't otherwise get it).
 if conda env list | grep -q "^${CONDA_ENV_NAME} "; then
-    echo "[2/4] Conda env '$CONDA_ENV_NAME' already exists — skipping."
+    echo "[2/4] Conda env '$CONDA_ENV_NAME' exists — ensuring bcftools is present..."
+    conda run -n "$CONDA_ENV_NAME" bcftools --version >/dev/null 2>&1 \
+        || conda install -y -n "$CONDA_ENV_NAME" -c conda-forge -c bioconda bcftools
 else
-    # Install NEAT 4 from bioconda (the method NEAT's own README recommends),
-    # plus bcftools: NEAT shells out to `bcftools sort` at runtime (see its
-    # environment.yml, bcftools==1.22*), but the bioconda `neat` package does NOT
-    # pull it — without it NEAT dies with FileNotFoundError: 'bcftools'. Used by
-    # benchmark.sbatch (throughput) and germline_e2e.sbatch (NEAT fidelity arm).
     echo "[2/4] Creating conda env for NEAT 4 (bioconda)..."
     conda create -y -n "$CONDA_ENV_NAME" -c conda-forge -c bioconda neat bcftools
-    echo "      NEAT 4 installed: $(conda run -n "$CONDA_ENV_NAME" neat --version 2>&1 | head -1 || true)"
 fi
+# `neat` has no --version flag; verify the tools resolve instead.
+echo "      neat4: $(conda run -n "$CONDA_ENV_NAME" which neat 2>/dev/null || echo 'neat MISSING')"
+echo "             $(conda run -n "$CONDA_ENV_NAME" bcftools --version 2>/dev/null | head -1 || echo 'bcftools MISSING')"
 
 # ── 3. bioinf conda env (bwa-mem2, gatk4, bcftools) ────────────────────
 # samtools and htslib (tabix/bgzip) are available as Delta modules.

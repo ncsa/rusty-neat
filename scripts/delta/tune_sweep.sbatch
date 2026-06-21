@@ -57,7 +57,10 @@ mkdir -p "$OUTDIR"
 [[ -f "$GFASTA" ]] || { echo "Genome not staged: $GFASTA" >&2; exit 1; }
 
 # ── Locate optional allocators (no-op variant if absent) ─────────────────
-find_so() { for p in "$@"; do [[ -f "$p" ]] && { echo "$p"; return; }; done; }
+# Always return 0: a non-zero return here would propagate through the bare
+# `MIMALLOC_SO=$(find_so ...)` assignment and trip `set -e` (silently exiting
+# the whole job before any output) whenever the allocator isn't installed.
+find_so() { local p; for p in "$@"; do [[ -e "$p" ]] && { printf '%s\n' "$p"; return 0; }; done; return 0; }
 CONDA_LIB="$(conda info --base 2>/dev/null)/envs/bioinf/lib"
 MIMALLOC_SO="${MIMALLOC_SO:-$(find_so "$CONDA_LIB"/libmimalloc.so* 2>/dev/null)}"
 JEMALLOC_SO="${JEMALLOC_SO:-$(find_so "$CONDA_LIB"/libjemalloc.so* 2>/dev/null)}"

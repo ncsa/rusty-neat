@@ -351,8 +351,16 @@ pub fn generate_read(
     let fragment_length = sequence.len();
 
     let mut bases_written = 0;
-    let mut out_seq = String::new();
-    let mut cigar_ops: Vec<char> = Vec::new();
+    // Pre-size to read_length (+ slack for insertions) so the per-read output
+    // buffers don't repeatedly reallocate as they grow.
+    let mut out_seq = String::with_capacity(read_length + 16);
+    let mut cigar_ops: Vec<char> = Vec::with_capacity(read_length + 16);
+    // Reused across positions for the rare multi-base (insertion) case only, so
+    // insertions don't allocate a fresh Vec each time. The common single-base
+    // path (ref base / SNP / SNP-error) uses the stack array `single` below and
+    // never touches the heap. This is the hot-loop allocation that previously
+    // ran once per base of every read (read_length × 2 reads × every fragment).
+    let mut ins_buf: Vec<Nucleotide> = Vec::new();
     let mut quality_index = 0;
     let mut seq_index = 0;
 
@@ -369,7 +377,12 @@ pub fn generate_read(
         // flag as strand bias and filter out.
         let fragment_position = seq_index;
         let reference_base = sequence[seq_index].get_unmasked_base();
-        let mut base_to_write: Vec<Nucleotide> = vec![reference_base];
+        // Common case writes exactly one base (the reference base, or a single
+        // SNP/SNP-error substitution) — kept in the stack array `single`, no
+        // heap. Only insertions (multi-base alt / insertion error) set use_ins
+        // and fill the reused `ins_buf`.
+        let mut single = [reference_base];
+        let mut use_ins = false;
         let mut deletion_skip: usize = 0;
 
         if reference_base == N {
@@ -386,18 +399,24 @@ pub fn generate_read(
             );
             let entry = ad_counter.entry(variant.location).or_insert((0, 0));
             if (variant.genotype == Genotype::Homozygous) || (rng.random()? < 0.5) {
-                base_to_write = match read_strand {
-                    Strand::Forward => variant.alternate
-                        .as_literal()
-                        .unwrap()
-                        .to_vec(),
-                    Strand::Reverse => variant.alternate
-                        .as_literal()
-                        .unwrap()
-                        .iter()
-                        .map(|b| b.complement())
-                        .collect(),
-                };
+                let alt = variant.alternate.as_literal().unwrap();
+                let alt_len = alt.len();
+                // Reverse reads are generated forward then flipped by the
+                // caller, EXCEPT alt bases which are complemented here (length is
+                // preserved, so alt_len is strand-independent).
+                if alt_len == 1 {
+                    single[0] = match read_strand {
+                        Strand::Forward => alt[0],
+                        Strand::Reverse => alt[0].complement(),
+                    };
+                } else {
+                    ins_buf.clear();
+                    match read_strand {
+                        Strand::Forward => ins_buf.extend_from_slice(alt),
+                        Strand::Reverse => ins_buf.extend(alt.iter().map(|b| b.complement())),
+                    }
+                    use_ins = true;
+                }
                 entry.1 += 1; // alt
                 // For a net-deletion variant (REF longer than ALT — typically a
                 // pure literal deletion from indel_model with ALT.len() == 1),
@@ -409,7 +428,6 @@ pub fn generate_read(
                 // uses; reusing it keeps CIGAR shape uniform across both
                 // sources of deletion signal.
                 let ref_len = variant.reference.len();
-                let alt_len = base_to_write.len();
                 if ref_len > alt_len {
                     let want_skip = ref_len - alt_len;
                     // Cap at remaining buffer so we don't read past the
@@ -435,7 +453,7 @@ pub fn generate_read(
                 match error {
                     SequencingErrorType::SnpError(base) => {
                         debug!("Snp error");
-                        base_to_write = vec![base];
+                        single[0] = base;
                     }
                     SequencingErrorType::DeletionError(length) => {
                         debug!("Deletion error");
@@ -446,16 +464,20 @@ pub fn generate_read(
                     }
                     SequencingErrorType::InsertionError(vec) => {
                         debug!("Insertion error");
-                        let mut insertion = vec![reference_base];
-                        insertion.extend(vec);
-                        base_to_write = insertion;
+                        ins_buf.clear();
+                        ins_buf.push(reference_base);
+                        ins_buf.extend(vec);
+                        use_ins = true;
                     }
                 }
             }
         }
 
+        // Borrow single (stack) for the common path or the reused ins_buf for
+        // insertions — set only after all mutations above, so no aliasing.
+        let to_write: &[Nucleotide] = if use_ins { &ins_buf } else { &single };
         let mut is_first_base = true;
-        for base in base_to_write {
+        for &base in to_write {
             out_seq.push(base.into());
             bases_written += 1;
             if is_first_base {

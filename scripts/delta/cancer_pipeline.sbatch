@@ -214,7 +214,14 @@ else
     echo "[6/6] Scoring with hap.py som.py (Apptainer)..."
     [[ -f "$HAPPY_SIF" ]] || { echo "hap.py SIF not found: $HAPPY_SIF — run setup.sh first" >&2; exit 1; }
 
+    # -N (--normalize-all) runs `bcftools norm` on BOTH truth and query before
+    # comparison — essential for indels: without it, a truth indel and Mutect2's
+    # call for the same event can be left-aligned to different positions and get
+    # double-counted as FN + FP, deflating indel recall AND precision. SNVs are
+    # unaffected. HGREF is set so som.py's reference lookup resolves (silences the
+    # "No reference file found" warning) in addition to the explicit -r.
     apptainer exec \
+        --env "HGREF=/refs/$REF_NAME" \
         --bind "$REF_DIR:/refs:ro" \
         --bind "$OUTDIR:/work" \
         "$HAPPY_SIF" \
@@ -223,6 +230,7 @@ else
             "/work/$(basename "$FILTERED_VCF")" \
             -r "/refs/$REF_NAME" \
             -o "/work/scored" \
+            -N \
             --feature-table generic
     echo "[6/6] Scoring complete."
 fi

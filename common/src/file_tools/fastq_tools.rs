@@ -92,15 +92,20 @@ pub fn write_block_fastq<B1: Write, B2: Write>(
     ad_counter: &mut AdCounter,
 ) -> Result<(), FastqToolsError> {
     debug!("writing reads for {}", sequence_block.contig);
-    // For SE reads, fragment_length == read_length exactly.  Sequencing-error deletions advance
-    // seq_index without writing bases, so the generation loop can exhaust the fragment before
-    // writing read_length bases, causing a TruncatedRead.  Fetching a small pad beyond `end`
-    // gives the loop extra reference bases to consume.  For PE, fragments are large relative to
-    // read_length so no padding is needed (and it would shift R2 coordinates).
+    // Pad the fetched fragment with extra reference beyond `end` so deletions
+    // (sequencing-error or literal-variant) near a read's tail have bases to
+    // consume instead of exhausting the buffer and raising TruncatedRead.
+    //   - SE: the single read can end with a deletion -> small tail pad.
+    //   - PE: R2 is generated FORWARD over the right-end window, which ends at
+    //     `end`, so a deletion in R2 needs reference *beyond* `end`. Without
+    //     this pad, any deletion in R2 truncated the read and dropped the whole
+    //     pair (~14% coverage loss at 30x). A read-length pad covers any literal
+    //     deletion (all < the SV threshold). The pad does NOT shift R2's
+    //     coordinates — the R2 window still starts at `end - effective_read_len`.
     let seq_len = sequence_block.sequence.len();
-    let se_pad = if paired_ended { 0 } else { 32 };
+    let frag_pad = if paired_ended { read_length } else { 32 };
     for (frag_idx, (start, end)) in block_fragments.into_iter().enumerate() {
-        let padded_end = (end + se_pad).min(seq_len);
+        let padded_end = (end + frag_pad).min(seq_len);
         let fragment = sequence_block.get_subseq(start, padded_end)?;
         // In long-read mode a fragment may be shorter than read_length; truncate the read
         // to the actual fragment length rather than discarding it.
@@ -218,8 +223,11 @@ pub fn write_block_fastq<B1: Write, B2: Write>(
             // read. Applying VCF-anchored indels during a reverse walk mis-placed
             // them (insertion base order / deletion anchor), so reverse reads
             // carried garbled indels; forward-generate-then-flip avoids that.
-            let r2_sub: &[Nucleotide] = match fragment.len().checked_sub(effective_read_len) {
-                Some(s) => &fragment[s..],
+            // R2 window starts at (end - effective_read_len); since `fragment`
+            // is padded beyond `end`, &fragment[off..] is the window plus the
+            // deletion buffer (so R2 deletions don't truncate and drop the pair).
+            let r2_sub: &[Nucleotide] = match (end - start).checked_sub(effective_read_len) {
+                Some(off) => &fragment[off..],
                 // Fragment shorter than a read: skip the pair to avoid an
                 // orphaned R1 (matches the TruncatedRead handling below).
                 None => continue,

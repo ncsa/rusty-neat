@@ -61,7 +61,12 @@ mkdir -p "$OUTDIR"
 # `MIMALLOC_SO=$(find_so ...)` assignment and trip `set -e` (silently exiting
 # the whole job before any output) whenever the allocator isn't installed.
 find_so() { local p; for p in "$@"; do [[ -e "$p" ]] && { printf '%s\n' "$p"; return 0; }; done; return 0; }
-CONDA_LIB="$(conda info --base 2>/dev/null)/envs/bioinf/lib"
+# Look in the ACTIVE bioinf env's lib ($CONDA_PREFIX, set by conda_activate
+# above). Do NOT use `conda info --base`/envs/bioinf — on Delta user envs live
+# under ~/.conda/envs, not under the module base prefix, so that path is wrong
+# and silently found no allocators (only baseline/numa variants ran). Override
+# with CONDA_LIB / MIMALLOC_SO / JEMALLOC_SO if needed.
+CONDA_LIB="${CONDA_LIB:-${CONDA_PREFIX:-}/lib}"
 MIMALLOC_SO="${MIMALLOC_SO:-$(find_so "$CONDA_LIB"/libmimalloc.so* 2>/dev/null)}"
 JEMALLOC_SO="${JEMALLOC_SO:-$(find_so "$CONDA_LIB"/libjemalloc.so* 2>/dev/null)}"
 HAVE_NUMACTL=0; command -v numactl >/dev/null 2>&1 && HAVE_NUMACTL=1

@@ -88,18 +88,27 @@ _resource_values() {
             --format=ElapsedRaw,AllocCPUS,AllocNodes 2>/dev/null \
         | head -1 | awk -F'|' '{print $1+0, $2+0, $3+0}')
     : "${elapsed:=0}"; : "${cpus:=0}"; : "${nodes:=0}"
-    # MaxRSS is reported on the .batch/.extern SUB-steps, not the alloc line, so
-    # scan all rows and take the max (normalize K/M/G/T suffix to KB).
-    local rss_kb
-    rss_kb=$(sacct -j "$jid" --noheader --parsable2 --format=MaxRSS 2>/dev/null | awk '
-        { v=$1; if (v=="") next
+    # MaxRSS (KB). archive_run is called at job END but while the job is still
+    # RUNNING, so sacct hasn't finalized the .batch step's MaxRSS yet -> it comes
+    # back empty (every Delta run reported 0). sstat reports a *running* step's
+    # live RSS, so try it first (.batch then .0), and fall back to sacct. awk
+    # normalizes the K/M/G/T suffix to KB and takes the max across rows.
+    local max_rss_awk='
+        { v=$1; if (v=="" || v=="-") next
           u=substr(v,length(v),1); n=v
           if      (u=="K") n=substr(v,1,length(v)-1)
           else if (u=="M") n=substr(v,1,length(v)-1)*1024
           else if (u=="G") n=substr(v,1,length(v)-1)*1048576
           else if (u=="T") n=substr(v,1,length(v)-1)*1073741824
           if (n+0>max) max=n+0 }
-        END { printf "%.0f", max+0 }')
+        END { printf "%.0f", max+0 }'
+    local rss_kb=0
+    if command -v sstat >/dev/null 2>&1; then
+        rss_kb=$(sstat -a -j "$jid" --noheader --parsable2 --format=MaxRSS 2>/dev/null | awk "$max_rss_awk")
+    fi
+    if [[ -z "$rss_kb" || "$rss_kb" == 0 ]]; then
+        rss_kb=$(sacct -j "$jid" --noheader --parsable2 --format=MaxRSS 2>/dev/null | awk "$max_rss_awk")
+    fi
     # Core-hours = elapsed_hours * allocated CPUs (≈ Delta CPU SUs).
     local core_hours
     core_hours=$(awk -v e="$elapsed" -v c="$cpus" 'BEGIN{printf "%.3f", (e/3600.0)*c}')

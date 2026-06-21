@@ -58,9 +58,12 @@ READ_LEN="${READ_LEN:-151}"
 FRAG_MEAN="${FRAG_MEAN:-350}"
 FRAG_SD="${FRAG_SD:-50}"
 PLOIDY="${PLOIDY:-2}"
-# Fixed seed string — determinism + the baseline both depend on this being
-# constant across runs/versions. Do not change between releases you compare.
-SEED="${SEED:-rneat delta baseline v1}"
+# Seed string — determinism + the baseline depend on this being constant across
+# runs/versions. When run as a job array (`sbatch --array=1-3`) for triplicate
+# replication, the array task id is appended so each replicate uses a distinct
+# seed (independent draw) while staying constant within a run; SLURM schedules
+# the tasks across (likely different) nodes. Plain submit → no suffix.
+SEED="${SEED:-rneat delta baseline v1}${SLURM_ARRAY_TASK_ID:+ rep$SLURM_ARRAY_TASK_ID}"
 # Two thread counts for the determinism check. Output must be content-identical.
 THREADS_A=1
 THREADS_B="${THREADS_B:-8}"

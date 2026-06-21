@@ -101,6 +101,10 @@ else
     echo "[1/6] Simulating tumor/normal reads..."
     PAIRED_FLAG=""
     [[ "$PAIRED" == "true" ]] && PAIRED_FLAG="--paired-ended --fragment-mean $FRAG_MEAN --fragment-st-dev $FRAG_SD"
+    # Under `sbatch --array=1-3` (triplicate), each replicate uses a distinct
+    # seed root (independent draw); SLURM spreads tasks across nodes. Plain
+    # submit uses the default root.
+    RNG_SEED_ROOT="${RNG_SEED_ROOT:-cancer-simulate}${SLURM_ARRAY_TASK_ID:+-rep$SLURM_ARRAY_TASK_ID}"
     bash "$REPO_ROOT/tools/cancer_simulate.sh" \
         --reference "$REFERENCE" \
         --output-prefix "$PREFIX" \
@@ -109,6 +113,7 @@ else
         --read-len "$READ_LEN" \
         --tumor-model "$TUMOR_MODEL" \
         --sv-rate-scale "$SV_RATE_SCALE" \
+        --rng-seed "$RNG_SEED_ROOT" \
         --rneat-bin "$RNEAT_BIN" \
         $PAIRED_FLAG
     echo "[1/6] Simulation complete."

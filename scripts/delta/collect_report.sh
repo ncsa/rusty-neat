@@ -36,7 +36,14 @@ mval() { awk -F'\t' -v k="$2" '$1==k{print $2; exit}' "$1"; }
         ver=$(mval "$m" rneat_version); gitd=$(mval "$m" git)
         ref=$(mval "$m" reference);     ch=$(mval "$m" core_hours)
         rss=$(mval "$m" maxrss_kb);     jid=$(mval "$m" slurm_job_id)
-        rss_gb=$(awk -v r="${rss:-0}" 'BEGIN{printf "%.2f", r/1048576}')
+        # sacct often fails to record MaxRSS on Delta (empty/0); show "—" rather
+        # than a misleading "0.00 GB". Per-tool memory is in the benchmark's
+        # median.tsv (peak_rss_mb, from /usr/bin/time).
+        if [[ "${rss:-0}" =~ ^0*$ || -z "${rss:-}" ]]; then
+            rss_gb="—"
+        else
+            rss_gb=$(awk -v r="$rss" 'BEGIN{printf "%.2f", r/1048576}')
+        fi
         echo "| $kind | $date | $ver | $gitd | $ref | ${ch:-0} | $rss_gb | $jid |"
         total_ch=$(awk -v t="$total_ch" -v c="${ch:-0}" 'BEGIN{printf "%.3f", t+c}')
     done
@@ -51,7 +58,9 @@ mval() { awk -F'\t' -v k="$2" '$1==k{print $2; exit}' "$1"; }
         echo
         echo "### $kind — job $jid"
         local_emitted=0
-        for art in baseline.json median.tsv scored.summary.csv scored.stats.csv het_af_histogram.tsv; do
+        for art in baseline.json median.tsv tune.tsv \
+                   rneat_scored.summary.csv neat_scored.summary.csv \
+                   scored.summary.csv scored.stats.csv het_af_histogram.tsv; do
             if [[ -f "$d/$art" ]]; then
                 echo
                 echo "<details><summary>\`$art\`</summary>"
@@ -71,6 +80,8 @@ mval() { awk -F'\t' -v k="$2" '$1==k{print $2; exit}' "$1"; }
 
     echo
     echo "---"
+    echo "_Max RSS via sstat/sacct (\"—\" = not recorded by Slurm accounting); the"
+    echo "benchmark's median.tsv carries per-tool peak RSS from /usr/bin/time._"
     echo "_Artifacts and SLURM logs for each run live under \`$RESULTS_DIR/<kind>/job_<id>/\`._"
 } > "$OUT"
 

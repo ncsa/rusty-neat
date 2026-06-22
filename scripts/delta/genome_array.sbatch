@@ -31,7 +31,16 @@
 #SBATCH --account=bhrd-delta-cpu
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
+# cpus-per-task is the per-node PACKING knob (rneat runs 1 thread); SLURM packs
+# ~128/cpus-per-task shards onto a shared node. The procs-per-node sweep
+# (tune_procs_per_node.sbatch) found per-node aggregate throughput plateaus near
+# 32-64 procs but per-process efficiency craters there (5-11%); the efficient
+# zone is ≤8 procs/node (≥29% eff, each shard near full speed). With a
+# core-hour-rich budget and minimum-wall-clock the goal, pack LIGHT and spread
+# across many nodes: 16 → ~8 shards/node (each ~29% eff). Lower it (→ more
+# shards/node, fewer nodes, cheaper) or raise it (→ fewer/node, faster per shard,
+# more nodes) per your node availability.
+#SBATCH --cpus-per-task=16
 #SBATCH --mem=16G
 #SBATCH --time=08:00:00
 #SBATCH --output=%x_%A_%a.out

@@ -59,11 +59,15 @@ impl SequenceBlock {
         self.ref_end - self.ref_start
     }
 
-    pub fn get_subseq(
+    /// Borrowed view of a sub-sequence — zero-copy. Preferred in the read-gen
+    /// hot loop, where the fragment is only read (not stored/mutated): avoids a
+    /// per-fragment heap allocation + copy. `get_subseq` delegates here for
+    /// callers that need an owned Vec.
+    pub fn get_subseq_slice(
         &self,
         request_start: usize,
         request_end: usize,
-    ) -> Result<Vec<Nucleotide>, SequenceBlockError> {
+    ) -> Result<&[Nucleotide], SequenceBlockError> {
         let block_start = request_start + self.ref_start;
         let block_end = request_end + self.ref_start;
         if request_start >= request_end {
@@ -84,7 +88,15 @@ impl SequenceBlock {
             );
             return Err(SequenceBlockError::OutOfBoundsError);
         }
-        Ok(self.sequence[request_start..request_end].to_owned())
+        Ok(&self.sequence[request_start..request_end])
+    }
+
+    pub fn get_subseq(
+        &self,
+        request_start: usize,
+        request_end: usize,
+    ) -> Result<Vec<Nucleotide>, SequenceBlockError> {
+        Ok(self.get_subseq_slice(request_start, request_end)?.to_owned())
     }
 }
 

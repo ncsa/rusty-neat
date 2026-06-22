@@ -84,14 +84,16 @@ echo "             $(conda run -n "$CONDA_ENV_NAME" bcftools --version 2>/dev/nu
 # via LD_PRELOAD to isolate allocator lock contention on Delta's EPYC); numactl
 # (a system tool on Delta) covers the NUMA lever. Harmless extras in this env.
 if conda env list | grep -q "^${BIOINF_ENV_NAME} "; then
-    echo "[3/4] Conda env '$BIOINF_ENV_NAME' exists — ensuring tuning allocators present..."
+    echo "[3/4] Conda env '$BIOINF_ENV_NAME' exists — ensuring tuning allocators + seqkit present..."
     conda run -n "$BIOINF_ENV_NAME" sh -c 'ls "$CONDA_PREFIX"/lib/libmimalloc.so* >/dev/null 2>&1' \
         || conda install -y -n "$BIOINF_ENV_NAME" -c conda-forge mimalloc jemalloc
+    conda run -n "$BIOINF_ENV_NAME" which seqkit >/dev/null 2>&1 \
+        || conda install -y -n "$BIOINF_ENV_NAME" -c bioconda seqkit
 else
-    echo "[3/4] Creating bioinf conda env (bcftools, bwa-mem2, gatk4, mimalloc, jemalloc)..."
+    echo "[3/4] Creating bioinf conda env (bcftools, bwa-mem2, gatk4, seqkit, mimalloc, jemalloc)..."
     conda create -y -n "$BIOINF_ENV_NAME" \
         -c bioconda -c conda-forge \
-        bcftools bwa-mem2 gatk4 mimalloc jemalloc
+        bcftools bwa-mem2 gatk4 seqkit mimalloc jemalloc
     echo "      Tools installed:"
     # `|| true`: head -1 closes the pipe after one line, so the tool gets
     # SIGPIPE (exit 141) and `set -o pipefail` would otherwise abort setup.

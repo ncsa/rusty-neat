@@ -201,6 +201,16 @@ remaining defects of the kind already found.
    parameters (purity, coverage, tumor mutation rate) to ensure rneat handles
    diverse inputs rather than a single tuned case.
 
+5. **Simulation-only timing for the community.** Benchmark *just the rneat
+   simulation stage* (FASTQ + truth VCF generation, no downstream alignment or
+   variant calling) across genome sizes, coverages, and the sharded whole-genome
+   configuration, to publish concrete real-world wall-clock / throughput numbers
+   users can plan around (e.g. "whole human genome at 30× in N minutes on K
+   nodes"). This isolates the simulator's own performance — rneat's core
+   contribution — from pipeline overhead, and is the headline deliverable for
+   communicating rneat's HPC performance to the community. (The sharded GRCh38
+   run in item 2 is the first such measurement at whole-genome scale.)
+
 ---
 
 ## 5. Phase 3 — stretch goals (time permitting)

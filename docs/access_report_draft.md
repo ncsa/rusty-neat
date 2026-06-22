@@ -114,6 +114,51 @@ fixed, and re-verified end-to-end:
 All affect every paired-end run, not just cancer. The somatic-SNV journey
 (0.33 → 0.94) and cancer-indel journey (0.20 → 0.90) trace the cumulative impact.
 
+### 3.6 Multicore scaling and the whole-genome strategy
+
+Benchmarking exposed a scaling characteristic that reshaped the whole-genome
+plan. On Delta's dual-socket EPYC nodes, rneat's in-process (rayon) threading
+*regresses*: yeast 30× takes 218 s on 1 thread but 278 s at 2 and 337 s at 16 —
+slower with more threads. A systematic isolation sweep (thread count ×
+{glibc, mimalloc, jemalloc} × {default, numactl --interleave}, 2 reps) showed the
+regression is **independent of allocator and of NUMA placement** — every variant
+regressed identically. The bottleneck is memory-bandwidth / cache-coherence
+saturation on shared, per-process state, not malloc lock contention or page
+locality.
+
+The decisive experiment was a **procs-per-node sweep**: running K independent
+single-threaded rneat *processes* concurrently on one node. Unlike threads,
+processes **scale** — aggregate throughput rises ~3.5× from 1 to 64 processes
+(0.0118 → 0.0409 jobs/s) before the bandwidth ceiling plateaus it:
+
+| processes/node | 1 | 2 | 4 | 8 | 16 | 32 | 64 | 128 |
+|---|---|---|---|---|---|---|---|---|
+| throughput (jobs/s) | 0.012 | 0.014 | 0.018 | 0.028 | 0.037 | 0.041 | **0.041** | 0.039 |
+| per-process efficiency | 100% | 60% | 39% | 29% | 19% | 11% | 5% | 3% |
+
+Same hardware and workload: **processes scale where threads regress.** This
+pinpoints the thread bottleneck as *intra-process* contention (shared thread
+pool / sequence-block / counter state crossing core complexes), capped by a real
+bandwidth ceiling at ~32–64 processes/node.
+
+**Consequence — rneat's HPC parallelism model is multi-process region-sharding,
+not threading.** A genome is partitioned into anchor-windows (rneat's
+generation-time BED filter assigns each fragment to exactly one window in
+absolute coordinates, so shards reconstruct a whole-genome run with no
+double-counting or gaps), simulated as one single-threaded process per window
+via a SLURM array spread across nodes, then concatenated. Projected GRCh38
+(~124 × 25 Mb shards): **~20–26 min wall-clock vs ~16 h single-threaded serial.**
+Tooling (`make_shard_beds.sh`, `genome_array.sbatch`, `merge_shards.sh`,
+`tune_procs_per_node.sbatch`) is implemented and locally validated; the
+full-scale GRCh38 run is the remaining Phase-2 measurement. A complementary
+single-thread optimization (eliminating a per-base heap allocation in the read
+loop) gives a further ~3–4 % and is byte-identical.
+
+The honest framing for the report: rneat's advantage is **single-thread
+efficiency + low, flat memory**, and HPC throughput is reclaimed by **process-
+level sharding** — a defensible, mechanistically-grounded story rather than a
+(false) claim of linear thread scaling.
+
 ---
 
 ## 4. Phase 2 — robustness at scale (planned, key deliverables)
@@ -129,12 +174,12 @@ remaining defects of the kind already found.
    Phase 1 metrics hold at genome scale and that nothing was overfit to one
    chromosome.
 
-2. **Multicore scaling / HPC tuning.** Resolve the thread regression so
-   whole-genome runs are fast (target: hours, not ~13 h single-threaded).
-   Isolation sweep (numactl × allocator × threads) to attribute the cause
-   (NUMA vs malloc contention), then reduce hot-loop allocations and/or enable
-   sub-contig chunking for large chromosomes, and chart the optimal full-genome
-   configuration.
+2. **Multicore scaling / HPC tuning — substantially complete (§3.6).** The
+   thread regression was characterized (memory-bandwidth-bound, allocator- and
+   NUMA-independent) and the strategy resolved: multi-process region-sharding.
+   Tooling is implemented and locally validated; the remaining item is the
+   full-scale **sharded GRCh38 run** to chart the measured whole-genome
+   wall-clock at the tuned packing (~8 shards/node).
 
 3. **Exercise the new cancer features deeply.** Validate structural-variant
    realism downstream with SV-aware callers (Manta / Delly / GRIDSS), which the

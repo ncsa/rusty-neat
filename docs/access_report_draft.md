@@ -118,17 +118,25 @@ All affect every paired-end run, not just cancer. The somatic-SNV journey
 
 Benchmarking exposed a scaling characteristic that reshaped the whole-genome
 plan. On Delta's dual-socket EPYC nodes, rneat's in-process (rayon) threading
-*regresses*: yeast 30× takes 218 s on 1 thread but 278 s at 2 and 337 s at 16 —
-slower with more threads. A systematic isolation sweep (thread count ×
-{glibc, mimalloc, jemalloc} × {default, numactl --interleave}, 2 reps) showed the
-regression is **independent of allocator and of NUMA placement** — every variant
-regressed identically. The bottleneck is memory-bandwidth / cache-coherence
-saturation on shared, per-process state, not malloc lock contention or page
-locality.
+initially *regressed* — yeast 30× took 218 s on 1 thread but 278 s at 2 and
+337 s at 16, monotonically slower with more threads. A systematic isolation
+sweep (thread count × {glibc, mimalloc, jemalloc} × {default, numactl
+--interleave}, 2 reps) showed *swapping* the allocator or NUMA policy made no
+difference — but that pointed at allocation *volume* rather than allocator
+*choice*. Eliminating the read loop's per-base heap allocation removed the
+at-scale degradation: 16-thread dropped from 337 s to **249 s (−26 %)**, now
+within ~14 % of single-thread, and the curve recovers with thread count instead
+of diverging.
 
-The decisive experiment was a **procs-per-node sweep**: running K independent
-single-threaded rneat *processes* concurrently on one node. Unlike threads,
-processes **scale** — aggregate throughput rises ~3.5× from 1 to 64 processes
+A residual 1→2-thread step (+28 %, ~218→280 s) remains; it is allocator- and
+NUMA-independent (identical under mimalloc/jemalloc), i.e. a memory-bandwidth /
+cross-socket floor, not something further code removes. Net: in-process
+threading is now **break-even — no longer harmful, but no net speedup** over
+single-thread, which remains the fastest per-worker mode.
+
+The decisive experiment for the whole-genome strategy was a **procs-per-node
+sweep**: K independent single-threaded rneat *processes* concurrently on one
+node. Processes **scale** — aggregate throughput rises ~3.5× from 1 to 64
 (0.0118 → 0.0409 jobs/s) before the bandwidth ceiling plateaus it:
 
 | processes/node | 1 | 2 | 4 | 8 | 16 | 32 | 64 | 128 |
@@ -136,10 +144,11 @@ processes **scale** — aggregate throughput rises ~3.5× from 1 to 64 processes
 | throughput (jobs/s) | 0.012 | 0.014 | 0.018 | 0.028 | 0.037 | 0.041 | **0.041** | 0.039 |
 | per-process efficiency | 100% | 60% | 39% | 29% | 19% | 11% | 5% | 3% |
 
-Same hardware and workload: **processes scale where threads regress.** This
-pinpoints the thread bottleneck as *intra-process* contention (shared thread
-pool / sequence-block / counter state crossing core complexes), capped by a real
-bandwidth ceiling at ~32–64 processes/node.
+Separate processes share no thread pool, sequence-block, or counter state and no
+allocator, yet still plateau at 32–64 — so the ceiling is genuine per-node
+**memory bandwidth**, library-independent. But because each single-threaded
+process runs at full speed, packing many per node and spreading across nodes
+extracts that bandwidth far better than threading a single process does.
 
 **Consequence — rneat's HPC parallelism model is multi-process region-sharding,
 not threading.** A genome is partitioned into anchor-windows (rneat's
@@ -150,14 +159,14 @@ via a SLURM array spread across nodes, then concatenated. Projected GRCh38
 (~124 × 25 Mb shards): **~20–26 min wall-clock vs ~16 h single-threaded serial.**
 Tooling (`make_shard_beds.sh`, `genome_array.sbatch`, `merge_shards.sh`,
 `tune_procs_per_node.sbatch`) is implemented and locally validated; the
-full-scale GRCh38 run is the remaining Phase-2 measurement. A complementary
-single-thread optimization (eliminating a per-base heap allocation in the read
-loop) gives a further ~3–4 % and is byte-identical.
+full-scale GRCh38 run is the remaining Phase-2 measurement.
 
 The honest framing for the report: rneat's advantage is **single-thread
 efficiency + low, flat memory**, and HPC throughput is reclaimed by **process-
 level sharding** — a defensible, mechanistically-grounded story rather than a
-(false) claim of linear thread scaling.
+(false) claim of linear thread scaling. Since each shard runs single-threaded on
+a (relatively slow) Delta core, ongoing single-thread optimization (reducing
+per-read allocations) compounds directly across the whole genome.
 
 ---
 

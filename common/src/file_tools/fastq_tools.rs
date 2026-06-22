@@ -106,7 +106,10 @@ pub fn write_block_fastq<B1: Write, B2: Write>(
     let frag_pad = if paired_ended { read_length } else { 32 };
     for (frag_idx, (start, end)) in block_fragments.into_iter().enumerate() {
         let padded_end = (end + frag_pad).min(seq_len);
-        let fragment = sequence_block.get_subseq(start, padded_end)?;
+        // Zero-copy: the fragment is only read (R1 reads it, R2 reads a suffix),
+        // never stored or mutated, so borrow it instead of allocating + copying
+        // a Vec per fragment. Borrows sequence_block for the iteration.
+        let fragment = sequence_block.get_subseq_slice(start, padded_end)?;
         // In long-read mode a fragment may be shorter than read_length; truncate the read
         // to the actual fragment length rather than discarding it.
         let effective_read_len = if long_reads {
@@ -179,7 +182,7 @@ pub fn write_block_fastq<B1: Write, B2: Write>(
         let quality_scores_1 =
             quality_score_model.generate_quality_scores(effective_read_len, rng)?;
         let r1_record = match generate_read(
-            &fragment,
+            fragment,
             &reads1_flagged,
             &read1_variants,
             effective_read_len,

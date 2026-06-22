@@ -23,7 +23,10 @@
 # Usage:
 #   sbatch scripts/delta/germline_e2e.sbatch
 #   REFERENCE=/path/ref.fa COVERAGE=30 TOOLS="rneat neat" sbatch scripts/delta/germline_e2e.sbatch
-#   TOOLS=rneat sbatch ...   # rneat only (skip the NEAT 4 arm)
+#   TOOLS=rneat sbatch ...        # rneat only (skip the NEAT 4 arm)
+#   SHUFFLE=1 TOOLS=rneat sbatch ...   # randomize read order before alignment
+#       (off by default; run once shuffled vs unshuffled to confirm the caller
+#        is read-order-independent — same recall expected)
 
 #SBATCH --job-name=rneat-germline
 #SBATCH --partition=cpu
@@ -58,6 +61,12 @@ COVERAGE="${COVERAGE:-30}"
 READ_LEN="${READ_LEN:-151}"
 FRAG_MEAN="${FRAG_MEAN:-350}"
 FRAG_SD="${FRAG_SD:-50}"
+# Read-order randomization before alignment (off by default). rneat/NEAT emit
+# reads in genome order; SHUFFLE=1 randomizes (seqkit, paired) to mimic real
+# sequencer output and to demonstrate the caller is order-independent. Needs
+# seqkit in the bioinf env (setup.sh installs it).
+SHUFFLE="${SHUFFLE:-0}"
+SHUFFLE_SEED="${SHUFFLE_SEED:-11}"
 
 HAPPY_SIF="${HAPPY_SIF:-$SCRATCH/sif/happy_v0.3.12.sif}"
 NEAT_ENV="${NEAT_ENV:-neat4}"         # conda env with NEAT 4
@@ -202,6 +211,26 @@ for tool in $TOOLS; do
             ;;
         *) echo "  unknown tool '$tool' — skipping." >&2; continue ;;
     esac
+
+    # Optional read-order randomization (SHUFFLE=1; off by default). rneat (and
+    # NEAT) write reads in genome-coordinate order, whereas a real sequencer's
+    # FASTQ is in arbitrary order. The caller is order-independent (the BAM is
+    # coordinate-sorted before calling, no order-based dup-marking), so this does
+    # not change recall in principle — the flag exists to *demonstrate* that
+    # (shuffled vs unshuffled diff) and to better mimic real input. seqkit's
+    # per-index permutation with a fixed seed shuffles R1/R2 identically, keeping
+    # mates in register.
+    if [[ "$SHUFFLE" == "1" ]]; then
+        sh1="$wd/shuf_r1.fastq.gz"; sh2="$wd/shuf_r2.fastq.gz"
+        if [[ -f "$sh1" && -f "$sh2" ]]; then
+            echo "  [$tool shuffle] shuffled FASTQ present — skipping."
+        else
+            echo "  [$tool shuffle] randomizing read order (seqkit, paired)..."
+            seqkit shuffle -s "$SHUFFLE_SEED" -o "$sh1" "$r1"
+            seqkit shuffle -s "$SHUFFLE_SEED" -o "$sh2" "$r2"
+        fi
+        r1="$sh1"; r2="$sh2"
+    fi
 
     align_call_score "$tool" "$wd" "$r1" "$r2" "$truth"
     # Stage the summary at the top level with a tool tag for the report.

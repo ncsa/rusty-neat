@@ -174,30 +174,62 @@ inflating an 8-min window 10–20×. On a shared partition this is uncontrollabl
 and makes the whole-genome wall-clock irreproducible.
 
 **Fix — exclusive nodes, packed by us.** Requesting whole nodes (`--exclusive`)
-and packing a controlled number of shards per node ourselves removes every
-stranger: the only remaining contention is our own K processes competing for the
-node's bandwidth — exactly the predictable curve the procs-per-node sweep
-characterized. We therefore report **both** figures: the realistic
-shared-partition result (3 h 41 m — what a naive submission yields) and the
-optimal exclusive-node result from a packing sweep (K ∈ {4, 8, 16} shards/node ×
-3 independent-seed reps), with the gap between them as the central HPC finding.
-Straggler-proofing (tight per-task walltime + `--requeue`) bounces any shard that
-lands on a sick node onto a fresh one instead of letting it stall the whole array.
+and packing K shards per node ourselves removes every stranger: the only
+remaining contention is our own K processes competing for the node's bandwidth.
+This worked — a single isolated 25 Mb window dropped back to **7 m 53 s** — but
+the path to a clean whole-genome number then exposed two further trade-offs that,
+together with the shared-partition result, form the complete HPC story.
 
-> **[PENDING — exclusive-node sweep]** Optimal K and the resulting whole-genome
-> wall-clock (mean ± sd over reps) to be filled from `run_genome_reps.sh` +
-> `aggregate_reps.sh`. Expected ≪ 3 h 41 m and approaching the ~20–26 min
-> projection once cross-tenant contention is eliminated.
+**Trade-off 1 — straggler ceiling vs. completeness.** The first exclusive sweep
+paired packing with a *tight* per-task walltime (`10 + 6K` min) as
+straggler-proofing. But packing slows each window (Trade-off 2), so the ceiling
+silently *killed* the heavy windows — every K's slowest shard landed exactly on
+its walltime (K=4: 34 min, K=8: 58 min, K=16: 103 min) and runs finished
+incomplete (197–268 of 306 shards). Lesson: once `--exclusive` removes the
+cross-tenant straggler, the tight ceiling is not only unnecessary, it is
+*harmful*; the walltime must comfortably exceed the packed-window time, and
+`--requeue` alone covers genuine node failure. (Fixed to `30 + 20K` min.)
 
-**Recommendation for HPC users.** Run rneat's sharded whole-genome mode on
-**exclusive nodes**, packing ~4–8 single-threaded shards per node (the
-≥29 %-efficiency zone) and spreading across as many nodes as the allocation
-allows. Do **not** rely on a shared per-core slice: it exposes a
-memory-bandwidth-bound simulator to unbounded cross-tenant contention and can
-inflate wall-clock by an order of magnitude with no warning. Tooling
+**Trade-off 2 — packing density vs. per-shard speed.** Even with strangers gone,
+rneat is hard memory-bandwidth-bound, so our *own* co-packed processes slow each
+other roughly linearly: a window that runs ~8 min alone takes ≥34 min at K=4,
+≥58 min at K=8, ≥103 min at K=16. The node's bandwidth saturates by ~K=4, so
+**packing more shards per node buys no extra throughput** — it only inflates
+per-shard latency. Wall-clock is therefore minimized by *low* K (each shard near
+full speed) spread across *many* nodes, not by dense packing.
+
+**Trade-off 3 — compute speed vs. schedulability.** But low-K-many-nodes is
+exactly the hardest thing to schedule: `--exclusive` claims a full 128-core node
+even for a 1-core (K=1) task, so minimizing compute wall-clock means requesting
+dozens of whole nodes, which on a busy shared cluster queues behind everyone
+else (observed: 77- and 153-task low-K arrays stuck `PD (Resources/Priority)`
+with no estimable start). The bandwidth-optimal configuration is the
+scheduling-pessimal one.
+
+These three trade-offs resolve into one rule and three regimes:
+
+| Approach | Compute speed | Schedulability | Reproducible? | Best when |
+|---|---|---|---|---|
+| Shared partition, any packing | unpredictable (3 h 41 m; 8-min windows → 170 min under co-tenants) | instant | no | never the right choice |
+| Exclusive, **low** K, many nodes | fastest (~8 min/window) | poor on a busy cluster | yes | cluster is idle / reserved nodes |
+| Exclusive, **moderate** K, fewer nodes | good | schedules quickly | yes | busy shared cluster (pragmatic) |
+
+**Recommendation for HPC users.** Always run on **exclusive nodes** — a shared
+per-core slice exposes a bandwidth-bound simulator to unbounded cross-tenant
+contention and can inflate wall-clock 10–20× with no warning. Then **match
+packing density to node availability**: pack *light* (1–2 shards/node) across as
+many nodes as you can get when the cluster is idle or you hold a reservation
+(minimizes compute wall-clock); pack *heavier* (8–16/node) when nodes are scarce
+(fewer whole-node grabs → schedules sooner, at the cost of slower per-shard time).
+Use a generous per-task walltime plus `--requeue`; never a tight ceiling. Tooling
 (`make_shard_beds.sh`, `genome_array.sbatch` [exclusive packing],
-`run_genome_reps.sh`, `aggregate_reps.sh`, `merge_shards.sh`,
+`run_genome_reps.sh` [K-sweep × reps], `aggregate_reps.sh`, `merge_shards.sh`,
 `tune_procs_per_node.sbatch`) is implemented and validated.
+
+> **[PENDING — clean exclusive numbers]** A completeness-verified K=2/K=4 run
+> (generous walltime, on whatever exclusive nodes schedule) will fill the exact
+> optimal whole-genome wall-clock ± sd. The trade-off structure above is final
+> regardless of the precise figure.
 
 The honest framing for the report: rneat's advantage is **single-thread
 efficiency + low, flat memory**, and HPC throughput is reclaimed by **process-

@@ -51,10 +51,13 @@ echo "NOTE: ~$(( $(echo "$KS" | wc -w) * REPS * 38 )) GB of FASTQ total across a
 
 for K in $KS; do
     T=$(( (N + K - 1) / K ))               # node-tasks = ceil(N / K)
-    # Tight per-task walltime sized to K: ~8 min/window at full node bandwidth,
-    # degrading as K windows share it. This is the straggler ceiling — small
-    # enough that --requeue bounces a sick node, large enough for a healthy batch.
-    MINUTES=$(( 10 + K * 6 ))
+    # Per-task walltime. --exclusive already removes the cross-tenant straggler
+    # that motivated a tight ceiling, so this must be GENEROUS: a heavy 25 Mb
+    # window runs ~8 min alone but slows ~linearly under packing (~0.8*K), and a
+    # ceiling below that silently kills legitimate slow shards (the first sweep
+    # capped every heavy window exactly at a 10+6K ceiling -> incomplete runs).
+    # Override with WALL_MINUTES if needed.
+    MINUTES="${WALL_MINUTES:-$(( 30 + K * 20 ))}"
     WALL=$(printf '%02d:%02d:00' $(( MINUTES / 60 )) $(( MINUTES % 60 )))
     for r in $(seq 1 "$REPS"); do
         OUTROOT="$SCRATCH/wg_${TAG}_k${K}_rep${r}"

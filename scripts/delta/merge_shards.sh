@@ -7,16 +7,34 @@
 #            and shards are disjoint, so names are globally unique — no rename).
 #   - VCF:   bcftools concat (disjoint, ordered shards) then sort, bgzip, index.
 #
-# Run on a login node or as a dependent job (sbatch --dependency=afterok:<arrayjobid>).
-# Needs bcftools (bioinf env). Verifies every expected shard is present first.
+# Run on a COMPUTE node — it cat's ~tens of GB of FASTQ + bcftools concat|sort
+# the truth VCF, which is too heavy for a shared login node (and may be killed
+# by login-node limits). Needs bcftools (bioinf env). Verifies every expected
+# shard is present first.
 #
-# Usage:
-#   SHARD_OUTROOT=$SCRATCH/wg_<arrayjobid> bash scripts/delta/merge_shards.sh
+# Usage (submit from the repo root):
+#   sbatch scripts/delta/merge_shards.sh                                   # batch job
+#   sbatch --dependency=afterok:<arrayjobid> scripts/delta/merge_shards.sh # auto after the array
+#   SHARD_OUTROOT=$SCRATCH/wg_<id> sbatch scripts/delta/merge_shards.sh
+#   (interactive alt: srun ... --pty bash, then SHARD_OUTROOT=... bash scripts/delta/merge_shards.sh)
 #   (optional) OUT_PREFIX=$SCRATCH/wg_<id>/merged  EXPECT_SHARDS=<N>
+
+#SBATCH --job-name=rneat-merge
+#SBATCH --partition=cpu
+#SBATCH --account=bhrd-delta-cpu
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=32G
+#SBATCH --time=02:00:00
+#SBATCH --output=%x_%j.out
+#SBATCH --error=%x_%j.err
 
 set -euo pipefail
 
-REPO_ROOT="${RNEAT_REPO:-$(cd "$(dirname "$0")/../.." && pwd)}"
+# Under sbatch, $0 is a spooled copy — derive the repo from the submit dir
+# (submit from the repo root) or override with RNEAT_REPO.
+REPO_ROOT="${RNEAT_REPO:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}}"
 source "$REPO_ROOT/scripts/delta/lib_report.sh"   # $SCRATCH + setup_conda/conda_activate
 
 SHARD_OUTROOT="${SHARD_OUTROOT:?set SHARD_OUTROOT to the array OUTROOT (e.g. \$SCRATCH/wg_<jobid>)}"

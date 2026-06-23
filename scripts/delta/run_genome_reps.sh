@@ -39,9 +39,15 @@ SV_RATE_SCALE="${SV_RATE_SCALE:-0}"
 N=$(ls "$SHARD_DIR"/shard_*.bed 2>/dev/null | wc -l)
 (( N > 0 )) || { echo "no shard_*.bed under $SHARD_DIR — run make_shard_beds.sh first" >&2; exit 1; }
 
-MANIFEST="$SCRATCH/wg_sweep_${TAG}.manifest"
+# Manifest lives on DURABLE storage, never scratch — scratch can throw transient
+# EIO / hit quota mid-run, and the driver must not half-submit because a tiny
+# bookkeeping write failed. OUTROOTs (the bulky FASTQ) still go to scratch.
+MANIFEST="${MANIFEST:-${RESULTS_DIR:-$HOME}/rneat-sweeps/wg_sweep_${TAG}.manifest}"
+mkdir -p "$(dirname "$MANIFEST")"
 { echo "# K rep jobid nodes outroot"; } > "$MANIFEST"
 echo "shards=$N  KS=[$KS]  reps=$REPS  maxnodes=$MAXNODES  tag=$TAG"
+# Rough footprint warning: ~35-40 GB FASTQ per whole-genome 30x run.
+echo "NOTE: ~$(( $(echo "$KS" | wc -w) * REPS * 38 )) GB of FASTQ total across all (K,rep) runs — check scratch quota."
 
 for K in $KS; do
     T=$(( (N + K - 1) / K ))               # node-tasks = ceil(N / K)

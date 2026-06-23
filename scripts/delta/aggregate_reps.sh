@@ -33,8 +33,8 @@ shard_dist() {
         [[ -f "$f" ]] || continue
         local e; e=$(awk -F'): ' '/Elapsed/{print $2}' "$f")
         [[ -n "$e" ]] && awk -F: -v x="$e" 'BEGIN{n=split(x,a,":"); print (n==3)?a[1]*3600+a[2]*60+a[3]:a[1]*60+a[2]}'
-    done | sort -n | awk '{v[NR]=$1; s+=$1} END{ if(NR==0){printf "n/a"; next}
-        printf "n=%d median=%.1fm p90=%.1fm max=%.1fm", NR, v[int(NR/2)]/60, v[int(NR*0.9)]/60, v[NR]/60 }'
+    done | sort -n | awk '{v[NR]=$1; s+=$1} END{ if(NR==0){printf "n/a"}
+        else {printf "n=%d median=%.1fm p90=%.1fm max=%.1fm", NR, v[int(NR/2)]/60, v[int(NR*0.9)]/60, v[NR]/60} }'
 }
 
 fmt() { awk -v s="$1" 'BEGIN{ if(s==""){print "?"} else printf "%dm%02ds", int(s/60), s%60 }'; }

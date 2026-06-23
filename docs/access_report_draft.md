@@ -155,11 +155,49 @@ not threading.** A genome is partitioned into anchor-windows (rneat's
 generation-time BED filter assigns each fragment to exactly one window in
 absolute coordinates, so shards reconstruct a whole-genome run with no
 double-counting or gaps), simulated as one single-threaded process per window
-via a SLURM array spread across nodes, then concatenated. Projected GRCh38
-(~124 × 25 Mb shards): **~20–26 min wall-clock vs ~16 h single-threaded serial.**
-Tooling (`make_shard_beds.sh`, `genome_array.sbatch`, `merge_shards.sh`,
-`tune_procs_per_node.sbatch`) is implemented and locally validated; the
-full-scale GRCh38 run is the remaining Phase-2 measurement.
+via a SLURM array spread across nodes, then concatenated.
+
+**First full GRCh38 run — and the contention discovery.** The initial
+whole-genome run (306 × 25 Mb shards, one single-threaded rneat per shard,
+submitted as a SLURM array on Delta's *shared* `cpu` partition with a 16-core
+slice per shard) completed in **3 h 41 m** — far above the ~20–26 min the
+procs-per-node sweep projected. Per-shard timing was sharply **bimodal**: median
+2.5 min, but p90 131 min and a worst shard of **170 min** for an ordinary 25 Mb
+window that runs in ~8 min on an unloaded node (confirmed by re-running that exact
+window on an isolated node: 7 m 53 s). Grouping shard time by compute node exposed
+the cause: the slow shards clustered on nodes holding only 1–2 of our shards,
+while nodes that ran 12–17 of our shards each were uniformly fast — the *inverse*
+of what our own packing would produce. The slowdown therefore came from **other
+tenants' jobs** co-scheduled on those nodes: because rneat is
+memory-bandwidth-bound (above), a bandwidth-hungry neighbour starves it,
+inflating an 8-min window 10–20×. On a shared partition this is uncontrollable
+and makes the whole-genome wall-clock irreproducible.
+
+**Fix — exclusive nodes, packed by us.** Requesting whole nodes (`--exclusive`)
+and packing a controlled number of shards per node ourselves removes every
+stranger: the only remaining contention is our own K processes competing for the
+node's bandwidth — exactly the predictable curve the procs-per-node sweep
+characterized. We therefore report **both** figures: the realistic
+shared-partition result (3 h 41 m — what a naive submission yields) and the
+optimal exclusive-node result from a packing sweep (K ∈ {4, 8, 16} shards/node ×
+3 independent-seed reps), with the gap between them as the central HPC finding.
+Straggler-proofing (tight per-task walltime + `--requeue`) bounces any shard that
+lands on a sick node onto a fresh one instead of letting it stall the whole array.
+
+> **[PENDING — exclusive-node sweep]** Optimal K and the resulting whole-genome
+> wall-clock (mean ± sd over reps) to be filled from `run_genome_reps.sh` +
+> `aggregate_reps.sh`. Expected ≪ 3 h 41 m and approaching the ~20–26 min
+> projection once cross-tenant contention is eliminated.
+
+**Recommendation for HPC users.** Run rneat's sharded whole-genome mode on
+**exclusive nodes**, packing ~4–8 single-threaded shards per node (the
+≥29 %-efficiency zone) and spreading across as many nodes as the allocation
+allows. Do **not** rely on a shared per-core slice: it exposes a
+memory-bandwidth-bound simulator to unbounded cross-tenant contention and can
+inflate wall-clock by an order of magnitude with no warning. Tooling
+(`make_shard_beds.sh`, `genome_array.sbatch` [exclusive packing],
+`run_genome_reps.sh`, `aggregate_reps.sh`, `merge_shards.sh`,
+`tune_procs_per_node.sbatch`) is implemented and validated.
 
 The honest framing for the report: rneat's advantage is **single-thread
 efficiency + low, flat memory**, and HPC throughput is reclaimed by **process-
@@ -186,9 +224,12 @@ remaining defects of the kind already found.
 2. **Multicore scaling / HPC tuning — substantially complete (§3.6).** The
    thread regression was characterized (memory-bandwidth-bound, allocator- and
    NUMA-independent) and the strategy resolved: multi-process region-sharding.
-   Tooling is implemented and locally validated; the remaining item is the
-   full-scale **sharded GRCh38 run** to chart the measured whole-genome
-   wall-clock at the tuned packing (~8 shards/node).
+   The first full GRCh38 sharded run surfaced a further finding — on a *shared*
+   partition, cross-tenant memory-bandwidth contention inflated the wall-clock to
+   3 h 41 m (vs an ~8 min/window unloaded cost). The remaining item is the
+   **exclusive-node packing sweep** (K ∈ {4, 8, 16} shards/node × reps) to chart
+   the reproducible optimal whole-genome wall-clock and quantify the
+   shared-vs-exclusive gap that grounds the HPC-usage recommendation.
 
 3. **Exercise the new cancer features deeply.** Validate structural-variant
    realism downstream with SV-aware callers (Manta / Delly / GRIDSS), which the

@@ -154,6 +154,23 @@ pub fn run_neat(
     let fasta = FastaStream::open(&config.reference)?;
     for (idx, result) in fasta.enumerate() {
         let (name, raw) = result?;
+        // Always record the contig in file order so downstream per-contig RNG
+        // derivations (IUPAC at `idx`, mutated maps at `idx`, chunks at
+        // contig_idx) key off the contig's ORIGINAL position — preserving
+        // byte-identical output regardless of which contigs are loaded.
+        contig_order_in_file.push(name.clone());
+        // target_bed-aware loading: only materialize the sequence for contigs in
+        // the target BED. target_bed already restricts read GENERATION to those
+        // contigs (process_chunk skips the rest), so non-target contigs were
+        // loaded into RAM but never used — wasteful at genome scale (a chr1
+        // shard otherwise holds all ~3 GB of GRCh38 to simulate 25 Mb). Skipping
+        // them here changes no output (those contigs produce no reads either
+        // way); it only drops the dead weight.
+        if let Some(bed) = &target_bed
+            && !bed.contains_key(&name)
+        {
+            continue;
+        }
         let mut child_rng = rng.derive_child(idx as u64);
         let (seq, iupac_count) = resolve_iupac_bases(&raw, &mut child_rng)?;
         if iupac_count > 0 {
@@ -166,15 +183,16 @@ pub fn run_neat(
         // get_non_n_regions) excludes them from read anchoring, mutation
         // placement, and SV anchoring, so assembly gaps stay as coverage
         // dropouts rather than being filled with fabricated sequence.
-        contig_order_in_file.push(name.clone());
         reference_map.insert(name, seq);
     }
     let reference = Arc::new(reference_map);
 
     let bam_context: Option<Arc<BamContext>> = if config.produce_bam {
+        // Only loaded (target) contigs have sequence; with target_bed set the
+        // BAM header covers the targeted contigs (the only ones that get reads).
         let contig_lengths: Vec<(String, usize)> = contig_order_in_file
             .iter()
-            .map(|name| (name.clone(), reference.get(name).unwrap().len()))
+            .filter_map(|name| reference.get(name).map(|s| (name.clone(), s.len())))
             .collect();
         Some(Arc::new(BamContext::new(&contig_lengths)))
     } else {
@@ -186,8 +204,13 @@ pub fn run_neat(
     let mut all_mutated_maps = HashMap::new();
     let mut max_del_lens = HashMap::new();
     for (m_idx, name) in contig_order_in_file.iter().enumerate() {
+        // Skip contigs whose sequence wasn't loaded (non-target under
+        // target_bed). m_idx stays the original file position, so the loaded
+        // contigs' mutation RNG (derive_child(m_idx + 1000000)) is unchanged.
+        let Some(seq) = reference.get(name) else {
+            continue;
+        };
         let m_rng = rng.derive_child((m_idx + 1000000) as u64);
-        let seq = reference.get(name).unwrap();
         let (m_map, max_del) = generate_mutated_map(
             name,
             seq,
@@ -245,8 +268,21 @@ pub fn run_neat(
         .iter()
         .enumerate()
         .flat_map(|(contig_idx, name)| {
-            let contig_len = ctx.reference.get(name).map(|s| s.len()).unwrap_or(0);
-            split_contig_into_chunks(contig_len, chunk_size)
+            // Non-target contigs aren't loaded (target_bed-aware loading), so
+            // they produce no chunks — skip them rather than emitting a chunk
+            // that would panic in process_chunk's seq_cache.get. contig_idx
+            // (the enumerate position) is preserved for loaded contigs, so their
+            // per-chunk RNG (derive_child(contig_idx)) is unchanged.
+            let contig_len = match ctx.reference.get(name) {
+                Some(seq) => seq.len(),
+                None => 0,
+            };
+            let chunks = if contig_len == 0 {
+                Vec::new()
+            } else {
+                split_contig_into_chunks(contig_len, chunk_size)
+            };
+            chunks
                 .into_iter()
                 .enumerate()
                 .map(move |(chunk_idx, (chunk_start, chunk_end))| ChunkWork {

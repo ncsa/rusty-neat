@@ -192,11 +192,14 @@ cross-tenant straggler, the tight ceiling is not only unnecessary, it is
 
 **Trade-off 2 — packing density vs. per-shard speed.** Even with strangers gone,
 rneat is hard memory-bandwidth-bound, so our *own* co-packed processes slow each
-other roughly linearly: a window that runs ~8 min alone takes ≥34 min at K=4,
-≥58 min at K=8, ≥103 min at K=16. The node's bandwidth saturates by ~K=4, so
-**packing more shards per node buys no extra throughput** — it only inflates
-per-shard latency. Wall-clock is therefore minimized by *low* K (each shard near
-full speed) spread across *many* nodes, not by dense packing.
+other **superlinearly**. From the clean, complete (uncapped) runs, the heaviest
+25 Mb window took ~8 min alone (K=1), **29 min at K=2, and 101 min at K=4** — the
+node's bandwidth saturates almost immediately (by K=2), so packing more shards per
+node buys no extra throughput, only steeply rising per-shard latency. (The
+human-genome penalty is harsher than the earlier yeast procs-per-node sweep
+implied: a 25 Mb window's working set drives far more memory traffic than yeast.)
+Wall-clock compute is therefore minimized by *low* K (each shard near full speed)
+spread across *many* nodes, not by dense packing.
 
 **Trade-off 3 — compute speed vs. schedulability.** But low-K-many-nodes is
 exactly the hardest thing to schedule: `--exclusive` claims a full 128-core node
@@ -226,10 +229,27 @@ Use a generous per-task walltime plus `--requeue`; never a tight ceiling. Toolin
 `run_genome_reps.sh` [K-sweep × reps], `aggregate_reps.sh`, `merge_shards.sh`,
 `tune_procs_per_node.sbatch`) is implemented and validated.
 
-> **[PENDING — clean exclusive numbers]** A completeness-verified K=2/K=4 run
-> (generous walltime, on whatever exclusive nodes schedule) will fill the exact
-> optimal whole-genome wall-clock ± sd. The trade-off structure above is final
-> regardless of the precise figure.
+**Measured results (each run complete, 306/306 shards).** Two
+completeness-verified exclusive runs against the shared baseline:
+
+| Run | Whole-genome wall | Heaviest window | Median window | Effective nodes |
+|---|---|---|---|---|
+| Shared partition (16-core slice) | 3 h 41 m | 170 min | 2.4 min | ~varies (contended) |
+| Exclusive, **K=2** | **2 h 30 m** | **29 min** | 0.8 min | ~30 (in waves) |
+| Exclusive, **K=4** | 12 h 32 m | 101 min | 0.4 min | ~10 (starved) |
+
+Two results stand out. First, **exclusive K=2 beat the shared run on every axis** —
+faster wall-clock (2 h 30 m vs 3 h 41 m) and, more durably, a **6× tighter
+per-window ceiling (29 min vs 170 min)** with no contention outliers; that ceiling
+improvement is reproducible and scheduling-independent, where the wall-clock is
+not. Second, **K=4's 12.5 h wall is almost entirely scheduling latency, not
+compute**: its heaviest window was 101 min, but its 77 whole-node tasks trickled
+through only ~10 concurrently-available exclusive nodes (vs ~30 for K=2, which was
+submitted first and got nodes first). The K2/K4 wall gap is therefore
+node-availability luck, not packing — Trade-off 3 made literal. With full node
+availability, K=2's compute floor is a single ~29-min wave (153 nodes), i.e. a
+whole human genome at 30× in **~30 min** when the nodes are actually there; the
+2 h 30 m reflects getting only ~30 of them, in waves, on a busy day.
 
 The honest framing for the report: rneat's advantage is **single-thread
 efficiency + low, flat memory**, and HPC throughput is reclaimed by **process-

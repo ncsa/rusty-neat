@@ -273,15 +273,15 @@ remaining defects of the kind already found.
    Phase 1 metrics hold at genome scale and that nothing was overfit to one
    chromosome.
 
-2. **Multicore scaling / HPC tuning — substantially complete (§3.6).** The
-   thread regression was characterized (memory-bandwidth-bound, allocator- and
-   NUMA-independent) and the strategy resolved: multi-process region-sharding.
-   The first full GRCh38 sharded run surfaced a further finding — on a *shared*
-   partition, cross-tenant memory-bandwidth contention inflated the wall-clock to
-   3 h 41 m (vs an ~8 min/window unloaded cost). The remaining item is the
-   **exclusive-node packing sweep** (K ∈ {4, 8, 16} shards/node × reps) to chart
-   the reproducible optimal whole-genome wall-clock and quantify the
-   shared-vs-exclusive gap that grounds the HPC-usage recommendation.
+2. **Multicore scaling / HPC tuning — COMPLETE (§3.6).** The thread regression
+   was characterized (memory-bandwidth-bound, allocator- and NUMA-independent) and
+   the strategy resolved and *measured*: multi-process region-sharding on exclusive
+   nodes. The full GRCh38 sweep produced the shared-vs-exclusive contrast (3 h 41 m
+   contended → 2 h 30 m clean at K=2, with a 6× tighter per-window ceiling), the
+   superlinear packing curve (8→29→101 min/window at K=1/2/4), and the three-regime
+   HPC-usage recommendation. The only follow-on is opportunistic: a low-K run on a
+   *reservation* to demonstrate the ~30 min compute floor when whole nodes are
+   actually available.
 
 3. **Exercise the new cancer features deeply.** Validate structural-variant
    realism downstream with SV-aware callers (Manta / Delly / GRIDSS), which the
@@ -302,7 +302,8 @@ remaining defects of the kind already found.
    nodes"). This isolates the simulator's own performance — rneat's core
    contribution — from pipeline overhead, and is the headline deliverable for
    communicating rneat's HPC performance to the community. (The sharded GRCh38
-   run in item 2 is the first such measurement at whole-genome scale.)
+   sweep in item 2 is the first such measurement at whole-genome scale: a complete
+   human genome at 30× in 2 h 30 m on ~30 exclusive nodes, ~30 min compute-bound.)
 
 ---
 

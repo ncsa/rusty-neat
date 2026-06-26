@@ -219,7 +219,8 @@ else
         --runDir "$MANTA_DIR" 2>&1 | tail -5
     "$MANTA_DIR/runWorkflow.py" -j "$THREADS" 2>&1 | tail -10
     [[ -f "$MANTA_SV" ]] || { echo "ERROR: Manta produced no somaticSV.vcf.gz" >&2; exit 1; }
-    echo "[4/5] Manta complete: $(bcftools view -H "$MANTA_SV" | wc -l) somatic SV calls."
+    # Count without bcftools — the manta env doesn't have it; zcat/grep are env-independent.
+    echo "[4/5] Manta complete: $(zcat "$MANTA_SV" | grep -vc '^#' || true) somatic SV calls."
 fi
 
 # ── Stage 5: Score with truvari (overall + per SV type) ──────────────────
@@ -227,11 +228,15 @@ echo "[5/5] Scoring SVs with truvari..."
 conda_activate "$TRUVARI_ENV"
 
 run_truvari() {  # <truth.vcf.gz> <out-subdir-name>
-    local truth="$1" name="$2" out="$OUTDIR/truvari_$name"
+    # Separate `local`s on purpose: a combined `local a=$1 b=$2 c=...$b` expands
+    # $b before it's assigned, which trips `set -u` (unbound variable).
+    local truth="$1"
+    local name="$2"
+    local out="$OUTDIR/truvari_$name"
     rm -rf "$out"   # truvari requires the output dir not pre-exist
     truvari bench -b "$truth" -c "$MANTA_SV" -f "$REFERENCE" -o "$out" --passonly 2>&1 | tail -3 || true
     if [[ -f "$out/summary.json" ]]; then
-        python - "$out/summary.json" "$name" <<'PY'
+        python3 - "$out/summary.json" "$name" <<'PY'
 import json, sys
 s = json.load(open(sys.argv[1])); name = sys.argv[2]
 print(f"  {name:<8} recall={s.get('recall',0):.3f}  precision={s.get('precision',0):.3f}  "

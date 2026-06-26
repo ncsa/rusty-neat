@@ -302,5 +302,15 @@ a simulator bug — inspect the pre-flight schema dump. Uniformly low recall for
 type rneat emitted heavily = candidate SV-generation bug (the Phase-2 target).
 EOF
 
+# Reclaim scratch once scoring is done: FASTQ is the bulk (~GBs/run at 60x) and
+# isn't needed afterward — BAMs, Manta calls, the truth VCFs, and the truvari
+# summaries are kept, so re-scoring and re-calling still work. This keeps a
+# parameter sweep (per-tissue / purity) from exhausting the shared project quota.
+# Set PRUNE_FASTQ=0 to retain the reads.
+if [[ "${PRUNE_FASTQ:-1}" == "1" ]]; then
+    echo "[prune] removing FASTQ intermediates (set PRUNE_FASTQ=0 to keep)..."
+    rm -f "$OUTDIR"/sample_*_r1.fastq.gz "$OUTDIR"/sample_*_r2.fastq.gz
+fi
+
 # Persist report artifacts off scratch + record provenance/resources.
 archive_run sv "$OUTDIR" truvari_overall/summary.json

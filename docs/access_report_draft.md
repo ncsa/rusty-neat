@@ -316,6 +316,18 @@ Scoreable-class recall holds at **~0.89–0.94 regardless of tissue**; a tissue'
 *overall* recall simply tracks how much of its spectrum is BND (skin 47% → 0.43,
 lung 27% → 0.61) — a scorer limitation, not detection quality.
 
+**Recall vs. tumor purity — robust, with a coverage-model caveat at the extreme.**
+Holding model and total coverage fixed (60×) and sweeping purity, DEL+DUP+INV recall
+is **0.91 / 0.94 / 0.94** at purity 0.3 / 0.5 / 0.7, then drops to **0.17 at 0.9**.
+The collapse is *not* a detection failure: `cancer_simulate` splits a fixed coverage
+budget by purity (`normal = (1−purity)·total`), so at purity 0.9 the matched normal
+falls to **6×**, and Manta — unable to score somatic confidence against so thin a
+normal — filters 37 of 68 calls as `MinSomaticScore` (which `--passonly` then drops).
+Recall is stable as long as the matched normal stays ≳18× (purity ≤0.7 here); the
+extreme-purity drop is a simulation coverage-model artifact (#315: decouple
+matched-normal depth from purity), not SV generation. Real tumor/normal pairs
+sequence the normal at an independent depth, avoiding this.
+
 This is the first end-to-end validation of rneat's structural-variant output, and
 the read-level signal is correct across all classes and sizes. (Detection needs
 adequate depth and SV count: a 30×/0.6 chr22 run yields too few somatic SVs to

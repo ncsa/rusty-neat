@@ -70,6 +70,9 @@ TUMOR_MODEL="${TUMOR_MODEL:-$REPO_ROOT/tools/cosmic_v104_pancancer_model.json.gz
 
 MANTA_ENV="${MANTA_ENV:-manta}"
 TRUVARI_ENV="${TRUVARI_ENV:-truvari}"
+# rneat SVs reach ~1 Mb; truvari's default --sizemax is 50 kb, which would silently
+# EXCLUDE most large rneat SVs from scoring. Raise it to cover the full range.
+TRUVARI_SIZEMAX="${TRUVARI_SIZEMAX:-5000000}"
 
 THREADS=$SLURM_CPUS_PER_TASK
 CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$SCRATCH/cargo-target/rusty-neat}"
@@ -249,7 +252,8 @@ run_truvari() {  # <truth.vcf.gz> <out-subdir-name>
     local name="$2"
     local out="$OUTDIR/truvari_$name"
     rm -rf "$out"   # truvari requires the output dir not pre-exist
-    truvari bench -b "$truth" -c "$MANTA_SV" -f "$REFERENCE" -o "$out" --passonly 2>&1 | tail -3 || true
+    truvari bench -b "$truth" -c "$MANTA_SV" -f "$REFERENCE" -o "$out" \
+        --passonly --sizemax "$TRUVARI_SIZEMAX" 2>&1 | tail -3 || true
     if [[ -f "$out/summary.json" ]]; then
         python3 - "$out/summary.json" "$name" <<'PY'
 import json, sys

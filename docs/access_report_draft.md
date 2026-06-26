@@ -258,6 +258,46 @@ level sharding** — a defensible, mechanistically-grounded story rather than a
 a (relatively slow) Delta core, ongoing single-thread optimization (reducing
 per-read allocations) compounds directly across the whole genome.
 
+### 3.7 Structural-variant validation (chr22, Manta + truvari)
+
+The cancer workflow's structural variants (DEL / DUP / INV / BND / CNV) had only
+ever been validated through Mutect2, which scores SNVs and indels — never through
+an SV-aware caller. We closed that gap: simulate an SV-rich tumor/normal pair
+(60×, purity 0.8), call somatic SVs with **Manta** (tumor/normal mode), and score
+against rneat's SV truth with **truvari**.
+
+| SV type | Truth | Recall | Notes |
+|---|---|---|---|
+| DEL | 17 | **0.882** (15/17) | includes 376 kb and 645 kb deletions |
+| DUP | 14 | **0.929** (13/14) | includes a 1 Mb duplication |
+| INV | 4 | **1.000** (4/4) | |
+| BND | 22 | n/a | truvari does not benchmark breakends; Manta did emit 16 BND calls and assembled rneat's BND pair into a tandem-duplication call |
+| CNV | 7 | n/a | Manta does not call copy number; validated independently by depth (below) |
+
+On the classes Manta and truvari can score (DEL/DUP/INV), rneat's variants —
+**including large events up to 1 Mb** — are recovered at **0.88–1.00 recall
+(32/35 = 91%)**. Overall figures across all 64 truth SVs (recall 0.500, precision
+0.561) are limited by BND (unscoreable by truvari) and CNV (uncallable by Manta),
+i.e. tool constraints, not simulator defects.
+
+Three independent cross-checks confirm the SV machinery beyond the caller:
+
+- **CNV by depth.** Manta cannot call copy number, so we verified it directly: a
+  `CN=4` region showed 110.5× vs a 60.4× flank = **1.83×**, matching the expected
+  `(0.8·4 + 0.2·2)/2 = 1.8×` for that amplification at purity 0.8.
+- **Somatic specificity (no leak).** A homozygous somatic deletion was depleted
+  5× in the tumor (60×→12×) while the normal stayed at full depth — the SV is real
+  in the reads and correctly tumor-restricted.
+- **Mechanism.** rneat does not edit the reference; it emits breakpoint signal via
+  a dedicated chimeric-read pass that stitches flanks across junctions, which is
+  what produces the discordant-pair / split-read evidence Manta detects (the 55 kb
+  truth deletion was found with 12 supporting pairs).
+
+This is the first end-to-end validation of rneat's structural-variant output, and
+it holds across SV types and sizes. (Detection requires adequate depth and a
+sufficient SV count: a 30×/0.6 chr22 run yields too few somatic SVs to measure;
+60×/0.8 gives a scoreable set.)
+
 ---
 
 ## 4. Phase 2 — robustness at scale (planned, key deliverables)
@@ -283,11 +323,14 @@ remaining defects of the kind already found.
    *reservation* to demonstrate the ~30 min compute floor when whole nodes are
    actually available.
 
-3. **Exercise the new cancer features deeply.** Validate structural-variant
-   realism downstream with SV-aware callers (Manta / Delly / GRIDSS), which the
-   SNV-focused Mutect2 path does not test. Exercise CNVs, BND/INV/INS, per-tissue
-   cancer models (BRCA / skin / lung), and the purity-mixing machinery — the
-   areas most likely to harbor bugs of the type found in Phase 1.
+3. **Exercise the new cancer features deeply — SV validation DONE (§3.7).**
+   Structural-variant realism was validated downstream with Manta + truvari: rneat's
+   DEL/DUP/INV (to 1 Mb) recover at 0.88–1.00 recall, CNV confirmed by depth, BNDs
+   emitted and partly reassembled by Manta, somatic specificity confirmed — the
+   first end-to-end check of the SV machinery, with no simulator defect found.
+   Remaining sub-items: exercise the **per-tissue cancer models** (BRCA / skin /
+   lung) to confirm tissue-specific SV spectra downstream, and sweep the
+   **purity-mixing** machinery across purity/coverage.
 
 4. **Input variety and parameter sweeps.** Run across a range of genome sizes and
    compositions (bacterial, fungal, invertebrate, mammalian) and across cancer

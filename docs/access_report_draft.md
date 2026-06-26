@@ -301,12 +301,20 @@ by BND (unscoreable by truvari) and CNV (uncallable by Manta) — tool constrain
 not simulator defects.
 
 **Per-tissue models shift the spectrum correctly.** Swapping the pan-cancer model
-for tissue-specific COSMIC SV models reproduces the expected dominant type in the
-truth set — **skin → BND-enriched, lung → DEL-dominant** (BRCA → DUP-dominant) —
-tracking each model's type probabilities, while per-type *recovery* stays
-tissue-independent (~0.89–0.91 on scoreable classes). A tissue's apparent overall
-recall simply tracks how much of its spectrum is BND (a scorer limitation), not
-detection quality.
+for tissue-specific COSMIC SV models reproduces each tissue's dominant SV type in
+the truth set, tracking the model's type probabilities, while per-type *recovery*
+stays tissue-independent:
+
+| Tissue | Dominant truth type (✓ model) | DEL / DUP / INV recall | BND frac | Overall |
+|---|---|---|---|---|
+| BRCA | **DUP** (37, > DEL 27) — model Dup 0.32 | 0.89 / 0.94 / 1.00 (0.94) | 32% | 0.585 |
+| skin | **BND**-enriched (45) — model Bnd 0.31 | 0.87 / 0.94 / 0.80 (0.89) | 47% | 0.432 |
+| lung | **DEL** (35) — model Del 0.35 | 0.86 / 0.93 / 1.00 (0.90) | 27% | 0.614 |
+
+Each tissue's largest bucket matches its model's largest type probability.
+Scoreable-class recall holds at **~0.89–0.94 regardless of tissue**; a tissue's
+*overall* recall simply tracks how much of its spectrum is BND (skin 47% → 0.43,
+lung 27% → 0.61) — a scorer limitation, not detection quality.
 
 This is the first end-to-end validation of rneat's structural-variant output, and
 the read-level signal is correct across all classes and sizes. (Detection needs

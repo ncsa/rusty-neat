@@ -193,7 +193,7 @@ fi
 # Pre-generate per-type truth subsets NOW, while bcftools (bioinf) is active, so
 # the truvari scoring stage needs only truvari on its PATH (no bcftools in that
 # env). Empty types are removed so the scoring loop skips them.
-for svt in DEL DUP INV INS BND; do
+for svt in DEL DUP INV INS BND CNV; do
     typed="$OUTDIR/truth_sv_${svt}.vcf.gz"
     bcftools view -i "INFO/SVTYPE=\"$svt\"" -O z -o "$typed" "$TRUTH_SV" 2>/dev/null || continue
     bcftools index -f -t "$typed" 2>/dev/null || true
@@ -254,8 +254,10 @@ run_truvari() {  # <truth.vcf.gz> <out-subdir-name>
         python3 - "$out/summary.json" "$name" <<'PY'
 import json, sys
 s = json.load(open(sys.argv[1])); name = sys.argv[2]
-print(f"  {name:<8} recall={s.get('recall',0):.3f}  precision={s.get('precision',0):.3f}  "
-      f"f1={s.get('f1',0):.3f}  TP={s.get('TP-base',0)}  FN={s.get('FN',0)}  FP={s.get('FP',0)}")
+# truvari writes null (None) for metrics when a subset has no comparisons;
+# `or 0` coerces None -> 0 (s.get(k, 0) only defaults a MISSING key, not a null one).
+print(f"  {name:<8} recall={(s.get('recall') or 0):.3f}  precision={(s.get('precision') or 0):.3f}  "
+      f"f1={(s.get('f1') or 0):.3f}  TP={s.get('TP-base') or 0}  FN={s.get('FN') or 0}  FP={s.get('FP') or 0}")
 PY
     else
         echo "  $name: truvari produced no summary.json (see $out)"

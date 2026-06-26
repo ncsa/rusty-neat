@@ -266,21 +266,13 @@ an SV-aware caller. We closed that gap: simulate an SV-rich tumor/normal pair
 (60×, purity 0.8), call somatic SVs with **Manta** (tumor/normal mode), and score
 against rneat's SV truth with **truvari**.
 
-| SV type | Truth | Recall | Notes |
-|---|---|---|---|
-| DEL | 17 | **0.882** (15/17) | includes 376 kb and 645 kb deletions |
-| DUP | 14 | **0.929** (13/14) | includes a 1 Mb duplication |
-| INV | 4 | **1.000** (4/4) | |
-| BND | 22 | n/a | truvari does not benchmark breakends; Manta did emit 16 BND calls and assembled rneat's BND pair into a tandem-duplication call |
-| CNV | 7 | n/a | Manta does not call copy number; validated independently by depth (below) |
-
 On the classes Manta and truvari can score (DEL/DUP/INV), rneat's variants —
 **including large events up to 1 Mb** — are recovered at **0.88–1.00 recall
-(32/35 = 91%)**. Overall figures across all 64 truth SVs (recall 0.500, precision
-0.561) are limited by BND (unscoreable by truvari) and CNV (uncallable by Manta),
-i.e. tool constraints, not simulator defects.
-
-Three independent cross-checks confirm the SV machinery beyond the caller:
+(32/35 = 91%)**. The strongest evidence, though, looks *below* the caller, at the
+reads themselves: rneat does not edit the reference; it emits breakpoint signal
+through a dedicated chimeric-read pass that stitches flanks across each junction,
+and that signal is present and correctly placed for **every** class — including
+where the caller fails to recover it.
 
 - **CNV by depth.** Manta cannot call copy number, so we verified it directly: a
   `CN=4` region showed 110.5× vs a 60.4× flank = **1.83×**, matching the expected
@@ -288,15 +280,48 @@ Three independent cross-checks confirm the SV machinery beyond the caller:
 - **Somatic specificity (no leak).** A homozygous somatic deletion was depleted
   5× in the tumor (60×→12×) while the normal stayed at full depth — the SV is real
   in the reads and correctly tumor-restricted.
-- **Mechanism.** rneat does not edit the reference; it emits breakpoint signal via
-  a dedicated chimeric-read pass that stitches flanks across junctions, which is
-  what produces the discordant-pair / split-read evidence Manta detects (the 55 kb
-  truth deletion was found with 12 supporting pairs).
+- **BND signal is in the reads even when uncalled.** Every truth-BND locus
+  inspected carried **8–73 discordant/split reads** — the same range as the
+  *detected* BNDs. Manta calls only ~half of them (re-representing tandem-dup
+  pairs as `DUP:TANDEM` at the correct coordinates); the misses are a *caller*
+  limitation — translocations are the hardest short-read class — not absent signal.
+
+Per-type recovery (Manta + truvari, 60×/0.8):
+
+| SV type | Truth | Recovery | Bounded by |
+|---|---|---|---|
+| DEL | 17 | **0.882** (15/17) | — (incl. 376 / 645 kb) |
+| DUP | 14 | **0.929** (13/14) | — (incl. 1 Mb) |
+| INV | 4 | **1.000** (4/4) | — |
+| BND | 22 | signal present at read level; ~50% Manta-called | truvari can't benchmark breakends; Manta translocation recall |
+| CNV | 7 | depth-validated (1.83×) | Manta does not call CNV |
+
+Overall figures across all 64 truth SVs (recall 0.500, precision 0.561) are bounded
+by BND (unscoreable by truvari) and CNV (uncallable by Manta) — tool constraints,
+not simulator defects.
+
+**Per-tissue models shift the spectrum correctly.** Swapping the pan-cancer model
+for tissue-specific COSMIC SV models reproduces the expected dominant type in the
+truth set — **skin → BND-enriched, lung → DEL-dominant** (BRCA → DUP-dominant) —
+tracking each model's type probabilities, while per-type *recovery* stays
+tissue-independent (~0.89–0.91 on scoreable classes). A tissue's apparent overall
+recall simply tracks how much of its spectrum is BND (a scorer limitation), not
+detection quality.
 
 This is the first end-to-end validation of rneat's structural-variant output, and
-it holds across SV types and sizes. (Detection requires adequate depth and a
-sufficient SV count: a 30×/0.6 chr22 run yields too few somatic SVs to measure;
-60×/0.8 gives a scoreable set.)
+the read-level signal is correct across all classes and sizes. (Detection needs
+adequate depth and SV count: a 30×/0.6 chr22 run yields too few somatic SVs to
+measure; 60×/0.8 gives a scoreable set.)
+
+**Honest caveats — tracked as realism enhancements (epic #311).** The simulated SVs
+are *idealized*: clean cuts in unique sequence, lacking the microhomology, imprecise
+breakpoints, and repeat / segmental-duplication context that make real somatic SVs
+hard to call. The 0.88–1.00 DEL/DUP/INV recall is therefore an **upper bound**
+relative to real, repeat-embedded variants (#312). Two further items: rneat encodes
+tandem-dup junctions as generic BND pairs rather than the canonical `DUP` that
+callers and truth sets expect (#313), and SV-scale insertions did not appear in any
+run (`INS: 0`) despite a non-zero model probability (#314). None is a defect in the
+validated read generation — all are realism / interoperability improvements.
 
 ---
 

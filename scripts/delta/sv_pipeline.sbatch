@@ -223,6 +223,21 @@ else
     echo "[4/5] Manta complete: $(zcat "$MANTA_SV" | grep -vc '^#' || true) somatic SV calls."
 fi
 
+# Diagnostic: compare PRE-filter candidates vs POST-filter somatic calls. This
+# separates "reads carry no SV signal" (simulator/coverage issue) from "signal
+# present but somatic-classified away" (support/purity issue) when recall is low.
+CAND_SV="$MANTA_DIR/results/variants/candidateSV.vcf.gz"
+SOM_N=$(zcat "$MANTA_SV" | grep -vc '^#' || true)
+CAND_N=0; [[ -f "$CAND_SV" ]] && CAND_N=$(zcat "$CAND_SV" | grep -vc '^#' || true)
+echo "  Manta SV signal: $CAND_N candidate(s) (pre-filter) -> $SOM_N somatic (post-filter)"
+if [[ "$CAND_N" -eq 0 ]]; then
+    echo "  NOTE: 0 candidates -> reads present NO detectable SV signal to the aligner"
+    echo "        (coverage too low, too few truth SVs, or an rneat SV-read-emission gap)."
+elif [[ "$SOM_N" -eq 0 ]]; then
+    echo "  NOTE: candidates exist but 0 somatic -> signal IS there; Manta's somatic"
+    echo "        classifier dropped them (low support at this coverage/purity)."
+fi
+
 # ── Stage 5: Score with truvari (overall + per SV type) ──────────────────
 echo "[5/5] Scoring SVs with truvari..."
 conda_activate "$TRUVARI_ENV"

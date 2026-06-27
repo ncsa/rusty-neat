@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rneat vs NEAT 4 — speed & memory</title>
+<style>
+  :root{--rneat:#2563eb;--neat:#9aa4b2;--ink:#0f172a;--muted:#64748b;--line:#e2e8f0;}
+  *{box-sizing:border-box}
+  body{margin:0;background:#f8fafc;color:var(--ink);
+       font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  .wrap{max-width:920px;margin:0 auto;padding:28px 20px 48px}
+  h1{font-size:23px;margin:0 0 2px}
+  .sub{color:var(--muted);margin:0 0 22px}
+  .legend{display:flex;gap:18px;align-items:center;margin:0 0 18px;font-size:13px}
+  .sw{display:inline-block;width:13px;height:13px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+  .panels{display:flex;gap:26px;flex-wrap:wrap}
+  .panel{flex:1 1 380px;min-width:300px;background:#fff;border:1px solid var(--line);
+         border-radius:12px;padding:16px 16px 8px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+  .panel h2{font-size:15px;margin:0 0 2px}
+  .panel .note{color:var(--muted);font-size:12.5px;margin:0 0 6px}
+  svg{width:100%;height:auto;display:block;overflow:visible}
+  .cap{color:var(--muted);font-size:13px;margin-top:20px;border-top:1px solid var(--line);padding-top:14px}
+  .cap b{color:var(--ink)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>rneat vs NEAT 4 — single-thread speed &amp; memory</h1>
+  <p class="sub">Same simulation (30× paired-end), three genomes. rneat is consistently faster and far leaner.</p>
+  <div class="legend">
+    <span><span class="sw" style="background:var(--rneat)"></span>rneat</span>
+    <span><span class="sw" style="background:var(--neat)"></span>NEAT 4</span>
+  </div>
+  <div class="panels">
+    <div class="panel">
+      <h2>Wall-clock</h2>
+      <div class="note">seconds (lower is better) · label = speedup</div>
+      <svg id="time" viewBox="0 0 420 300" role="img" aria-label="wall-clock seconds"></svg>
+    </div>
+    <div class="panel">
+      <h2>Peak memory</h2>
+      <div class="note">MB, log scale (lower is better) · label = ×less</div>
+      <svg id="ram" viewBox="0 0 420 300" role="img" aria-label="peak memory MB"></svg>
+    </div>
+  </div>
+  <p class="cap"><b>rneat is 2.7–2.9× faster and uses 3–7× less, flatter memory</b> than NEAT 4
+  across E. coli (4.5 Mb), yeast (11 Mb) and human chr22 (49 Mb) — single thread, 30×.
+  Source: ACCESS report §3.2.</p>
+</div>
+<script>
+const NS="http://www.w3.org/2000/svg";
+const el=(t,a)=>{const e=document.createElementNS(NS,t);for(const k in a)e.setAttribute(k,a[k]);return e;};
+const genomes=["E. coli","yeast","chr22"];
+const data={
+  time:{rneat:[33.0,77.0,255.0],neat:[88.2,214.7,749.0],ratio:[2.7,2.8,2.9],unit:"s",log:false,max:780},
+  ram :{rneat:[41,53,227],       neat:[280,172,1528],    ratio:[6.9,3.2,6.7],unit:"MB",log:true, max:2000}
+};
+function draw(id,d){
+  const svg=document.getElementById(id);
+  const W=420,H=300,L=44,R=12,T=14,B=40,pw=W-L-R,ph=H-T-B;
+  const ng=genomes.length, gw=pw/ng, bw=gw*0.30, gap=gw*0.10;
+  const sc=v=>{ if(d.log){const lo=Math.log10(10),hi=Math.log10(d.max);
+                          return ph*(Math.log10(Math.max(v,10))-lo)/(hi-lo);}
+               return ph*v/d.max; };
+  // axis baseline
+  svg.appendChild(el("line",{x1:L,y1:T+ph,x2:W-R,y2:T+ph,stroke:"#cbd5e1","stroke-width":1}));
+  // gridlines
+  const ticks = d.log?[10,100,1000]:[0,200,400,600];
+  ticks.forEach(tk=>{const y=T+ph-sc(tk);
+    svg.appendChild(el("line",{x1:L,y1:y,x2:W-R,y2:y,stroke:"#eef2f7","stroke-width":1}));
+    const tt=el("text",{x:L-6,y:y+3,"text-anchor":"end","font-size":10,fill:"#94a3b8"});tt.textContent=tk;svg.appendChild(tt);});
+  genomes.forEach((g,i)=>{
+    const x0=L+i*gw+gap;
+    [["rneat","#2563eb",d.rneat[i]],["neat","#9aa4b2",d.neat[i]]].forEach(([k,c,v],j)=>{
+      const h=sc(v),x=x0+j*(bw+4),y=T+ph-h;
+      svg.appendChild(el("rect",{x,y,width:bw,height:h,rx:3,fill:c}));
+      const vt=el("text",{x:x+bw/2,y:y-4,"text-anchor":"middle","font-size":10,fill:"#475569"});
+      vt.textContent=v; svg.appendChild(vt);
+    });
+    // genome label
+    const gt=el("text",{x:x0+bw+2,y:T+ph+15,"text-anchor":"middle","font-size":11.5,fill:"#334155"});
+    gt.textContent=g; svg.appendChild(gt);
+    // ratio badge
+    const rt=el("text",{x:x0+bw+2,y:T+ph+30,"text-anchor":"middle","font-size":11,"font-weight":700,fill:"#2563eb"});
+    rt.textContent=(id==="ram"? d.ratio[i]+"× less" : d.ratio[i]+"×"); svg.appendChild(rt);
+  });
+}
+draw("time",data.time); draw("ram",data.ram);
+</script>
+</body>
+</html>

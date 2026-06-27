@@ -210,22 +210,32 @@ if [[ "$RUN_STRELKA" == "1" ]]; then
         echo "[5b] Strelka2 somatic VCF already present — skipping."
     else
         echo "[5b] Running Strelka2 (tumor/normal somatic SNV/indel)..."
-        conda_activate "$STRELKA_ENV"
-        rm -rf "$STRELKA_DIR"
-        configureStrelkaSomaticWorkflow.py \
-            --normalBam "$NORMAL_BAM" \
-            --tumorBam  "$TUMOR_BAM" \
-            --referenceFasta "$REFERENCE" \
-            --runDir "$STRELKA_DIR" 2>&1 | tail -5
-        "$STRELKA_DIR/runWorkflow.py" -m local -j "$THREADS" 2>&1 | tail -5
-        # Strelka emits SNVs + indels in separate files; concat into one query.
-        conda_activate bioinf
-        bcftools concat -a \
-            "$STRELKA_DIR/results/variants/somatic.snvs.vcf.gz" \
-            "$STRELKA_DIR/results/variants/somatic.indels.vcf.gz" \
-            | bcftools sort -Oz -o "$STRELKA_VCF"
-        bcftools index -f -t "$STRELKA_VCF"
-        echo "[5b] Strelka2 complete: $(zcat "$STRELKA_VCF" | grep -vc '^#' || true) somatic calls."
+        # Strelka2 is a SECONDARY cross-check and must NEVER abort the run: the
+        # bioconda strelka 2.9.10 binary SIGSEGVs on some HPC glibc/CPU combos.
+        # Run it guarded — on failure, warn and continue so the primary Mutect2
+        # result is still scored (Stage 6).
+        run_strelka() {
+            conda_activate "$STRELKA_ENV"
+            rm -rf "$STRELKA_DIR"
+            configureStrelkaSomaticWorkflow.py \
+                --normalBam "$NORMAL_BAM" --tumorBam "$TUMOR_BAM" \
+                --referenceFasta "$REFERENCE" --runDir "$STRELKA_DIR" \
+                > "$OUTDIR/strelka_config.log" 2>&1 || return 1
+            "$STRELKA_DIR/runWorkflow.py" -m local -j "$THREADS" \
+                > "$OUTDIR/strelka_run.log" 2>&1 || return 1
+        }
+        if run_strelka; then
+            conda_activate bioinf   # Strelka emits SNVs + indels separately; merge.
+            bcftools concat -a \
+                "$STRELKA_DIR/results/variants/somatic.snvs.vcf.gz" \
+                "$STRELKA_DIR/results/variants/somatic.indels.vcf.gz" \
+                | bcftools sort -Oz -o "$STRELKA_VCF"
+            bcftools index -f -t "$STRELKA_VCF"
+            echo "[5b] Strelka2 complete: $(zcat "$STRELKA_VCF" | grep -vc '^#' || true) somatic calls."
+        else
+            echo "[5b] WARNING: Strelka2 failed (see $OUTDIR/strelka_run.log) — continuing without it; Mutect2 unaffected." >&2
+            STRELKA_VCF=""
+        fi
     fi
 fi
 

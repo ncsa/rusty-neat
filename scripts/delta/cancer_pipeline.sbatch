@@ -243,6 +243,23 @@ echo "      Somatic truth records: $somatic_count"
 [[ "$somatic_count" -eq 0 ]] && echo "WARNING: no somatic truth records — check NEAT_ORIGIN." >&2
 [[ -f "$HAPPY_SIF" ]] || { echo "hap.py SIF not found: $HAPPY_SIF — run setup.sh first" >&2; exit 1; }
 
+# hap.py/som.py hardcodes UCSC chr-prefixing of input VCFs (perl s/^([0-9XYM])/chr/),
+# then bcftools-norm's against the reference. With an Ensembl-named reference (1/2/3)
+# the renamed VCFs (chr1) no longer match the reference (1) and som.py dies
+# ("sequence chr1 not found"). If the reference isn't chr-prefixed, build a
+# chr-prefixed copy for scoring so the renamed VCFs match. (chr22.fa etc. pass
+# through unchanged.) Alignment/Mutect2 already used $REFERENCE as-is — unaffected.
+SCORE_REF_DIR="$REF_DIR"; SCORE_REF_NAME="$REF_NAME"
+if ! head -1 "${REFERENCE}.fai" 2>/dev/null | grep -q '^chr'; then
+    SCORE_REF="${REFERENCE%.fa}.chr.fa"
+    if [[ ! -f "$SCORE_REF" ]]; then
+        echo "[6/6] Reference is Ensembl-named; building chr-prefixed copy for som.py..."
+        sed '/^>/ s/^>/>chr/' "$REFERENCE" > "$SCORE_REF"
+        samtools faidx "$SCORE_REF"
+    fi
+    SCORE_REF_DIR="$(dirname "$SCORE_REF")"; SCORE_REF_NAME="$(basename "$SCORE_REF")"
+fi
+
 # som_score <query.vcf.gz> <out-label>. -N (--normalize-all) runs bcftools norm on
 # BOTH truth and query — essential for indels (representation/left-align mismatch
 # otherwise double-counts FN+FP). HGREF resolves som.py's reference lookup.
@@ -254,14 +271,14 @@ som_score() {
     fi
     echo "[6/6] Scoring $label with som.py (Apptainer)..."
     apptainer exec \
-        --env "HGREF=/refs/$REF_NAME" \
-        --bind "$REF_DIR:/refs:ro" \
+        --env "HGREF=/refs/$SCORE_REF_NAME" \
+        --bind "$SCORE_REF_DIR:/refs:ro" \
         --bind "$OUTDIR:/work" \
         "$HAPPY_SIF" \
         /opt/hap.py/bin/som.py \
             "/work/$(basename "$SCORE_TRUTH")" \
             "/work/$(basename "$query")" \
-            -r "/refs/$REF_NAME" \
+            -r "/refs/$SCORE_REF_NAME" \
             -o "/work/$label" \
             -N \
             --feature-table generic

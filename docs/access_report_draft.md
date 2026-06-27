@@ -47,10 +47,23 @@ noted.
 | Mean coverage (covered bases) | 29.96× (requested 30×) |
 | Breadth | 0.77 (chr22 N-gaps correctly left uncovered) |
 | Heterozygous allele fraction | 0.486 (clean diploid binomial ~0.5) |
+| Het/hom ratio | ~95 (high vs real resequencing ~1.5–2.0 — see note) |
 | Ts/Tv | **2.35** (human-realistic) |
 
 Determinism holding byte-for-byte across thread counts is a guarantee NEAT 4 does
 not make.
+
+**Het/hom ratio (realism note).** Across the germline runs the heterozygous/
+homozygous variant-site ratio is ~95 (truth and recovered tracking together —
+e.g. 94.7 / 95.5 on the input-variety set in §4), far above a real resequenced
+human's ~1.5–2.0. This is expected from the current model rather than a defect:
+germline variants are drawn independently per haplotype against the reference
+with no population / common-variant (LD) structure, so coincident homozygous-alt
+sites — which in real resequencing arise mostly from shared, common alleles — are
+rare. The caller recovers the simulated zygosity consistently (truth and query
+ratios match), so recall, precision and Ts/Tv are unaffected. It is a realism
+gap, not a correctness issue — a candidate Phase-2/3 backlog item if
+population-realistic zygosity (common-variant spike-in / LD model) is wanted.
 
 ### 3.2 Performance vs NEAT 4 (single thread)
 

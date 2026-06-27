@@ -74,6 +74,10 @@ TRUVARI_ENV="${TRUVARI_ENV:-truvari}"
 # Run Delly as a 2nd somatic SV caller alongside Manta (cross-validation; the
 # BND-recovery question). Set RUN_DELLY=0 to skip.
 RUN_DELLY="${RUN_DELLY:-1}"
+# Run GATK somatic CNV to validate the CNV machinery through a real copy-number
+# caller (rneat's CNVs were previously only depth-validated). No new env (gatk4 in
+# bioinf). Set RUN_CNV=0 to skip.
+RUN_CNV="${RUN_CNV:-1}"
 # rneat SVs reach ~1 Mb; truvari's default --sizemax is 50 kb, which would silently
 # EXCLUDE most large rneat SVs from scoring. Raise it to cover the full range.
 TRUVARI_SIZEMAX="${TRUVARI_SIZEMAX:-5000000}"
@@ -270,6 +274,50 @@ if [[ "$RUN_DELLY" == "1" ]]; then
         bcftools index -f -t "$DELLY_SV"
         echo "[4b] Delly complete: $(zcat "$DELLY_SV" | grep -vc '^#' || true) somatic SV calls."
     fi
+fi
+
+# ── Stage 4c: GATK somatic CNV (validate the CNV machinery via a caller) ─
+# rneat's CNVs were only depth-validated; here a real copy-number caller must
+# recover them. GATK4 (bioinf) — no new env. RUN_CNV=0 to skip.
+CNV_TRUTH="$OUTDIR/truth_sv_CNV.vcf.gz"
+if [[ "$RUN_CNV" == "1" && -f "$CNV_TRUTH" ]]; then
+    conda_activate bioinf
+    if [[ -f "$OUTDIR/cnv_called.seg" ]]; then
+        echo "[4c] GATK CNV segments already present — skipping call."
+    else
+        echo "[4c] Running GATK somatic CNV (denoise -> segment -> call)..."
+        [[ -f "${REFERENCE%.fa}.dict" ]] || gatk CreateSequenceDictionary -R "$REFERENCE" 2>&1 | tail -2
+        gatk PreprocessIntervals -R "$REFERENCE" --bin-length 1000 --padding 0 \
+            --interval-merging-rule OVERLAPPING_ONLY -O "$OUTDIR/cnv.intervals" 2>&1 | tail -2
+        for s in tumor normal; do
+            gatk CollectReadCounts -I "$OUTDIR/$s.bam" -L "$OUTDIR/cnv.intervals" \
+                --interval-merging-rule OVERLAPPING_ONLY -O "$OUTDIR/$s.counts.hdf5" 2>&1 | tail -2
+        done
+        gatk CreateReadCountPanelOfNormals -I "$OUTDIR/normal.counts.hdf5" \
+            -O "$OUTDIR/cnv.pon.hdf5" 2>&1 | tail -2
+        gatk DenoiseReadCounts -I "$OUTDIR/tumor.counts.hdf5" --count-panel-of-normals "$OUTDIR/cnv.pon.hdf5" \
+            --standardized-copy-ratios "$OUTDIR/tumor.stdCR.tsv" \
+            --denoised-copy-ratios "$OUTDIR/tumor.denoisedCR.tsv" 2>&1 | tail -2
+        gatk ModelSegments --denoised-copy-ratios "$OUTDIR/tumor.denoisedCR.tsv" \
+            -O "$OUTDIR" --output-prefix cnv 2>&1 | tail -2
+        gatk CallCopyRatioSegments -I "$OUTDIR/cnv.cr.seg" -O "$OUTDIR/cnv_called.seg" 2>&1 | tail -2
+    fi
+    # Score: does a called gain/loss segment overlap each truth CNV with the right
+    # direction? (CN>2 -> gain '+', CN<2 -> loss '-'.) Manta/truvari can't score CNV,
+    # so this is the CNV feature's caller-level validation.
+    if [[ -f "$OUTDIR/cnv_called.seg" ]]; then
+        bcftools query -f '%CHROM\t%POS\t%INFO/END\t%INFO/CN\n' "$CNV_TRUTH" \
+            | awk 'BEGIN{OFS="\t"}{print $1,$2,$3,($4>2?"+":($4<2?"-":"0"))}' > "$OUTDIR/cnv_truth.bed"
+        awk '!/^@/ && $1!="CONTIG" && ($6=="+"||$6=="-"){print $1,$2,$3,$6}' \
+            "$OUTDIR/cnv_called.seg" > "$OUTDIR/cnv_called.bed"
+        awk 'NR==FNR{n++;c[n]=$1;st[n]=$2;e[n]=$3;d[n]=$4;next}
+             {for(i=1;i<=n;i++) if($1==c[i] && $2<=e[i] && $3>=st[i] && $4==d[i]) hit[i]=1}
+             END{tp=0; for(i=1;i<=n;i++) tp+=hit[i];
+                 printf "[4c] CNV recovery: %d/%d truth CNVs called with matching direction\n", tp+0, n+0}' \
+             "$OUTDIR/cnv_truth.bed" "$OUTDIR/cnv_called.bed"
+    fi
+elif [[ "$RUN_CNV" == "1" ]]; then
+    echo "[4c] no CNV truth (truth_sv_CNV.vcf.gz) — skipping CNV validation (raise SV_RATE_SCALE / coverage)."
 fi
 
 # ── Stage 5: Score each caller with truvari (overall + per SV type) ──────

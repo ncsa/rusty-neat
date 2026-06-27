@@ -366,6 +366,45 @@ without interval scatter).
 Ensembl-named reference (GRCh38: `1/2/3`) needs a chr-prefixed copy for scoring —
 now handled automatically by the cancer pipeline.
 
+### 3.9 Cross-caller coverage and mutational-signature fidelity
+
+To avoid judging rneat's cancer features by a single caller, second callers were
+added across classes on the existing Delta harnesses — **Delly** (somatic SV, vs
+Manta), **Strelka2** (somatic SNV/indel, vs Mutect2), and **GATK somatic-CNV** (vs
+the depth check of §3.7) — plus a **mutational-signature** check
+(SigProfilerAssignment). Cross-caller *agreement* is the strongest anti-overfit
+signal; the signature check probes something variant-recall cannot: does rneat
+reproduce the COSMIC mutational *signature* its tumor model encodes?
+
+**At the signature level, it does not — a real fidelity limitation.** Fitting
+COSMIC signatures to 6,225 simulated somatic SNVs (chr1–3) assigned them entirely
+to flat, clock-like signatures (SBS5 45 %, SBS3 31 %, SBS41 17 %, SBS12 7 %), with
+**no SBS1** — the near-universal C>T-at-CpG signature present in essentially every
+real tumor. The 96-context spectrum confirms it: the four CpG `[C>T]G` contexts are
+the *lowest* C>T contexts (16–23 counts vs ~65 average).
+
+**Root cause (verified both ends).** The bundled COSMIC model is faithful — its
+per-context substitution model encodes strong CpG C>T enrichment (conditional
+0.78–0.88 at CpG vs 0.39–0.62 elsewhere). But rneat places mutations at a
+**context-independent rate** and conditions only the *alt allele* on trinucleotide
+context. The realized spectrum is therefore *(genome trinucleotide frequency) ×
+(conditional alt)*, not the COSMIC signature; because CpG dinucleotides are ~10×
+genome-depleted, the CpG C>T peak never forms. COSMIC signatures are **rate
+patterns** (mutations-per-context), which a uniform-placement model cannot
+represent.
+
+**Interpretation.** rneat faithfully reproduces the substitution-*type*
+distribution and transition bias (Ts/Tv 2.34, §3.1/3.3) and recovers variants well
+across independent callers and at scale (§3.3/3.4/3.7/3.8) — but simulated somatic
+SNVs do not reconstruct the input COSMIC *signature* under signature extraction.
+This is a limitation of the underlying NEAT trinucleotide approach (the germline
+default model shares it), and the fix is to weight mutation *placement* by the
+signature's per-context probability rather than placing uniformly (tracked: #320).
+It is exactly the class of gap recall-based metrics cannot surface — and the reason
+the signature check was added. The broadened SV/SNV/CNV caller coverage (#317) is
+implemented and validating on Delta; cross-caller agreement results will be added
+as the runs complete.
+
 ---
 
 ## 4. Phase 2 — robustness at scale (planned, key deliverables)

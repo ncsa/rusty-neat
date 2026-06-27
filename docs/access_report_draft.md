@@ -300,6 +300,14 @@ Overall figures across all 64 truth SVs (recall 0.500, precision 0.561) are boun
 by BND (unscoreable by truvari) and CNV (uncallable by Manta) — tool constraints,
 not simulator defects.
 
+**Confirmed by an independent second caller.** Delly (read-pair/split/depth-based,
+no assembly) recovers the same SVs at the *same* rates — **DEL 0.882, DUP 0.929,
+INV 1.000, identical to Manta** — with slightly higher precision (0.667 vs 0.561),
+and likewise scores 0/22 BND and 0/7 CNV. Two independent callers agreeing this
+closely is strong evidence rneat's SV data is not tuned to one tool, and that the
+BND/CNV gaps are scorer/caller limitations (truvari cannot benchmark breakends;
+neither caller emits truvari-matchable CNV) rather than simulator defects.
+
 **Per-tissue models shift the spectrum correctly.** Swapping the pan-cancer model
 for tissue-specific COSMIC SV models reproduces each tissue's dominant SV type in
 the truth set, tracking the model's type probabilities, while per-type *recovery*

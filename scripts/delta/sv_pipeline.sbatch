@@ -289,14 +289,14 @@ if [[ "$RUN_CNV" == "1" && -f "$CNV_TRUTH" ]]; then
         [[ -f "${REFERENCE%.fa}.dict" ]] || gatk CreateSequenceDictionary -R "$REFERENCE" >>"$log" 2>&1 || return 1
         gatk PreprocessIntervals -R "$REFERENCE" --bin-length 1000 --padding 0 \
             --interval-merging-rule OVERLAPPING_ONLY -O "$OUTDIR/cnv.interval_list" >>"$log" 2>&1 || return 1
-        local s
-        for s in tumor normal; do
-            gatk CollectReadCounts -I "$OUTDIR/$s.bam" -L "$OUTDIR/cnv.interval_list" \
-                --interval-merging-rule OVERLAPPING_ONLY -O "$OUTDIR/$s.counts.hdf5" >>"$log" 2>&1 || return 1
-        done
-        gatk CreateReadCountPanelOfNormals -I "$OUTDIR/normal.counts.hdf5" \
-            -O "$OUTDIR/cnv.pon.hdf5" >>"$log" 2>&1 || return 1
-        gatk DenoiseReadCounts -I "$OUTDIR/tumor.counts.hdf5" --count-panel-of-normals "$OUTDIR/cnv.pon.hdf5" \
+        gatk CollectReadCounts -I "$OUTDIR/tumor.bam" -L "$OUTDIR/cnv.interval_list" \
+            --interval-merging-rule OVERLAPPING_ONLY -O "$OUTDIR/tumor.counts.hdf5" >>"$log" 2>&1 || return 1
+        # No panel-of-normals: CreateReadCountPanelOfNormals is a Spark tool and
+        # Spark 3.5 fails on the env's Java 25 (Subject.getSubject removed). With a
+        # single matched normal a PoN is overkill anyway — DenoiseReadCounts without
+        # one standardizes the tumor against its own median, which still surfaces the
+        # copy-ratio deviations at rneat's CNV loci.
+        gatk DenoiseReadCounts -I "$OUTDIR/tumor.counts.hdf5" \
             --standardized-copy-ratios "$OUTDIR/tumor.stdCR.tsv" \
             --denoised-copy-ratios "$OUTDIR/tumor.denoisedCR.tsv" >>"$log" 2>&1 || return 1
         gatk ModelSegments --denoised-copy-ratios "$OUTDIR/tumor.denoisedCR.tsv" \

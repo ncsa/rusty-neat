@@ -274,9 +274,13 @@ through a dedicated chimeric-read pass that stitches flanks across each junction
 and that signal is present and correctly placed for **every** class — including
 where the caller fails to recover it.
 
-- **CNV by depth.** Manta cannot call copy number, so we verified it directly: a
-  `CN=4` region showed 110.5× vs a 60.4× flank = **1.83×**, matching the expected
-  `(0.8·4 + 0.2·2)/2 = 1.8×` for that amplification at purity 0.8.
+- **CNV — two ways.** Manta cannot call copy number. (i) *By depth:* a `CN=4`
+  region showed 110.5× vs a 60.4× flank = **1.83×**, matching the expected
+  `(0.8·4 + 0.2·2)/2 = 1.8×` at purity 0.8. (ii) *By a copy-number caller:* GATK
+  `DenoiseReadCounts`→`ModelSegments`→`CallCopyRatioSegments` recovered **4/7 truth
+  CNVs with the correct gain/loss direction** (the misses are the small/low-amplitude
+  het CNVs — kb-scale events near the read-depth segmentation limit). Both confirm
+  rneat's CNVs carry correct, caller-detectable copy-ratio signal.
 - **Somatic specificity (no leak).** A homozygous somatic deletion was depleted
   5× in the tumor (60×→12×) while the normal stayed at full depth — the SV is real
   in the reads and correctly tumor-restricted.
@@ -294,7 +298,7 @@ Per-type recovery (Manta + truvari, 60×/0.8):
 | DUP | 14 | **0.929** (13/14) | — (incl. 1 Mb) |
 | INV | 4 | **1.000** (4/4) | — |
 | BND | 22 | signal present at read level; ~50% Manta-called | truvari can't benchmark breakends; Manta translocation recall |
-| CNV | 7 | depth-validated (1.83×) | Manta does not call CNV |
+| CNV | 7 | depth 1.83× + GATK caller 4/7 by direction | Manta does not call CNV |
 
 Overall figures across all 64 truth SVs (recall 0.500, precision 0.561) are bounded
 by BND (unscoreable by truvari) and CNV (uncallable by Manta) — tool constraints,
@@ -421,7 +425,8 @@ different statistical model from Mutect2 — calls rneat's somatic variants at h
 and the high-confidence (`Somatic.hc`) filter, not a simulator property — Mutect2
 (sensitive) and VarScan2 (precise) bracket the truth as expected for two callers.
 (Strelka2 was dropped — its 2018 build SIGSEGVs on Delta's stack. GATK somatic-CNV
-is the remaining cross-check, pending.)
+recovered **4/7 CNVs by direction** — no-PoN, since its panel step is a Spark tool
+incompatible with the env's Java 25 — corroborating the depth check, §3.7.)
 
 ---
 

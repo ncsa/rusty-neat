@@ -441,6 +441,34 @@ and the high-confidence (`Somatic.hc`) filter, not a simulator property — Mute
 recovered **4/7 CNVs by direction** — no-PoN, since its panel step is a Spark tool
 incompatible with the env's Java 25 — corroborating the depth check, §3.7.)
 
+### 3.10 Order-independence, determinism, and sharding correctness
+
+A dedicated harness (`run_order_independence.sbatch`) changes exactly one variable
+at a time at a fixed seed (yeast, 16 chromosomes) and compares the header-less,
+sorted truth-VCF body by md5. Four invariances that *must* hold, do:
+
+| Check | Result | Evidence |
+|---|---|---|
+| Determinism (run twice, 1 thread) | **PASS** | identical (`1ad0f06…`) |
+| Thread-invariance (1 thread vs 8) | **PASS** | identical (`1ad0f06…`) — parallelism never perturbs results |
+| Shard-order independence (fwd vs reversed merge) | **PASS** | identical (`4990989…`) |
+| Shard disjointness (35 windows) | **PASS** | 0 duplicate `CHROM:POS:REF:ALT` keys |
+
+One check **fails by design** and is documented rather than treated as a defect:
+**contig-order independence**. Reversing contig order in the FASTA changes the
+realization — even the variant count (12627 → 12631) — the signature of a single
+global RNG consumed in contig order. The consequence is a *reproducibility scope*
+note, not a correctness problem: reproducing a **monolithic** run requires the
+byte-identical reference (same contig order), not merely the same genome. The
+region-sharded whole-genome path is unaffected — and this is precisely why it is
+correct: each shard draws from an independent per-shard seed over an
+absolute-coordinate window, so shard-order independence and disjointness both pass
+and the merge never depends on reproducing the monolithic stream. A backlog item
+(**#322**) proposes per-contig seeding from `hash(seed, contig_name)` to make
+output contig-order-independent (and let a sharded run optionally reproduce a
+monolithic one). Net: rneat is reproducible and parallelism-invariant where it
+matters, and its HPC sharding is verifiably correct.
+
 ---
 
 ## 4. Phase 2 — robustness at scale (planned, key deliverables)

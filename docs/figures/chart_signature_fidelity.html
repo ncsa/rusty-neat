@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mutational signature fidelity (#320)</title>
+<style>
+  :root{--ink:#0f172a;--muted:#64748b;--line:#e2e8f0;}
+  *{box-sizing:border-box}
+  body{margin:0;background:#f8fafc;color:var(--ink);
+       font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  .wrap{max-width:900px;margin:0 auto;padding:28px 20px 48px}
+  h1{font-size:23px;margin:0 0 2px}.sub{color:var(--muted);margin:0 0 18px}
+  .row{display:flex;gap:24px;flex-wrap:wrap}
+  .panel{flex:1 1 360px;min-width:300px;background:#fff;border:1px solid var(--line);
+         border-radius:12px;padding:16px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+  .panel h2{font-size:15px;margin:0 0 2px}.panel .note{color:var(--muted);font-size:12.5px;margin:0 0 8px}
+  svg{width:100%;height:auto;display:block;overflow:visible}
+  .cap{color:var(--muted);font-size:13px;margin-top:18px;border-top:1px solid var(--line);padding-top:14px}
+  .cap b{color:var(--ink)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Mutational signature fidelity — the open gap (#320)</h1>
+  <p class="sub">SigProfiler decomposition of rneat somatic calls (chr1–3). The substitution mix is
+  plausible, but the contexts decompose into flat signatures — the clock-like CpG peak is absent.</p>
+  <div class="row">
+    <div class="panel">
+      <h2>Substitution classes</h2>
+      <div class="note">% of somatic SNVs · biologically reasonable spread</div>
+      <svg id="sub" viewBox="0 0 420 300" role="img" aria-label="substitution classes"></svg>
+    </div>
+    <div class="panel">
+      <h2>COSMIC SBS decomposition</h2>
+      <div class="note">assigned exposure · note what's missing</div>
+      <svg id="sig" viewBox="0 0 420 300" role="img" aria-label="COSMIC signature assignment"></svg>
+    </div>
+  </div>
+  <p class="cap"><b>rneat reproduces a believable 6-class mix but decomposes entirely into flat/clock-agnostic
+  signatures (SBS5/3/41/12) with zero SBS1</b> — because mutations are placed at a context-independent
+  rate and only the alt base is conditioned, so the [C&gt;T]G CpG peak that defines SBS1 never forms.
+  <b>Fix (#320):</b> sample (context, alt) from the 96-dim COSMIC signature and place at a matching
+  trinucleotide site. Source: ACCESS report §3.9.</p>
+</div>
+<script>
+const NS="http://www.w3.org/2000/svg";
+const el=(t,a)=>{const e=document.createElementNS(NS,t);for(const k in a)e.setAttribute(k,a[k]);return e;};
+const txt=(x,y,s,o={})=>{const e=el("text",{x,y,"font-size":o.size||10,fill:o.fill||"#475569",
+  "text-anchor":o.anchor||"middle","font-weight":o.w||400});e.textContent=s;return e;};
+function bars(id,items,ymax,fmt){
+  const svg=document.getElementById(id),W=420,H=300,L=40,R=14,T=16,B=58,pw=W-L-R,ph=H-T-B;
+  const n=items.length,gw=pw/n,bw=gw*0.6;
+  svg.appendChild(el("line",{x1:L,y1:T+ph,x2:W-R,y2:T+ph,stroke:"#cbd5e1"}));
+  for(let k=0;k<=4;k++){const v=ymax*k/4,y=T+ph-ph*v/ymax;
+    svg.appendChild(el("line",{x1:L,y1:y,x2:W-R,y2:y,stroke:"#eef2f7"}));
+    svg.appendChild(txt(L-6,y+3,v.toFixed(0),{anchor:"end",fill:"#94a3b8"}));}
+  items.forEach((it,i)=>{
+    const x=L+i*gw+(gw-bw)/2,h=ph*it.v/ymax,y=T+ph-h;
+    svg.appendChild(el("rect",{x,y,width:bw,height:h,rx:3,fill:it.c}));
+    svg.appendChild(txt(x+bw/2,y-4,fmt(it.v),{size:9.5,fill:"#475569"}));
+    svg.appendChild(txt(x+bw/2,T+ph+15,it.l,{fill:"#334155",size:10}));
+    if(it.sub) svg.appendChild(txt(x+bw/2,T+ph+29,it.sub,{fill:"#94a3b8",size:9}));
+  });
+}
+bars("sub",[
+  {l:"C>A",v:12.5,c:"#3b82f6"},{l:"C>G",v:7.4,c:"#0f172a"},{l:"C>T",v:21.2,c:"#dc2626"},
+  {l:"T>A",v:15.4,c:"#9ca3af"},{l:"T>C",v:29.8,c:"#16a34a"},{l:"T>G",v:13.7,c:"#ec4899"}
+],32,v=>v.toFixed(1)+"%");
+bars("sig",[
+  {l:"SBS5",v:45,c:"#2563eb",sub:"flat"},{l:"SBS3",v:31,c:"#2563eb",sub:"flat"},
+  {l:"SBS41",v:17,c:"#2563eb",sub:"flat"},{l:"SBS12",v:7,c:"#2563eb",sub:"flat"},
+  {l:"SBS1",v:0,c:"#dc2626",sub:"absent"}
+],50,v=>v.toFixed(0)+"%");
+// highlight absent SBS1
+const sig=document.getElementById("sig");
+sig.appendChild(txt(380,40,"no CpG",{fill:"#dc2626",size:11,w:700,anchor:"end"}));
+sig.appendChild(txt(380,54,"clock",{fill:"#dc2626",size:11,w:700,anchor:"end"}));
+</script>
+</body>
+</html>

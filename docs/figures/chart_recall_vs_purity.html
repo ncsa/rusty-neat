@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Somatic recall vs purity — the normal-starvation knee</title>
+<style>
+  :root{--ink:#0f172a;--muted:#64748b;--line:#e2e8f0;--blue:#2563eb;--red:#dc2626;}
+  *{box-sizing:border-box}
+  body{margin:0;background:#f8fafc;color:var(--ink);
+       font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  .wrap{max-width:820px;margin:0 auto;padding:28px 20px 48px}
+  h1{font-size:23px;margin:0 0 2px}.sub{color:var(--muted);margin:0 0 18px}
+  .panel{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+  svg{width:100%;height:auto;display:block;overflow:visible}
+  .cap{color:var(--muted);font-size:13px;margin-top:16px;border-top:1px solid var(--line);padding-top:14px}
+  .cap b{color:var(--ink)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Somatic recall vs tumor purity</h1>
+  <p class="sub">Mutect2 recall on rneat tumor/normal pairs (chr22), sweeping purity at a
+  <i>fixed total sequencing budget</i> split between tumor and matched normal.</p>
+  <div class="panel"><svg id="c" viewBox="0 0 720 340" role="img" aria-label="recall vs purity"></svg></div>
+  <p class="cap"><b>Recall is flat (0.91–0.94) from 0.3 to 0.7 purity, then collapses to 0.17 at 0.9 —
+  not an rneat artifact but an experiment-design one.</b> Under a fixed budget, purity 0.9 starves the
+  matched normal to ~6×, so Mutect2 loses the germline reference it needs to subtract.
+  <b>Recommendation:</b> hold normal coverage fixed (don't split a fixed budget) when sweeping purity.
+  Source: ACCESS report §3.9.</p>
+</div>
+<script>
+const NS="http://www.w3.org/2000/svg";
+const el=(t,a)=>{const e=document.createElementNS(NS,t);for(const k in a)e.setAttribute(k,a[k]);return e;};
+const txt=(x,y,s,o={})=>{const e=el("text",{x,y,"font-size":o.size||11,fill:o.fill||"#475569",
+  "text-anchor":o.anchor||"middle","font-weight":o.w||400});e.textContent=s;return e;};
+const P=[0.3,0.5,0.7,0.9], R=[0.91,0.94,0.94,0.17], NORM=["~21×","~15×","~9×","~6×"];
+const svg=document.getElementById("c"),W=720,H=340,L=52,Rm=18,T=18,B=56,pw=W-L-Rm,ph=H-T-B;
+const X=p=>L+pw*(p-0.2)/(1.0-0.2), Y=v=>T+ph-ph*v/1.0;
+svg.appendChild(el("line",{x1:L,y1:T+ph,x2:W-Rm,y2:T+ph,stroke:"#cbd5e1"}));
+[0,.2,.4,.6,.8,1].forEach(v=>{const y=Y(v);
+  svg.appendChild(el("line",{x1:L,y1:y,x2:W-Rm,y2:y,stroke:"#eef2f7"}));
+  svg.appendChild(txt(L-8,y+3,v.toFixed(1),{anchor:"end",fill:"#94a3b8",size:10}));});
+svg.appendChild(txt(18,T+ph/2,"Mutect2 recall",{fill:"#64748b",size:11})).setAttribute("transform",`rotate(-90 18 ${T+ph/2})`);
+// stable band shading 0.3-0.7
+svg.appendChild(el("rect",{x:X(0.3),y:T,width:X(0.7)-X(0.3),height:ph,fill:"#2563eb",opacity:0.05}));
+svg.appendChild(txt((X(0.3)+X(0.7))/2,T+14,"stable",{fill:"#93b4f0",size:11,w:700}));
+const pts=P.map((p,i)=>`${X(p)},${Y(R[i])}`).join(" ");
+svg.appendChild(el("polyline",{points:pts,fill:"none",stroke:"#2563eb","stroke-width":2.5}));
+P.forEach((p,i)=>{
+  const drop=R[i]<0.5;
+  svg.appendChild(el("circle",{cx:X(p),cy:Y(R[i]),r:4,fill:drop?"#dc2626":"#2563eb"}));
+  svg.appendChild(txt(X(p),Y(R[i])-9,R[i].toFixed(2),{fill:drop?"#dc2626":"#2563eb",w:700,size:11}));
+  svg.appendChild(txt(X(p),T+ph+16,"purity "+p,{fill:"#334155",size:11}));
+  svg.appendChild(txt(X(p),T+ph+31,"normal "+NORM[i],{fill:"#94a3b8",size:9.5}));
+});
+svg.appendChild(txt(X(0.9),Y(0.17)+22,"normal starved",{fill:"#dc2626",size:10.5,w:700}));
+</script>
+</body>
+</html>

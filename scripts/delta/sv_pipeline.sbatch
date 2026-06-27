@@ -69,7 +69,11 @@ SV_RATE_SCALE="${SV_RATE_SCALE:-1.0}"
 TUMOR_MODEL="${TUMOR_MODEL:-$REPO_ROOT/tools/cosmic_v104_pancancer_model.json.gz}"
 
 MANTA_ENV="${MANTA_ENV:-manta}"
+DELLY_ENV="${DELLY_ENV:-delly}"
 TRUVARI_ENV="${TRUVARI_ENV:-truvari}"
+# Run Delly as a 2nd somatic SV caller alongside Manta (cross-validation; the
+# BND-recovery question). Set RUN_DELLY=0 to skip.
+RUN_DELLY="${RUN_DELLY:-1}"
 # rneat SVs reach ~1 Mb; truvari's default --sizemax is 50 kb, which would silently
 # EXCLUDE most large rneat SVs from scoring. Raise it to cover the full range.
 TRUVARI_SIZEMAX="${TRUVARI_SIZEMAX:-5000000}"
@@ -241,44 +245,78 @@ elif [[ "$SOM_N" -eq 0 ]]; then
     echo "        classifier dropped them (low support at this coverage/purity)."
 fi
 
-# ── Stage 5: Score with truvari (overall + per SV type) ──────────────────
+# ── Stage 4b: Delly somatic SV calling (2nd caller vs Manta) ─────────────
+# Cross-validation: an independent caller confirms rneat's SVs aren't recovered
+# only by Manta — and is the direct test of the BND-recovery question (does Delly
+# recover the translocations Manta re-represents/misses?). RUN_DELLY=0 to skip.
+DELLY_SV=""
+if [[ "$RUN_DELLY" == "1" ]]; then
+    DELLY_SV="$OUTDIR/delly.somatic.vcf.gz"
+    if [[ -f "$DELLY_SV" ]]; then
+        echo "[4b] Delly somatic SV already present — skipping."
+    else
+        echo "[4b] Running Delly (tumor/normal somatic SV)..."
+        conda_activate "$DELLY_ENV"
+        # delly call takes both BAMs (indexed) + a faidx'd reference (we have both).
+        delly call -g "$REFERENCE" -o "$OUTDIR/delly.bcf" "$TUMOR_BAM" "$NORMAL_BAM" 2>&1 | tail -3
+        # Somatic filter needs a sample->{tumor,control} TSV; our @RG SM tags are
+        # TUMOR / NORMAL (set in index_and_align).
+        printf 'TUMOR\ttumor\nNORMAL\tcontrol\n' > "$OUTDIR/delly_samples.tsv"
+        delly filter -f somatic -s "$OUTDIR/delly_samples.tsv" \
+            -o "$OUTDIR/delly.somatic.bcf" "$OUTDIR/delly.bcf" 2>&1 | tail -3
+        # Convert BCF->VCF.gz for truvari (bcftools lives in bioinf, not the delly env).
+        conda_activate bioinf
+        bcftools view "$OUTDIR/delly.somatic.bcf" -O z -o "$DELLY_SV"
+        bcftools index -f -t "$DELLY_SV"
+        echo "[4b] Delly complete: $(zcat "$DELLY_SV" | grep -vc '^#' || true) somatic SV calls."
+    fi
+fi
+
+# ── Stage 5: Score each caller with truvari (overall + per SV type) ──────
 echo "[5/5] Scoring SVs with truvari..."
 conda_activate "$TRUVARI_ENV"
 
-run_truvari() {  # <truth.vcf.gz> <out-subdir-name>
+run_truvari() {  # <truth.vcf.gz> <out-label> <comp.vcf.gz>
     # Separate `local`s on purpose: a combined `local a=$1 b=$2 c=...$b` expands
     # $b before it's assigned, which trips `set -u` (unbound variable).
     local truth="$1"
-    local name="$2"
-    local out="$OUTDIR/truvari_$name"
+    local label="$2"
+    local comp="$3"
+    local out="$OUTDIR/truvari_$label"
     rm -rf "$out"   # truvari requires the output dir not pre-exist
-    truvari bench -b "$truth" -c "$MANTA_SV" -f "$REFERENCE" -o "$out" \
+    truvari bench -b "$truth" -c "$comp" -f "$REFERENCE" -o "$out" \
         --passonly --sizemax "$TRUVARI_SIZEMAX" 2>&1 | tail -3 || true
     if [[ -f "$out/summary.json" ]]; then
-        python3 - "$out/summary.json" "$name" <<'PY'
+        python3 - "$out/summary.json" "$label" <<'PY'
 import json, sys
 s = json.load(open(sys.argv[1])); name = sys.argv[2]
 # truvari writes null (None) for metrics when a subset has no comparisons;
 # `or 0` coerces None -> 0 (s.get(k, 0) only defaults a MISSING key, not a null one).
-print(f"  {name:<8} recall={(s.get('recall') or 0):.3f}  precision={(s.get('precision') or 0):.3f}  "
+print(f"  {name:<18} recall={(s.get('recall') or 0):.3f}  precision={(s.get('precision') or 0):.3f}  "
       f"f1={(s.get('f1') or 0):.3f}  TP={s.get('TP-base') or 0}  FN={s.get('FN') or 0}  FP={s.get('FP') or 0}")
 PY
     else
-        echo "  $name: truvari produced no summary.json (see $out)"
+        echo "  $label: truvari produced no summary.json (see $out)"
     fi
 }
 
-echo "  --- overall ---"
-run_truvari "$TRUTH_SV" overall
+# Score one caller's VCF against the truth — overall + each per-type subset.
+# Outputs land under truvari_<caller>_<overall|TYPE>/, so Manta vs Delly is a
+# direct side-by-side (esp. for BND).
+score_caller() {  # <caller> <comp.vcf.gz>
+    local caller="$1" comp="$2"
+    [[ -f "$comp" ]] || { echo "  ($caller: no calls to score)"; return 0; }
+    echo "  === $caller ==="
+    run_truvari "$TRUTH_SV" "${caller}_overall" "$comp"
+    for typed in "$OUTDIR"/truth_sv_*.vcf.gz; do
+        [[ -f "$typed" ]] || continue
+        local svt; svt=$(basename "$typed" .vcf.gz); svt=${svt#truth_sv_}
+        run_truvari "$typed" "${caller}_${svt}" "$comp"
+    done
+}
 
-echo "  --- per SV type (recall: did Manta recover each type rneat emitted?) ---"
-# Score the per-type truth subsets pre-generated in stage 3b (bcftools not needed
-# here — the truvari env may not have it).
-for typed in "$OUTDIR"/truth_sv_*.vcf.gz; do
-    [[ -f "$typed" ]] || continue            # no typed files matched
-    svt=$(basename "$typed" .vcf.gz); svt=${svt#truth_sv_}
-    run_truvari "$typed" "$svt"
-done
+score_caller manta "$MANTA_SV"
+[[ -n "$DELLY_SV" ]] && score_caller delly "$DELLY_SV"
 
 # ── Summary ──────────────────────────────────────────────────────────────
 cat <<EOF
@@ -294,12 +332,14 @@ Inputs:
 Key outputs in $OUTDIR:
   SV truth:     truth_sv.vcf.gz            ($SV_TRUTH_N somatic SVs)
   Manta calls:  manta/results/variants/somaticSV.vcf.gz
-  Scores:       truvari_overall/summary.json + truvari_<TYPE>/
+  Delly calls:  delly.somatic.vcf.gz       (RUN_DELLY=1)
+  Scores:       truvari_<caller>_<overall|TYPE>/summary.json   (manta + delly)
 
-Interpretation: low overall recall with high per-type recall for some types =
-a representation/format mismatch (truvari SVTYPE/SVLEN matching), not necessarily
-a simulator bug — inspect the pre-flight schema dump. Uniformly low recall for a
-type rneat emitted heavily = candidate SV-generation bug (the Phase-2 target).
+Interpretation: compare the two callers side-by-side. A type rneat emitted heavily
+that BOTH callers miss = candidate SV-generation issue; one caller recovering what
+the other misses (especially BND) = a caller limitation, not a simulator defect.
+Low overall with high per-type recall = truvari SVTYPE/SVLEN representation
+mismatch (inspect the pre-flight schema dump).
 EOF
 
 # Reclaim scratch once scoring is done: FASTQ is the bulk (~GBs/run at 60x) and
@@ -313,4 +353,5 @@ if [[ "${PRUNE_FASTQ:-1}" == "1" ]]; then
 fi
 
 # Persist report artifacts off scratch + record provenance/resources.
-archive_run sv "$OUTDIR" truvari_overall/summary.json
+# (manta overall always exists; delly summaries remain under $OUTDIR/truvari_delly_*)
+archive_run sv "$OUTDIR" truvari_manta_overall/summary.json

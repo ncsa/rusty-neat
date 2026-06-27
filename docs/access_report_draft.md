@@ -409,9 +409,19 @@ This is a limitation of the underlying NEAT trinucleotide approach (the germline
 default model shares it), and the fix is to weight mutation *placement* by the
 signature's per-context probability rather than placing uniformly (tracked: #320).
 It is exactly the class of gap recall-based metrics cannot surface — and the reason
-the signature check was added. The broadened SV/SNV/CNV caller coverage (#317) is
-implemented and validating on Delta; cross-caller agreement results will be added
-as the runs complete.
+the signature check was added.
+
+**Cross-caller results (#317).** The broadened coverage reinforces the anti-overfit
+picture across independent callers. **SVs:** Delly reproduces Manta's per-type recall
+*exactly* (DEL 0.882 / DUP 0.929 / INV 1.000; §3.7). **SNV/indel:** VarScan2 — a
+different statistical model from Mutect2 — calls rneat's somatic variants at high
+**precision** (0.93 SNV / 0.94 indel, vs Mutect2's 0.87 / 0.84): the calls it makes
+*match the truth*, so the data is not a Mutect2-specific artifact. Its lower recall
+(0.63 / 0.53 vs Mutect2's 0.93 / 0.90) reflects VarScan2's more conservative model
+and the high-confidence (`Somatic.hc`) filter, not a simulator property — Mutect2
+(sensitive) and VarScan2 (precise) bracket the truth as expected for two callers.
+(Strelka2 was dropped — its 2018 build SIGSEGVs on Delta's stack. GATK somatic-CNV
+is the remaining cross-check, pending.)
 
 ---
 

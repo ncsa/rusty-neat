@@ -144,7 +144,10 @@ index_and_align() {
     if [[ -f "$out_bam" && -f "${out_bam}.bai" ]]; then
         echo "  $sample BAM already present — skipping."; return 0
     fi
-    if [[ ! -f "${REFERENCE}.bwt.2bit.64" ]] && [[ ! -f "${REFERENCE}.bwt" ]]; then
+    # Guard on -s, not -f: a build killed mid-write leaves a 0-byte .bwt.2bit.64
+    # that -f treats as present, poisoning every later run (bwa-mem2: "Unexpected
+    # end of file"). -s rebuilds on empty/missing.
+    if [[ ! -s "${REFERENCE}.bwt.2bit.64" ]] && [[ ! -s "${REFERENCE}.bwt" ]]; then
         echo "  Indexing reference for BWA-MEM2 (one-time)..."
         bwa-mem2 index "$REFERENCE" 2>&1 | tail -3
     fi

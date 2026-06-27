@@ -140,8 +140,10 @@ index_and_align() {
         return 0
     fi
 
-    # Index reference once (idempotent — bwa-mem2 skips if already present).
-    if [[ ! -f "${REFERENCE}.bwt.2bit.64" ]] && [[ ! -f "${REFERENCE}.bwt" ]]; then
+    # Index reference once (idempotent). Guard on -s, not -f: a build killed
+    # mid-write leaves a 0-byte .bwt.2bit.64 that -f treats as present, poisoning
+    # every later run (bwa-mem2: "Unexpected end of file"). -s rebuilds on empty.
+    if [[ ! -s "${REFERENCE}.bwt.2bit.64" ]] && [[ ! -s "${REFERENCE}.bwt" ]]; then
         echo "  Indexing reference for BWA-MEM2 (one-time, ~2 min)..."
         bwa-mem2 index "$REFERENCE" 2>&1 | tail -3
     fi

@@ -113,9 +113,12 @@ fi
 #   sigprofiler — SigProfilerAssignment, COSMIC-signature fidelity of the model
 # NOTE: sigprofiler downloads a reference genome on first use
 # (SigProfilerMatrixGenerator); the signature_check helper installs GRCh38 once.
+#   varscan     — somatic SNV/indel, robust 2nd caller vs Mutect2 (Strelka2 2.9.10
+#                 SIGSEGVs on Delta's stack, so it's the working cross-check)
 for env_spec in \
     "delly:-c bioconda -c conda-forge delly" \
     "strelka:-c bioconda -c conda-forge strelka" \
+    "varscan:-c bioconda -c conda-forge varscan" \
     "sigprofiler:-c bioconda -c conda-forge sigprofilerassignment"; do
     env_name="${env_spec%%:*}"; env_pkgs="${env_spec#*:}"
     if conda env list | grep -q "^${env_name} "; then

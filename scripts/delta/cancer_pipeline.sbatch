@@ -67,8 +67,13 @@ TUMOR_MODEL="$REPO_ROOT/tools/cosmic_v104_pancancer_model.json.gz"
 # Path to the hap.py Apptainer SIF (built by setup.sh).
 HAPPY_SIF="${HAPPY_SIF:-$SCRATCH/sif/happy_v0.3.12.sif}"
 
-# Run Strelka2 as a 2nd somatic SNV/indel caller alongside Mutect2 (cross-validation).
-RUN_STRELKA="${RUN_STRELKA:-1}"
+# Secondary somatic SNV/indel callers for cross-validation vs Mutect2. VarScan2 is
+# the working cross-check; Strelka2 2.9.10 SIGSEGVs on Delta's stack so it's OFF by
+# default (set RUN_STRELKA=1 to attempt it). Both are non-fatal — a failure never
+# aborts the primary Mutect2 result.
+RUN_VARSCAN="${RUN_VARSCAN:-1}"
+VARSCAN_ENV="${VARSCAN_ENV:-varscan}"
+RUN_STRELKA="${RUN_STRELKA:-0}"
 STRELKA_ENV="${STRELKA_ENV:-strelka}"
 
 THREADS=$SLURM_CPUS_PER_TASK
@@ -239,6 +244,47 @@ if [[ "$RUN_STRELKA" == "1" ]]; then
     fi
 fi
 
+# ── Stage 5c: VarScan2 somatic SNV/indel (robust 2nd caller vs Mutect2) ──
+# The working SNV/indel cross-check (Strelka2 is broken on Delta). Combined
+# normal+tumor mpileup -> varscan somatic -> processSomatic (high-confidence
+# somatic) -> merge SNP+indel -> scored vs the same somatic truth. Guarded:
+# never aborts the run. RUN_VARSCAN=0 to skip.
+VARSCAN_VCF=""
+if [[ "$RUN_VARSCAN" == "1" ]]; then
+    VARSCAN_VCF="$OUTDIR/varscan.somatic.vcf.gz"
+    if [[ -f "$VARSCAN_VCF" ]]; then
+        echo "[5c] VarScan2 somatic VCF already present — skipping."
+    else
+        echo "[5c] Running VarScan2 (tumor/normal somatic SNV/indel)..."
+        run_varscan() {
+            conda_activate "$VARSCAN_ENV"   # varscan (samtools comes from the module)
+            # Combined mpileup, NORMAL first then TUMOR (--mpileup 1 expects this order).
+            samtools mpileup -B -q 1 -f "$REFERENCE" "$NORMAL_BAM" "$TUMOR_BAM" \
+                > "$OUTDIR/varscan.mpileup" 2>"$OUTDIR/varscan_mpileup.log" || return 1
+            varscan somatic "$OUTDIR/varscan.mpileup" "$OUTDIR/varscan" \
+                --mpileup 1 --output-vcf 1 > "$OUTDIR/varscan_run.log" 2>&1 || return 1
+            varscan processSomatic "$OUTDIR/varscan.snp.vcf"   >> "$OUTDIR/varscan_run.log" 2>&1 || return 1
+            varscan processSomatic "$OUTDIR/varscan.indel.vcf" >> "$OUTDIR/varscan_run.log" 2>&1 || return 1
+        }
+        if run_varscan; then
+            conda_activate bioinf   # bcftools
+            for v in snp indel; do
+                bcftools sort -Oz -o "$OUTDIR/varscan.$v.somatic.vcf.gz" \
+                    "$OUTDIR/varscan.$v.Somatic.hc.vcf"
+                bcftools index -f -t "$OUTDIR/varscan.$v.somatic.vcf.gz"
+            done
+            bcftools concat -a "$OUTDIR/varscan.snp.somatic.vcf.gz" "$OUTDIR/varscan.indel.somatic.vcf.gz" \
+                | bcftools sort -Oz -o "$VARSCAN_VCF"
+            bcftools index -f -t "$VARSCAN_VCF"
+            rm -f "$OUTDIR/varscan.mpileup"   # large intermediate — reclaim space
+            echo "[5c] VarScan2 complete: $(zcat "$VARSCAN_VCF" | grep -vc '^#' || true) somatic calls."
+        else
+            echo "[5c] WARNING: VarScan2 failed (see $OUTDIR/varscan_run.log) — continuing without it; Mutect2 unaffected." >&2
+            VARSCAN_VCF=""
+        fi
+    fi
+fi
+
 # ── Stage 6: Score each caller with hap.py som.py ───────────────────────
 # Somatic-only truth (NEAT_ORIGIN=somatic); germline carry-through (shared) is
 # correctly ignored by T/N callers, so scoring against it would be meaningless.
@@ -298,7 +344,8 @@ som_score() {
 }
 
 som_score "$FILTERED_VCF" scored                                    # Mutect2
-[[ -n "$STRELKA_VCF" ]] && som_score "$STRELKA_VCF" scored_strelka   # Strelka2
+[[ -n "$VARSCAN_VCF" ]] && som_score "$VARSCAN_VCF" scored_varscan   # VarScan2 (2nd caller)
+[[ -n "$STRELKA_VCF" ]] && som_score "$STRELKA_VCF" scored_strelka   # Strelka2 (opt-in)
 echo "[6/6] Scoring complete."
 
 # ── Summary ──────────────────────────────────────────────────────────────
@@ -317,11 +364,16 @@ Key outputs in $OUTDIR:
   Truth VCF:      sample_merged_truth.vcf.gz  (NEAT_ORIGIN-tagged)
   Somatic truth:  scoring_truth.vcf.gz         (somatic only)
   Mutect2 calls:  mutect2.filtered.vcf.gz   -> scored.stats.csv
-  Strelka2 calls: strelka.somatic.vcf.gz    -> scored_strelka.stats.csv  (RUN_STRELKA=1)
+  VarScan2 calls: varscan.somatic.vcf.gz    -> scored_varscan.stats.csv  (RUN_VARSCAN=1)
+  Strelka2 calls: strelka.somatic.vcf.gz    -> scored_strelka.stats.csv  (RUN_STRELKA=1, opt-in)
 
 Top-line results (Mutect2):
 EOF
 [[ -f "$OUTDIR/scored.stats.csv" ]] && column -t -s',' "$OUTDIR/scored.stats.csv" || echo "  (Mutect2 score not found)"
+if [[ -n "$VARSCAN_VCF" && -f "$OUTDIR/scored_varscan.stats.csv" ]]; then
+    echo; echo "Top-line results (VarScan2):"
+    column -t -s',' "$OUTDIR/scored_varscan.stats.csv"
+fi
 if [[ -n "$STRELKA_VCF" && -f "$OUTDIR/scored_strelka.stats.csv" ]]; then
     echo; echo "Top-line results (Strelka2):"
     column -t -s',' "$OUTDIR/scored_strelka.stats.csv"

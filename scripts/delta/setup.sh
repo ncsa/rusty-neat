@@ -102,6 +102,33 @@ else
     conda run -n "$BIOINF_ENV_NAME" gatk      --version 2>&1 | head -1 || true
 fi
 
+# ── 3b. Somatic-caller coverage envs (cross-validation) ──────────────────
+# Independent second callers to confirm rneat's cancer features aren't tuned to a
+# single tool, plus a mutational-signature fidelity check. Each gets its own env
+# (strelka2 is python2, sigprofiler python3, delly a static binary), so they don't
+# clash with bioinf or each other. GATK somatic CNV needs NO new env (gatk4 is in
+# bioinf); Manta + truvari already have their own envs (see sv_pipeline.sbatch).
+#   delly       — somatic SV, 2nd caller vs Manta (esp. the BND recovery question)
+#   strelka     — somatic SNV/indel, 2nd caller vs Mutect2
+#   sigprofiler — SigProfilerAssignment, COSMIC-signature fidelity of the model
+# NOTE: sigprofiler downloads a reference genome on first use
+# (SigProfilerMatrixGenerator); the signature_check helper installs GRCh38 once.
+#   varscan     — somatic SNV/indel, robust 2nd caller vs Mutect2 (Strelka2 2.9.10
+#                 SIGSEGVs on Delta's stack, so it's the working cross-check)
+for env_spec in \
+    "delly:-c bioconda -c conda-forge delly" \
+    "strelka:-c bioconda -c conda-forge strelka" \
+    "varscan:-c bioconda -c conda-forge varscan" \
+    "sigprofiler:-c bioconda -c conda-forge sigprofilerassignment"; do
+    env_name="${env_spec%%:*}"; env_pkgs="${env_spec#*:}"
+    if conda env list | grep -q "^${env_name} "; then
+        echo "[3b/4] Conda env '$env_name' already present — skipping."
+    else
+        echo "[3b/4] Creating conda env '$env_name' ($env_pkgs)..."
+        conda create -y -n "$env_name" $env_pkgs
+    fi
+done
+
 # ── 4. hap.py Apptainer image ───────────────────────────────────────────
 mkdir -p "$SIF_DIR"
 HAPPY_SIF="$SIF_DIR/happy_v0.3.12.sif"

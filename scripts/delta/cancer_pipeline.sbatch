@@ -67,6 +67,15 @@ TUMOR_MODEL="$REPO_ROOT/tools/cosmic_v104_pancancer_model.json.gz"
 # Path to the hap.py Apptainer SIF (built by setup.sh).
 HAPPY_SIF="${HAPPY_SIF:-$SCRATCH/sif/happy_v0.3.12.sif}"
 
+# Secondary somatic SNV/indel callers for cross-validation vs Mutect2. VarScan2 is
+# the working cross-check; Strelka2 2.9.10 SIGSEGVs on Delta's stack so it's OFF by
+# default (set RUN_STRELKA=1 to attempt it). Both are non-fatal — a failure never
+# aborts the primary Mutect2 result.
+RUN_VARSCAN="${RUN_VARSCAN:-1}"
+VARSCAN_ENV="${VARSCAN_ENV:-varscan}"
+RUN_STRELKA="${RUN_STRELKA:-0}"
+STRELKA_ENV="${STRELKA_ENV:-strelka}"
+
 THREADS=$SLURM_CPUS_PER_TASK
 CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$SCRATCH/cargo-target/rusty-neat}"
 RNEAT_BIN="$CARGO_TARGET_DIR/release/rneat"
@@ -194,51 +203,156 @@ else
     echo "[5/6] Filtering complete."
 fi
 
-# ── Stage 6: Score with hap.py som.py ───────────────────────────────────
-# Filter the truth VCF to somatic-only records before scoring.
-# The rneat truth carries germline-carry-through (NEAT_ORIGIN=shared) which
-# Mutect2 in tumor/normal mode correctly ignores — counting those as FN
-# would make the recall number meaningless.
-SCORE_TRUTH="$OUTDIR/scoring_truth.vcf.gz"
-SCORE_PREFIX="$OUTDIR/scored"
+# ── Stage 5b: Strelka2 somatic SNV/indel (2nd caller vs Mutect2) ─────────
+# Cross-validation: a second, independently-modeled somatic caller confirms
+# rneat's somatic SNV/indel data isn't recovered only by Mutect2. Reuses the same
+# tumor/normal BAMs. RUN_STRELKA=0 to skip.
+STRELKA_VCF=""
+if [[ "$RUN_STRELKA" == "1" ]]; then
+    STRELKA_DIR="$OUTDIR/strelka"
+    STRELKA_VCF="$OUTDIR/strelka.somatic.vcf.gz"
+    if [[ -f "$STRELKA_VCF" ]]; then
+        echo "[5b] Strelka2 somatic VCF already present — skipping."
+    else
+        echo "[5b] Running Strelka2 (tumor/normal somatic SNV/indel)..."
+        # Strelka2 is a SECONDARY cross-check and must NEVER abort the run: the
+        # bioconda strelka 2.9.10 binary SIGSEGVs on some HPC glibc/CPU combos.
+        # Run it guarded — on failure, warn and continue so the primary Mutect2
+        # result is still scored (Stage 6).
+        run_strelka() {
+            conda_activate "$STRELKA_ENV"
+            rm -rf "$STRELKA_DIR"
+            configureStrelkaSomaticWorkflow.py \
+                --normalBam "$NORMAL_BAM" --tumorBam "$TUMOR_BAM" \
+                --referenceFasta "$REFERENCE" --runDir "$STRELKA_DIR" \
+                > "$OUTDIR/strelka_config.log" 2>&1 || return 1
+            "$STRELKA_DIR/runWorkflow.py" -m local -j "$THREADS" \
+                > "$OUTDIR/strelka_run.log" 2>&1 || return 1
+        }
+        if run_strelka; then
+            conda_activate bioinf   # Strelka emits SNVs + indels separately; merge.
+            bcftools concat -a \
+                "$STRELKA_DIR/results/variants/somatic.snvs.vcf.gz" \
+                "$STRELKA_DIR/results/variants/somatic.indels.vcf.gz" \
+                | bcftools sort -Oz -o "$STRELKA_VCF"
+            bcftools index -f -t "$STRELKA_VCF"
+            echo "[5b] Strelka2 complete: $(zcat "$STRELKA_VCF" | grep -vc '^#' || true) somatic calls."
+        else
+            echo "[5b] WARNING: Strelka2 failed (see $OUTDIR/strelka_run.log) — continuing without it; Mutect2 unaffected." >&2
+            STRELKA_VCF=""
+        fi
+    fi
+fi
 
-if [[ -f "${SCORE_PREFIX}.stats.csv" ]]; then
-    echo "[6/6] Scoring output already present — skipping."
-else
+# ── Stage 5c: VarScan2 somatic SNV/indel (robust 2nd caller vs Mutect2) ──
+# The working SNV/indel cross-check (Strelka2 is broken on Delta). Combined
+# normal+tumor mpileup -> varscan somatic -> processSomatic (high-confidence
+# somatic) -> merge SNP+indel -> scored vs the same somatic truth. Guarded:
+# never aborts the run. RUN_VARSCAN=0 to skip.
+VARSCAN_VCF=""
+if [[ "$RUN_VARSCAN" == "1" ]]; then
+    VARSCAN_VCF="$OUTDIR/varscan.somatic.vcf.gz"
+    if [[ -f "$VARSCAN_VCF" ]]; then
+        echo "[5c] VarScan2 somatic VCF already present — skipping."
+    else
+        echo "[5c] Running VarScan2 (tumor/normal somatic SNV/indel)..."
+        # Everything (calling AND bcftools post-processing) is inside the guard so
+        # a VarScan-VCF quirk can't abort the run. VarScan VCFs lack ##contig lines,
+        # which makes bcftools sort fail on the undefined contig — add them from the
+        # reference .fai via `reheader --fai` before sorting.
+        run_varscan() {
+            local vlog="$OUTDIR/varscan_run.log"
+            conda_activate "$VARSCAN_ENV"   # varscan (samtools comes from the module)
+            # Combined mpileup, NORMAL first then TUMOR (--mpileup 1 expects this order).
+            samtools mpileup -B -q 1 -f "$REFERENCE" "$NORMAL_BAM" "$TUMOR_BAM" \
+                > "$OUTDIR/varscan.mpileup" 2>"$OUTDIR/varscan_mpileup.log" || return 1
+            varscan somatic "$OUTDIR/varscan.mpileup" "$OUTDIR/varscan" \
+                --mpileup 1 --output-vcf 1 > "$vlog" 2>&1 || return 1
+            varscan processSomatic "$OUTDIR/varscan.snp.vcf"   >> "$vlog" 2>&1 || return 1
+            varscan processSomatic "$OUTDIR/varscan.indel.vcf" >> "$vlog" 2>&1 || return 1
+            conda_activate bioinf   # bcftools
+            local v
+            for v in snp indel; do
+                bcftools reheader --fai "${REFERENCE}.fai" "$OUTDIR/varscan.$v.Somatic.hc.vcf" 2>>"$vlog" \
+                    | bcftools sort -Oz -o "$OUTDIR/varscan.$v.somatic.vcf.gz" 2>>"$vlog" || return 1
+                bcftools index -f -t "$OUTDIR/varscan.$v.somatic.vcf.gz" 2>>"$vlog" || return 1
+            done
+            bcftools concat -a "$OUTDIR/varscan.snp.somatic.vcf.gz" "$OUTDIR/varscan.indel.somatic.vcf.gz" 2>>"$vlog" \
+                | bcftools sort -Oz -o "$VARSCAN_VCF" 2>>"$vlog" || return 1
+            bcftools index -f -t "$VARSCAN_VCF" 2>>"$vlog" || return 1
+            rm -f "$OUTDIR/varscan.mpileup"   # large intermediate — reclaim space
+        }
+        if run_varscan; then
+            echo "[5c] VarScan2 complete: $(zcat "$VARSCAN_VCF" | grep -vc '^#' || true) somatic calls."
+        else
+            echo "[5c] WARNING: VarScan2 failed (see $OUTDIR/varscan_run.log) — continuing without it; Mutect2 unaffected." >&2
+            VARSCAN_VCF=""
+        fi
+    fi
+fi
+
+# ── Stage 6: Score each caller with hap.py som.py ───────────────────────
+# Somatic-only truth (NEAT_ORIGIN=somatic); germline carry-through (shared) is
+# correctly ignored by T/N callers, so scoring against it would be meaningless.
+# Strelka (5b) may leave us in its conda env (especially on its failure path);
+# scoring needs bioinf (bcftools) + apptainer, so re-activate it here.
+conda_activate bioinf
+SCORE_TRUTH="$OUTDIR/scoring_truth.vcf.gz"
+if [[ ! -f "$SCORE_TRUTH" ]]; then
     echo "[6/6] Filtering truth to somatic records..."
     bcftools view -i 'INFO/NEAT_ORIGIN="somatic"' -O z -o "$SCORE_TRUTH" "$TRUTH_VCF"
     bcftools index -f -t "$SCORE_TRUTH"
+fi
+somatic_count=$(bcftools view -H "$SCORE_TRUTH" | wc -l)
+echo "      Somatic truth records: $somatic_count"
+[[ "$somatic_count" -eq 0 ]] && echo "WARNING: no somatic truth records — check NEAT_ORIGIN." >&2
+[[ -f "$HAPPY_SIF" ]] || { echo "hap.py SIF not found: $HAPPY_SIF — run setup.sh first" >&2; exit 1; }
 
-    somatic_count=$(bcftools view -H "$SCORE_TRUTH" | wc -l)
-    echo "      Somatic truth records: $somatic_count"
-
-    if [[ "$somatic_count" -eq 0 ]]; then
-        echo "WARNING: no somatic records in truth VCF — check that NEAT_ORIGIN is present." >&2
+# hap.py/som.py hardcodes UCSC chr-prefixing of input VCFs (perl s/^([0-9XYM])/chr/),
+# then bcftools-norm's against the reference. With an Ensembl-named reference (1/2/3)
+# the renamed VCFs (chr1) no longer match the reference (1) and som.py dies
+# ("sequence chr1 not found"). If the reference isn't chr-prefixed, build a
+# chr-prefixed copy for scoring so the renamed VCFs match. (chr22.fa etc. pass
+# through unchanged.) Alignment/Mutect2 already used $REFERENCE as-is — unaffected.
+SCORE_REF_DIR="$REF_DIR"; SCORE_REF_NAME="$REF_NAME"
+if ! head -1 "${REFERENCE}.fai" 2>/dev/null | grep -q '^chr'; then
+    SCORE_REF="${REFERENCE%.fa}.chr.fa"
+    if [[ ! -f "$SCORE_REF" ]]; then
+        echo "[6/6] Reference is Ensembl-named; building chr-prefixed copy for som.py..."
+        sed '/^>/ s/^>/>chr/' "$REFERENCE" > "$SCORE_REF"
+        samtools faidx "$SCORE_REF"
     fi
+    SCORE_REF_DIR="$(dirname "$SCORE_REF")"; SCORE_REF_NAME="$(basename "$SCORE_REF")"
+fi
 
-    echo "[6/6] Scoring with hap.py som.py (Apptainer)..."
-    [[ -f "$HAPPY_SIF" ]] || { echo "hap.py SIF not found: $HAPPY_SIF — run setup.sh first" >&2; exit 1; }
-
-    # -N (--normalize-all) runs `bcftools norm` on BOTH truth and query before
-    # comparison — essential for indels: without it, a truth indel and Mutect2's
-    # call for the same event can be left-aligned to different positions and get
-    # double-counted as FN + FP, deflating indel recall AND precision. SNVs are
-    # unaffected. HGREF is set so som.py's reference lookup resolves (silences the
-    # "No reference file found" warning) in addition to the explicit -r.
+# som_score <query.vcf.gz> <out-label>. -N (--normalize-all) runs bcftools norm on
+# BOTH truth and query — essential for indels (representation/left-align mismatch
+# otherwise double-counts FN+FP). HGREF resolves som.py's reference lookup.
+som_score() {
+    local query="$1" label="$2"
+    [[ -f "$query" ]] || { echo "  ($label: no query VCF to score)"; return 0; }
+    if [[ -f "$OUTDIR/${label}.stats.csv" ]]; then
+        echo "[6/6] $label score already present — skipping."; return 0
+    fi
+    echo "[6/6] Scoring $label with som.py (Apptainer)..."
     apptainer exec \
-        --env "HGREF=/refs/$REF_NAME" \
-        --bind "$REF_DIR:/refs:ro" \
+        --env "HGREF=/refs/$SCORE_REF_NAME" \
+        --bind "$SCORE_REF_DIR:/refs:ro" \
         --bind "$OUTDIR:/work" \
         "$HAPPY_SIF" \
         /opt/hap.py/bin/som.py \
             "/work/$(basename "$SCORE_TRUTH")" \
-            "/work/$(basename "$FILTERED_VCF")" \
-            -r "/refs/$REF_NAME" \
-            -o "/work/scored" \
+            "/work/$(basename "$query")" \
+            -r "/refs/$SCORE_REF_NAME" \
+            -o "/work/$label" \
             -N \
             --feature-table generic
-    echo "[6/6] Scoring complete."
-fi
+}
+
+som_score "$FILTERED_VCF" scored                                    # Mutect2
+[[ -n "$VARSCAN_VCF" ]] && som_score "$VARSCAN_VCF" scored_varscan   # VarScan2 (2nd caller)
+[[ -n "$STRELKA_VCF" ]] && som_score "$STRELKA_VCF" scored_strelka   # Strelka2 (opt-in)
+echo "[6/6] Scoring complete."
 
 # ── Summary ──────────────────────────────────────────────────────────────
 cat <<EOF
@@ -255,12 +369,21 @@ Key outputs in $OUTDIR:
   Simulation:     sample_merged_{r1,r2}.fastq.gz
   Truth VCF:      sample_merged_truth.vcf.gz  (NEAT_ORIGIN-tagged)
   Somatic truth:  scoring_truth.vcf.gz         (somatic only)
-  Mutect2 calls:  mutect2.filtered.vcf.gz
-  Score summary:  scored.stats.csv             ← recall / precision / F1
+  Mutect2 calls:  mutect2.filtered.vcf.gz   -> scored.stats.csv
+  VarScan2 calls: varscan.somatic.vcf.gz    -> scored_varscan.stats.csv  (RUN_VARSCAN=1)
+  Strelka2 calls: strelka.somatic.vcf.gz    -> scored_strelka.stats.csv  (RUN_STRELKA=1, opt-in)
 
-Top-line results:
+Top-line results (Mutect2):
 EOF
-[[ -f "${SCORE_PREFIX}.stats.csv" ]] && column -t -s',' "${SCORE_PREFIX}.stats.csv" || echo "  (score file not found)"
+[[ -f "$OUTDIR/scored.stats.csv" ]] && column -t -s',' "$OUTDIR/scored.stats.csv" || echo "  (Mutect2 score not found)"
+if [[ -n "$VARSCAN_VCF" && -f "$OUTDIR/scored_varscan.stats.csv" ]]; then
+    echo; echo "Top-line results (VarScan2):"
+    column -t -s',' "$OUTDIR/scored_varscan.stats.csv"
+fi
+if [[ -n "$STRELKA_VCF" && -f "$OUTDIR/scored_strelka.stats.csv" ]]; then
+    echo; echo "Top-line results (Strelka2):"
+    column -t -s',' "$OUTDIR/scored_strelka.stats.csv"
+fi
 
 # Persist report artifacts off scratch + record provenance/resources.
 archive_run cancer "$OUTDIR" scored.stats.csv

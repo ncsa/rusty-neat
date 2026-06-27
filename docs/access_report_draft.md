@@ -274,9 +274,13 @@ through a dedicated chimeric-read pass that stitches flanks across each junction
 and that signal is present and correctly placed for **every** class — including
 where the caller fails to recover it.
 
-- **CNV by depth.** Manta cannot call copy number, so we verified it directly: a
-  `CN=4` region showed 110.5× vs a 60.4× flank = **1.83×**, matching the expected
-  `(0.8·4 + 0.2·2)/2 = 1.8×` for that amplification at purity 0.8.
+- **CNV — two ways.** Manta cannot call copy number. (i) *By depth:* a `CN=4`
+  region showed 110.5× vs a 60.4× flank = **1.83×**, matching the expected
+  `(0.8·4 + 0.2·2)/2 = 1.8×` at purity 0.8. (ii) *By a copy-number caller:* GATK
+  `DenoiseReadCounts`→`ModelSegments`→`CallCopyRatioSegments` recovered **4/7 truth
+  CNVs with the correct gain/loss direction** (the misses are the small/low-amplitude
+  het CNVs — kb-scale events near the read-depth segmentation limit). Both confirm
+  rneat's CNVs carry correct, caller-detectable copy-ratio signal.
 - **Somatic specificity (no leak).** A homozygous somatic deletion was depleted
   5× in the tumor (60×→12×) while the normal stayed at full depth — the SV is real
   in the reads and correctly tumor-restricted.
@@ -294,11 +298,19 @@ Per-type recovery (Manta + truvari, 60×/0.8):
 | DUP | 14 | **0.929** (13/14) | — (incl. 1 Mb) |
 | INV | 4 | **1.000** (4/4) | — |
 | BND | 22 | signal present at read level; ~50% Manta-called | truvari can't benchmark breakends; Manta translocation recall |
-| CNV | 7 | depth-validated (1.83×) | Manta does not call CNV |
+| CNV | 7 | depth 1.83× + GATK caller 4/7 by direction | Manta does not call CNV |
 
 Overall figures across all 64 truth SVs (recall 0.500, precision 0.561) are bounded
 by BND (unscoreable by truvari) and CNV (uncallable by Manta) — tool constraints,
 not simulator defects.
+
+**Confirmed by an independent second caller.** Delly (read-pair/split/depth-based,
+no assembly) recovers the same SVs at the *same* rates — **DEL 0.882, DUP 0.929,
+INV 1.000, identical to Manta** — with slightly higher precision (0.667 vs 0.561),
+and likewise scores 0/22 BND and 0/7 CNV. Two independent callers agreeing this
+closely is strong evidence rneat's SV data is not tuned to one tool, and that the
+BND/CNV gaps are scorer/caller limitations (truvari cannot benchmark breakends;
+neither caller emits truvari-matchable CNV) rather than simulator defects.
 
 **Per-tissue models shift the spectrum correctly.** Swapping the pan-cancer model
 for tissue-specific COSMIC SV models reproduces each tissue's dominant SV type in
@@ -343,6 +355,79 @@ callers and truth sets expect (#313), and SV-scale insertions did not appear in 
 run (`INS: 0`) despite a non-zero model probability (#314). None is a defect in the
 validated read generation — all are realism / interoperability improvements.
 
+### 3.8 At-scale validation (chr1–3 subset, ~690 Mb)
+
+To confirm the chr22 metrics are not overfit to one chromosome, both pipelines were
+re-run on a **chr1–chr3 subset of GRCh38** — ~690 Mb, ~13× chr22, entirely different
+sequence. Every metric held or slightly improved:
+
+| Pipeline | Metric | chr1–3 | chr22 |
+|---|---|---|---|
+| Germline (rneat) | SNP recall / precision | **0.990 / 0.9997** | 0.989 / 0.9996 |
+| Germline (rneat) | INDEL recall / precision | **0.988 / 0.990** | 0.982 / 0.989 |
+| Cancer (Mutect2 T/N) | somatic SNV recall / precision | **0.944 / 0.910** | 0.925 / 0.872 |
+| Cancer (Mutect2 T/N) | somatic INDEL recall / precision | **0.908 / 0.885** | 0.900 / 0.844 |
+
+Germline Ts/Tv held at 2.34 (truth = query). rneat's fidelity is therefore not an
+artifact of chr22 — it holds at 13× the scale on different sequence. Whole-genome
+runs were not pursued (no divergence to investigate); the Mutect2 tumor/normal step
+is the practical scale ceiling (~3.2 h on chr1–3, and ≫48 h projected genome-wide
+without interval scatter).
+
+*Tooling note:* hap.py/som.py hardcodes UCSC chr-prefixing of input VCFs, so an
+Ensembl-named reference (GRCh38: `1/2/3`) needs a chr-prefixed copy for scoring —
+now handled automatically by the cancer pipeline.
+
+### 3.9 Cross-caller coverage and mutational-signature fidelity
+
+To avoid judging rneat's cancer features by a single caller, second callers were
+added across classes on the existing Delta harnesses — **Delly** (somatic SV, vs
+Manta), **Strelka2** (somatic SNV/indel, vs Mutect2), and **GATK somatic-CNV** (vs
+the depth check of §3.7) — plus a **mutational-signature** check
+(SigProfilerAssignment). Cross-caller *agreement* is the strongest anti-overfit
+signal; the signature check probes something variant-recall cannot: does rneat
+reproduce the COSMIC mutational *signature* its tumor model encodes?
+
+**At the signature level, it does not — a real fidelity limitation.** Fitting
+COSMIC signatures to 6,225 simulated somatic SNVs (chr1–3) assigned them entirely
+to flat, clock-like signatures (SBS5 45 %, SBS3 31 %, SBS41 17 %, SBS12 7 %), with
+**no SBS1** — the near-universal C>T-at-CpG signature present in essentially every
+real tumor. The 96-context spectrum confirms it: the four CpG `[C>T]G` contexts are
+the *lowest* C>T contexts (16–23 counts vs ~65 average).
+
+**Root cause (verified both ends).** The bundled COSMIC model is faithful — its
+per-context substitution model encodes strong CpG C>T enrichment (conditional
+0.78–0.88 at CpG vs 0.39–0.62 elsewhere). But rneat places mutations at a
+**context-independent rate** and conditions only the *alt allele* on trinucleotide
+context. The realized spectrum is therefore *(genome trinucleotide frequency) ×
+(conditional alt)*, not the COSMIC signature; because CpG dinucleotides are ~10×
+genome-depleted, the CpG C>T peak never forms. COSMIC signatures are **rate
+patterns** (mutations-per-context), which a uniform-placement model cannot
+represent.
+
+**Interpretation.** rneat faithfully reproduces the substitution-*type*
+distribution and transition bias (Ts/Tv 2.34, §3.1/3.3) and recovers variants well
+across independent callers and at scale (§3.3/3.4/3.7/3.8) — but simulated somatic
+SNVs do not reconstruct the input COSMIC *signature* under signature extraction.
+This is a limitation of the underlying NEAT trinucleotide approach (the germline
+default model shares it), and the fix is to weight mutation *placement* by the
+signature's per-context probability rather than placing uniformly (tracked: #320).
+It is exactly the class of gap recall-based metrics cannot surface — and the reason
+the signature check was added.
+
+**Cross-caller results (#317).** The broadened coverage reinforces the anti-overfit
+picture across independent callers. **SVs:** Delly reproduces Manta's per-type recall
+*exactly* (DEL 0.882 / DUP 0.929 / INV 1.000; §3.7). **SNV/indel:** VarScan2 — a
+different statistical model from Mutect2 — calls rneat's somatic variants at high
+**precision** (0.93 SNV / 0.94 indel, vs Mutect2's 0.87 / 0.84): the calls it makes
+*match the truth*, so the data is not a Mutect2-specific artifact. Its lower recall
+(0.63 / 0.53 vs Mutect2's 0.93 / 0.90) reflects VarScan2's more conservative model
+and the high-confidence (`Somatic.hc`) filter, not a simulator property — Mutect2
+(sensitive) and VarScan2 (precise) bracket the truth as expected for two callers.
+(Strelka2 was dropped — its 2018 build SIGSEGVs on Delta's stack. GATK somatic-CNV
+recovered **4/7 CNVs by direction** — no-PoN, since its panel step is a Spark tool
+incompatible with the env's Java 25 — corroborating the depth check, §3.7.)
+
 ---
 
 ## 4. Phase 2 — robustness at scale (planned, key deliverables)
@@ -353,10 +438,12 @@ cover, with an explicit goal of **avoiding over-tuning to chr22**: exercise rnea
 on substantial and *varied* inputs to confirm robustness and surface any
 remaining defects of the kind already found.
 
-1. **Whole-genome scale.** Run the full germline and cancer pipelines on GRCh38
-   (whole genome and large chromosome subsets), not just chr22. Confirms the
-   Phase 1 metrics hold at genome scale and that nothing was overfit to one
-   chromosome.
+1. **Whole-genome scale — done at chr1–3 (§3.8).** Germline and cancer pipelines
+   re-run on a ~690 Mb chr1–3 subset of GRCh38 (~13× chr22): all metrics held or
+   slightly improved (germline SNP 0.990 / indel 0.988; cancer somatic SNV 0.944 /
+   indel 0.908), confirming nothing was overfit to chr22. Full whole-genome not
+   pursued — no divergence to investigate, and Mutect2 T/N is the scale ceiling
+   (≫48 h genome-wide without interval scatter).
 
 2. **Multicore scaling / HPC tuning — COMPLETE (§3.6).** The thread regression
    was characterized (memory-bandwidth-bound, allocator- and NUMA-independent) and
@@ -397,9 +484,19 @@ remaining defects of the kind already found.
 
 ## 5. Phase 3 — stretch goals (time permitting)
 
-- **Long-read simulation.** Extend testing to long-read-style data
-  (longer fragments / single-molecule profiles) and validate against long-read
-  aligners/callers.
+- **Long-read simulation (ONT / PacBio-style)** (tracked: #319). Validate rneat against the
+  long-read paradigm: simulate single-molecule reads (kb-scale lengths and the
+  higher, indel-dominated, homopolymer-dependent error profile characteristic of
+  nanopore / HiFi data, unpaired), align with **minimap2**, and score recall with
+  long-read callers — **Clair3 / DeepVariant** for SNV/indel and **Sniffles2 /
+  cuteSV** for SVs (truvari for SV scoring, as in §3.7). Because a single long read
+  spans an SV breakpoint, this is the natural complement to the short-read SV
+  validation: it stresses the SV machinery from the other side and would exercise
+  the breakpoint-realism work in epic #311 directly. *Prerequisite:* a long-read
+  mode in rneat (read-length distribution + long-read error model) — today rneat
+  targets short paired-end Illumina data, so this is feature work gated ahead of
+  the validation, mirroring the short-read harnesses already built
+  (`germline_e2e` / `cancer_pipeline` / `sv_pipeline`).
 - **Plant genomes and polyploidy.** Exercise large, repetitive plant genomes and
   scope tuning for polyploid simulation (rneat's `ploidy` parameter and the
   allele-dosage work tracked separately), where structural variation and high

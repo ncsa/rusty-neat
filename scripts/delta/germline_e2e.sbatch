@@ -91,8 +91,11 @@ echo "Tools:     $TOOLS"
 echo "Output:    $OUTDIR"
 
 # ── Shared one-time reference indexing ───────────────────────────────────
+# Guard on -s (exists AND non-empty), not -f: an index build killed mid-write
+# leaves a 0-byte .bwt.2bit.64 that -f treats as "present", so every later run
+# skips indexing and bwa-mem2 dies with "Unexpected end of file". -s rebuilds it.
 [[ -f "${REFERENCE}.fai" ]] || samtools faidx "$REFERENCE"
-if [[ ! -f "${REFERENCE}.bwt.2bit.64" && ! -f "${REFERENCE}.bwt" ]]; then
+if [[ ! -s "${REFERENCE}.bwt.2bit.64" && ! -s "${REFERENCE}.bwt" ]]; then
     echo "Indexing reference for BWA-MEM2 (one-time)..."
     bwa-mem2 index "$REFERENCE"
 fi

@@ -422,9 +422,19 @@ remaining defects of the kind already found.
 
 ## 5. Phase 3 — stretch goals (time permitting)
 
-- **Long-read simulation.** Extend testing to long-read-style data
-  (longer fragments / single-molecule profiles) and validate against long-read
-  aligners/callers.
+- **Long-read simulation (ONT / PacBio-style).** Validate rneat against the
+  long-read paradigm: simulate single-molecule reads (kb-scale lengths and the
+  higher, indel-dominated, homopolymer-dependent error profile characteristic of
+  nanopore / HiFi data, unpaired), align with **minimap2**, and score recall with
+  long-read callers — **Clair3 / DeepVariant** for SNV/indel and **Sniffles2 /
+  cuteSV** for SVs (truvari for SV scoring, as in §3.7). Because a single long read
+  spans an SV breakpoint, this is the natural complement to the short-read SV
+  validation: it stresses the SV machinery from the other side and would exercise
+  the breakpoint-realism work in epic #311 directly. *Prerequisite:* a long-read
+  mode in rneat (read-length distribution + long-read error model) — today rneat
+  targets short paired-end Illumina data, so this is feature work gated ahead of
+  the validation, mirroring the short-read harnesses already built
+  (`germline_e2e` / `cancer_pipeline` / `sv_pipeline`).
 - **Plant genomes and polyploidy.** Exercise large, repetitive plant genomes and
   scope tuning for polyploid simulation (rneat's `ploidy` parameter and the
   allele-dosage work tracked separately), where structural variation and high

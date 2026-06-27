@@ -288,10 +288,10 @@ if [[ "$RUN_CNV" == "1" && -f "$CNV_TRUTH" ]]; then
         local log="$OUTDIR/cnv_gatk.log"; : > "$log"
         [[ -f "${REFERENCE%.fa}.dict" ]] || gatk CreateSequenceDictionary -R "$REFERENCE" >>"$log" 2>&1 || return 1
         gatk PreprocessIntervals -R "$REFERENCE" --bin-length 1000 --padding 0 \
-            --interval-merging-rule OVERLAPPING_ONLY -O "$OUTDIR/cnv.intervals" >>"$log" 2>&1 || return 1
+            --interval-merging-rule OVERLAPPING_ONLY -O "$OUTDIR/cnv.interval_list" >>"$log" 2>&1 || return 1
         local s
         for s in tumor normal; do
-            gatk CollectReadCounts -I "$OUTDIR/$s.bam" -L "$OUTDIR/cnv.intervals" \
+            gatk CollectReadCounts -I "$OUTDIR/$s.bam" -L "$OUTDIR/cnv.interval_list" \
                 --interval-merging-rule OVERLAPPING_ONLY -O "$OUTDIR/$s.counts.hdf5" >>"$log" 2>&1 || return 1
         done
         gatk CreateReadCountPanelOfNormals -I "$OUTDIR/normal.counts.hdf5" \

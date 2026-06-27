@@ -343,6 +343,29 @@ callers and truth sets expect (#313), and SV-scale insertions did not appear in 
 run (`INS: 0`) despite a non-zero model probability (#314). None is a defect in the
 validated read generation — all are realism / interoperability improvements.
 
+### 3.8 At-scale validation (chr1–3 subset, ~690 Mb)
+
+To confirm the chr22 metrics are not overfit to one chromosome, both pipelines were
+re-run on a **chr1–chr3 subset of GRCh38** — ~690 Mb, ~13× chr22, entirely different
+sequence. Every metric held or slightly improved:
+
+| Pipeline | Metric | chr1–3 | chr22 |
+|---|---|---|---|
+| Germline (rneat) | SNP recall / precision | **0.990 / 0.9997** | 0.989 / 0.9996 |
+| Germline (rneat) | INDEL recall / precision | **0.988 / 0.990** | 0.982 / 0.989 |
+| Cancer (Mutect2 T/N) | somatic SNV recall / precision | **0.944 / 0.910** | 0.925 / 0.872 |
+| Cancer (Mutect2 T/N) | somatic INDEL recall / precision | **0.908 / 0.885** | 0.900 / 0.844 |
+
+Germline Ts/Tv held at 2.34 (truth = query). rneat's fidelity is therefore not an
+artifact of chr22 — it holds at 13× the scale on different sequence. Whole-genome
+runs were not pursued (no divergence to investigate); the Mutect2 tumor/normal step
+is the practical scale ceiling (~3.2 h on chr1–3, and ≫48 h projected genome-wide
+without interval scatter).
+
+*Tooling note:* hap.py/som.py hardcodes UCSC chr-prefixing of input VCFs, so an
+Ensembl-named reference (GRCh38: `1/2/3`) needs a chr-prefixed copy for scoring —
+now handled automatically by the cancer pipeline.
+
 ---
 
 ## 4. Phase 2 — robustness at scale (planned, key deliverables)
@@ -353,10 +376,12 @@ cover, with an explicit goal of **avoiding over-tuning to chr22**: exercise rnea
 on substantial and *varied* inputs to confirm robustness and surface any
 remaining defects of the kind already found.
 
-1. **Whole-genome scale.** Run the full germline and cancer pipelines on GRCh38
-   (whole genome and large chromosome subsets), not just chr22. Confirms the
-   Phase 1 metrics hold at genome scale and that nothing was overfit to one
-   chromosome.
+1. **Whole-genome scale — done at chr1–3 (§3.8).** Germline and cancer pipelines
+   re-run on a ~690 Mb chr1–3 subset of GRCh38 (~13× chr22): all metrics held or
+   slightly improved (germline SNP 0.990 / indel 0.988; cancer somatic SNV 0.944 /
+   indel 0.908), confirming nothing was overfit to chr22. Full whole-genome not
+   pursued — no divergence to investigate, and Mutect2 T/N is the scale ceiling
+   (≫48 h genome-wide without interval scatter).
 
 2. **Multicore scaling / HPC tuning — COMPLETE (§3.6).** The thread regression
    was characterized (memory-bandwidth-bound, allocator- and NUMA-independent) and

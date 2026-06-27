@@ -256,27 +256,33 @@ if [[ "$RUN_VARSCAN" == "1" ]]; then
         echo "[5c] VarScan2 somatic VCF already present — skipping."
     else
         echo "[5c] Running VarScan2 (tumor/normal somatic SNV/indel)..."
+        # Everything (calling AND bcftools post-processing) is inside the guard so
+        # a VarScan-VCF quirk can't abort the run. VarScan VCFs lack ##contig lines,
+        # which makes bcftools sort fail on the undefined contig — add them from the
+        # reference .fai via `reheader --fai` before sorting.
         run_varscan() {
+            local vlog="$OUTDIR/varscan_run.log"
             conda_activate "$VARSCAN_ENV"   # varscan (samtools comes from the module)
             # Combined mpileup, NORMAL first then TUMOR (--mpileup 1 expects this order).
             samtools mpileup -B -q 1 -f "$REFERENCE" "$NORMAL_BAM" "$TUMOR_BAM" \
                 > "$OUTDIR/varscan.mpileup" 2>"$OUTDIR/varscan_mpileup.log" || return 1
             varscan somatic "$OUTDIR/varscan.mpileup" "$OUTDIR/varscan" \
-                --mpileup 1 --output-vcf 1 > "$OUTDIR/varscan_run.log" 2>&1 || return 1
-            varscan processSomatic "$OUTDIR/varscan.snp.vcf"   >> "$OUTDIR/varscan_run.log" 2>&1 || return 1
-            varscan processSomatic "$OUTDIR/varscan.indel.vcf" >> "$OUTDIR/varscan_run.log" 2>&1 || return 1
+                --mpileup 1 --output-vcf 1 > "$vlog" 2>&1 || return 1
+            varscan processSomatic "$OUTDIR/varscan.snp.vcf"   >> "$vlog" 2>&1 || return 1
+            varscan processSomatic "$OUTDIR/varscan.indel.vcf" >> "$vlog" 2>&1 || return 1
+            conda_activate bioinf   # bcftools
+            local v
+            for v in snp indel; do
+                bcftools reheader --fai "${REFERENCE}.fai" "$OUTDIR/varscan.$v.Somatic.hc.vcf" 2>>"$vlog" \
+                    | bcftools sort -Oz -o "$OUTDIR/varscan.$v.somatic.vcf.gz" 2>>"$vlog" || return 1
+                bcftools index -f -t "$OUTDIR/varscan.$v.somatic.vcf.gz" 2>>"$vlog" || return 1
+            done
+            bcftools concat -a "$OUTDIR/varscan.snp.somatic.vcf.gz" "$OUTDIR/varscan.indel.somatic.vcf.gz" 2>>"$vlog" \
+                | bcftools sort -Oz -o "$VARSCAN_VCF" 2>>"$vlog" || return 1
+            bcftools index -f -t "$VARSCAN_VCF" 2>>"$vlog" || return 1
+            rm -f "$OUTDIR/varscan.mpileup"   # large intermediate — reclaim space
         }
         if run_varscan; then
-            conda_activate bioinf   # bcftools
-            for v in snp indel; do
-                bcftools sort -Oz -o "$OUTDIR/varscan.$v.somatic.vcf.gz" \
-                    "$OUTDIR/varscan.$v.Somatic.hc.vcf"
-                bcftools index -f -t "$OUTDIR/varscan.$v.somatic.vcf.gz"
-            done
-            bcftools concat -a "$OUTDIR/varscan.snp.somatic.vcf.gz" "$OUTDIR/varscan.indel.somatic.vcf.gz" \
-                | bcftools sort -Oz -o "$VARSCAN_VCF"
-            bcftools index -f -t "$VARSCAN_VCF"
-            rm -f "$OUTDIR/varscan.mpileup"   # large intermediate — reclaim space
             echo "[5c] VarScan2 complete: $(zcat "$VARSCAN_VCF" | grep -vc '^#' || true) somatic calls."
         else
             echo "[5c] WARNING: VarScan2 failed (see $OUTDIR/varscan_run.log) — continuing without it; Mutect2 unaffected." >&2

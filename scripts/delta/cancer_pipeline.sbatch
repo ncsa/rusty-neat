@@ -242,6 +242,9 @@ fi
 # ── Stage 6: Score each caller with hap.py som.py ───────────────────────
 # Somatic-only truth (NEAT_ORIGIN=somatic); germline carry-through (shared) is
 # correctly ignored by T/N callers, so scoring against it would be meaningless.
+# Strelka (5b) may leave us in its conda env (especially on its failure path);
+# scoring needs bioinf (bcftools) + apptainer, so re-activate it here.
+conda_activate bioinf
 SCORE_TRUTH="$OUTDIR/scoring_truth.vcf.gz"
 if [[ ! -f "$SCORE_TRUTH" ]]; then
     echo "[6/6] Filtering truth to somatic records..."

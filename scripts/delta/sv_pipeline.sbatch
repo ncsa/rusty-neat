@@ -282,25 +282,33 @@ fi
 CNV_TRUTH="$OUTDIR/truth_sv_CNV.vcf.gz"
 if [[ "$RUN_CNV" == "1" && -f "$CNV_TRUTH" ]]; then
     conda_activate bioinf
-    if [[ -f "$OUTDIR/cnv_called.seg" ]]; then
-        echo "[4c] GATK CNV segments already present — skipping call."
-    else
-        echo "[4c] Running GATK somatic CNV (denoise -> segment -> call)..."
-        [[ -f "${REFERENCE%.fa}.dict" ]] || gatk CreateSequenceDictionary -R "$REFERENCE" 2>&1 | tail -2
+    # GATK CNV is a SECONDARY validation — never let it abort the run (truvari
+    # scoring of Manta/Delly must still happen). Guarded; full GATK output -> cnv_gatk.log.
+    run_gatk_cnv() {
+        local log="$OUTDIR/cnv_gatk.log"; : > "$log"
+        [[ -f "${REFERENCE%.fa}.dict" ]] || gatk CreateSequenceDictionary -R "$REFERENCE" >>"$log" 2>&1 || return 1
         gatk PreprocessIntervals -R "$REFERENCE" --bin-length 1000 --padding 0 \
-            --interval-merging-rule OVERLAPPING_ONLY -O "$OUTDIR/cnv.intervals" 2>&1 | tail -2
+            --interval-merging-rule OVERLAPPING_ONLY -O "$OUTDIR/cnv.intervals" >>"$log" 2>&1 || return 1
+        local s
         for s in tumor normal; do
             gatk CollectReadCounts -I "$OUTDIR/$s.bam" -L "$OUTDIR/cnv.intervals" \
-                --interval-merging-rule OVERLAPPING_ONLY -O "$OUTDIR/$s.counts.hdf5" 2>&1 | tail -2
+                --interval-merging-rule OVERLAPPING_ONLY -O "$OUTDIR/$s.counts.hdf5" >>"$log" 2>&1 || return 1
         done
         gatk CreateReadCountPanelOfNormals -I "$OUTDIR/normal.counts.hdf5" \
-            -O "$OUTDIR/cnv.pon.hdf5" 2>&1 | tail -2
+            -O "$OUTDIR/cnv.pon.hdf5" >>"$log" 2>&1 || return 1
         gatk DenoiseReadCounts -I "$OUTDIR/tumor.counts.hdf5" --count-panel-of-normals "$OUTDIR/cnv.pon.hdf5" \
             --standardized-copy-ratios "$OUTDIR/tumor.stdCR.tsv" \
-            --denoised-copy-ratios "$OUTDIR/tumor.denoisedCR.tsv" 2>&1 | tail -2
+            --denoised-copy-ratios "$OUTDIR/tumor.denoisedCR.tsv" >>"$log" 2>&1 || return 1
         gatk ModelSegments --denoised-copy-ratios "$OUTDIR/tumor.denoisedCR.tsv" \
-            -O "$OUTDIR" --output-prefix cnv 2>&1 | tail -2
-        gatk CallCopyRatioSegments -I "$OUTDIR/cnv.cr.seg" -O "$OUTDIR/cnv_called.seg" 2>&1 | tail -2
+            -O "$OUTDIR" --output-prefix cnv >>"$log" 2>&1 || return 1
+        gatk CallCopyRatioSegments -I "$OUTDIR/cnv.cr.seg" -O "$OUTDIR/cnv_called.seg" >>"$log" 2>&1 || return 1
+    }
+    if [[ -f "$OUTDIR/cnv_called.seg" ]]; then
+        echo "[4c] GATK CNV segments already present — skipping call."
+    elif run_gatk_cnv; then
+        echo "[4c] GATK CNV calling complete."
+    else
+        echo "[4c] WARNING: GATK CNV failed (see $OUTDIR/cnv_gatk.log) — continuing without CNV validation." >&2
     fi
     # Score: does a called gain/loss segment overlap each truth CNV with the right
     # direction? (CN>2 -> gain '+', CN<2 -> loss '-'.) Manta/truvari can't score CNV,

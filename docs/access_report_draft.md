@@ -422,7 +422,7 @@ remaining defects of the kind already found.
 
 ## 5. Phase 3 — stretch goals (time permitting)
 
-- **Long-read simulation (ONT / PacBio-style).** Validate rneat against the
+- **Long-read simulation (ONT / PacBio-style)** (tracked: #319). Validate rneat against the
   long-read paradigm: simulate single-molecule reads (kb-scale lengths and the
   higher, indel-dominated, homopolymer-dependent error profile characteristic of
   nanopore / HiFi data, unpaired), align with **minimap2**, and score recall with

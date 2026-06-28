@@ -22,17 +22,29 @@ source "$REPO_ROOT/scripts/delta/lib_report.sh"
 
 GENOMES="${GENOMES:?set GENOMES to a space-separated list of reference FASTAs}"
 COVERAGE="${COVERAGE:-30}"
+# REPS>1 submits each genome REPS times with a DISTINCT seed into variety_<g>_rep<r>,
+# for mean±sd error bars (see docs/replication_audit.md). REPS=1 = original behavior.
+REPS="${REPS:-1}"
 MANIFEST="${MANIFEST:-${RESULTS_DIR:-$HOME}/variety.manifest}"
 mkdir -p "$(dirname "$MANIFEST")"
 echo "# name jobid outdir reference" > "$MANIFEST"
 
 for ref in $GENOMES; do
     if [[ ! -f "$ref" ]]; then echo "MISSING: $ref — skipping" >&2; continue; fi
-    name="$(basename "$ref")"; name="${name%.*}"
-    out="$SCRATCH/variety_$name"
-    jid=$(REFERENCE="$ref" TOOLS=rneat COVERAGE="$COVERAGE" OUTDIR="$out" \
-          sbatch --parsable "$REPO_ROOT/scripts/delta/germline_e2e.sbatch")
-    echo "$name $jid $out $ref" | tee -a "$MANIFEST"
+    base="$(basename "$ref")"; base="${base%.*}"
+    for r in $(seq 1 "$REPS"); do
+        if [[ "$REPS" -gt 1 ]]; then
+            name="${base}_rep${r}"; out="$SCRATCH/variety_${base}_rep${r}"
+            jid=$(REFERENCE="$ref" TOOLS=rneat COVERAGE="$COVERAGE" OUTDIR="$out" \
+                  SEED="variety $base rep$r" \
+                  sbatch --parsable "$REPO_ROOT/scripts/delta/germline_e2e.sbatch")
+        else
+            name="$base"; out="$SCRATCH/variety_$base"   # unchanged default seed
+            jid=$(REFERENCE="$ref" TOOLS=rneat COVERAGE="$COVERAGE" OUTDIR="$out" \
+                  sbatch --parsable "$REPO_ROOT/scripts/delta/germline_e2e.sbatch")
+        fi
+        echo "$name $jid $out $ref" | tee -a "$MANIFEST"
+    done
 done
 
 echo

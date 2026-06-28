@@ -281,7 +281,16 @@ against rneat's SV truth with **truvari**.
 
 On the classes Manta and truvari can score (DEL/DUP/INV), rneat's variants —
 **including large events up to 1 Mb** — are recovered at **0.88–1.00 recall
-(32/35 = 91%)**. The strongest evidence, though, looks *below* the caller, at the
+(32/35 = 91%)** in this single run.
+
+**Replicated (n=18 = 3 tissue models × 3 seeds × 2 callers).** Because that single
+run rests on few events per type, we replicated SV recovery at higher SV count.
+The replicated means are **DEL 0.84 ± 0.11, DUP 0.85 ± 0.11, INV 0.92 ± 0.09**
+(Manta ≈ Delly throughout). Replication **corrected the single run's optimism** —
+in particular `INV 1.000` was a small-n artifact; the replicated mean is 0.92 with
+a 0.75–1.00 range. The qualitative conclusion is unchanged and now carries honest
+confidence intervals: DEL/DUP/INV recover at ~0.84–0.92, tool-independently. The
+strongest evidence, though, looks *below* the caller, at the
 reads themselves: rneat does not edit the reference; it emits breakpoint signal
 through a dedicated chimeric-read pass that stitches flanks across each junction,
 and that signal is present and correctly placed for **every** class — including

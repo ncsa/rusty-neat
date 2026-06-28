@@ -363,14 +363,31 @@ plateaus at the detection ceiling for purity ≥ 0.7, dipping at 0.3 only becaus
 the pinned-normal design leaves less tumor depth (13×) there. This confirms the
 extreme-purity drop is matched-normal starvation common to any tumor/normal
 caller (Manta or Mutect2 losing the germline reference it subtracts) — the #315
-coverage-model artifact — not rneat's variant generation. (A same-caller
-fixed-budget SNV arm, the direct "before" to this "after", is a one-command
-follow-up: `AXIS=purity FIXED_TOTAL=60 run_cancer_sweeps.sh`.)
+coverage-model artifact — not rneat's variant generation. The same-caller
+fixed-budget SNV arm (the direct "before" to this "after") makes it airtight:
+splitting a fixed 60× budget, SNV recall is **0.88 / 0.97 / 0.96** at purity
+0.3 / 0.5 / 0.7 and then **collapses to 0.003 at 0.9** (normal 6×) — a near-total
+loss, *even more severe than the SV path's 0.17*, because Mutect2 is more
+normal-dependent than Manta. Same caller, same metric, only the budget policy
+differs: the collapse is entirely matched-normal starvation.
 
 This is the first end-to-end validation of rneat's structural-variant output, and
 the read-level signal is correct across all classes and sizes. (Detection needs
 adequate depth and SV count: a 30×/0.6 chr22 run yields too few somatic SVs to
 measure; 60×/0.8 gives a scoreable set.)
+
+**Per-tissue SV spectra reproduce at scale (§4).** Exercising the three bundled
+per-tissue SV models (BRCA / skin / lung) on chr22 at the default SV rate yields
+only ~3 somatic SVs per run — far too few to express a type distribution. Forcing
+the SV rate up to ~200–280 events per tissue makes the signatures clear: **skin is
+the most BND-enriched (59 %), lung the most DEL-leaning (40 %), and BRCA the most
+DUP-enriched (24 %, ~2× the others)** — the last exactly the expected BRCA1/2
+tandem-duplicator phenotype, and all three consistent with the PCAWG-derived models
+(#202 / #237). Two caveats: differentiation requires enough events (a scale
+requirement, not a defect — a small target won't show it), and BND is elevated
+across all tissues (a generation tendency, and unscored downstream since truvari
+does not benchmark breakends), so the tissue signal lives in the *relative*
+enrichments rather than the absolute mode.
 
 **Honest caveats — tracked as realism enhancements (epic #311).** The simulated SVs
 are *idealized*: clean cuts in unique sequence, lacking the microhomology, imprecise

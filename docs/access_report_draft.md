@@ -363,9 +363,13 @@ plateaus at the detection ceiling for purity ≥ 0.7, dipping at 0.3 only becaus
 the pinned-normal design leaves less tumor depth (13×) there. This confirms the
 extreme-purity drop is matched-normal starvation common to any tumor/normal
 caller (Manta or Mutect2 losing the germline reference it subtracts) — the #315
-coverage-model artifact — not rneat's variant generation. (A same-caller
-fixed-budget SNV arm, the direct "before" to this "after", is a one-command
-follow-up: `AXIS=purity FIXED_TOTAL=60 run_cancer_sweeps.sh`.)
+coverage-model artifact — not rneat's variant generation. The same-caller
+fixed-budget SNV arm (the direct "before" to this "after") makes it airtight:
+splitting a fixed 60× budget, SNV recall is **0.88 / 0.97 / 0.96** at purity
+0.3 / 0.5 / 0.7 and then **collapses to 0.003 at 0.9** (normal 6×) — a near-total
+loss, *even more severe than the SV path's 0.17*, because Mutect2 is more
+normal-dependent than Manta. Same caller, same metric, only the budget policy
+differs: the collapse is entirely matched-normal starvation.
 
 This is the first end-to-end validation of rneat's structural-variant output, and
 the read-level signal is correct across all classes and sizes. (Detection needs

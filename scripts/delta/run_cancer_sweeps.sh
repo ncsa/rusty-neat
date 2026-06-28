@@ -42,16 +42,30 @@ echo "# axis point jobid outdir total_cov purity tmr model" > "$MANIFEST"
 
 case "$AXIS" in
   purity)
-    NORMAL_FIX="${NORMAL_FIX:-30}"               # matched-normal coverage, held constant
-    PURITIES="${PURITIES:-0.3 0.5 0.7 0.9}"      # matches the §3.9 sweep for direct comparison
+    NORMAL_FIX="${NORMAL_FIX:-30}"               # matched-normal coverage, held constant (pinned mode)
+    FIXED_TOTAL="${FIXED_TOTAL:-}"               # if set: §3.7-style FIXED budget (normal shrinks) — the
+                                                 # same-caller "before" arm for an SNV collapse-vs-fix overlay
+    PURITIES="${PURITIES:-0.3 0.5 0.7 0.9}"
+    if [[ -n "$FIXED_TOTAL" ]]; then             # distinct manifest so it never clobbers the pinned run
+        MANIFEST="${MANIFEST%.manifest}_fixed.manifest"
+        echo "# axis point jobid outdir total_cov purity tmr model" > "$MANIFEST"
+    fi
     for p in $PURITIES; do
-        total=$(awk -v n="$NORMAL_FIX" -v p="$p" 'BEGIN{printf "%d", (n/(1-p))+0.5}')
-        out="$SCRATCH/sweep_purity_p${p}_n${NORMAL_FIX}"
+        if [[ -n "$FIXED_TOTAL" ]]; then
+            total="$FIXED_TOTAL"; out="$SCRATCH/sweep_purity_p${p}_fixed${FIXED_TOTAL}"
+        else
+            total=$(awk -v n="$NORMAL_FIX" -v p="$p" 'BEGIN{printf "%d", (n/(1-p))+0.5}')
+            out="$SCRATCH/sweep_purity_p${p}_n${NORMAL_FIX}"
+        fi
         jid=$(REFERENCE="$REFERENCE" TOTAL_COVERAGE="$total" PURITY="$p" OUTDIR="$out" \
               sbatch --parsable "$CANCER")
         echo "purity $p $jid $out $total $p - pancancer" | tee -a "$MANIFEST"
     done
-    echo "NOTE: matched normal pinned at ${NORMAL_FIX}× (total=NORMAL_FIX/(1-purity)); compare to §3.9 fixed-budget sweep."
+    if [[ -n "$FIXED_TOTAL" ]]; then
+        echo "NOTE: FIXED budget ${FIXED_TOTAL}× (normal=(1-purity)·total, shrinks) — the §3.7-style 'before' arm."
+    else
+        echo "NOTE: matched normal pinned at ${NORMAL_FIX}× (total=NORMAL_FIX/(1-purity)) — the 'after' arm."
+    fi
     ;;
   coverage)
     PURITY="${PURITY:-0.6}"

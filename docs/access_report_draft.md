@@ -353,6 +353,20 @@ extreme-purity drop is a simulation coverage-model artifact (#315: decouple
 matched-normal depth from purity), not SV generation. Real tumor/normal pairs
 sequence the normal at an independent depth, avoiding this.
 
+**Confirmed by a controlled re-run (§4).** To check that the collapse is this
+normal-starvation artifact and not a purity-handling defect, we re-ran the sweep
+on the SNV/Mutect2 path with the matched normal **pinned at 30×** (`total =
+30/(1−purity)`, so tumor depth varies while the normal stays healthy). Somatic
+SNV recall then **holds across purity — 0.87 / 0.97 / 0.97 / 0.97** at 0.3 / 0.5 /
+0.7 / 0.9 — with no collapse at the extreme; it in fact *rises* with purity and
+plateaus at the detection ceiling for purity ≥ 0.7, dipping at 0.3 only because
+the pinned-normal design leaves less tumor depth (13×) there. This confirms the
+extreme-purity drop is matched-normal starvation common to any tumor/normal
+caller (Manta or Mutect2 losing the germline reference it subtracts) — the #315
+coverage-model artifact — not rneat's variant generation. (A same-caller
+fixed-budget SNV arm, the direct "before" to this "after", is a one-command
+follow-up: `AXIS=purity FIXED_TOTAL=60 run_cancer_sweeps.sh`.)
+
 This is the first end-to-end validation of rneat's structural-variant output, and
 the read-level signal is correct across all classes and sizes. (Detection needs
 adequate depth and SV count: a 30×/0.6 chr22 run yields too few somatic SVs to

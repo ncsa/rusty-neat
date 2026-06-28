@@ -376,6 +376,19 @@ the read-level signal is correct across all classes and sizes. (Detection needs
 adequate depth and SV count: a 30×/0.6 chr22 run yields too few somatic SVs to
 measure; 60×/0.8 gives a scoreable set.)
 
+**Per-tissue SV spectra reproduce at scale (§4).** Exercising the three bundled
+per-tissue SV models (BRCA / skin / lung) on chr22 at the default SV rate yields
+only ~3 somatic SVs per run — far too few to express a type distribution. Forcing
+the SV rate up to ~200–280 events per tissue makes the signatures clear: **skin is
+the most BND-enriched (59 %), lung the most DEL-leaning (40 %), and BRCA the most
+DUP-enriched (24 %, ~2× the others)** — the last exactly the expected BRCA1/2
+tandem-duplicator phenotype, and all three consistent with the PCAWG-derived models
+(#202 / #237). Two caveats: differentiation requires enough events (a scale
+requirement, not a defect — a small target won't show it), and BND is elevated
+across all tissues (a generation tendency, and unscored downstream since truvari
+does not benchmark breakends), so the tissue signal lives in the *relative*
+enrichments rather than the absolute mode.
+
 **Honest caveats — tracked as realism enhancements (epic #311).** The simulated SVs
 are *idealized*: clean cuts in unique sequence, lacking the microhomology, imprecise
 breakpoints, and repeat / segmental-duplication context that make real somatic SVs

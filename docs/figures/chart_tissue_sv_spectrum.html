@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Per-tissue somatic SV spectra</title>
+<style>
+  :root{--brca:#db2777;--skin:#d97706;--lung:#2563eb;--ink:#0f172a;--muted:#64748b;--line:#e2e8f0;}
+  *{box-sizing:border-box}
+  body{margin:0;background:#f8fafc;color:var(--ink);
+       font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  .wrap{max-width:860px;margin:0 auto;padding:28px 20px 48px}
+  h1{font-size:22px;margin:0 0 2px}.sub{color:var(--muted);margin:0 0 14px}
+  .legend{display:flex;gap:18px;flex-wrap:wrap;margin:0 0 14px;font-size:13px}
+  .sw{display:inline-block;width:13px;height:13px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+  .panel{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+  svg{width:100%;height:auto;display:block;overflow:visible}
+  .cap{color:var(--muted);font-size:13px;margin-top:16px;border-top:1px solid var(--line);padding-top:14px}
+  .cap b{color:var(--ink)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>rneat reproduces per-tissue somatic SV signatures</h1>
+  <p class="sub">Somatic SV type composition of rneat's truth set under each bundled per-tissue model
+  (chr22, SV rate forced to ~200–280 events so the distribution is resolvable). % of each tissue's SVs.</p>
+  <div class="legend">
+    <span><span class="sw" style="background:var(--brca)"></span>BRCA (n=283)</span>
+    <span><span class="sw" style="background:var(--skin)"></span>skin (n=217)</span>
+    <span><span class="sw" style="background:var(--lung)"></span>lung (n=199)</span>
+  </div>
+  <div class="panel"><svg id="c" viewBox="0 0 760 360" role="img" aria-label="per-tissue SV type composition"></svg></div>
+  <p class="cap"><b>The expected tissue signatures emerge: skin is the most BND-enriched (59%), lung the most
+  DEL-leaning (40%), and BRCA the most DUP-enriched (24%, ~2× the others) — the latter exactly the BRCA1/2
+  tandem-duplicator phenotype.</b> This matches the PCAWG-derived per-tissue models (#202/#237). It is only
+  visible at scale: the chr22 default-rate run produced ~3 SVs/tissue, far too few to express a distribution
+  (a documented scale requirement, not a defect). BND is elevated across all three (an rneat generation
+  tendency, and unscored downstream — truvari doesn't benchmark breakends), so the tissue signal lives in
+  the <i>relative</i> enrichments. Source: ACCESS report §3.7 (per-tissue SV spectra).</p>
+</div>
+<script>
+const NS="http://www.w3.org/2000/svg";
+const el=(t,a)=>{const e=document.createElementNS(NS,t);for(const k in a)e.setAttribute(k,a[k]);return e;};
+const txt=(x,y,s,o={})=>{const e=el("text",{x,y,"font-size":o.size||10,fill:o.fill||"#475569",
+  "text-anchor":o.anchor||"middle","font-weight":o.w||400});e.textContent=s;return e;};
+const TYPES=["BND","DEL","DUP","INV","CNV"];
+// % of each tissue's somatic SVs  [BRCA, skin, lung]
+const PCT={BND:[41.0,59.4,32.2],DEL:[22.3,20.7,39.7],DUP:[23.7,12.4,14.1],INV:[10.2,3.7,10.6],CNV:[2.8,3.7,3.5]};
+const COL=["#db2777","#d97706","#2563eb"];
+const star={BND:1,DEL:2,DUP:0};  // which tissue index peaks in each type (skin/lung/BRCA)
+const svg=document.getElementById("c"),W=760,H=360,L=46,R=16,T=18,B=44,pw=W-L-R,ph=H-T-B;
+const ng=TYPES.length,gw=pw/ng,bw=gw*0.22;
+svg.appendChild(el("line",{x1:L,y1:T+ph,x2:W-R,y2:T+ph,stroke:"#cbd5e1"}));
+[0,15,30,45,60].forEach(v=>{const y=T+ph-ph*v/65;
+  svg.appendChild(el("line",{x1:L,y1:y,x2:W-R,y2:y,stroke:"#eef2f7"}));
+  svg.appendChild(txt(L-7,y+3,v+"%",{anchor:"end",fill:"#94a3b8"}));});
+svg.appendChild(txt(16,T+ph/2,"% of tissue's somatic SVs",{fill:"#64748b",size:11})).setAttribute("transform",`rotate(-90 16 ${T+ph/2})`);
+TYPES.forEach((ty,i)=>{
+  const x0=L+i*gw+gw*0.17;
+  PCT[ty].forEach((v,j)=>{
+    const h=ph*v/65,x=x0+j*(bw+4),y=T+ph-h;
+    svg.appendChild(el("rect",{x,y,width:bw,height:h,rx:2.5,fill:COL[j]}));
+    svg.appendChild(txt(x+bw/2,y-3,v.toFixed(0),{size:9,fill:"#475569"}));
+    if(star[ty]===j) svg.appendChild(txt(x+bw/2,y-13,"★",{size:11,fill:COL[j],w:700}));
+  });
+  svg.appendChild(txt(x0+1.5*(bw+4),T+ph+16,ty,{fill:"#334155",size:12,w:600}));
+});
+// signature callouts
+svg.appendChild(txt(W-R,T+6,"★ = tissue's defining enrichment",{anchor:"end",fill:"#64748b",size:10.5}));
+</script>
+</body>
+</html>

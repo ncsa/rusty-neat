@@ -45,11 +45,10 @@
       <svg id="tstv" viewBox="0 0 460 300" role="img" aria-label="Ts/Tv per genome"></svg>
     </div>
   </div>
-  <p class="cap"><b>Across E. coli (4.6 Mb), yeast (11.5 Mb), human chr22 (50.8 Mb) and rice (389.7 Mb) —
-  an ~85× size range — SNP/indel recall stays ≥0.97 and precision ≥0.99</b>, with no human-specific
-  overtuning. Ts/Tv holds in a tight 2.33–2.43 band throughout. Recall dips only marginally at rice's
-  scale (0.970 vs ~0.985), as expected from its higher repeat content, while precision stays 0.999.
-  <i>C. elegans (100 Mb) is still in flight and will add a mid-range point.</i>
+  <p class="cap"><b>Across E. coli (4.6 Mb), yeast (11.5 Mb), human chr22 (50.8 Mb), C. elegans (100.3 Mb)
+  and rice (389.7 Mb) — an ~85× size range — SNP/indel recall stays ≥0.97 and precision ≥0.99</b>, with no
+  human-specific overtuning. Ts/Tv holds in a tight 2.31–2.43 band throughout. Recall dips only marginally
+  at rice's scale (0.970 vs ~0.985), as expected from its higher repeat content, while precision stays 0.999.
   Source: ACCESS report §4 (input variety).</p>
 </div>
 <script>
@@ -57,10 +56,10 @@ const NS="http://www.w3.org/2000/svg";
 const el=(t,a)=>{const e=document.createElementNS(NS,t);for(const k in a)e.setAttribute(k,a[k]);return e;};
 const txt=(x,y,s,o={})=>{const e=el("text",{x,y,"font-size":o.size||10,fill:o.fill||"#475569",
   "text-anchor":o.anchor||"middle","font-weight":o.w||400});e.textContent=s;return e;};
-// data (rice pending → excluded)
 const G=[{n:"E. coli",mb:4.6,sr:0.9847,sp:0.9998,ir:0.9916,ip:1.0000,tstv:2.433},
          {n:"yeast", mb:11.5,sr:0.9834,sp:0.9998,ir:0.9799,ip:0.9882,tstv:2.378},
          {n:"chr22", mb:50.8,sr:0.9888,sp:0.9996,ir:0.9822,ip:0.9887,tstv:2.337},
+         {n:"C.eleg",mb:100.3,sr:0.9834,sp:0.9998,ir:0.9796,ip:0.9881,tstv:2.310},
          {n:"rice",  mb:389.7,sr:0.9700,sp:0.9992,ir:0.9686,ip:0.9868,tstv:2.333}];
 const lx=G.map(g=>Math.log10(g.mb)), lmin=Math.log10(3), lmax=Math.log10(550);
 const Xof=v=>{const L=46,R=16,pw=460-L-R;return L+pw*(Math.log10(v)-lmin)/(lmax-lmin);};

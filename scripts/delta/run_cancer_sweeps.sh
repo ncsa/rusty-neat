@@ -52,11 +52,11 @@ submit_point() {
     for rr in $(seq 1 "$REPS"); do
         if [[ "$REPS" -gt 1 ]]; then
             o="${OUTBASE}_rep${rr}"; lbl="${POINT}_rep${rr}"
-            jid=$(env "${PIPE_ENV[@]}" OUTDIR="$o" RNG_SEED_ROOT="cancer $AXIS $POINT rep$rr" \
+            jid=$(env "${PIPE_ENV[@]}" OUTDIR="$o" PRUNE="${PRUNE:-0}" RNG_SEED_ROOT="cancer $AXIS $POINT rep$rr" \
                   sbatch --parsable "$PIPELINE")
         else
             o="$OUTBASE"; lbl="$POINT"
-            jid=$(env "${PIPE_ENV[@]}" OUTDIR="$o" sbatch --parsable "$PIPELINE")
+            jid=$(env "${PIPE_ENV[@]}" OUTDIR="$o" PRUNE="${PRUNE:-0}" sbatch --parsable "$PIPELINE")
         fi
         echo "$AXIS $lbl $jid $o $extra" | tee -a "$MANIFEST"
     done

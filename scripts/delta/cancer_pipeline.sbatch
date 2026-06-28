@@ -64,6 +64,10 @@ PAIRED="${PAIRED:-true}"
 FRAG_MEAN="${FRAG_MEAN:-350}"
 FRAG_SD="${FRAG_SD:-50}"
 SV_RATE_SCALE="${SV_RATE_SCALE:-1.0}"   # >0 enables SV simulation in tumor pass
+# PRUNE=1 deletes the bulky FASTQ + BAM intermediates after a SUCCESSFUL score,
+# keeping only the small result artifacts (scored*.stats.csv, VCFs, logs). Use for
+# large sweeps so per-point output doesn't exhaust the shared scratch project quota.
+PRUNE="${PRUNE:-0}"
 
 # Tumor mutation model (COSMIC pan-cancer). Bundled in the repo.
 TUMOR_MODEL="$REPO_ROOT/tools/cosmic_v104_pancancer_model.json.gz"
@@ -396,3 +400,13 @@ fi
 
 # Persist report artifacts off scratch + record provenance/resources.
 archive_run cancer "$OUTDIR" scored.stats.csv
+
+# Optional cleanup of bulky intermediates once scored + archived, so large sweeps
+# don't exhaust the shared scratch project quota. Only prunes after a SUCCESSFUL
+# score (scored.stats.csv present) so a failed run keeps its inputs for resume.
+if [[ "$PRUNE" == "1" && -f "$OUTDIR/scored.stats.csv" ]]; then
+    echo "[prune] PRUNE=1 — removing FASTQ + BAM intermediates (keeping scores, VCFs, logs)..."
+    rm -f "$OUTDIR"/*.fastq.gz \
+          "$OUTDIR"/normal.bam "$OUTDIR"/normal.bam.bai \
+          "$OUTDIR"/tumor.bam  "$OUTDIR"/tumor.bam.bai
+fi

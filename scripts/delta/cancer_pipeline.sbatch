@@ -55,6 +55,10 @@ OUTDIR="${OUTDIR:-$SCRATCH/cancer_$SLURM_JOB_ID}"
 # Simulation parameters.
 TOTAL_COVERAGE="${TOTAL_COVERAGE:-30}"
 PURITY="${PURITY:-0.6}"          # tumor cell fraction
+# Tumor somatic per-base mutation rate. Empty → cancer_simulate.sh's default
+# (1e-5, a typical solid tumor). Set to sweep tumor burden, or "model" to defer
+# to the tumor model's fitted (corpus-aggregated) rate.
+TUMOR_MUTATION_RATE="${TUMOR_MUTATION_RATE:-}"
 READ_LEN="${READ_LEN:-151}"
 PAIRED="${PAIRED:-true}"
 FRAG_MEAN="${FRAG_MEAN:-350}"
@@ -110,6 +114,8 @@ else
     echo "[1/6] Simulating tumor/normal reads..."
     PAIRED_FLAG=""
     [[ "$PAIRED" == "true" ]] && PAIRED_FLAG="--paired-ended --fragment-mean $FRAG_MEAN --fragment-st-dev $FRAG_SD"
+    TMR_FLAG=""
+    [[ -n "$TUMOR_MUTATION_RATE" ]] && TMR_FLAG="--tumor-mutation-rate $TUMOR_MUTATION_RATE"
     # Under `sbatch --array=1-3` (triplicate), each replicate uses a distinct
     # seed root (independent draw); SLURM spreads tasks across nodes. Plain
     # submit uses the default root.
@@ -124,6 +130,7 @@ else
         --sv-rate-scale "$SV_RATE_SCALE" \
         --rng-seed "$RNG_SEED_ROOT" \
         --rneat-bin "$RNEAT_BIN" \
+        $TMR_FLAG \
         $PAIRED_FLAG
     echo "[1/6] Simulation complete."
 fi

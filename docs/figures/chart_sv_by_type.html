@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SV recovery by type — Manta vs Delly</title>
+<style>
+  :root{--manta:#2563eb;--delly:#7c3aed;--ink:#0f172a;--muted:#64748b;--line:#e2e8f0;}
+  *{box-sizing:border-box}
+  body{margin:0;background:#f8fafc;color:var(--ink);
+       font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  .wrap{max-width:820px;margin:0 auto;padding:28px 20px 48px}
+  h1{font-size:23px;margin:0 0 2px}.sub{color:var(--muted);margin:0 0 18px}
+  .legend{display:flex;gap:18px;margin:0 0 14px;font-size:13px}
+  .sw{display:inline-block;width:13px;height:13px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+  .panel{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+  svg{width:100%;height:auto;display:block;overflow:visible}
+  .cap{color:var(--muted);font-size:13px;margin-top:16px;border-top:1px solid var(--line);padding-top:14px}
+  .cap b{color:var(--ink)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Somatic SV recovery by type — two independent callers</h1>
+  <p class="sub">rneat SV truth (chr22, 60×, purity 0.8) recovered by Manta and Delly. Recall, per type.</p>
+  <div class="legend">
+    <span><span class="sw" style="background:var(--manta)"></span>Manta</span>
+    <span><span class="sw" style="background:var(--delly)"></span>Delly</span>
+  </div>
+  <div class="panel"><svg id="c" viewBox="0 0 720 320" role="img" aria-label="SV recall by type"></svg></div>
+  <p class="cap"><b>Two independent callers agree to the digit on DEL/DUP/INV (0.88–1.00)</b> — rneat's SVs
+  aren't tuned to one tool. BND scores 0 in both (truvari doesn't benchmark breakends, though the
+  read-level signal is present); CNV scores 0 in both here (neither emits truvari-matchable CNV) but is
+  validated separately — depth 1.83× and GATK copy-ratio 4/7. Source: ACCESS report §3.7.</p>
+</div>
+<script>
+const NS="http://www.w3.org/2000/svg";
+const el=(t,a)=>{const e=document.createElementNS(NS,t);for(const k in a)e.setAttribute(k,a[k]);return e;};
+const txt=(x,y,s,o={})=>{const e=el("text",{x,y,"font-size":o.size||11,fill:o.fill||"#475569",
+  "text-anchor":o.anchor||"middle","font-weight":o.w||400});e.textContent=s;return e;};
+const types=["DEL","DUP","INV","BND","CNV"];
+const manta=[0.882,0.929,1.000,0,0], delly=[0.882,0.929,1.000,0,0];
+const tool_limit=[0,0,0,1,1];
+const svg=document.getElementById("c"),W=720,H=320,L=44,R=14,T=16,B=58,pw=W-L-R,ph=H-T-B;
+const ng=types.length,gw=pw/ng,bw=gw*0.26;
+svg.appendChild(el("line",{x1:L,y1:T+ph,x2:W-R,y2:T+ph,stroke:"#cbd5e1"}));
+[0,.25,.5,.75,1].forEach(v=>{const y=T+ph-ph*v;
+  svg.appendChild(el("line",{x1:L,y1:y,x2:W-R,y2:y,stroke:"#eef2f7"}));
+  svg.appendChild(txt(L-6,y+3,v.toFixed(2),{anchor:"end",fill:"#94a3b8",size:10}));});
+svg.appendChild(txt(16,T+ph/2,"recall",{fill:"#64748b",size:11})).setAttribute("transform",`rotate(-90 16 ${T+ph/2})`);
+types.forEach((ty,i)=>{
+  const x0=L+i*gw+gw*0.18;
+  [["#2563eb",manta[i]],["#7c3aed",delly[i]]].forEach(([c,v],j)=>{
+    const h=ph*v,x=x0+j*(bw+5),y=T+ph-h;
+    if(v>0){svg.appendChild(el("rect",{x,y,width:bw,height:h,rx:3,fill:c}));
+            svg.appendChild(txt(x+bw/2,y-4,v.toFixed(3),{size:10,fill:"#475569"}));}
+  });
+  svg.appendChild(txt(x0+bw+2,T+ph+16,ty,{fill:"#334155",size:12.5,w:600}));
+  if(tool_limit[i]) svg.appendChild(txt(x0+bw+2,T+ph+34,"scorer/caller limit",{fill:"#94a3b8",size:10}));
+});
+</script>
+</body>
+</html>

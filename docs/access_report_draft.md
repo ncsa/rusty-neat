@@ -47,10 +47,23 @@ noted.
 | Mean coverage (covered bases) | 29.96× (requested 30×) |
 | Breadth | 0.77 (chr22 N-gaps correctly left uncovered) |
 | Heterozygous allele fraction | 0.486 (clean diploid binomial ~0.5) |
+| Het/hom ratio | ~95 (high vs real resequencing ~1.5–2.0 — see note) |
 | Ts/Tv | **2.35** (human-realistic) |
 
 Determinism holding byte-for-byte across thread counts is a guarantee NEAT 4 does
 not make.
+
+**Het/hom ratio (realism note).** Across the germline runs the heterozygous/
+homozygous variant-site ratio is ~95 (truth and recovered tracking together —
+e.g. 94.7 / 95.5 on the input-variety set in §4), far above a real resequenced
+human's ~1.5–2.0. This is expected from the current model rather than a defect:
+germline variants are drawn independently per haplotype against the reference
+with no population / common-variant (LD) structure, so coincident homozygous-alt
+sites — which in real resequencing arise mostly from shared, common alleles — are
+rare. The caller recovers the simulated zygosity consistently (truth and query
+ratios match), so recall, precision and Ts/Tv are unaffected. It is a realism
+gap, not a correctness issue — a candidate Phase-2/3 backlog item if
+population-realistic zygosity (common-variant spike-in / LD model) is wanted.
 
 ### 3.2 Performance vs NEAT 4 (single thread)
 
@@ -340,6 +353,20 @@ extreme-purity drop is a simulation coverage-model artifact (#315: decouple
 matched-normal depth from purity), not SV generation. Real tumor/normal pairs
 sequence the normal at an independent depth, avoiding this.
 
+**Confirmed by a controlled re-run (§4).** To check that the collapse is this
+normal-starvation artifact and not a purity-handling defect, we re-ran the sweep
+on the SNV/Mutect2 path with the matched normal **pinned at 30×** (`total =
+30/(1−purity)`, so tumor depth varies while the normal stays healthy). Somatic
+SNV recall then **holds across purity — 0.87 / 0.97 / 0.97 / 0.97** at 0.3 / 0.5 /
+0.7 / 0.9 — with no collapse at the extreme; it in fact *rises* with purity and
+plateaus at the detection ceiling for purity ≥ 0.7, dipping at 0.3 only because
+the pinned-normal design leaves less tumor depth (13×) there. This confirms the
+extreme-purity drop is matched-normal starvation common to any tumor/normal
+caller (Manta or Mutect2 losing the germline reference it subtracts) — the #315
+coverage-model artifact — not rneat's variant generation. (A same-caller
+fixed-budget SNV arm, the direct "before" to this "after", is a one-command
+follow-up: `AXIS=purity FIXED_TOTAL=60 run_cancer_sweeps.sh`.)
+
 This is the first end-to-end validation of rneat's structural-variant output, and
 the read-level signal is correct across all classes and sizes. (Detection needs
 adequate depth and SV count: a 30×/0.6 chr22 run yields too few somatic SVs to
@@ -427,6 +454,34 @@ and the high-confidence (`Somatic.hc`) filter, not a simulator property — Mute
 (Strelka2 was dropped — its 2018 build SIGSEGVs on Delta's stack. GATK somatic-CNV
 recovered **4/7 CNVs by direction** — no-PoN, since its panel step is a Spark tool
 incompatible with the env's Java 25 — corroborating the depth check, §3.7.)
+
+### 3.10 Order-independence, determinism, and sharding correctness
+
+A dedicated harness (`run_order_independence.sbatch`) changes exactly one variable
+at a time at a fixed seed (yeast, 16 chromosomes) and compares the header-less,
+sorted truth-VCF body by md5. Four invariances that *must* hold, do:
+
+| Check | Result | Evidence |
+|---|---|---|
+| Determinism (run twice, 1 thread) | **PASS** | identical (`1ad0f06…`) |
+| Thread-invariance (1 thread vs 8) | **PASS** | identical (`1ad0f06…`) — parallelism never perturbs results |
+| Shard-order independence (fwd vs reversed merge) | **PASS** | identical (`4990989…`) |
+| Shard disjointness (35 windows) | **PASS** | 0 duplicate `CHROM:POS:REF:ALT` keys |
+
+One check **fails by design** and is documented rather than treated as a defect:
+**contig-order independence**. Reversing contig order in the FASTA changes the
+realization — even the variant count (12627 → 12631) — the signature of a single
+global RNG consumed in contig order. The consequence is a *reproducibility scope*
+note, not a correctness problem: reproducing a **monolithic** run requires the
+byte-identical reference (same contig order), not merely the same genome. The
+region-sharded whole-genome path is unaffected — and this is precisely why it is
+correct: each shard draws from an independent per-shard seed over an
+absolute-coordinate window, so shard-order independence and disjointness both pass
+and the merge never depends on reproducing the monolithic stream. A backlog item
+(**#322**) proposes per-contig seeding from `hash(seed, contig_name)` to make
+output contig-order-independent (and let a sharded run optionally reproduce a
+monolithic one). Net: rneat is reproducible and parallelism-invariant where it
+matters, and its HPC sharding is verifiably correct.
 
 ---
 

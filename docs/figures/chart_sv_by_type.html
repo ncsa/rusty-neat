@@ -22,16 +22,19 @@
 <body>
 <div class="wrap">
   <h1>Somatic SV recovery by type — two independent callers</h1>
-  <p class="sub">rneat SV truth (chr22, 60×, purity 0.8) recovered by Manta and Delly. Recall, per type.</p>
+  <p class="sub">rneat SV truth recovered by Manta and Delly, <b>replicated across 3 tissue models × 3 seeds</b>
+  (n=9/caller). Mean recall per type; whiskers = ±1 sd.</p>
   <div class="legend">
     <span><span class="sw" style="background:var(--manta)"></span>Manta</span>
     <span><span class="sw" style="background:var(--delly)"></span>Delly</span>
   </div>
   <div class="panel"><svg id="c" viewBox="0 0 720 320" role="img" aria-label="SV recall by type"></svg></div>
-  <p class="cap"><b>Two independent callers agree to the digit on DEL/DUP/INV (0.88–1.00)</b> — rneat's SVs
-  aren't tuned to one tool. BND scores 0 in both (truvari doesn't benchmark breakends, though the
-  read-level signal is present); CNV scores 0 in both here (neither emits truvari-matchable CNV) but is
-  validated separately — depth 1.83× and GATK copy-ratio 4/7. Source: ACCESS report §3.7.</p>
+  <p class="cap"><b>Replicated, both callers recover DEL/DUP/INV at mean 0.84–0.92, and agree (Manta≈Delly)</b>
+  — rneat's SVs aren't tuned to one tool. Replication corrected the optimistic single-run values, notably
+  <b>INV 1.000 → 0.92 ± 0.09</b> (a small-n fluke), and put real ±0.09–0.11 sd on each type. BND scores 0
+  in both (truvari doesn't benchmark breakends; read-level signal present); CNV unscored by truvari but
+  validated separately — depth 1.83× and GATK copy-ratio. n=9/caller (3 tissue models × 3 seeds).
+  Source: ACCESS report §3.7.</p>
 </div>
 <script>
 const NS="http://www.w3.org/2000/svg";
@@ -39,7 +42,9 @@ const el=(t,a)=>{const e=document.createElementNS(NS,t);for(const k in a)e.setAt
 const txt=(x,y,s,o={})=>{const e=el("text",{x,y,"font-size":o.size||11,fill:o.fill||"#475569",
   "text-anchor":o.anchor||"middle","font-weight":o.w||400});e.textContent=s;return e;};
 const types=["DEL","DUP","INV","BND","CNV"];
-const manta=[0.882,0.929,1.000,0,0], delly=[0.882,0.929,1.000,0,0];
+// replicated: mean ± sd across 3 tissue models × 3 seeds (n=9 per caller)
+const manta=[0.818,0.836,0.927,0,0], manta_sd=[0.098,0.130,0.090,0,0];
+const delly=[0.868,0.870,0.904,0,0], delly_sd=[0.108,0.085,0.093,0,0];
 const tool_limit=[0,0,0,1,1];
 const svg=document.getElementById("c"),W=720,H=320,L=44,R=14,T=16,B=58,pw=W-L-R,ph=H-T-B;
 const ng=types.length,gw=pw/ng,bw=gw*0.26;
@@ -50,10 +55,16 @@ svg.appendChild(el("line",{x1:L,y1:T+ph,x2:W-R,y2:T+ph,stroke:"#cbd5e1"}));
 svg.appendChild(txt(16,T+ph/2,"recall",{fill:"#64748b",size:11})).setAttribute("transform",`rotate(-90 16 ${T+ph/2})`);
 types.forEach((ty,i)=>{
   const x0=L+i*gw+gw*0.18;
-  [["#2563eb",manta[i]],["#7c3aed",delly[i]]].forEach(([c,v],j)=>{
-    const h=ph*v,x=x0+j*(bw+5),y=T+ph-h;
-    if(v>0){svg.appendChild(el("rect",{x,y,width:bw,height:h,rx:3,fill:c}));
-            svg.appendChild(txt(x+bw/2,y-4,v.toFixed(3),{size:10,fill:"#475569"}));}
+  [["#2563eb",manta[i],manta_sd[i]],["#7c3aed",delly[i],delly_sd[i]]].forEach(([c,v,sd],j)=>{
+    const h=ph*v,x=x0+j*(bw+5),y=T+ph-h,cx=x+bw/2;
+    if(v>0){
+      svg.appendChild(el("rect",{x,y,width:bw,height:h,rx:3,fill:c}));
+      const hi=T+ph-ph*Math.min(1,v+sd), lo=T+ph-ph*Math.max(0,v-sd);   // ±1 sd whisker
+      svg.appendChild(el("line",{x1:cx,y1:hi,x2:cx,y2:lo,stroke:"#1e293b","stroke-width":1.2}));
+      svg.appendChild(el("line",{x1:cx-3,y1:hi,x2:cx+3,y2:hi,stroke:"#1e293b","stroke-width":1.2}));
+      svg.appendChild(el("line",{x1:cx-3,y1:lo,x2:cx+3,y2:lo,stroke:"#1e293b","stroke-width":1.2}));
+      svg.appendChild(txt(cx,hi-4,v.toFixed(2),{size:9.5,fill:"#475569"}));
+    }
   });
   svg.appendChild(txt(x0+bw+2,T+ph+16,ty,{fill:"#334155",size:12.5,w:600}));
   if(tool_limit[i]) svg.appendChild(txt(x0+bw+2,T+ph+34,"scorer/caller limit",{fill:"#94a3b8",size:10}));

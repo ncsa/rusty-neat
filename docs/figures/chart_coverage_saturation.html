@@ -22,7 +22,8 @@
 <body>
 <div class="wrap">
   <h1>Somatic sensitivity saturates by 60×</h1>
-  <p class="sub">Mutect2 recovery of rneat somatic truth (chr22, purity 0.6), sweeping total tumor depth.</p>
+  <p class="sub">Mutect2 recovery of rneat somatic truth (chr22, purity 0.6), sweeping total tumor depth.
+  Mean of 3 reps/point; whiskers = ±1 sd.</p>
   <div class="legend">
     <span><span class="sw" style="background:#2563eb"></span>SNV recall</span>
     <span><span class="sw" style="background:#60a5fa"></span>SNV precision</span>
@@ -30,10 +31,11 @@
     <span><span class="sw" style="background:#86efac"></span>INDEL precision</span>
   </div>
   <div class="panel"><svg id="c" viewBox="0 0 720 330" role="img" aria-label="recall/precision vs coverage"></svg></div>
-  <p class="cap"><b>Recall plateaus at ~0.97 (SNV) / ~0.93 (indel) by 60×, and precision jumps from 0.87 at
-  30× to 1.00 at ≥60×</b> — 30× is somewhat under-powered for somatic calling (more false positives on the
-  thin tumor signal), while 60× is the sweet spot and 100–200× add nothing. The flat top end confirms rneat
-  isn't bottlenecking sensitivity: the caller, not the simulator, sets the ceiling. Source: ACCESS report §4 (coverage sweep).</p>
+  <p class="cap"><b>Replicated (n=3/point): SNV recall climbs 0.94→0.97 and precision 0.90→1.00 by ≥60×,
+  then plateaus — 30× is under-powered, 60× is the sweet spot, 100–200× add nothing.</b> SNV is rock-tight
+  (sd ≤0.01); INDEL recall (0.84→0.96) carries wider error bars (sd up to 0.09) from its small event count,
+  not instability — precision stays high. The flat top end confirms rneat isn't bottlenecking sensitivity:
+  the caller, not the simulator, sets the ceiling. Source: ACCESS report §4 (coverage sweep).</p>
 </div>
 <script>
 const NS="http://www.w3.org/2000/svg";
@@ -41,21 +43,29 @@ const el=(t,a)=>{const e=document.createElementNS(NS,t);for(const k in a)e.setAt
 const txt=(x,y,s,o={})=>{const e=el("text",{x,y,"font-size":o.size||10,fill:o.fill||"#475569",
   "text-anchor":o.anchor||"middle","font-weight":o.w||400});e.textContent=s;return e;};
 const COV=["30×","60×","100×","200×"];
-const S={SNVr:[0.9252,0.9695,0.9723,0.9695],SNVp:[0.8721,1.0,1.0,1.0],
-         INDr:[0.9000,0.9333,0.9000,0.9333],INDp:[0.8438,0.9655,0.9310,0.9655]};
+// replicated: mean across 3 reps/point; SD = ±1 sd whisker
+const S={SNVr:[0.937,0.961,0.971,0.972],SNVp:[0.901,0.997,1.000,0.999],
+         INDr:[0.836,0.908,0.943,0.963],INDp:[0.804,0.942,0.968,1.000]};
+const SD={SNVr:[0.004,0.010,0.002,0.005],SNVp:[0.008,0.002,0.000,0.001],
+          INDr:[0.019,0.087,0.017,0.052],INDp:[0.038,0.082,0.025,0.000]};
 const svg=document.getElementById("c"),W=720,H=330,L=46,Rm=16,T=16,B=42,pw=W-L-Rm,ph=H-T-B;
-const n=COV.length,X=i=>L+pw*(i+0.5)/n, y0=0.80,y1=1.01,Y=v=>T+ph-ph*(v-y0)/(y1-y0);
+const n=COV.length,X=i=>L+pw*(i+0.5)/n, y0=0.75,y1=1.01,Y=v=>T+ph-ph*(v-y0)/(y1-y0);
 svg.appendChild(el("line",{x1:L,y1:T+ph,x2:W-Rm,y2:T+ph,stroke:"#cbd5e1"}));
-[0.80,0.85,0.90,0.95,1.00].forEach(v=>{const y=Y(v);
+[0.75,0.80,0.85,0.90,0.95,1.00].forEach(v=>{const y=Y(v);
   svg.appendChild(el("line",{x1:L,y1:y,x2:W-Rm,y2:y,stroke:"#eef2f7"}));
   svg.appendChild(txt(L-7,y+3,v.toFixed(2),{anchor:"end",fill:"#94a3b8"}));});
 svg.appendChild(txt(16,T+ph/2,"recall / precision",{fill:"#64748b",size:11})).setAttribute("transform",`rotate(-90 16 ${T+ph/2})`);
-function line(arr,c){const pts=arr.map((v,i)=>`${X(i)},${Y(v)}`).join(" ");
+function line(arr,sd,c){
+  const pts=arr.map((v,i)=>`${X(i)},${Y(v)}`).join(" ");
   svg.appendChild(el("polyline",{points:pts,fill:"none",stroke:c,"stroke-width":2.5}));
-  arr.forEach((v,i)=>svg.appendChild(el("circle",{cx:X(i),cy:Y(v),r:3.5,fill:c})));}
-line(S.SNVr,"#2563eb"); line(S.SNVp,"#60a5fa"); line(S.INDr,"#16a34a"); line(S.INDp,"#86efac");
+  arr.forEach((v,i)=>{const cx=X(i);
+    if(sd[i]>0){const hi=Y(Math.min(y1,v+sd[i])),lo=Y(Math.max(y0,v-sd[i]));
+      svg.appendChild(el("line",{x1:cx,y1:hi,x2:cx,y2:lo,stroke:c,"stroke-width":1}));
+      svg.appendChild(el("line",{x1:cx-2.5,y1:hi,x2:cx+2.5,y2:hi,stroke:c,"stroke-width":1}));
+      svg.appendChild(el("line",{x1:cx-2.5,y1:lo,x2:cx+2.5,y2:lo,stroke:c,"stroke-width":1}));}
+    svg.appendChild(el("circle",{cx,cy:Y(v),r:3.5,fill:c}));});}
+line(S.SNVr,SD.SNVr,"#2563eb"); line(S.SNVp,SD.SNVp,"#60a5fa"); line(S.INDr,SD.INDr,"#16a34a"); line(S.INDp,SD.INDp,"#86efac");
 COV.forEach((c,i)=>svg.appendChild(txt(X(i),T+ph+16,c,{fill:"#334155",size:11.5})));
-svg.appendChild(txt(X(0),Y(0.8721)-8,"0.87",{fill:"#60a5fa",size:9.5,w:700}));
 svg.appendChild(txt((X(1)+X(2))/2,Y(1.0)-6,"precision → 1.00 (≥60×)",{fill:"#3b82f6",size:10,w:700}));
 </script>
 </body>

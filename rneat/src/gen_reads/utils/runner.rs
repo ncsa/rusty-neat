@@ -782,6 +782,18 @@ fn process_chunk(
 
     let read_name_prefix = format!("RNEAT_generated_{}", current_block.contig);
 
+    // Resolve 3' adapter sequences once (#125). Empty vecs = disabled, which makes
+    // write_block_fastq take its unchanged code path (output byte-identical when off).
+    let (r1_adapter, r2_adapter): (Vec<Nucleotide>, Vec<Nucleotide>) =
+        if ctx.config.adapters.enabled {
+            (
+                ctx.config.adapters.r1.chars().map(Nucleotide::from).collect(),
+                ctx.config.adapters.r2.chars().map(Nucleotide::from).collect(),
+            )
+        } else {
+            (Vec::new(), Vec::new())
+        };
+
     if ctx.config.produce_fastq {
         let mut file_to_write_1 = PathBuf::from(ctx.working_dir);
         file_to_write_1.push(format!(
@@ -819,6 +831,8 @@ fn process_chunk(
                 &mut rng,
                 bam_stager,
                 &mut ad_counter,
+                &r1_adapter,
+                &r2_adapter,
             )?;
             contig_files_r1.push(file_to_write_1);
             contig_files_r2.push(file_to_write_2);
@@ -841,6 +855,8 @@ fn process_chunk(
                 &mut rng,
                 bam_stager,
                 &mut ad_counter,
+                &r1_adapter,
+                &r2_adapter,
             )?;
             contig_files_r1.push(file_to_write_1);
         }
@@ -870,6 +886,8 @@ fn process_chunk(
             &mut rng,
             bam_stager,
             &mut ad_counter,
+            &r1_adapter,
+            &r2_adapter,
         )?;
     }
 

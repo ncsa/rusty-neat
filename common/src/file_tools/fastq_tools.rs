@@ -90,8 +90,14 @@ pub fn write_block_fastq<B1: Write, B2: Write>(
     rng: &mut NeatRng,
     mut bam_writer: Option<&mut dyn BamRecordStager>,
     ad_counter: &mut AdCounter,
+    // 3' adapter readthrough (#125). Empty slices = disabled (no behavior change).
+    // When non-empty, reads whose insert < read_length are padded to read_length
+    // with adapter sequence: R1 gets r1_adapter, R2 gets r2_adapter.
+    r1_adapter: &[Nucleotide],
+    r2_adapter: &[Nucleotide],
 ) -> Result<(), FastqToolsError> {
     debug!("writing reads for {}", sequence_block.contig);
+    let adapters_on = !r1_adapter.is_empty() || !r2_adapter.is_empty();
     // Pad the fetched fragment with extra reference beyond `end` so deletions
     // (sequencing-error or literal-variant) near a read's tail have bases to
     // consume instead of exhausting the buffer and raising TruncatedRead.
@@ -112,7 +118,13 @@ pub fn write_block_fastq<B1: Write, B2: Write>(
         let fragment = sequence_block.get_subseq_slice(start, padded_end)?;
         // In long-read mode a fragment may be shorter than read_length; truncate the read
         // to the actual fragment length rather than discarding it.
-        let effective_read_len = if long_reads {
+        // With adapters on, a short insert generates an insert-length read here, then the
+        // 3' adapter pads it to read_length after orientation (see append_adapter_readthrough);
+        // capping at the insert length keeps generate_read from truncating-and-dropping it.
+        let insert_len = end - start;
+        let effective_read_len = if adapters_on {
+            insert_len.min(read_length)
+        } else if long_reads {
             fragment.len().min(read_length)
         } else {
             read_length
@@ -181,7 +193,7 @@ pub fn write_block_fastq<B1: Write, B2: Write>(
 
         let quality_scores_1 =
             quality_score_model.generate_quality_scores(effective_read_len, rng)?;
-        let r1_record = match generate_read(
+        let mut r1_record = match generate_read(
             fragment,
             &reads1_flagged,
             &read1_variants,
@@ -206,6 +218,17 @@ pub fn write_block_fastq<B1: Write, B2: Write>(
             }
             Err(e) => return Err(e),
         };
+        // R1 adapter readthrough: pad a short-insert read to read_length at its 3' end.
+        if adapters_on {
+            r1_record = append_adapter_readthrough(
+                r1_record,
+                r1_adapter,
+                read_length,
+                quality_score_model,
+                sequencing_error_model,
+                rng,
+            )?;
+        }
 
         // Generate r2 BEFORE writing r1, so that a TruncatedRead on r2
         // skips BOTH reads together. Otherwise r1 lands in buffer1 with
@@ -253,7 +276,23 @@ pub fn write_block_fastq<B1: Write, B2: Write>(
                 true,
                 ad_counter,
             ) {
-                Ok(record) => Some(reverse_complement_record(record)),
+                Ok(record) => {
+                    // Flip to the reverse mate FIRST, then append the R2 adapter at
+                    // the (now 3') end — so R2 carries the R2 adapter in read
+                    // orientation, exactly as a trimmer expects.
+                    let mut rec = reverse_complement_record(record);
+                    if adapters_on {
+                        rec = append_adapter_readthrough(
+                            rec,
+                            r2_adapter,
+                            read_length,
+                            quality_score_model,
+                            sequencing_error_model,
+                            rng,
+                        )?;
+                    }
+                    Some(rec)
+                }
                 Err(FastqToolsError::TruncatedRead(msg)) => {
                     debug!("{}", msg);
                     // Drop r1 alongside r2 so the streams stay in sync.
@@ -545,6 +584,51 @@ fn reverse_complement_record(mut record: ReadRecord) -> ReadRecord {
     record
 }
 
+/// Append 3' sequencing-adapter readthrough to a FINAL-oriented read (#125).
+/// When the insert was shorter than `read_length`, the record holds only the
+/// insert bases; this pads it to `read_length` with adapter sequence sourced
+/// cyclically (real reads can read through into — and past — the adapter).
+/// Adapter bases:
+///   - carry the same per-base substitution error as insert bases, so trimmers
+///     see realistic (not pristine) adapters; insertion/deletion errors are
+///     intentionally NOT applied here, to keep the read exactly `read_length`,
+///   - take quality scores from the same quality model,
+///   - are soft-clipped (`'S'`) in the golden BAM — they are not reference-aligned,
+///   - carry no variants (adapter is not reference-derived).
+/// Pass the R1 adapter for R1, and the R2 adapter for the post-flip R2 read.
+/// (The end-to-end fastp/cutadapt trim check is an integration step — see #125.)
+fn append_adapter_readthrough(
+    mut record: ReadRecord,
+    adapter: &[Nucleotide],
+    read_length: usize,
+    quality_score_model: &QualityScoreModel,
+    sequencing_error_model: &SequencingErrorModel,
+    rng: &mut NeatRng,
+) -> Result<ReadRecord, FastqToolsError> {
+    let current = record.sequence.len();
+    if adapter.is_empty() || current >= read_length {
+        return Ok(record);
+    }
+    let n_adapter = read_length - current;
+    let quals = quality_score_model.generate_quality_scores(n_adapter, rng)?;
+    for (i, &score) in quals.iter().enumerate() {
+        let mut base = adapter[i % adapter.len()];
+        let prob = sequencing_error_model.convert_score(score)?;
+        if rng.random()? < prob {
+            // Substitution noise only — preserves exact read_length.
+            if let SequencingErrorType::SnpError(b) =
+                sequencing_error_model.generate_sequencing_error(base, rng)?
+            {
+                base = b;
+            }
+        }
+        record.sequence.push(base.into());
+        record.quality_scores.push(score);
+        record.cigar_ops.push('S');
+    }
+    Ok(record)
+}
+
 pub fn write_read_to_fastq<W: Write>(
     record: &ReadRecord,
     buffer: &mut W,
@@ -688,6 +772,80 @@ mod tests {
         assert_eq!(reverse_complement(read), revcomp);
     }
 
+    // --- adapter readthrough (#125) ---
+    fn adapter_rec(seq: &str, paired: bool, reverse: bool) -> ReadRecord {
+        ReadRecord {
+            name: "frag/1".to_string(),
+            sequence: seq.to_string(),
+            quality_scores: vec![30; seq.len()],
+            cigar_ops: vec!['M'; seq.len()],
+            is_paired: paired,
+            is_reverse: reverse,
+            contig: "chr1".to_string(),
+            position: 0,
+            mate_contig: "chr1".to_string(),
+            mate_position: 0,
+            template_length: 0,
+        }
+    }
+
+    #[test]
+    fn test_append_adapter_pads_to_read_length_and_softclips() {
+        // Short insert (8) + adapter -> exactly read_length (20), adapter region soft-clipped.
+        let (read_length, insert_len) = (20usize, 8usize);
+        let adapter: Vec<Nucleotide> = "GATCGATCGATCGATC".chars().map(Nucleotide::from).collect();
+        let qm = QualityScoreModel::default().unwrap();
+        let em = SequencingErrorModel::default().unwrap();
+        let mut rng = NeatRng::new_from_seed(&vec!["adapter".to_string()]).unwrap();
+        let out = append_adapter_readthrough(
+            adapter_rec(&"A".repeat(insert_len), true, false),
+            &adapter, read_length, &qm, &em, &mut rng,
+        ).unwrap();
+        assert_eq!(out.sequence.len(), read_length, "padded to read_length");
+        assert_eq!(out.quality_scores.len(), read_length);
+        assert_eq!(out.cigar_ops.len(), read_length);
+        assert!(out.cigar_ops[..insert_len].iter().all(|&c| c == 'M'), "insert stays M");
+        assert_eq!(
+            out.cigar_ops[insert_len..].iter().filter(|&&c| c == 'S').count(),
+            read_length - insert_len,
+            "adapter region is soft-clipped",
+        );
+    }
+
+    #[test]
+    fn test_append_adapter_noop_when_insert_ge_read_length() {
+        let read_length = 10usize;
+        let adapter: Vec<Nucleotide> = "GGGG".chars().map(Nucleotide::from).collect();
+        let qm = QualityScoreModel::default().unwrap();
+        let em = SequencingErrorModel::default().unwrap();
+        let mut rng = NeatRng::new_from_seed(&vec!["x".to_string()]).unwrap();
+        let rec = adapter_rec("ACGTACGTAC", false, false); // already read_length
+        let before = rec.sequence.clone();
+        let out = append_adapter_readthrough(rec, &adapter, read_length, &qm, &em, &mut rng).unwrap();
+        assert_eq!(out.sequence, before, "no adapter when insert >= read_length");
+    }
+
+    #[test]
+    fn test_r2_adapter_appended_forward_after_flip() {
+        // The caller flips R2 (reverse_complement_record) THEN appends the R2 adapter,
+        // so the adapter must sit at the final read's 3' end in FORWARD orientation —
+        // an A/C-rich adapter leaves the tail A/C-rich, NOT the G/T-rich revcomp.
+        let read_length = 30usize;
+        let flipped = reverse_complement_record(adapter_rec("ACGTAC", true, false));
+        assert!(flipped.is_reverse);
+        let r2_adapter: Vec<Nucleotide> =
+            "AAAACCCCAAAACCCCAAAACCCC".chars().map(Nucleotide::from).collect();
+        let qm = QualityScoreModel::default().unwrap();
+        let em = SequencingErrorModel::default().unwrap();
+        let mut rng = NeatRng::new_from_seed(&vec!["r2".to_string()]).unwrap();
+        let out = append_adapter_readthrough(flipped, &r2_adapter, read_length, &qm, &em, &mut rng).unwrap();
+        assert_eq!(out.sequence.len(), read_length);
+        let tail = &out.sequence[6..];
+        let ac = tail.chars().filter(|c| matches!(c, 'A' | 'C')).count();
+        let gt = tail.chars().filter(|c| matches!(c, 'G' | 'T')).count();
+        assert!(ac > gt, "R2 adapter must be forward (A/C-rich), not revcomp'd; tail={tail}");
+    }
+
     #[test]
     fn test_write_block_fastq_ref_start_in_read_name() {
         // Verifies that when a SequenceBlock has ref_start > 0, the read names in the
@@ -743,6 +901,8 @@ mod tests {
             &mut rng,
             None,
             &mut AdCounter::new(),
+            &[],
+            &[],
         )
         .unwrap();
         buf1.finish().unwrap();
@@ -835,6 +995,8 @@ mod tests {
             &mut rng,
             None,
             &mut AdCounter::new(),
+            &[],
+            &[],
         )
         .unwrap();
         buf1.finish().unwrap();
@@ -1415,6 +1577,8 @@ mod tests {
             &mut rng,
             stager,
             &mut AdCounter::new(),
+            &[],
+            &[],
         )
         .unwrap();
     }

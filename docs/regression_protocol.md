@@ -96,12 +96,31 @@ check), Tier 1 on the PR; Tier 2 only if the same change also touches SVs.
 - `regression_gate.sh` diffs the two, applies the gates + tolerances above, prints
   a PASS/FAIL table, and **exits non-zero on any FAIL** (CI / `--dependency`-friendly).
 
-## To build (automation, follow-up)
+## Automation (built)
 
-1. `capture_baseline.sh` — run the chosen tier on `develop`, write `baseline_metrics.tsv` (value + sd from the reps).
-2. `regression_suite.sh TIER=n` — run that tier on the candidate branch, write `candidate_metrics.tsv`.
-3. `regression_gate.sh baseline candidate` — apply gates, emit PASS/FAIL, exit code = gate result.
+Three files implement this, thin wrappers over the existing harnesses — no new
+simulation logic:
 
-These are thin wrappers over the existing `benchmark` / `germline_e2e` /
-`cancer_pipeline` / `sv_pipeline` / `run_order_independence` harnesses and their
-`collect_*` outputs — no new simulation logic, just orchestration + comparison.
+- **`scripts/delta/baseline_metrics.tsv`** — the frozen baseline, *seeded from the
+  Phase-1/2 validation + replication numbers* (value, sd, gate, tier). Re-freeze on
+  each release by running the collect step on `develop`.
+- **`scripts/delta/regression_suite.sh`** — `MODE=submit TIER=n` submits the tier's
+  jobs (order-independence + germline + perf, plus chr22 germline/cancer at Tier 1)
+  and writes a manifest; `MODE=collect MANIFEST=…` extracts metrics into a candidate
+  TSV. (Tier 2 — variety, SV per-type reps, sweeps — is driven by
+  `run_input_variety.sh` / `run_cancer_sweeps.sh REPS=3` and appended.)
+- **`scripts/delta/regression_gate.sh baseline candidate [max_tier]`** — applies the
+  gates, prints a PASS/FAIL table, and exits non-zero on any FAIL (CI-friendly).
+
+Usage on a feature branch (from repo root):
+
+```bash
+MODE=submit TIER=1 LABEL=cand bash scripts/delta/regression_suite.sh   # submit; prints manifest path
+# ...wait for jobs (squeue --me)...
+MODE=collect MANIFEST=<path> bash scripts/delta/regression_suite.sh > candidate_metrics.tsv
+bash scripts/delta/regression_gate.sh scripts/delta/baseline_metrics.tsv candidate_metrics.tsv 1
+```
+
+The gate logic and all collect parsers are unit-tested; the `sbatch` submit path
+runs on Delta. Capturing a fresh baseline is just the same collect step pointed at
+a `develop` run.

@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Somatic recall/precision vs tumor mutation rate</title>
+<style>
+  :root{--ink:#0f172a;--muted:#64748b;--line:#e2e8f0;}
+  *{box-sizing:border-box}
+  body{margin:0;background:#f8fafc;color:var(--ink);
+       font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  .wrap{max-width:820px;margin:0 auto;padding:28px 20px 48px}
+  h1{font-size:22px;margin:0 0 2px}.sub{color:var(--muted);margin:0 0 14px}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;margin:0 0 12px;font-size:12.5px}
+  .sw{display:inline-block;width:20px;height:3px;border-radius:2px;margin-right:6px;vertical-align:3px}
+  .panel{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+  svg{width:100%;height:auto;display:block;overflow:visible}
+  .cap{color:var(--muted);font-size:13px;margin-top:16px;border-top:1px solid var(--line);padding-top:14px}
+  .cap b{color:var(--ink)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Calling is robust across tumor mutation burden</h1>
+  <p class="sub">Mutect2 recovery of rneat somatic truth (chr22, 60×, purity 0.6), sweeping the tumor
+  somatic mutation rate over a 100× range.</p>
+  <div class="legend">
+    <span><span class="sw" style="background:#2563eb"></span>SNV recall</span>
+    <span><span class="sw" style="background:#60a5fa"></span>SNV precision</span>
+    <span><span class="sw" style="background:#16a34a"></span>INDEL recall</span>
+    <span><span class="sw" style="background:#86efac"></span>INDEL precision</span>
+  </div>
+  <div class="panel"><svg id="c" viewBox="0 0 720 330" role="img" aria-label="recall/precision vs mutation rate"></svg></div>
+  <p class="cap"><b>SNV recall (~0.95–0.97) and precision (1.00) are flat across the full 1e-6 → 1e-4 range;
+  indel recall tapers from 1.00 to 0.89 as burden rises</b> — denser, more closely-spaced indels are
+  progressively harder to recover and left-normalize, an expected caller limit, not a simulator one
+  (precision stays ≥0.94). rneat's tumor-burden knob spans two orders of magnitude without destabilizing
+  the pipeline. <i>Note: this shows recovery vs rate; that the truth variant count scales with the
+  configured rate is a separate check (truth totals not in this TSV).</i> Source: ACCESS report §4 (tumor-mutation-rate sweep).</p>
+</div>
+<script>
+const NS="http://www.w3.org/2000/svg";
+const el=(t,a)=>{const e=document.createElementNS(NS,t);for(const k in a)e.setAttribute(k,a[k]);return e;};
+const txt=(x,y,s,o={})=>{const e=el("text",{x,y,"font-size":o.size||10,fill:o.fill||"#475569",
+  "text-anchor":o.anchor||"middle","font-weight":o.w||400});e.textContent=s;return e;};
+const R=["1e-6","1e-5","5e-5","1e-4"];
+const S={SNVr:[0.9429,0.9695,0.9697,0.9681],SNVp:[1.0,1.0,1.0,1.0],
+         INDr:[1.0,0.9333,0.8936,0.8853],INDp:[1.0,0.9655,0.9545,0.9427]};
+const svg=document.getElementById("c"),W=720,H=330,L=46,Rm=16,T=16,B=44,pw=W-L-Rm,ph=H-T-B;
+const n=R.length,X=i=>L+pw*(i+0.5)/n, y0=0.85,y1=1.01,Y=v=>T+ph-ph*(v-y0)/(y1-y0);
+svg.appendChild(el("line",{x1:L,y1:T+ph,x2:W-Rm,y2:T+ph,stroke:"#cbd5e1"}));
+[0.85,0.90,0.95,1.00].forEach(v=>{const y=Y(v);
+  svg.appendChild(el("line",{x1:L,y1:y,x2:W-Rm,y2:y,stroke:"#eef2f7"}));
+  svg.appendChild(txt(L-7,y+3,v.toFixed(2),{anchor:"end",fill:"#94a3b8"}));});
+svg.appendChild(txt(16,T+ph/2,"recall / precision",{fill:"#64748b",size:11})).setAttribute("transform",`rotate(-90 16 ${T+ph/2})`);
+function line(arr,c){const pts=arr.map((v,i)=>`${X(i)},${Y(v)}`).join(" ");
+  svg.appendChild(el("polyline",{points:pts,fill:"none",stroke:c,"stroke-width":2.5}));
+  arr.forEach((v,i)=>svg.appendChild(el("circle",{cx:X(i),cy:Y(v),r:3.5,fill:c})));}
+line(S.SNVr,"#2563eb"); line(S.SNVp,"#60a5fa"); line(S.INDr,"#16a34a"); line(S.INDp,"#86efac");
+R.forEach((r,i)=>svg.appendChild(txt(X(i),T+ph+16,r,{fill:"#334155",size:11})));
+svg.appendChild(txt(W/2,T+ph+34,"tumor somatic mutation rate (per base)",{fill:"#64748b",size:11}));
+svg.appendChild(txt(X(3),Y(0.8853)+13,"indel recall ↓ at high burden",{fill:"#16a34a",size:10,w:700,anchor:"end"}));
+</script>
+</body>
+</html>

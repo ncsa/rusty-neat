@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rneat order-independence & determinism</title>
+<style>
+  :root{--ink:#0f172a;--muted:#64748b;--line:#e2e8f0;--green:#16a34a;--amber:#d97706;}
+  *{box-sizing:border-box}
+  body{margin:0;background:#f8fafc;color:var(--ink);
+       font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  .wrap{max-width:860px;margin:0 auto;padding:28px 20px 48px}
+  h1{font-size:23px;margin:0 0 2px}.sub{color:var(--muted);margin:0 0 20px}
+  .grid{display:flex;flex-direction:column;gap:10px}
+  .chk{display:flex;gap:14px;align-items:flex-start;background:#fff;border:1px solid var(--line);
+       border-radius:12px;padding:13px 16px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+  .pill{flex:0 0 auto;font-size:11.5px;font-weight:700;letter-spacing:.04em;color:#fff;
+        border-radius:999px;padding:4px 11px;margin-top:1px;min-width:54px;text-align:center}
+  .pass{background:var(--green)} .fail{background:var(--amber)}
+  .body{flex:1 1 auto;min-width:0}
+  .name{font-weight:650;font-size:15px}
+  .mean{color:var(--muted);font-size:13px;margin-top:1px}
+  .ev{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;color:#94a3b8;
+      margin-top:5px;word-break:break-all}
+  .tag{display:inline-block;font-size:10.5px;font-weight:700;color:var(--amber);
+       border:1px solid var(--amber);border-radius:6px;padding:0 6px;margin-left:6px;vertical-align:1px}
+  .note{background:#fffbeb;border:1px solid #fde68a;border-radius:12px;padding:14px 16px;margin-top:18px;font-size:13.5px}
+  .note b{color:var(--ink)} .note h3{margin:0 0 6px;font-size:14px;color:var(--amber)}
+  .foot{color:var(--muted);font-size:12.5px;margin-top:16px;border-top:1px solid var(--line);padding-top:12px}
+  .foot code{font-family:ui-monospace,Menlo,monospace}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>rneat is reproducible &amp; order-independent where it must be</h1>
+  <p class="sub">Fixed seed, yeast (16 chromosomes, multi-contig). Each check changes exactly one
+  variable and compares the header-less sorted truth-VCF body by md5 (set-equality).</p>
+
+  <div class="grid">
+    <div class="chk">
+      <span class="pill pass">PASS</span>
+      <div class="body">
+        <div class="name">Determinism</div>
+        <div class="mean">Same config + seed, run twice → byte-identical variant set.</div>
+        <div class="ev">1ad0f06… = 1ad0f06…</div>
+      </div>
+    </div>
+    <div class="chk">
+      <span class="pill pass">PASS</span>
+      <div class="body">
+        <div class="name">Thread-invariance</div>
+        <div class="mean">1 thread and 8 threads produce the <i>same</i> output — parallelism never perturbs results.</div>
+        <div class="ev">1-thread 1ad0f06… = 8-thread 1ad0f06…</div>
+      </div>
+    </div>
+    <div class="chk">
+      <span class="pill pass">PASS</span>
+      <div class="body">
+        <div class="name">Shard-order independence</div>
+        <div class="mean">Same shards merged in forward vs reversed order → identical set. The HPC merge is order-robust.</div>
+        <div class="ev">fwd 4990989… = rev 4990989…</div>
+      </div>
+    </div>
+    <div class="chk">
+      <span class="pill pass">PASS</span>
+      <div class="body">
+        <div class="name">Shard disjointness</div>
+        <div class="mean">No variant emitted by more than one window — region-sharding tiles the genome with no double-counting.</div>
+        <div class="ev">0 duplicate CHROM:POS:REF:ALT keys across 35 shards</div>
+      </div>
+    </div>
+    <div class="chk">
+      <span class="pill fail">FAIL</span>
+      <div class="body">
+        <div class="name">Contig-order independence <span class="tag">KNOWN · NOT A DEFECT</span></div>
+        <div class="mean">Reversing contig order in the FASTA changes the realization (even the variant count: 12627 → 12631).
+        Signature of a single global RNG consumed in file-contig order.</div>
+        <div class="ev">base 1ad0f06… ≠ shuffled e898359…</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <h3>What the one FAIL means</h3>
+    <b>It is working-as-implemented, not a correctness bug — and the HPC path is unaffected.</b>
+    rneat draws variants from one seeded RNG stream consumed in contig order, so reproducing a
+    <i>monolithic</i> run requires the byte-identical reference (same contig order), not just the same
+    genome. The region-sharded whole-genome path never relies on this: each shard uses an independent
+    per-shard seed and absolute-coordinate windows, which is exactly why shard-order independence and
+    disjointness both pass. <b>Fix on the backlog (#322):</b> seed per contig from <code>hash(seed, contig_name)</code>
+    to make output contig-order-independent.
+  </div>
+
+  <p class="foot">Variant counts — <code>base 12627 · shuffled 12631 · shard-union 12631</code>.
+  (Sharded union uses distinct per-shard seeds by design, so it is a different valid realization,
+  not a reproduction of the monolithic run.) Source: ACCESS report §4, job 19743167.</p>
+</div>
+</body>
+</html>

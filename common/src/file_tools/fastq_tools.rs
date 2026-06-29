@@ -92,16 +92,24 @@ pub fn write_block_fastq<B1: Write, B2: Write>(
     ad_counter: &mut AdCounter,
 ) -> Result<(), FastqToolsError> {
     debug!("writing reads for {}", sequence_block.contig);
-    // For SE reads, fragment_length == read_length exactly.  Sequencing-error deletions advance
-    // seq_index without writing bases, so the generation loop can exhaust the fragment before
-    // writing read_length bases, causing a TruncatedRead.  Fetching a small pad beyond `end`
-    // gives the loop extra reference bases to consume.  For PE, fragments are large relative to
-    // read_length so no padding is needed (and it would shift R2 coordinates).
+    // Pad the fetched fragment with extra reference beyond `end` so deletions
+    // (sequencing-error or literal-variant) near a read's tail have bases to
+    // consume instead of exhausting the buffer and raising TruncatedRead.
+    //   - SE: the single read can end with a deletion -> small tail pad.
+    //   - PE: R2 is generated FORWARD over the right-end window, which ends at
+    //     `end`, so a deletion in R2 needs reference *beyond* `end`. Without
+    //     this pad, any deletion in R2 truncated the read and dropped the whole
+    //     pair (~14% coverage loss at 30x). A read-length pad covers any literal
+    //     deletion (all < the SV threshold). The pad does NOT shift R2's
+    //     coordinates — the R2 window still starts at `end - effective_read_len`.
     let seq_len = sequence_block.sequence.len();
-    let se_pad = if paired_ended { 0 } else { 32 };
+    let frag_pad = if paired_ended { read_length } else { 32 };
     for (frag_idx, (start, end)) in block_fragments.into_iter().enumerate() {
-        let padded_end = (end + se_pad).min(seq_len);
-        let fragment = sequence_block.get_subseq(start, padded_end)?;
+        let padded_end = (end + frag_pad).min(seq_len);
+        // Zero-copy: the fragment is only read (R1 reads it, R2 reads a suffix),
+        // never stored or mutated, so borrow it instead of allocating + copying
+        // a Vec per fragment. Borrows sequence_block for the iteration.
+        let fragment = sequence_block.get_subseq_slice(start, padded_end)?;
         // In long-read mode a fragment may be shorter than read_length; truncate the read
         // to the actual fragment length rather than discarding it.
         let effective_read_len = if long_reads {
@@ -127,15 +135,17 @@ pub fn write_block_fastq<B1: Write, B2: Write>(
             read1_variants.insert(var_pos, &block_map.variant_map[&pos]);
             reads1_flagged.push(var_pos);
         }
-        // R2 window: [end - effective_read_len, end); R2 is reverse-stranded so
-        // var offset = (end - 1) - pos. Guard end > effective_read_len so the
-        // window start doesn't underflow (matches the original condition).
+        // R2 window: [end - effective_read_len, end). R2 is generated in FORWARD
+        // orientation over this right-end window (then the whole record is
+        // reverse-complemented), so the variant offset is the forward offset
+        // within the window, just like R1. Guard end > effective_read_len so the
+        // window start doesn't underflow.
         if paired_ended && end > effective_read_len {
             let w_lo = end - effective_read_len;
             let r2_lo = flagged.partition_point(|&p| p < w_lo);
             let r2_hi = flagged.partition_point(|&p| p < end);
             for &pos in &flagged[r2_lo..r2_hi] {
-                let var_pos = (end - 1) - pos;
+                let var_pos = pos - w_lo;
                 read2_variants.insert(var_pos, &block_map.variant_map[&pos]);
                 reads2_flagged.push(var_pos);
             }
@@ -172,7 +182,7 @@ pub fn write_block_fastq<B1: Write, B2: Write>(
         let quality_scores_1 =
             quality_score_model.generate_quality_scores(effective_read_len, rng)?;
         let r1_record = match generate_read(
-            &fragment,
+            fragment,
             &reads1_flagged,
             &read1_variants,
             effective_read_len,
@@ -210,13 +220,28 @@ pub fn write_block_fastq<B1: Write, B2: Write>(
                 quality_score_model.generate_quality_scores(effective_read_len, rng)?;
             let r2_pos = abs_end.saturating_sub(effective_read_len);
             let tlen_r2 = -((abs_end - abs_start) as i32);
+            // R2 covers the fragment's right end. Generate it FORWARD over that
+            // window — so SNP/insertion/deletion handling is identical to R1 and
+            // correct — then reverse-complement the whole record into a reverse
+            // read. Applying VCF-anchored indels during a reverse walk mis-placed
+            // them (insertion base order / deletion anchor), so reverse reads
+            // carried garbled indels; forward-generate-then-flip avoids that.
+            // R2 window starts at (end - effective_read_len); since `fragment`
+            // is padded beyond `end`, &fragment[off..] is the window plus the
+            // deletion buffer (so R2 deletions don't truncate and drop the pair).
+            let r2_sub: &[Nucleotide] = match (end - start).checked_sub(effective_read_len) {
+                Some(off) => &fragment[off..],
+                // Fragment shorter than a read: skip the pair to avoid an
+                // orphaned R1 (matches the TruncatedRead handling below).
+                None => continue,
+            };
             match generate_read(
-                &reverse_complement(fragment),
+                r2_sub,
                 &reads2_flagged,
                 &read2_variants,
                 effective_read_len,
                 format!("{}/2", base_name),
-                Strand::Reverse,
+                Strand::Forward,
                 quality_scores_2,
                 sequencing_error_model,
                 rng,
@@ -228,7 +253,7 @@ pub fn write_block_fastq<B1: Write, B2: Write>(
                 true,
                 ad_counter,
             ) {
-                Ok(record) => Some(record),
+                Ok(record) => Some(reverse_complement_record(record)),
                 Err(FastqToolsError::TruncatedRead(msg)) => {
                     debug!("{}", msg);
                     // Drop r1 alongside r2 so the streams stay in sync.
@@ -329,18 +354,38 @@ pub fn generate_read(
     let fragment_length = sequence.len();
 
     let mut bases_written = 0;
-    let mut out_seq = String::new();
-    let mut cigar_ops: Vec<char> = Vec::new();
+    // Pre-size to read_length (+ slack for insertions) so the per-read output
+    // buffers don't repeatedly reallocate as they grow.
+    let mut out_seq = String::with_capacity(read_length + 16);
+    let mut cigar_ops: Vec<char> = Vec::with_capacity(read_length + 16);
+    // Reused across positions for the rare multi-base (insertion) case only, so
+    // insertions don't allocate a fresh Vec each time. The common single-base
+    // path (ref base / SNP / SNP-error) uses the stack array `single` below and
+    // never touches the heap. This is the hot-loop allocation that previously
+    // ran once per base of every read (read_length × 2 reads × every fragment).
+    let mut ins_buf: Vec<Nucleotide> = Vec::new();
     let mut quality_index = 0;
     let mut seq_index = 0;
 
     'outer: while (seq_index < fragment_length) && (bases_written < read_length) {
-        let fragment_position = match read_strand {
-            Strand::Forward => seq_index,
-            Strand::Reverse => fragment_length - seq_index,
-        };
+        // Index variants by seq_index for BOTH strands. The caller already
+        // reverse-complements the fragment for reverse (R2) reads AND maps each
+        // variant's coordinate into that reversed sequence (var_pos = (end-1)-pos),
+        // so the variant base sits at `seq_index` here just like the forward read.
+        // The old `fragment_length - seq_index` for Reverse applied a second,
+        // erroneous reflection — the variant was looked up at the mirror position,
+        // so reverse reads carried REF at the true locus and the alt landed
+        // elsewhere. Net effect: alternate alleles only ever appeared on
+        // forward-strand reads, which strand-aware callers (e.g. Mutect2) correctly
+        // flag as strand bias and filter out.
+        let fragment_position = seq_index;
         let reference_base = sequence[seq_index].get_unmasked_base();
-        let mut base_to_write: Vec<Nucleotide> = vec![reference_base];
+        // Common case writes exactly one base (the reference base, or a single
+        // SNP/SNP-error substitution) — kept in the stack array `single`, no
+        // heap. Only insertions (multi-base alt / insertion error) set use_ins
+        // and fill the reused `ins_buf`.
+        let mut single = [reference_base];
+        let mut use_ins = false;
         let mut deletion_skip: usize = 0;
 
         if reference_base == N {
@@ -357,18 +402,24 @@ pub fn generate_read(
             );
             let entry = ad_counter.entry(variant.location).or_insert((0, 0));
             if (variant.genotype == Genotype::Homozygous) || (rng.random()? < 0.5) {
-                base_to_write = match read_strand {
-                    Strand::Forward => variant.alternate
-                        .as_literal()
-                        .unwrap()
-                        .to_vec(),
-                    Strand::Reverse => variant.alternate
-                        .as_literal()
-                        .unwrap()
-                        .iter()
-                        .map(|b| b.complement())
-                        .collect(),
-                };
+                let alt = variant.alternate.as_literal().unwrap();
+                let alt_len = alt.len();
+                // Reverse reads are generated forward then flipped by the
+                // caller, EXCEPT alt bases which are complemented here (length is
+                // preserved, so alt_len is strand-independent).
+                if alt_len == 1 {
+                    single[0] = match read_strand {
+                        Strand::Forward => alt[0],
+                        Strand::Reverse => alt[0].complement(),
+                    };
+                } else {
+                    ins_buf.clear();
+                    match read_strand {
+                        Strand::Forward => ins_buf.extend_from_slice(alt),
+                        Strand::Reverse => ins_buf.extend(alt.iter().map(|b| b.complement())),
+                    }
+                    use_ins = true;
+                }
                 entry.1 += 1; // alt
                 // For a net-deletion variant (REF longer than ALT — typically a
                 // pure literal deletion from indel_model with ALT.len() == 1),
@@ -380,7 +431,6 @@ pub fn generate_read(
                 // uses; reusing it keeps CIGAR shape uniform across both
                 // sources of deletion signal.
                 let ref_len = variant.reference.len();
-                let alt_len = base_to_write.len();
                 if ref_len > alt_len {
                     let want_skip = ref_len - alt_len;
                     // Cap at remaining buffer so we don't read past the
@@ -406,7 +456,7 @@ pub fn generate_read(
                 match error {
                     SequencingErrorType::SnpError(base) => {
                         debug!("Snp error");
-                        base_to_write = vec![base];
+                        single[0] = base;
                     }
                     SequencingErrorType::DeletionError(length) => {
                         debug!("Deletion error");
@@ -417,16 +467,20 @@ pub fn generate_read(
                     }
                     SequencingErrorType::InsertionError(vec) => {
                         debug!("Insertion error");
-                        let mut insertion = vec![reference_base];
-                        insertion.extend(vec);
-                        base_to_write = insertion;
+                        ins_buf.clear();
+                        ins_buf.push(reference_base);
+                        ins_buf.extend(vec);
+                        use_ins = true;
                     }
                 }
             }
         }
 
+        // Borrow single (stack) for the common path or the reused ins_buf for
+        // insertions — set only after all mutations above, so no aliasing.
+        let to_write: &[Nucleotide] = if use_ins { &ins_buf } else { &single };
         let mut is_first_base = true;
-        for base in base_to_write {
+        for &base in to_write {
             out_seq.push(base.into());
             bases_written += 1;
             if is_first_base {
@@ -466,6 +520,29 @@ pub fn generate_read(
         mate_position,
         template_length,
     })
+}
+
+/// Turn a forward-generated read into its reverse-strand mate: reverse-complement
+/// the sequence and reverse the per-base CIGAR ops and qualities. R2 is generated
+/// forward over the fragment's right-end window (so SNP/insertion/deletion handling
+/// is identical to R1 and correct) and flipped here — this avoids the
+/// reverse-walk indel hazards (insertion base order, deletion anchor) that
+/// garbled indels on reverse reads.
+fn reverse_complement_record(mut record: ReadRecord) -> ReadRecord {
+    record.sequence = record
+        .sequence
+        .chars()
+        .rev()
+        .map(|c| match c {
+            'A' => 'T', 'C' => 'G', 'G' => 'C', 'T' => 'A',
+            'a' => 't', 'c' => 'g', 'g' => 'c', 't' => 'a',
+            other => other,
+        })
+        .collect();
+    record.cigar_ops.reverse();
+    record.quality_scores.reverse();
+    record.is_reverse = true;
+    record
 }
 
 pub fn write_read_to_fastq<W: Write>(
@@ -899,6 +976,63 @@ mod tests {
         let (refs, alts) = ad[&5];
         assert_eq!(refs, 0, "homozygous SNP must produce zero ref reads");
         assert_eq!(alts, 50, "homozygous SNP must produce all alt reads");
+    }
+
+    /// Regression for the reverse-strand variant-placement bug: a reverse (R2)
+    /// read must apply the variant at `seq_index` (the caller already
+    /// reverse-complements the fragment and maps the variant coordinate into it),
+    /// NOT at the mirrored `fragment_length - seq_index`. With the old reflection
+    /// the variant fell outside the read window, so reverse reads silently
+    /// carried REF — alternate alleles only ever appeared on forward reads,
+    /// which Mutect2 (correctly) filtered as strand bias.
+    #[test]
+    fn test_generate_read_reverse_applies_variant() {
+        let sequence = make_sequence(30);
+        let read_length = 10;
+        let hom_snp =
+            Variant::new(VariantType::SNP, 5, &vec![T], &vec![C], &mut vec![1, 1]).unwrap();
+        let variant_map = HashMap::from([(5usize, &hom_snp)]);
+        let quality_scores = vec![40usize; read_length];
+        let model = SequencingErrorModel::default().unwrap();
+        let mut rng = NeatRng::new_from_seed(&vec!["rev".to_string()]).unwrap();
+        let mut ad: AdCounter = HashMap::new();
+        for i in 0..50 {
+            let _ = generate_read(
+                &sequence, &[5], &variant_map, read_length, format!("r{i}/2"),
+                Strand::Reverse, quality_scores.clone(), &model, &mut rng,
+                "chr1".to_string(), 0, "chr1".to_string(), 0, 0, true, &mut ad,
+            )
+            .unwrap();
+        }
+        let (refs, alts) = ad[&5];
+        // The pre-fix reflection put the lookup at index 25, outside the
+        // 10-base read, so alt would be 0 here. The fix applies it at index 5.
+        assert_eq!(refs, 0, "reverse homozygous SNP must produce zero ref reads");
+        assert_eq!(alts, 50, "reverse read must carry the alt (strand-bias regression)");
+    }
+
+    /// reverse_complement_record must reverse-complement the sequence and reverse
+    /// the per-base CIGAR + qualities (so a forward-generated R2 flips correctly).
+    #[test]
+    fn test_reverse_complement_record() {
+        let rec = ReadRecord {
+            name: "frag/2".to_string(),
+            sequence: "AACGT".to_string(),
+            quality_scores: vec![1, 2, 3, 4, 5],
+            cigar_ops: vec!['M', 'I', 'M', 'M', 'M'],
+            is_paired: true,
+            is_reverse: false,
+            contig: "chr1".to_string(),
+            position: 10,
+            mate_contig: "chr1".to_string(),
+            mate_position: 5,
+            template_length: -50,
+        };
+        let f = reverse_complement_record(rec);
+        assert_eq!(f.sequence, "ACGTT", "sequence must be reverse-complemented");
+        assert_eq!(f.quality_scores, vec![5, 4, 3, 2, 1], "qualities must be reversed");
+        assert_eq!(f.cigar_ops, vec!['M', 'M', 'M', 'I', 'M'], "CIGAR must be reversed");
+        assert!(f.is_reverse, "flipped record must be marked reverse");
     }
 
     #[test]

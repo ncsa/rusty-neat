@@ -50,7 +50,7 @@ line), the current Python 3 NEAT 4.x, and `rneat`.
 | Parallelism                                | Manual job sharding (`--job`)  | Multiprocessing (`--threads`): genome split into ~8 chunks/thread, then stitched | Multithreading (rayon) |
 | VCF comparison tooling                      | Bundled scripts                | ✅ `compare-vcfs`                          | ✅ `compare-vcfs`                                        |
 | I/O / memory                               | Temp files                     | Temp files                                | Streaming writes, low-memory focus                       |
-| Distribution                               | GitHub source                  | GitHub / PyPI                             | GitHub + binaries; Bioconda (in review)                  |
+| Distribution                               | GitHub source                  | GitHub / PyPI                             | GitHub + binaries; Bioconda (`conda install -c bioconda rneat`) |
 
 **Citations.** NEAT: Stephens et al. (2016), *PLOS ONE* 11(11):e0167047,
 [doi:10.1371/journal.pone.0167047](https://doi.org/10.1371/journal.pone.0167047);
@@ -71,11 +71,22 @@ when you want:
 - **Reproducibility** — the same seed yields byte-identical FASTQ regardless of
   the thread count.
 - **Easy deployment** — a single self-contained binary with no Python
-  environment to manage (and a Bioconda package in review).
+  environment to manage, installable via Bioconda
+  (`conda install -c bioconda rneat`).
 
 # How to use `rneat`
 
 ## Prerequisites
+
+The easiest way to install `rneat` is via [Bioconda](https://bioconda.github.io/):
+
+```
+conda install -c bioconda rneat
+```
+
+This pulls a prebuilt binary with all dependencies handled — no Rust toolchain
+required. If you prefer to build from source or grab a release binary, read on.
+
 You will need to install the rust toolchain to compile `rneat`, including `cargo`. Check the cargo documentation for instructions (https://doc.rust-lang.org/cargo/getting-started/installation.html). Alternatively, you can try one of the binaries on the release page. Select the one that matches your system and let us know if you run into errors. During compilation, you may run into errors, such as cmake not found. Some of the packages `rneat` uses have these dependencies. For Debian/Ubuntu this should be a simple `sudo apt install cmake` and for RHEL/Rocky type distros this should be `sudo dnf install cmake`. There may be some other requirements. Drop a comment if you need specific help.
 
 Download the executable in the release (current version 1.5.0).

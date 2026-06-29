@@ -1,0 +1,81 @@
+name: thirdparty-licenses
+
+# Guards the committed THIRDPARTY.yml against drift from Cargo.lock.
+#
+# rneat ships the licenses of all (transitive) Rust dependencies via a curated
+# THIRDPARTY.yml (consumed by the Bioconda build's `cargo-bundle-licenses
+# --previous THIRDPARTY.yml --check-previous`). If a dependency is added or
+# bumped to a version whose license isn't recorded, the bundle goes stale and
+# the Bioconda build — including Bioconda's automated version-bump PRs — would
+# fail. This job catches that here, before a release tag is cut, so the fix
+# (regenerate + commit THIRDPARTY.yml) happens upstream.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main", "develop" ]
+
+# Pin the tool: cargo-bundle-licenses' license detection can differ between
+# versions, so a floating version could flip the subset check. Keep this in
+# sync with conda-recipe/build.sh's expectations when bumping.
+env:
+  CARGO_BUNDLE_LICENSES_VERSION: "4.2.0"
+
+jobs:
+  check-thirdparty:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: thirdparty-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            thirdparty-cargo-
+
+      - name: Cache cargo-bundle-licenses binary
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-bundle-licenses
+          key: cargo-bundle-licenses-${{ env.CARGO_BUNDLE_LICENSES_VERSION }}
+
+      - name: Install cargo-bundle-licenses
+        run: |
+          if ! command -v cargo-bundle-licenses >/dev/null \
+              || [ "$(cargo-bundle-licenses --version | awk '{print $NF}' | sed 's/^cargo://')" != "$CARGO_BUNDLE_LICENSES_VERSION" ]; then
+            cargo install cargo-bundle-licenses \
+              --version "$CARGO_BUNDLE_LICENSES_VERSION" --locked --force
+          fi
+
+      - name: Fetch dependency sources
+        run: cargo fetch --locked
+
+      - name: Check THIRDPARTY.yml is in sync with Cargo.lock
+        run: |
+          if ! cargo-bundle-licenses --format yaml \
+              --output /tmp/thirdparty-check.yml \
+              --previous THIRDPARTY.yml --check-previous; then
+            echo "::error::THIRDPARTY.yml is out of sync with Cargo.lock."
+            echo ""
+            echo "A dependency was added or bumped to a version whose license is"
+            echo "not recorded in the committed THIRDPARTY.yml. Regenerate and"
+            echo "commit it (hand-fill any crate that ships no LICENSE file):"
+            echo ""
+            echo "    cargo install cargo-bundle-licenses --version $CARGO_BUNDLE_LICENSES_VERSION --locked"
+            echo "    cargo-bundle-licenses --format yaml --output THIRDPARTY.yml --previous THIRDPARTY.yml"
+            echo "    # then commit THIRDPARTY.yml"
+            echo ""
+            echo "Leaving this stale would break the Bioconda build (and its"
+            echo "automated version-bump PRs), which run the same --check-previous."
+            exit 1
+          fi
+          echo "THIRDPARTY.yml covers all crates in Cargo.lock."

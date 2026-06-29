@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rneat HPC scaling — processes, not threads</title>
+<style>
+  :root{--blue:#2563eb;--red:#dc2626;--green:#16a34a;--ink:#0f172a;--muted:#64748b;--line:#e2e8f0;}
+  *{box-sizing:border-box}
+  body{margin:0;background:#f8fafc;color:var(--ink);
+       font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  .wrap{max-width:960px;margin:0 auto;padding:28px 20px 48px}
+  h1{font-size:23px;margin:0 0 2px}
+  .sub{color:var(--muted);margin:0 0 22px}
+  .row{display:flex;gap:24px;flex-wrap:wrap}
+  .panel{flex:1 1 380px;min-width:300px;background:#fff;border:1px solid var(--line);
+         border-radius:12px;padding:16px;box-shadow:0 1px 2px rgba(0,0,0,.04);margin-bottom:24px}
+  .panel.full{flex-basis:100%}
+  .panel h2{font-size:15px;margin:0 0 2px}
+  .panel .note{color:var(--muted);font-size:12.5px;margin:0 0 8px}
+  svg{width:100%;height:auto;display:block;overflow:visible}
+  .cap{color:var(--muted);font-size:13px;margin-top:6px;border-top:1px solid var(--line);padding-top:14px}
+  .cap b{color:var(--ink)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>rneat HPC scaling — scale with processes, not threads</h1>
+  <p class="sub">rneat is memory-bandwidth-bound: in-process threads don't help, but independent
+  processes scale, so whole-genome speed comes from region-sharding across exclusive nodes.</p>
+
+  <div class="row">
+    <div class="panel">
+      <h2>Processes scale ✓</h2>
+      <div class="note">aggregate throughput vs processes per node (E. coli 30×, single-thread each)</div>
+      <svg id="proc" viewBox="0 0 440 280" role="img" aria-label="throughput vs processes per node"></svg>
+    </div>
+    <div class="panel">
+      <h2>Threads don't ✗</h2>
+      <div class="note">wall-clock vs in-process threads (yeast 30×) — 1 thread is fastest</div>
+      <svg id="thr" viewBox="0 0 440 280" role="img" aria-label="wall-clock vs threads"></svg>
+    </div>
+  </div>
+
+  <div class="panel full">
+    <h2>Whole human genome at 30× — wall-clock</h2>
+    <div class="note">GRCh38 region-sharded; the lever is exclusive-node availability, not packing</div>
+    <svg id="wg" viewBox="0 0 920 200" role="img" aria-label="whole-genome wall-clock"></svg>
+  </div>
+
+  <p class="cap"><b>Threading is break-even at best on Delta's dual-socket EPYC; processes scale ~3.5×
+  to a bandwidth plateau.</b> So whole-genome runs shard into single-thread region-workers across
+  exclusive nodes: a naive shared-partition run hit 3 h 41 m (cross-tenant contention), exclusive
+  K=2 packing 2 h 30 m, and the compute floor is ~30 min when enough whole nodes are available.
+  Source: ACCESS report §3.6.</p>
+</div>
+<script>
+const NS="http://www.w3.org/2000/svg";
+const el=(t,a)=>{const e=document.createElementNS(NS,t);for(const k in a)e.setAttribute(k,a[k]);return e;};
+const txt=(x,y,s,o={})=>{const e=el("text",{x,y,"font-size":o.size||10,fill:o.fill||"#475569",
+  "text-anchor":o.anchor||"middle","font-weight":o.w||400});e.textContent=s;return e;};
+
+// ---- line panel helper (log2 x) ----
+function linePanel(id,xs,ys,{ymax,ylab,color,xlabels,annot,goodLow}){
+  const svg=document.getElementById(id),W=440,H=280,L=46,R=14,T=14,B=42,pw=W-L-R,ph=H-T-B;
+  const lx=xs.map(v=>Math.log2(v)), lxmax=Math.max(...lx);
+  const X=i=>L+pw*lx[i]/lxmax, Y=v=>T+ph-ph*v/ymax;
+  svg.appendChild(el("line",{x1:L,y1:T+ph,x2:W-R,y2:T+ph,stroke:"#cbd5e1"}));
+  // y gridlines
+  for(let k=0;k<=4;k++){const v=ymax*k/4,y=Y(v);
+    svg.appendChild(el("line",{x1:L,y1:y,x2:W-R,y2:y,stroke:"#eef2f7"}));
+    svg.appendChild(txt(L-6,y+3,(ymax>=1000? (v/1000).toFixed(0)+"k" : (ymax<1? v.toFixed(3): v.toFixed(0))),{anchor:"end",fill:"#94a3b8"}));}
+  svg.appendChild(txt(14,T+ph/2,ylab,{anchor:"middle",fill:"#64748b",size:11})).setAttribute("transform",`rotate(-90 14 ${T+ph/2})`);
+  // polyline
+  let pts=xs.map((_,i)=>`${X(i)},${Y(ys[i])}`).join(" ");
+  svg.appendChild(el("polyline",{points:pts,fill:"none",stroke:color,"stroke-width":2.5}));
+  xs.forEach((xv,i)=>{
+    svg.appendChild(el("circle",{cx:X(i),cy:Y(ys[i]),r:3.5,fill:color}));
+    svg.appendChild(txt(X(i),T+ph+15,xlabels[i],{fill:"#334155",size:10.5}));
+  });
+  if(annot) svg.appendChild(txt(annot.x,annot.y,annot.s,{fill:color,w:700,size:11.5,anchor:annot.anchor||"middle"}));
+}
+
+// Panel 1: process scaling (jobs/s)
+linePanel("proc",[1,2,4,8,16,32,64,128],
+  [0.0118,0.0142,0.0182,0.0275,0.0365,0.0407,0.0409,0.0390],
+  {ymax:0.048,ylab:"throughput (jobs/s)",color:"#16a34a",
+   xlabels:["1","2","4","8","16","32","64","128"],
+   annot:{x:300,y:70,s:"~3.5× → bandwidth plateau"}});
+// Panel 2: thread regression (wall-clock s)
+linePanel("thr",[1,2,4,8,16],[218,280,275,251,249],
+  {ymax:320,ylab:"wall-clock (s)",color:"#dc2626",
+   xlabels:["1","2","4","8","16"],
+   annot:{x:300,y:60,s:"1 thread = fastest"}});
+
+// Panel 3: whole-genome wall-clock bars (minutes)
+(function(){
+  const svg=document.getElementById("wg"),W=920,H=200,L=150,R=120,T=14,B=20,pw=W-L-R,ph=H-T-B;
+  const rows=[["Shared partition (naive)",221,"#dc2626","3 h 41 m"],
+              ["Exclusive nodes, K=2 packing",150,"#2563eb","2 h 30 m"],
+              ["Compute floor (enough nodes)",30,"#16a34a","~30 m"]];
+  const max=240, bh=ph/rows.length*0.6, gap=ph/rows.length;
+  rows.forEach((r,i)=>{
+    const y=T+i*gap+gap*0.2, w=pw*r[1]/max;
+    svg.appendChild(txt(L-10,y+bh*0.66,r[0],{anchor:"end",fill:"#334155",size:12.5}));
+    svg.appendChild(el("rect",{x:L,y,width:w,height:bh,rx:4,fill:r[2]}));
+    svg.appendChild(txt(L+w+8,y+bh*0.66,r[3],{anchor:"start",fill:r[2],w:700,size:13}));
+  });
+})();
+</script>
+</body>
+</html>

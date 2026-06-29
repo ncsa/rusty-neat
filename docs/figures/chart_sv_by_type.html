@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SV recovery by type — Manta vs Delly</title>
+<style>
+  :root{--manta:#2563eb;--delly:#7c3aed;--ink:#0f172a;--muted:#64748b;--line:#e2e8f0;}
+  *{box-sizing:border-box}
+  body{margin:0;background:#f8fafc;color:var(--ink);
+       font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  .wrap{max-width:820px;margin:0 auto;padding:28px 20px 48px}
+  h1{font-size:23px;margin:0 0 2px}.sub{color:var(--muted);margin:0 0 18px}
+  .legend{display:flex;gap:18px;margin:0 0 14px;font-size:13px}
+  .sw{display:inline-block;width:13px;height:13px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+  .panel{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+  svg{width:100%;height:auto;display:block;overflow:visible}
+  .cap{color:var(--muted);font-size:13px;margin-top:16px;border-top:1px solid var(--line);padding-top:14px}
+  .cap b{color:var(--ink)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Somatic SV recovery by type — two independent callers</h1>
+  <p class="sub">rneat SV truth recovered by Manta and Delly, <b>replicated across 3 tissue models × 3 seeds</b>
+  (n=9/caller). Mean recall per type; whiskers = ±1 sd.</p>
+  <div class="legend">
+    <span><span class="sw" style="background:var(--manta)"></span>Manta</span>
+    <span><span class="sw" style="background:var(--delly)"></span>Delly</span>
+  </div>
+  <div class="panel"><svg id="c" viewBox="0 0 720 320" role="img" aria-label="SV recall by type"></svg></div>
+  <p class="cap"><b>Replicated, both callers recover DEL/DUP/INV at mean 0.84–0.92, and agree (Manta≈Delly)</b>
+  — rneat's SVs aren't tuned to one tool. Replication corrected the optimistic single-run values, notably
+  <b>INV 1.000 → 0.92 ± 0.09</b> (a small-n fluke), and put real ±0.09–0.11 sd on each type. BND scores 0
+  in both (truvari doesn't benchmark breakends; read-level signal present); CNV unscored by truvari but
+  validated separately — depth 1.83× and GATK copy-ratio. n=9/caller (3 tissue models × 3 seeds).
+  Source: ACCESS report §3.7.</p>
+</div>
+<script>
+const NS="http://www.w3.org/2000/svg";
+const el=(t,a)=>{const e=document.createElementNS(NS,t);for(const k in a)e.setAttribute(k,a[k]);return e;};
+const txt=(x,y,s,o={})=>{const e=el("text",{x,y,"font-size":o.size||11,fill:o.fill||"#475569",
+  "text-anchor":o.anchor||"middle","font-weight":o.w||400});e.textContent=s;return e;};
+const types=["DEL","DUP","INV","BND","CNV"];
+// replicated: mean ± sd across 3 tissue models × 3 seeds (n=9 per caller)
+const manta=[0.818,0.836,0.927,0,0], manta_sd=[0.098,0.130,0.090,0,0];
+const delly=[0.868,0.870,0.904,0,0], delly_sd=[0.108,0.085,0.093,0,0];
+const tool_limit=[0,0,0,1,1];
+const svg=document.getElementById("c"),W=720,H=320,L=44,R=14,T=16,B=58,pw=W-L-R,ph=H-T-B;
+const ng=types.length,gw=pw/ng,bw=gw*0.26;
+svg.appendChild(el("line",{x1:L,y1:T+ph,x2:W-R,y2:T+ph,stroke:"#cbd5e1"}));
+[0,.25,.5,.75,1].forEach(v=>{const y=T+ph-ph*v;
+  svg.appendChild(el("line",{x1:L,y1:y,x2:W-R,y2:y,stroke:"#eef2f7"}));
+  svg.appendChild(txt(L-6,y+3,v.toFixed(2),{anchor:"end",fill:"#94a3b8",size:10}));});
+svg.appendChild(txt(16,T+ph/2,"recall",{fill:"#64748b",size:11})).setAttribute("transform",`rotate(-90 16 ${T+ph/2})`);
+types.forEach((ty,i)=>{
+  const x0=L+i*gw+gw*0.18;
+  [["#2563eb",manta[i],manta_sd[i]],["#7c3aed",delly[i],delly_sd[i]]].forEach(([c,v,sd],j)=>{
+    const h=ph*v,x=x0+j*(bw+5),y=T+ph-h,cx=x+bw/2;
+    if(v>0){
+      svg.appendChild(el("rect",{x,y,width:bw,height:h,rx:3,fill:c}));
+      const hi=T+ph-ph*Math.min(1,v+sd), lo=T+ph-ph*Math.max(0,v-sd);   // ±1 sd whisker
+      svg.appendChild(el("line",{x1:cx,y1:hi,x2:cx,y2:lo,stroke:"#1e293b","stroke-width":1.2}));
+      svg.appendChild(el("line",{x1:cx-3,y1:hi,x2:cx+3,y2:hi,stroke:"#1e293b","stroke-width":1.2}));
+      svg.appendChild(el("line",{x1:cx-3,y1:lo,x2:cx+3,y2:lo,stroke:"#1e293b","stroke-width":1.2}));
+      svg.appendChild(txt(cx,hi-4,v.toFixed(2),{size:9.5,fill:"#475569"}));
+    }
+  });
+  svg.appendChild(txt(x0+bw+2,T+ph+16,ty,{fill:"#334155",size:12.5,w:600}));
+  if(tool_limit[i]) svg.appendChild(txt(x0+bw+2,T+ph+34,"scorer/caller limit",{fill:"#94a3b8",size:10}));
+});
+</script>
+</body>
+</html>

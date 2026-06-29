@@ -23,20 +23,21 @@
 <div class="wrap">
   <h1>The extreme-purity collapse is normal-starvation — pinning the normal fixes it</h1>
   <p class="sub">Same caller, same metric: Mutect2 somatic SNV recall (chr22, 60× model), sweeping purity
-  two ways — splitting a fixed budget (normal shrinks) vs holding the matched normal at 30×.</p>
+  two ways — splitting a fixed budget (normal shrinks) vs holding the matched normal at 30×.
+  Pinned arm = mean of 3 reps, whiskers ±1 sd.</p>
   <div class="legend">
     <span><span class="sw" style="background:var(--red)"></span>Fixed 60× budget — normal 42→6× (§3.7-style)</span>
     <span><span class="sw" style="background:var(--green)"></span>Matched normal pinned at 30×</span>
   </div>
   <div class="panel"><svg id="c" viewBox="0 0 720 360" role="img" aria-label="SNV recall vs purity, two regimes"></svg></div>
   <p class="cap"><b>Under a fixed budget, SNV recall collapses from 0.96 to 0.003 at purity 0.9 — near-total —
-  because the matched normal falls to 6× and Mutect2 loses the germline reference it subtracts. Pinning the
-  normal at 30× holds recall at 0.97 right through 0.9.</b> This is the controlled, same-caller before/after:
-  the collapse is matched-normal starvation (#315), not rneat's variant generation. SNV is hit even harder
-  than the SV path (§3.7, which bottomed at 0.17) because Mutect2 is more normal-dependent than Manta. Both
-  curves track together until the normal thins (≤18×); the pinned run is marginally lower at purity 0.3
-  (0.88) only because it spends less total depth there. <b>Recommendation:</b> hold normal coverage fixed
-  when sweeping purity. Source: ACCESS report §3.7 + §4 purity re-run.</p>
+  because the matched normal falls to 6× and Mutect2 loses the germline reference it subtracts. With the
+  normal pinned at 30×, recall holds at 0.96 ± 0.00 right through 0.9 (replicated, n=3 — tight error bars).</b>
+  This is the controlled, same-caller before/after: the collapse is matched-normal starvation (#315), not
+  rneat's variant generation. SNV is hit even harder than the SV path (§3.7, which bottomed at 0.17) because
+  Mutect2 is more normal-dependent than Manta. The pinned arm is marginally lower at purity 0.3 (0.90 ± 0.02)
+  only because it spends less total depth there. <b>Recommendation:</b> hold normal coverage fixed when
+  sweeping purity. Source: ACCESS report §3.7 + §4 purity re-run.</p>
 </div>
 <script>
 const NS="http://www.w3.org/2000/svg";
@@ -44,8 +45,9 @@ const el=(t,a)=>{const e=document.createElementNS(NS,t);for(const k in a)e.setAt
 const txt=(x,y,s,o={})=>{const e=el("text",{x,y,"font-size":o.size||11,fill:o.fill||"#475569",
   "text-anchor":o.anchor||"middle","font-weight":o.w||400});e.textContent=s;return e;};
 const P=[0.3,0.5,0.7,0.9];
-const FIXED =[0.8837,0.9668,0.9640,0.0028];  // fixed 60x budget — normal 42/30/18/6
-const PINNED=[0.873,0.967,0.970,0.970];       // normal pinned 30x
+const FIXED =[0.8837,0.9668,0.9640,0.0028];  // fixed 60x budget — normal 42/30/18/6 (single run)
+const PINNED=[0.896,0.954,0.971,0.964];       // normal pinned 30x — mean of 3 reps
+const PINNED_SD=[0.023,0.004,0.004,0.002];    // ±1 sd whisker
 const NORMF =["42×","30×","18×","6×"];
 const svg=document.getElementById("c"),W=720,H=360,L=52,Rm=18,T=18,B=72,pw=W-L-Rm,ph=H-T-B;
 const X=p=>L+pw*(p-0.2)/(1.0-0.2), Y=v=>T+ph-ph*v/1.0;
@@ -55,16 +57,21 @@ svg.appendChild(el("line",{x1:L,y1:T+ph,x2:W-Rm,y2:T+ph,stroke:"#cbd5e1"}));
   svg.appendChild(txt(L-8,y+3,v.toFixed(1),{anchor:"end",fill:"#94a3b8",size:10}));});
 svg.appendChild(txt(18,T+ph/2,"Mutect2 SNV recall",{fill:"#64748b",size:11})).setAttribute("transform",`rotate(-90 18 ${T+ph/2})`);
 
-function series(R,color,labelBelow){
+function series(R,color,labelBelow,sd){
   const pts=R.map((v,i)=>`${X(P[i])},${Y(v)}`).join(" ");
   svg.appendChild(el("polyline",{points:pts,fill:"none",stroke:color,"stroke-width":2.5}));
   R.forEach((v,i)=>{
-    svg.appendChild(el("circle",{cx:X(P[i]),cy:Y(v),r:4,fill:color}));
-    svg.appendChild(txt(X(P[i]),Y(v)+(labelBelow?16:-9),v.toFixed(2),{fill:color,w:700,size:11}));
+    const cx=X(P[i]);
+    if(sd && sd[i]>0){const hi=Y(Math.min(1,v+sd[i])),lo=Y(Math.max(0,v-sd[i]));
+      svg.appendChild(el("line",{x1:cx,y1:hi,x2:cx,y2:lo,stroke:color,"stroke-width":1}));
+      svg.appendChild(el("line",{x1:cx-3,y1:hi,x2:cx+3,y2:hi,stroke:color,"stroke-width":1}));
+      svg.appendChild(el("line",{x1:cx-3,y1:lo,x2:cx+3,y2:lo,stroke:color,"stroke-width":1}));}
+    svg.appendChild(el("circle",{cx,cy:Y(v),r:4,fill:color}));
+    svg.appendChild(txt(cx,Y(v)+(labelBelow?16:-9),v.toFixed(2),{fill:color,w:700,size:11}));
   });
 }
-series(PINNED,"#16a34a",false);  // held — labels above
-series(FIXED,"#dc2626",true);    // collapses — labels below
+series(PINNED,"#16a34a",false,PINNED_SD);  // held — labels above, ±sd whiskers
+series(FIXED,"#dc2626",true);              // collapses — single run
 P.forEach((p,i)=>{
   svg.appendChild(txt(X(p),T+ph+18,"purity "+p,{fill:"#334155",size:11}));
   svg.appendChild(txt(X(p),T+ph+32,"fixed-normal "+NORMF[i],{fill:"#94a3b8",size:9}));

@@ -44,16 +44,19 @@ for m, v in B.items():
     if m not in C:
         rows.append((m, tier, "SKIP", "absent in candidate")); missing += 1; continue
     cv = C[m][0]
+    cvn = num(cv)
+    if gate != "exact" and cvn is None:
+        rows.append((m, tier, "FAIL", f"{cv} — non-numeric (job failed / no output?)")); fails += 1; continue
     if gate == "exact":
         ok = (cv == val); detail = f"{cv}  (baseline {val})"
     elif gate == "ge2sd":
-        thr = num(val) - 2*num(sd); ok = num(cv) >= thr
+        thr = num(val) - 2*num(sd); ok = cvn >= thr
         detail = f"{cv} ≥ {thr:.3f}   (baseline {val} ± {sd})"
     elif gate.startswith("band:"):
-        _, lo, hi = gate.split(":"); ok = num(lo) <= num(cv) <= num(hi)
+        _, lo, hi = gate.split(":"); ok = num(lo) <= cvn <= num(hi)
         detail = f"{cv} ∈ [{lo}, {hi}]"
     elif gate.startswith("lepct:"):
-        p = num(gate.split(":")[1]); thr = num(val)*(1+p/100); ok = num(cv) <= thr
+        p = num(gate.split(":")[1]); thr = num(val)*(1+p/100); ok = cvn <= thr
         detail = f"{cv} ≤ {thr:.2f}   (baseline {val} +{p:.0f}%)"
     else:
         ok = False; detail = f"unknown gate '{gate}'"

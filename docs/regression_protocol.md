@@ -112,14 +112,28 @@ simulation logic:
 - **`scripts/delta/regression_gate.sh baseline candidate [max_tier]`** — applies the
   gates, prints a PASS/FAIL table, and exits non-zero on any FAIL (CI-friendly).
 
-Usage on a feature branch (from repo root):
+**One command (fire-and-forget)** on a feature branch, from repo root:
 
 ```bash
-MODE=submit TIER=1 LABEL=cand bash scripts/delta/regression_suite.sh   # submit; prints manifest path
-# ...wait for jobs (squeue --me)...
-MODE=collect MANIFEST=<path> bash scripts/delta/regression_suite.sh > candidate_metrics.tsv
-bash scripts/delta/regression_gate.sh scripts/delta/baseline_metrics.tsv candidate_metrics.tsv 1
+MODE=run TIER=1 LABEL=adapters bash scripts/delta/regression_suite.sh
 ```
+
+This submits the tier's jobs **plus a dependency gate job** (`--dependency=afterany`)
+that auto-collects and writes a PASS/FAIL verdict to
+`$RESULTS_DIR/regression_<label>.verdict.txt` when they finish — no babysitting.
+A crashed harness surfaces as a `FAIL` (non-numeric), not a silent pass.
+
+Manual three-step (if you want to inspect between stages):
+
+```bash
+MODE=submit  TIER=1 LABEL=cand bash scripts/delta/regression_suite.sh
+MODE=collect MANIFEST=<path>   bash scripts/delta/regression_suite.sh > candidate.tsv
+bash scripts/delta/regression_gate.sh scripts/delta/baseline_metrics.tsv candidate.tsv 1
+```
+
+There is no automatic trigger (git hook / CI) — GitHub runners can't reach Delta,
+so a run is kicked off deliberately (the convention: `MODE=run TIER=1` on the
+feature branch before merging; `TIER=2` for SV/perf-touching changes).
 
 The gate logic and all collect parsers are unit-tested; the `sbatch` submit path
 runs on Delta. Capturing a fresh baseline is just the same collect step pointed at

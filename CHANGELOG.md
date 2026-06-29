@@ -1,6 +1,42 @@
-6/17/2026
+6/29/2026
 =========
-## rneat v1.17.4
+## rneat v1.18.0
+
+Releases work that accumulated on `develop` after v1.17.4 (June 17) but was never
+cut into a release — performance, memory, and read-generation refinements — plus
+the ACCESS validation suite. Supersedes v1.17.4; includes everything in it.
+
+### Performance & memory
+- Eliminated the per-base heap allocation in the read-generation hot loop and made
+  the fetched fragment zero-copy (`get_subseq_slice`) — faster single-thread read
+  generation, the mode that dominates rneat's throughput.
+- `target_bed`-aware reference loading: only the targeted contigs are materialized,
+  so a region-sharded whole-genome run no longer holds the full reference in RAM
+  (per-shard footprint dropped from ~GBs to ~MBs). Output is byte-identical —
+  per-contig RNG keys off the original file position regardless of which contigs
+  load.
+
+### Read generation
+- Reverse (R2) reads are generated forward over the right-end window and then
+  reverse-complemented as a whole record, with variant offsets indexed by
+  `seq_index` for both strands — correct SNP/insertion/deletion handling on R2.
+- PE fragments are padded by one read length so a deletion near R2's tail consumes
+  reference instead of truncating and dropping the pair.
+
+### CLI
+- `rneat --version` / `-V`.
+
+### Validation
+- Extensive Delta (NCSA ACCESS) validation campaign documented under `docs/`
+  (report + figures), with a reusable regression suite (`scripts/delta/`,
+  `docs/regression_protocol.md`) that gates future changes on memory, speed,
+  fidelity, and determinism against replication-derived tolerances.
+
+> Note: the develop⇄main history had diverged before this release; the
+> read-generation bullet describes the code delta vs v1.17.4 — review the
+> attribution against prior CHANGELOG entries when finalizing.
+
+
 
 ### Packaging: bundle third-party Rust license texts (Bioconda)
 

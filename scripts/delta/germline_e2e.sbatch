@@ -90,6 +90,14 @@ ADAPTER_PRESET="${ADAPTER_PRESET:-truseq}"
 TRIM="${TRIM:-0}"
 MEASURE_REALISM="${MEASURE_REALISM:-0}"
 
+# PRUNE=1 deletes the bulky FASTQ + BAM + gVCF intermediates after a SUCCESSFUL
+# score (per-tool scored.summary.csv present), keeping the small scores/VCFs/QC.
+# Matches cancer_pipeline.sbatch; default off so variety/regression runs are
+# unchanged. The adapter matrix (3 conditions × reps, plus trimmed read copies)
+# is data-heavy on the shared scratch PROJECT quota — run_adapter_validation.sh
+# defaults it on.
+PRUNE="${PRUNE:-0}"
+
 HAPPY_SIF="${HAPPY_SIF:-$SCRATCH/sif/happy_v0.3.12.sif}"
 NEAT_ENV="${NEAT_ENV:-neat4}"         # conda env with NEAT 4
 THREADS=$SLURM_CPUS_PER_TASK
@@ -404,3 +412,21 @@ done
 archive_run germline "$OUTDIR" \
     rneat_scored.summary.csv neat_scored.summary.csv \
     rneat_realism.tsv neat_realism.tsv
+
+# Optional cleanup of bulky intermediates once scored + archived, so the
+# adapter matrix / large sweeps don't exhaust the shared scratch project quota.
+# Per tool, only prune when THAT tool scored successfully (scored.summary.csv
+# present) so a failed/partial arm keeps its inputs for resume. Keeps the small
+# durable bits: scores, called/truth VCFs, realism.tsv, samstats, fastp report.
+if [[ "$PRUNE" == "1" ]]; then
+    for tool in $TOOLS; do
+        wd="$OUTDIR/$tool"
+        [[ -f "$wd/scored.summary.csv" ]] || { echo "[prune] $tool not scored — keeping inputs."; continue; }
+        echo "[prune] $tool — removing FASTQ/BAM/gVCF (keeping scores, VCFs, QC)..."
+        rm -f "$wd"/sample_r1.fastq.gz "$wd"/sample_r2.fastq.gz \
+              "$wd"/trimmed_r1.fastq.gz "$wd"/trimmed_r2.fastq.gz \
+              "$wd"/shuf_r1.fastq.gz "$wd"/shuf_r2.fastq.gz \
+              "$wd"/aligned.bam "$wd"/aligned.bam.bai \
+              "$wd"/raw.g.vcf.gz "$wd"/raw.g.vcf.gz.tbi
+    done
+fi

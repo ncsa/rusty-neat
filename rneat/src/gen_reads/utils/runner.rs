@@ -714,6 +714,7 @@ fn process_chunk(
                         scaled,
                         ctx.config.paired_ended,
                         ctx.config.long_reads,
+                        ctx.config.adapters.enabled,
                         ctx.fragment_length_model,
                         &mut rng,
                     )?
@@ -730,6 +731,7 @@ fn process_chunk(
                         ctx.config.gc_bias_normalize_coverage,
                         ctx.config.paired_ended,
                         ctx.config.long_reads,
+                        ctx.config.adapters.enabled,
                         &mut rng,
                     )?
                 };

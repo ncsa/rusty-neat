@@ -21,6 +21,9 @@ pub fn generate_fragments(
     coverage: usize,
     paired_ended: bool,
     long_reads: bool,
+    // when true, KEEP short fragments (insert < read_len) instead of discarding them,
+    // so adapter readthrough can pad them to read_len in write_block_fastq (#125).
+    adapters: bool,
     fragment_model: &FragmentLengthModel,
     rng: &mut NeatRng,
 ) -> Result<Vec<(usize, usize)>, GenerateReadsError> {
@@ -70,7 +73,7 @@ pub fn generate_fragments(
             // In long-read mode accept all fragments; in short-read paired-end mode require
             // frag >= read_length + 10 so that R1 and R2 don't fully overlap (matching
             // NEAT Python's min_frag = read_len + 10 for paired-end).
-            if long_reads || frag >= read_length + 10 {
+            if long_reads || adapters || frag >= read_length + 10 {
                 fragment_pool.push(frag);
             }
             attempts += 1;
@@ -215,6 +218,8 @@ pub fn generate_weighted_fragments(
     normalize: bool,
     paired_ended: bool,
     long_reads: bool,
+    // keep short fragments for adapter readthrough (#125); see generate_fragments.
+    adapters: bool,
     rng: &mut NeatRng,
 ) -> Result<Vec<(usize, usize)>, GenerateReadsError> {
     const MAX_COVERAGE_MULTIPLIER: usize = 100;
@@ -287,14 +292,14 @@ pub fn generate_weighted_fragments(
         let start = region_start + offset;
         let frag_len = fragment_model.generate_fragment(rng.random()?)?;
         attempts += 1;
-        if !long_reads && frag_len < read_length {
+        if !long_reads && !adapters && frag_len < read_length {
             continue;
         }
         let end = (start + frag_len).min(region_end);
         if end == start {
             continue;
         }
-        if !long_reads && end - start < read_length {
+        if !long_reads && !adapters && end - start < read_length {
             continue;
         }
         fragments.push((start, end));
@@ -505,6 +510,7 @@ mod tests {
             coverage,
             false,
             false,
+            false, // adapters (off in these fragment-placement tests)
             &fragment_model,
             &mut rng,
         )
@@ -534,6 +540,7 @@ mod tests {
             coverage,
             false,
             false,
+            false, // adapters (off in these fragment-placement tests)
             &fragment_model,
             &mut rng,
         )
@@ -555,6 +562,7 @@ mod tests {
             coverage,
             false,
             false,
+            false, // adapters (off in these fragment-placement tests)
             &fragment_model,
             &mut rng2,
         )
@@ -583,6 +591,7 @@ mod tests {
             coverage,
             true,
             false,
+            false, // adapters (off in these fragment-placement tests)
             &fragment_model,
             &mut rng,
         )
@@ -622,6 +631,7 @@ mod tests {
             coverage,
             true,
             false,
+            false, // adapters (off in these fragment-placement tests)
             &fragment_model,
             &mut rng,
         )
@@ -657,6 +667,7 @@ mod tests {
             false,
             false,
             false,
+            false, // adapters (off in these fragment-placement tests)
             &mut rng,
         )
         .unwrap();
@@ -689,6 +700,7 @@ mod tests {
             false,
             false,
             false,
+            false, // adapters (off in these fragment-placement tests)
             &mut rng,
         )
         .unwrap();
@@ -718,6 +730,7 @@ mod tests {
             false,
             false,
             false,
+            false, // adapters (off in these fragment-placement tests)
             &mut rng,
         )
         .unwrap();
@@ -748,6 +761,7 @@ mod tests {
             false,
             false,
             false,
+            false, // adapters (off in these fragment-placement tests)
             &mut rng,
         )
         .unwrap();
@@ -787,6 +801,7 @@ mod tests {
             false,
             false,
             false,
+            false, // adapters (off in these fragment-placement tests)
             &mut rng1,
         )
         .unwrap();
@@ -804,6 +819,7 @@ mod tests {
             false,
             false,
             false,
+            false, // adapters (off in these fragment-placement tests)
             &mut rng2,
         )
         .unwrap();
@@ -835,6 +851,7 @@ mod tests {
             false,
             false,
             false,
+            false, // adapters (off in these fragment-placement tests)
             &mut rng,
         )
         .unwrap();
@@ -852,6 +869,7 @@ mod tests {
             true,
             false,
             false,
+            false, // adapters (off in these fragment-placement tests)
             &mut rng,
         )
         .unwrap();
@@ -891,6 +909,7 @@ mod tests {
             true,
             false,
             false,
+            false, // adapters (off in these fragment-placement tests)
             &mut rng,
         )
         .unwrap();
@@ -933,6 +952,7 @@ mod tests {
             false,
             false,
             false,
+            false, // adapters (off in these fragment-placement tests)
             &mut rng,
         )
         .unwrap();
@@ -1076,6 +1096,7 @@ mod tests {
             coverage,
             true,  // paired_ended
             false, // long_reads
+            false, // adapters (off in these fragment-placement tests)
             &fragment_model,
             &mut rng,
         )
@@ -1132,6 +1153,7 @@ mod tests {
             true,  // normalize
             true,  // paired_ended
             false, // long_reads
+            false, // adapters
             &mut rng,
         )
         .unwrap();
@@ -1187,6 +1209,7 @@ mod tests {
             true,  // normalize=true should bring coverage back to 10
             true,  // paired_ended
             false, // long_reads
+            false, // adapters
             &mut rng,
         )
         .unwrap();

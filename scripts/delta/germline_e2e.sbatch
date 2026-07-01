@@ -101,6 +101,11 @@ PRUNE="${PRUNE:-0}"
 HAPPY_SIF="${HAPPY_SIF:-$SCRATCH/sif/happy_v0.3.12.sif}"
 NEAT_ENV="${NEAT_ENV:-neat4}"         # conda env with NEAT 4
 THREADS=$SLURM_CPUS_PER_TASK
+# fastp's reader/worker/writer pipeline is built for a small thread pool; at very
+# high counts (e.g. THREADS=64 on a Delta cpu node) it livelocks — barely any CPU,
+# zero output — so cap it. Observed 2026-07-01: fastp sat at 38% CPU with 0-byte
+# trimmed output for 30+ min until capped. Override with FASTP_THREADS=.
+FASTP_THREADS="${FASTP_THREADS:-$(( THREADS < 16 ? THREADS : 16 ))}"
 CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$SCRATCH/cargo-target/rusty-neat}"
 RNEAT_BIN="$CARGO_TARGET_DIR/release/rneat"
 
@@ -295,7 +300,7 @@ run_fastp() {
     fi
     echo "  [fastp] adapter detect/trim + QC report..."
     conda run -n bioinf fastp -i "$r1" -I "$r2" -o "$tr1" -O "$tr2" \
-        --detect_adapter_for_pe --thread "$THREADS" \
+        --detect_adapter_for_pe --thread "$FASTP_THREADS" \
         -j "$wd/fastp.json" -h "$wd/fastp.html" 2>"$wd/fastp.log"
 }
 

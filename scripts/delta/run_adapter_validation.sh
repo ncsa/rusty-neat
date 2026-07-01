@@ -46,7 +46,7 @@ submit() {
     jid=$(REFERENCE="$REFERENCE" TOOLS=rneat COVERAGE="$COVERAGE" OUTDIR="$out" \
           SEED="adapter-validation rep$rep" \
           ADAPTERS="$adapters" TRIM="$trim" ADAPTER_PRESET="$ADAPTER_PRESET" \
-          MEASURE_REALISM=1 PRUNE="${PRUNE:-1}" \
+          MEASURE_REALISM=1 PRUNE="${PRUNE:-1}" LOCAL_STAGE="${LOCAL_STAGE:-1}" \
           sbatch --parsable "$REPO_ROOT/scripts/delta/germline_e2e.sbatch")
     echo "$cond $rep $jid $out $REFERENCE $ADAPTER_PRESET" | tee -a "$MANIFEST"
 }

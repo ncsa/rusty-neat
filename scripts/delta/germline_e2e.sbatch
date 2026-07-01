@@ -120,6 +120,30 @@ echo "Reference: $REFERENCE   Coverage: ${COVERAGE}x   Read: ${READ_LEN}bp   Thr
 echo "Tools:     $TOOLS"
 echo "Output:    $OUTDIR"
 
+# ── Node-local staging (LOCAL_STAGE=1) ────────────────────────────────────
+# Run all heavy per-tool I/O (FASTQ/BAM/gVCF) — plus the reference index reads,
+# rneat binary, and hap.py SIF — on the compute node's LOCAL disk, copying only
+# the small durable artifacts (scores, VCFs, QC) back to $OUTDIR on Lustre at
+# stage-out. A shared-filesystem OST dropping mid-run can then no longer wedge
+# the job in uninterruptible I/O wait (the failure that stalled the 2026-07-01
+# adapter matrix ~15h in the fastp step): Lustre is touched only briefly at
+# stage-in/out. Default OFF (work directly in $OUTDIR, cross-submit resume
+# preserved); run_adapter_validation.sh turns it on. Override the local root
+# with LOCAL_SCRATCH=..., keep the local tree for debugging with KEEP_LOCAL=1.
+LOCAL_STAGE="${LOCAL_STAGE:-0}"
+if [[ "$LOCAL_STAGE" == "1" ]]; then
+    LOCAL_ROOT="${LOCAL_SCRATCH:-${SLURM_TMPDIR:-${TMPDIR:-/tmp}}}/rneat_e2e_${SLURM_JOB_ID:-$$}"
+    mkdir -p "$LOCAL_ROOT" || { echo "ERROR: cannot create local scratch $LOCAL_ROOT" >&2; exit 1; }
+    [[ "${KEEP_LOCAL:-0}" == "1" ]] || trap 'rm -rf "$LOCAL_ROOT"' EXIT
+    # Tool workdirs go under work/ so they can't collide with the staged assets
+    # ($LOCAL_ROOT/ref, .../rneat binary, .../happy.sif) — the "rneat" tool dir
+    # would otherwise clash with the staged "rneat" binary of the same name.
+    WORK_ROOT="$LOCAL_ROOT/work"
+    echo "Local stage: $LOCAL_ROOT  (durable outputs copied back to $OUTDIR)"
+else
+    WORK_ROOT="$OUTDIR"
+fi
+
 # ── Shared one-time reference indexing ───────────────────────────────────
 # Guard on -s (exists AND non-empty), not -f: an index build killed mid-write
 # leaves a 0-byte .bwt.2bit.64 that -f treats as "present", so every later run
@@ -131,6 +155,26 @@ if [[ ! -s "${REFERENCE}.bwt.2bit.64" && ! -s "${REFERENCE}.bwt" ]]; then
 fi
 REF_DICT="${REFERENCE%.fa}.dict"
 [[ -f "$REF_DICT" ]] || gatk CreateSequenceDictionary -R "$REFERENCE" 2>&1 | tail -2
+
+# ── Node-local stage-in of the reference + tools (LOCAL_STAGE=1) ───────────
+# After the shared one-time Lustre index build above, copy the reference and all
+# its sidecar indexes (fai/dict + bwa-mem2 .0123/.amb/.ann/.bwt.2bit.64/.pac) —
+# plus the rneat binary and hap.py SIF — onto local disk and repoint at them, so
+# alignment/calling/scoring stream them from the node instead of Lustre.
+if [[ "$LOCAL_STAGE" == "1" ]]; then
+    echo "Staging reference + tools to $LOCAL_ROOT ..."
+    mkdir -p "$LOCAL_ROOT/ref"
+    cp -f "$REFERENCE" "$LOCAL_ROOT/ref/" 2>/dev/null || true
+    for ext in .fai .0123 .amb .ann .bwt.2bit.64 .pac; do
+        [[ -e "${REFERENCE}${ext}" ]] && cp -f "${REFERENCE}${ext}" "$LOCAL_ROOT/ref/" || true
+    done
+    [[ -e "$REF_DICT" ]] && cp -f "$REF_DICT" "$LOCAL_ROOT/ref/" || true
+    REFERENCE="$LOCAL_ROOT/ref/$REF_NAME"; REF_DIR="$LOCAL_ROOT/ref"; REF_DICT="${REFERENCE%.fa}.dict"
+    [[ -s "$REFERENCE" ]] || { echo "ERROR: reference stage-in failed ($REFERENCE)" >&2; exit 1; }
+    [[ -x "$RNEAT_BIN" ]] && cp -f "$RNEAT_BIN" "$LOCAL_ROOT/rneat"     && RNEAT_BIN="$LOCAL_ROOT/rneat"     || true
+    [[ -f "$HAPPY_SIF" ]] && cp -f "$HAPPY_SIF" "$LOCAL_ROOT/happy.sif" && HAPPY_SIF="$LOCAL_ROOT/happy.sif" || true
+    df -h "$LOCAL_ROOT" | tail -1
+fi
 
 # ── Simulators (each writes <wd>/sample_r1/r2.fastq.gz + a truth VCF) ─────
 # rneat: SNP/indel only via sv_rate_scale=0; truth = sample.vcf.gz
@@ -328,7 +372,7 @@ PY
 
 # ── Per-tool pipeline ─────────────────────────────────────────────────────
 for tool in $TOOLS; do
-    wd="$OUTDIR/$tool"; mkdir -p "$wd"
+    wd="$WORK_ROOT/$tool"; mkdir -p "$wd"
     r1="$wd/sample_r1.fastq.gz"; r2="$wd/sample_r2.fastq.gz"
     echo
     echo "──────── $tool ────────"
@@ -394,6 +438,21 @@ for tool in $TOOLS; do
         capture_realism "$tool" "$wd"
         [[ -f "$wd/realism.tsv" ]] && cp -f "$wd/realism.tsv" "$OUTDIR/${tool}_realism.tsv"
     fi
+
+    # Stage durable per-tool artifacts back to Lustre when working locally: drop
+    # the bulky FASTQ/BAM/gVCF (kept only on the node's local disk, discarded with
+    # it), then copy the small remainder (scores, called/truth VCFs, QC, logs) to
+    # $OUTDIR/$tool for provenance. The two files the collector needs were already
+    # copied to $OUTDIR top-level above; this makes PRUNE=1 a no-op here.
+    if [[ "$LOCAL_STAGE" == "1" ]]; then
+        rm -f "$wd"/sample_r1.fastq.gz "$wd"/sample_r2.fastq.gz \
+              "$wd"/trimmed_r1.fastq.gz "$wd"/trimmed_r2.fastq.gz \
+              "$wd"/shuf_r1.fastq.gz "$wd"/shuf_r2.fastq.gz \
+              "$wd"/aligned.bam "$wd"/aligned.bam.bai \
+              "$wd"/raw.g.vcf.gz "$wd"/raw.g.vcf.gz.tbi
+        mkdir -p "$OUTDIR/$tool"
+        cp -rf "$wd/." "$OUTDIR/$tool/" 2>/dev/null || true
+    fi
 done
 
 # ── Side-by-side summary ──────────────────────────────────────────────────
@@ -418,7 +477,7 @@ archive_run germline "$OUTDIR" \
 # Per tool, only prune when THAT tool scored successfully (scored.summary.csv
 # present) so a failed/partial arm keeps its inputs for resume. Keeps the small
 # durable bits: scores, called/truth VCFs, realism.tsv, samstats, fastp report.
-if [[ "$PRUNE" == "1" ]]; then
+if [[ "$PRUNE" == "1" && "$LOCAL_STAGE" != "1" ]]; then
     for tool in $TOOLS; do
         wd="$OUTDIR/$tool"
         [[ -f "$wd/scored.summary.csv" ]] || { echo "[prune] $tool not scored — keeping inputs."; continue; }

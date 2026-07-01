@@ -32,6 +32,16 @@ REFERENCE="${REFERENCE:-$SCRATCH/neat_data/chr22.fa}"
 COVERAGE="${COVERAGE:-30}"
 REPS="${REPS:-3}"
 ADAPTER_PRESET="${ADAPTER_PRESET:-truseq}"
+# SHORT-INSERT library — REQUIRED for this test to mean anything. 3' adapter
+# readthrough only occurs when the insert is shorter than the read length
+# (generate_fragments.rs:76 keeps frag < read_len only when adapters=1), so with
+# the germline default FRAG_MEAN=350 >> read_len=151 NO readthrough ever happens
+# and off/on_raw/on_trim produce identical reads (the 2026-07-01 null run). At
+# 180±60 with 151 bp reads ~30% of inserts fall below the read length → real
+# readthrough for the `on` arms, while ~63% stay >=161 so the `off` baseline can
+# still fill its fragment pool.
+FRAG_MEAN="${FRAG_MEAN:-180}"
+FRAG_SD="${FRAG_SD:-60}"
 MANIFEST="${MANIFEST:-${RESULTS_DIR:-$HOME}/adapter_validation.manifest}"
 
 [[ -f "$REFERENCE" ]] || { echo "REFERENCE not found: $REFERENCE" >&2; exit 1; }
@@ -46,12 +56,13 @@ submit() {
     jid=$(REFERENCE="$REFERENCE" TOOLS=rneat COVERAGE="$COVERAGE" OUTDIR="$out" \
           SEED="adapter-validation rep$rep" \
           ADAPTERS="$adapters" TRIM="$trim" ADAPTER_PRESET="$ADAPTER_PRESET" \
+          FRAG_MEAN="$FRAG_MEAN" FRAG_SD="$FRAG_SD" \
           MEASURE_REALISM=1 PRUNE="${PRUNE:-1}" LOCAL_STAGE="${LOCAL_STAGE:-1}" \
           sbatch --parsable "$REPO_ROOT/scripts/delta/germline_e2e.sbatch")
     echo "$cond $rep $jid $out $REFERENCE $ADAPTER_PRESET" | tee -a "$MANIFEST"
 }
 
-echo "Adapter validation: ref=$(basename "$REFERENCE") cov=${COVERAGE}x reps=$REPS preset=$ADAPTER_PRESET"
+echo "Adapter validation: ref=$(basename "$REFERENCE") cov=${COVERAGE}x reps=$REPS preset=$ADAPTER_PRESET frag=${FRAG_MEAN}±${FRAG_SD} (short-insert → readthrough active)"
 for r in $(seq 1 "$REPS"); do
     submit off     0 0 "$r"
     submit on_raw  1 0 "$r"

@@ -17,8 +17,11 @@ performance and fidelity, and (3) validate the cancer workflow end-to-end throug
 a real somatic-variant-calling pipeline.
 
 A central outcome is methodological: **benchmarking rneat against NEAT 4 and
-against GATK/Mutect2 surfaced — and we fixed — five real simulator defects** that
-unit tests had not caught. The verification process is itself a result.
+against GATK/Mutect2 surfaced — and we fixed — six real simulator defects** that
+unit tests had not caught. The verification process is itself a result — most
+strikingly for the sixth defect (§3.11), a malformed-FASTQ bug that was invisible
+to local read-count checks and only surfaced when a real aligner ran the data at
+scale on Delta.
 
 ---
 
@@ -113,7 +116,7 @@ purity/coverage point — both expanded in Phase 2.
 
 ### 3.5 Defects found and fixed through verification
 
-Benchmarking surfaced five real bugs invisible to unit tests; each was diagnosed,
+Benchmarking surfaced six real bugs invisible to unit tests; each was diagnosed,
 fixed, and re-verified end-to-end:
 
 | # | Defect | Effect when fixed |
@@ -123,9 +126,14 @@ fixed, and re-verified end-to-end:
 | #287 | Indels garbled on reverse-strand reads | indel precision 0.07 → 0.49 (read-level) |
 | #289 | Coverage regression introduced by #287 (R2 deletion truncation) | restored −14.5% lost read pairs |
 | #290 | som.py indel normalization off by default (scoring) | cancer indel recall 0.60 → 0.90 |
+| #125 | Adapter path wrote a malformed FASTQ record (quality one char longer than the sequence) for zero-length inserts; bwa-mem2 halts at the first such record | short-insert adapter alignment 2,986 → 3.89M reads (silent truncation eliminated); SNP recall 0.0004 → 0.944 |
 
-All affect every paired-end run, not just cancer. The somatic-SNV journey
-(0.33 → 0.94) and cancer-indel journey (0.20 → 0.90) trace the cumulative impact.
+All affect every paired-end run, not just cancer (the sixth affects any short-insert
+adapter run). The somatic-SNV journey (0.33 → 0.94) and cancer-indel journey
+(0.20 → 0.90) trace the cumulative impact. Defect #125 is detailed in §3.11: it is
+the clearest case of verification-as-result — local `zcat`/`wc` read counts were
+correct (line counts are unaffected by a too-long quality string), so the bug was
+only exposed by pushing the data through a real aligner at scale.
 
 ### 3.6 Multicore scaling and the whole-genome strategy
 
@@ -508,6 +516,71 @@ and the merge never depends on reproducing the monolithic stream. A backlog item
 output contig-order-independent (and let a sharded run optionally reproduce a
 monolithic one). Net: rneat is reproducible and parallelism-invariant where it
 matters, and its HPC sharding is verifiably correct.
+
+### 3.11 Adapter readthrough validation (chr22, 30×, TruSeq) — and a bug only Delta caught
+
+`rneat` added optional Illumina 3′ adapter readthrough (#125): when a fragment's
+insert is shorter than the read length, the read is padded at its 3′ end with adapter
+sequence, exactly as a real sequencer produces. We used Delta both to **confirm the new
+feature is callable** and — as it turned out — to **catch a correctness bug that no local
+check had surfaced**.
+
+**Design.** A four-arm matrix on the germline variant-calling pipeline
+(rneat → BWA-MEM2 → GATK HaplotypeCaller → hap.py), chr22 at 30×, TruSeq preset, three
+replicates per arm, paired by seed so the truth set is identical across arms. The arms are
+built to *isolate the adapter effect from the insert-size effect* — necessary because the
+no-adapter baseline rejects short fragments, so a naïve off-vs-on comparison confounds the
+two:
+
+| arm | inserts | adapter |
+|---|---|---|
+| `off` | long (short fragments rejected) | none — baseline |
+| `short_ctrl` | short (kept) | none — genomic reads |
+| `on_raw` | short | readthrough, aligned raw |
+| `on_trim` | short | readthrough, fastp-trimmed |
+
+**The bug Delta caught.** The first at-scale run collapsed: the adapter arms recovered
+almost no variants (SNP recall ≈ 0.0004) and their BAMs held ~2,986 reads instead of ~3.9M.
+This was *not* reproducible from read counts alone — `zcat | wc` reported the full read
+count locally, and rneat's own logs reported success. The cause was a malformed FASTQ record
+(quality string one character longer than the sequence) emitted for degenerate zero-length
+inserts; a too-long quality line leaves the 4-lines-per-record count intact but makes
+**bwa-mem2's parser stop at the first offending record**, silently truncating alignment.
+The defect was therefore invisible to every local sanity check and only manifested when the
+data passed through a real aligner at production scale — precisely the kind of failure the
+Delta verification pipeline exists to surface. Once diagnosed (bisected to zero-insert
+fragments, 5,513 malformed records in a 3.9M-read run), the fix was a one-line guard plus a
+regression test asserting `seq.len() == qual.len()` for every emitted record. It is
+catalogued as defect #125 in §3.5.
+
+**Result after the fix.** Adapter readthrough is realistic and fully callable. The realism
+signals move only when the feature is enabled, and the fidelity contrasts show the adapters
+themselves cost nothing:
+
+| realism signal | off | on_raw | on_trim |
+|---|---|---|---|
+| fastp adapter reads | 5,913 | 2,425,876 | 2,425,876 |
+| soft-clip fraction | 0.0004 | 0.0804 | 0.0006 (recovered by trim) |
+| mean insert size | 214.6 | 178.5 | 178.5 |
+| mean read length | 151 | 151 | 139 (adapter trimmed) |
+
+| fidelity contrast (Δ = A − B) | isolates | snp_recall | indel_recall |
+|---|---|---|---|
+| `on_trim` − `short_ctrl` | pure adapter effect (same inserts) | +0.0003 | +0.0018 |
+| `on_raw` − `on_trim` | adapter handling (soft-clip vs trim) | −0.0002 | −0.0009 |
+| `short_ctrl` − `off` | short-insert coverage effect (no adapters) | −0.0263 | −0.0334 |
+
+Adding adapter readthrough to short-insert reads costs no fidelity (within replication
+noise), whether the adapters are fastp-trimmed or left for BWA-MEM2 to soft-clip. The only
+fidelity difference versus the long-insert baseline is the reduced effective coverage of
+short-insert libraries (mate overlap) — present in `short_ctrl` with adapters entirely
+absent, so it is not attributable to readthrough.
+
+**Infrastructure note.** These runs also hardened the harness against Delta's shared
+filesystem: after a Lustre OST dropped mid-run and wedged jobs in uninterruptible I/O wait,
+the germline pipeline was moved to node-local NVMe staging (heavy FASTQ/BAM I/O on the
+compute node's local disk, only small artifacts copied back to Lustre), making it immune to
+transient OST outages; a fastp thread-count livelock at high core counts was also capped.
 
 ---
 

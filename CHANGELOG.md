@@ -1,3 +1,44 @@
+7/2/2026
+========
+## rneat v1.19.0
+
+Optional Illumina 3′ adapter readthrough (#125) — realistic short-insert data that
+exercises adapter-trim QC — plus the correctness fix and Delta validation surfaced
+while building it. Default off; output byte-identical to v1.18.0 when the `adapters`
+block is omitted.
+
+### Read generation
+- Optional 3′ adapter readthrough (#125): `adapters: {enabled, preset: truseq|nextera|custom, r1, r2}`.
+  **Default off** — output byte-identical when the block is omitted. When enabled, a fragment
+  whose insert is shorter than `read_len` is kept and the read is padded to `read_len` at its
+  3′ end with adapter sequence (R1→`r1`, R2→`r2`, appended after R2 is reverse-complemented),
+  carrying model quality/error, soft-clipped (`S`) in the golden BAM, introducing no variants.
+  Incompatible with `long_reads`. Amount of readthrough scales with the insert distribution
+  relative to `read_len`.
+- `keep_short_fragments`: keep short inserts as insert-length **genomic** reads *without*
+  adapter padding — the adapter-free short-insert mode.
+
+### Fixed
+- Adapter path emitted a malformed FASTQ record — quality string one character longer than
+  the sequence — for degenerate zero-length inserts (`start == end`). Invisible to `zcat`/`wc`
+  but bwa-mem2's parser halts at the first such record, silently truncating alignment to a few
+  thousand reads. Zero-length inserts are now skipped (both mates, streams stay in sync); no
+  effect when adapters are off.
+
+### Validation / tooling
+- 4-arm adapter validation harness (off / short_ctrl / on_raw / on_trim) with a contrast-based,
+  data-driven collector that isolates the adapter effect from the short-insert coverage effect
+  (`scripts/delta/`). Result: adapter readthrough is detectable and **fully callable** — GATK
+  SNP/indel fidelity is unchanged (within replication noise) whether adapters are fastp-trimmed
+  or left for BWA-MEM2 to soft-clip; the only fidelity difference vs a long-insert baseline is
+  the reduced effective coverage of short inserts, present with adapters entirely absent.
+- `germline_e2e.sbatch`: node-local staging (`LOCAL_STAGE`, immune to shared-Lustre OST drops)
+  and a fastp thread cap (avoids a livelock at high `--cpus-per-task`).
+
+### Docs
+- README: new "3′ Adapter Readthrough" section (config, presets, use cases, validated behavior).
+
+
 6/29/2026
 =========
 ## rneat v1.18.0

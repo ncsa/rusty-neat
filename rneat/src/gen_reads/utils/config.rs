@@ -12,6 +12,28 @@ use std::path::PathBuf;
 use std::string::String;
 use std::{env, fs};
 
+/// Optional 3' sequencing-adapter readthrough config (#125). When `enabled`,
+/// reads whose insert is shorter than `read_len` are padded at the 3' end with
+/// adapter sequence (R1 gets `r1`, R2 gets `r2`), matching real Illumina data so
+/// downstream adapter-trim QC stages are actually exercised. Default disabled.
+/// `r1`/`r2` are resolved 5'->3' uppercase-ACGT sequences (from a preset or custom).
+#[derive(Debug, Clone)]
+pub struct AdapterConfig {
+    pub enabled: bool,
+    pub r1: String,
+    pub r2: String,
+}
+
+impl Default for AdapterConfig {
+    fn default() -> Self {
+        AdapterConfig {
+            enabled: false,
+            r1: String::new(),
+            r2: String::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct RunConfiguration {
     // This struct holds all the parameters for this particular run. It is derived from input either
@@ -84,6 +106,13 @@ pub struct RunConfiguration {
     // when true, fragments shorter than read_len are kept and produce truncated reads
     // (long-read platforms); when false, such fragments are discarded (short-read default)
     pub long_reads: bool,
+    // when true, short-read PE keeps fragments whose insert < read_len and emits
+    // insert-length GENOMIC reads (no adapter). This is the short-insert library WITHOUT
+    // modeling 3' adapter readthrough — the isolation control for adapter validation
+    // (#125). adapters.enabled implies this (readthrough needs short fragments kept);
+    // set it on its own to get the adapter-free short-insert arm. Default off →
+    // short fragments discarded, output byte-identical to before.
+    pub keep_short_fragments: bool,
     // Scale applied to the SvModel's per-base SV rate at generation time.
     // 0.0 (default) disables de novo SV generation entirely — only SVs
     // from `input_vcf` flow through. Values > 0 enable sampling from
@@ -95,6 +124,9 @@ pub struct RunConfiguration {
     // references; raise toward 1.0 for small contigs (bacteria/viruses) or
     // native aneuploidy. Only affects de novo SV sampling, not input_vcf SVs.
     pub sv_max_length_fraction: f64,
+    // Optional 3' sequencing-adapter readthrough (#125). Default disabled; when
+    // disabled, output is byte-identical to pre-adapter behavior.
+    pub adapters: AdapterConfig,
 }
 
 impl Default for RunConfiguration {
@@ -133,8 +165,10 @@ impl Default for RunConfiguration {
             num_threads: None,
             chunk_size: None,
             long_reads: false,
+            keep_short_fragments: false,
             sv_rate_scale: 0.0,
             sv_max_length_fraction: 0.25,
+            adapters: AdapterConfig::default(),
         }
     }
 }
@@ -476,6 +510,14 @@ impl RunConfiguration {
                             )
                         })?;
                     }
+                    "keep_short_fragments" => {
+                        config.keep_short_fragments = value.as_bool().ok_or_else(|| {
+                            GenerateReadsError::ConfigReadError(
+                                "keep_short_fragments".to_string(),
+                                "boolean".to_string(),
+                            )
+                        })?;
+                    }
                     "sv_rate_scale" => {
                         config.sv_rate_scale = value.as_f64().ok_or_else(|| {
                             GenerateReadsError::ConfigReadError(
@@ -491,6 +533,51 @@ impl RunConfiguration {
                                 "float".to_string(),
                             )
                         })?;
+                    }
+                    "adapters" => {
+                        // Nested map: { enabled, preset: truseq|nextera|custom, r1, r2 }.
+                        let enabled = value
+                            .get("enabled")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
+                        config.adapters.enabled = enabled;
+                        if enabled {
+                            let preset = value
+                                .get("preset")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("truseq")
+                                .to_lowercase();
+                            match preset.as_str() {
+                                "truseq" => {
+                                    config.adapters.r1 =
+                                        "AGATCGGAAGAGCACACGTCTGAACTCCAGTCA".to_string();
+                                    config.adapters.r2 =
+                                        "AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGT".to_string();
+                                }
+                                "nextera" => {
+                                    config.adapters.r1 = "CTGTCTCTTATACACATCT".to_string();
+                                    config.adapters.r2 = "CTGTCTCTTATACACATCT".to_string();
+                                }
+                                "custom" => {
+                                    config.adapters.r1 = value
+                                        .get("r1")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("")
+                                        .to_uppercase();
+                                    config.adapters.r2 = value
+                                        .get("r2")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("")
+                                        .to_uppercase();
+                                }
+                                other => {
+                                    error!(
+                                        "Unknown adapter preset '{other}'; expected truseq|nextera|custom"
+                                    );
+                                    return Err(GenerateReadsError::ConfigError);
+                                }
+                            }
+                        }
                     }
                     _ => continue,
                 },
@@ -514,6 +601,47 @@ impl RunConfiguration {
         info!("\t>paired ended: {}", config.paired_ended);
         if config.long_reads {
             info!("\t>long reads mode: enabled (short fragments produce truncated reads)");
+        }
+        if config.keep_short_fragments {
+            if config.long_reads {
+                error!(
+                    "Invalid config: keep_short_fragments=true is redundant/incompatible with \
+                     long_reads=true (long-read mode already keeps short fragments). Set one."
+                );
+                return Err(GenerateReadsError::ConfigError);
+            }
+            info!(
+                "\t>keep short fragments: enabled (short inserts kept as genomic reads, no adapter)"
+            );
+        }
+        if config.adapters.enabled {
+            if config.long_reads {
+                error!(
+                    "Invalid config: adapters.enabled=true is incompatible with long_reads=true. \
+                     Illumina-style 3' adapter readthrough does not occur on long-read platforms. \
+                     Set long_reads=false (short-read Illumina) or adapters.enabled=false."
+                );
+                return Err(GenerateReadsError::ConfigError);
+            }
+            let acgt = |s: &str| !s.is_empty() && s.chars().all(|c| matches!(c, 'A' | 'C' | 'G' | 'T'));
+            if config.adapters.r1.is_empty() || config.adapters.r2.is_empty() {
+                error!(
+                    "Invalid config: adapters.enabled=true but an adapter sequence is empty \
+                     (preset 'custom' requires non-empty r1 and r2)."
+                );
+                return Err(GenerateReadsError::ConfigError);
+            }
+            if !acgt(&config.adapters.r1) || !acgt(&config.adapters.r2) {
+                error!(
+                    "Invalid config: adapter sequences must contain only A/C/G/T (uppercase); got r1='{}', r2='{}'.",
+                    config.adapters.r1, config.adapters.r2
+                );
+                return Err(GenerateReadsError::ConfigError);
+            }
+            info!(
+                "\t>adapters: enabled (R1={}, R2={})",
+                config.adapters.r1, config.adapters.r2
+            );
         }
         if config.overwrite_output {
             warn!("\t>Overwriting any existing files.")
@@ -688,8 +816,10 @@ mod tests {
             num_threads: None,
             chunk_size: None,
             long_reads: false,
+            keep_short_fragments: false,
             sv_rate_scale: 0.0,
             sv_max_length_fraction: 0.25,
+            adapters: AdapterConfig::default(),
         };
 
         println!("{:?}", test_configuration);
@@ -999,6 +1129,80 @@ mod tests {
         scrape_config.insert("rng_seed".to_string(), Value::Number(42.into()));
         let config = RunConfiguration::from_scrape_config(scrape_config).unwrap();
         assert_eq!(config.rng_seed.as_deref(), Some("42"));
+    }
+
+    fn write_cfg(dir: &std::path::Path, body: &str) -> PathBuf {
+        let yaml = dir.join("c.yml");
+        std::fs::write(
+            &yaml,
+            format!("reference: test_data/references/H1N1.fa\noutput_dir: ./\n{body}"),
+        )
+        .unwrap();
+        yaml
+    }
+
+    #[test]
+    fn test_adapters_default_disabled() {
+        // Default preserves pre-adapter behavior: disabled.
+        assert!(!RunConfiguration::default().adapters.enabled);
+    }
+
+    #[test]
+    fn test_adapters_truseq_preset() {
+        let dir = tempfile::tempdir().unwrap();
+        let yaml = write_cfg(dir.path(), "adapters:\n  enabled: true\n  preset: truseq\n");
+        let cfg = RunConfiguration::from_yaml_file(&yaml).unwrap();
+        assert!(cfg.adapters.enabled);
+        assert_eq!(cfg.adapters.r1, "AGATCGGAAGAGCACACGTCTGAACTCCAGTCA");
+        assert_eq!(cfg.adapters.r2, "AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGT");
+    }
+
+    #[test]
+    fn test_adapters_nextera_preset() {
+        let dir = tempfile::tempdir().unwrap();
+        let yaml = write_cfg(dir.path(), "adapters:\n  enabled: true\n  preset: nextera\n");
+        let cfg = RunConfiguration::from_yaml_file(&yaml).unwrap();
+        assert_eq!(cfg.adapters.r1, "CTGTCTCTTATACACATCT");
+        assert_eq!(cfg.adapters.r2, "CTGTCTCTTATACACATCT");
+    }
+
+    #[test]
+    fn test_adapters_custom_uppercased() {
+        let dir = tempfile::tempdir().unwrap();
+        let yaml = write_cfg(
+            dir.path(),
+            "adapters:\n  enabled: true\n  preset: custom\n  r1: acgtacgt\n  r2: tgcatgca\n",
+        );
+        let cfg = RunConfiguration::from_yaml_file(&yaml).unwrap();
+        assert_eq!(cfg.adapters.r1, "ACGTACGT");
+        assert_eq!(cfg.adapters.r2, "TGCATGCA");
+    }
+
+    #[test]
+    fn test_adapters_reject_long_reads_combo() {
+        let dir = tempfile::tempdir().unwrap();
+        let yaml = write_cfg(
+            dir.path(),
+            "long_reads: true\nadapters:\n  enabled: true\n  preset: truseq\n",
+        );
+        assert!(RunConfiguration::from_yaml_file(&yaml).is_err());
+    }
+
+    #[test]
+    fn test_adapters_reject_custom_missing_seq() {
+        let dir = tempfile::tempdir().unwrap();
+        let yaml = write_cfg(dir.path(), "adapters:\n  enabled: true\n  preset: custom\n");
+        assert!(RunConfiguration::from_yaml_file(&yaml).is_err());
+    }
+
+    #[test]
+    fn test_adapters_reject_non_acgt() {
+        let dir = tempfile::tempdir().unwrap();
+        let yaml = write_cfg(
+            dir.path(),
+            "adapters:\n  enabled: true\n  preset: custom\n  r1: ACGTX\n  r2: ACGT\n",
+        );
+        assert!(RunConfiguration::from_yaml_file(&yaml).is_err());
     }
 
     #[test]

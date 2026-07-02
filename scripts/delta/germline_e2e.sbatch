@@ -89,6 +89,11 @@ ADAPTERS="${ADAPTERS:-0}"
 ADAPTER_PRESET="${ADAPTER_PRESET:-truseq}"
 TRIM="${TRIM:-0}"
 MEASURE_REALISM="${MEASURE_REALISM:-0}"
+# KEEP_SHORT=1 keeps short inserts as genomic reads WITHOUT adapter readthrough
+# (rneat keep_short_fragments) — the adapter-free short-insert control arm that
+# isolates the coverage effect from the adapter effect (#125). Independent of
+# ADAPTERS; leave both off for the default long-insert baseline.
+KEEP_SHORT="${KEEP_SHORT:-0}"
 
 # PRUNE=1 deletes the bulky FASTQ + BAM + gVCF intermediates after a SUCCESSFUL
 # score (per-tool scored.summary.csv present), keeping the small scores/VCFs/QC.
@@ -211,6 +216,10 @@ adapters:
   enabled: true
   preset: $ADAPTER_PRESET
 YAML
+    elif [[ "$KEEP_SHORT" == "1" ]]; then
+        # Adapter-free short-insert control: keep short fragments as genomic reads.
+        # (Only when ADAPTERS!=1 — adapters.enabled already implies keeping them.)
+        echo "keep_short_fragments: true" >> "$wd/sim.yml"
     fi
     "$RNEAT_BIN" gen-reads -c "$wd/sim.yml"
 }

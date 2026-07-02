@@ -48,25 +48,32 @@ MANIFEST="${MANIFEST:-${RESULTS_DIR:-$HOME}/adapter_validation.manifest}"
 mkdir -p "$(dirname "$MANIFEST")"
 echo "# condition rep jobid outdir reference preset" > "$MANIFEST"
 
-# condition -> "ADAPTERS TRIM" env values
+# CONTROL=1 (default) adds the short_ctrl arm: short inserts KEPT but NO adapter
+# (genomic reads), which isolates the short-insert coverage effect from the adapter
+# effect. Set CONTROL=0 for the 3-arm off/on_raw/on_trim matrix only.
+CONTROL="${CONTROL:-1}"
+
+# submit <cond> <adapters> <trim> <keep_short> <rep>
 submit() {
-    local cond="$1" adapters="$2" trim="$3" rep="$4"
+    local cond="$1" adapters="$2" trim="$3" keep_short="$4" rep="$5"
     local out="$SCRATCH/adapter_${cond}_rep${rep}"
     local jid
     jid=$(REFERENCE="$REFERENCE" TOOLS=rneat COVERAGE="$COVERAGE" OUTDIR="$out" \
           SEED="adapter-validation rep$rep" \
-          ADAPTERS="$adapters" TRIM="$trim" ADAPTER_PRESET="$ADAPTER_PRESET" \
+          ADAPTERS="$adapters" TRIM="$trim" KEEP_SHORT="$keep_short" ADAPTER_PRESET="$ADAPTER_PRESET" \
           FRAG_MEAN="$FRAG_MEAN" FRAG_SD="$FRAG_SD" \
           MEASURE_REALISM=1 PRUNE="${PRUNE:-1}" LOCAL_STAGE="${LOCAL_STAGE:-1}" \
           sbatch --parsable "$REPO_ROOT/scripts/delta/germline_e2e.sbatch")
     echo "$cond $rep $jid $out $REFERENCE $ADAPTER_PRESET" | tee -a "$MANIFEST"
 }
 
-echo "Adapter validation: ref=$(basename "$REFERENCE") cov=${COVERAGE}x reps=$REPS preset=$ADAPTER_PRESET frag=${FRAG_MEAN}±${FRAG_SD} (short-insert → readthrough active)"
+echo "Adapter validation: ref=$(basename "$REFERENCE") cov=${COVERAGE}x reps=$REPS preset=$ADAPTER_PRESET frag=${FRAG_MEAN}±${FRAG_SD} control=$CONTROL (short-insert → readthrough active)"
 for r in $(seq 1 "$REPS"); do
-    submit off     0 0 "$r"
-    submit on_raw  1 0 "$r"
-    submit on_trim 1 1 "$r"
+    #      cond        adapters trim keep_short rep
+    submit off        0 0 0 "$r"
+    [[ "$CONTROL" == "1" ]] && submit short_ctrl 0 0 1 "$r"
+    submit on_raw     1 0 0 "$r"
+    submit on_trim    1 1 0 "$r"
 done
 
 echo

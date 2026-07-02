@@ -685,6 +685,11 @@ fn process_chunk(
     })?;
     let max_del_len = *ctx.max_del_lens.get(&contig_name).unwrap_or(&0);
 
+    // Keep short inserts when adapters are on (readthrough pads them) OR when the
+    // adapter-free short-insert control is requested. Drives both fragment retention
+    // (below) and the insert-length read cap in write_block_fastq.
+    let keep_short = ctx.config.adapters.enabled || ctx.config.keep_short_fragments;
+
     let block_fragments: Vec<(usize, usize)> = {
         let mut block_frags = Vec::new();
         // SV coverage multipliers are needed here to scale fragment counts.
@@ -714,6 +719,7 @@ fn process_chunk(
                         scaled,
                         ctx.config.paired_ended,
                         ctx.config.long_reads,
+                        keep_short,
                         ctx.fragment_length_model,
                         &mut rng,
                     )?
@@ -730,6 +736,7 @@ fn process_chunk(
                         ctx.config.gc_bias_normalize_coverage,
                         ctx.config.paired_ended,
                         ctx.config.long_reads,
+                        keep_short,
                         &mut rng,
                     )?
                 };
@@ -782,6 +789,18 @@ fn process_chunk(
 
     let read_name_prefix = format!("RNEAT_generated_{}", current_block.contig);
 
+    // Resolve 3' adapter sequences once (#125). Empty vecs = disabled, which makes
+    // write_block_fastq take its unchanged code path (output byte-identical when off).
+    let (r1_adapter, r2_adapter): (Vec<Nucleotide>, Vec<Nucleotide>) =
+        if ctx.config.adapters.enabled {
+            (
+                ctx.config.adapters.r1.chars().map(Nucleotide::from).collect(),
+                ctx.config.adapters.r2.chars().map(Nucleotide::from).collect(),
+            )
+        } else {
+            (Vec::new(), Vec::new())
+        };
+
     if ctx.config.produce_fastq {
         let mut file_to_write_1 = PathBuf::from(ctx.working_dir);
         file_to_write_1.push(format!(
@@ -813,12 +832,15 @@ fn process_chunk(
                 &mut buffer2,
                 ctx.config.read_len,
                 ctx.config.long_reads,
+                keep_short,
                 &read_name_prefix,
                 ctx.quality_score_model,
                 ctx.seq_error_model,
                 &mut rng,
                 bam_stager,
                 &mut ad_counter,
+                &r1_adapter,
+                &r2_adapter,
             )?;
             contig_files_r1.push(file_to_write_1);
             contig_files_r2.push(file_to_write_2);
@@ -835,12 +857,15 @@ fn process_chunk(
                 &mut buffer2,
                 ctx.config.read_len,
                 ctx.config.long_reads,
+                keep_short,
                 &read_name_prefix,
                 ctx.quality_score_model,
                 ctx.seq_error_model,
                 &mut rng,
                 bam_stager,
                 &mut ad_counter,
+                &r1_adapter,
+                &r2_adapter,
             )?;
             contig_files_r1.push(file_to_write_1);
         }
@@ -864,12 +889,15 @@ fn process_chunk(
             &mut buf2,
             ctx.config.read_len,
             ctx.config.long_reads,
+            keep_short,
             &read_name_prefix,
             ctx.quality_score_model,
             ctx.seq_error_model,
             &mut rng,
             bam_stager,
             &mut ad_counter,
+            &r1_adapter,
+            &r2_adapter,
         )?;
     }
 

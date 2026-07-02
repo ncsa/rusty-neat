@@ -89,11 +89,14 @@ if conda env list | grep -q "^${BIOINF_ENV_NAME} "; then
         || conda install -y -n "$BIOINF_ENV_NAME" -c conda-forge mimalloc jemalloc
     conda run -n "$BIOINF_ENV_NAME" which seqkit >/dev/null 2>&1 \
         || conda install -y -n "$BIOINF_ENV_NAME" -c bioconda seqkit
+    # fastp drives the adapter-readthrough QC/trim arm (germline_e2e MEASURE_REALISM/TRIM, #125).
+    conda run -n "$BIOINF_ENV_NAME" which fastp >/dev/null 2>&1 \
+        || conda install -y -n "$BIOINF_ENV_NAME" -c bioconda -c conda-forge fastp
 else
-    echo "[3/4] Creating bioinf conda env (bcftools, bwa-mem2, gatk4, seqkit, mimalloc, jemalloc)..."
+    echo "[3/4] Creating bioinf conda env (bcftools, bwa-mem2, gatk4, seqkit, fastp, mimalloc, jemalloc)..."
     conda create -y -n "$BIOINF_ENV_NAME" \
         -c bioconda -c conda-forge \
-        bcftools bwa-mem2 gatk4 seqkit mimalloc jemalloc
+        bcftools bwa-mem2 gatk4 seqkit fastp mimalloc jemalloc
     echo "      Tools installed:"
     # `|| true`: head -1 closes the pipe after one line, so the tool gets
     # SIGPIPE (exit 141) and `set -o pipefail` would otherwise abort setup.

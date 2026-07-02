@@ -122,6 +122,17 @@ pub fn write_block_fastq<B1: Write, B2: Write>(
         // 3' adapter pads it to read_length after orientation (see append_adapter_readthrough);
         // capping at the insert length keeps generate_read from truncating-and-dropping it.
         let insert_len = end - start;
+        // A zero-length insert (start == end) is a degenerate "adapter dimer": it
+        // carries no genomic bases, and with adapters on the padding path built a
+        // record whose quality string ran one char longer than the sequence
+        // (effective_read_len == 0 desyncs the seq/qual construction). That is a
+        // malformed FASTQ record — harmless to `zcat`/`wc`, but bwa-mem2's parser
+        // stops at the first one and silently truncates alignment to a few thousand
+        // reads (#125). Skip the whole pair so the R1/R2 streams stay in sync; this
+        // never fires when adapters are off (fragments are already >= read_length).
+        if insert_len == 0 {
+            continue;
+        }
         let effective_read_len = if adapters_on {
             insert_len.min(read_length)
         } else if long_reads {
@@ -1023,6 +1034,103 @@ mod tests {
             "expected 4 unique names, got duplicates in: {:?}",
             names
         );
+    }
+
+    #[test]
+    fn test_write_block_fastq_skips_zero_insert_no_malformed_record() {
+        // Regression (#125): a zero-length insert (start == end) is a degenerate
+        // adapter-dimer fragment. With adapters on it used to emit a record whose
+        // quality string ran one char longer than the sequence — malformed FASTQ
+        // that `zcat`/`wc` ignore but bwa-mem2's parser halts on, silently
+        // truncating alignment to a few thousand reads. It must be skipped, and
+        // every emitted record must have seq.len() == qual.len() == read_length.
+        use crate::structs::{
+            mutated_map::MutatedMap,
+            sequence_block::{RegionType, SequenceBlock, SequenceMap},
+        };
+        let temp_dir = tempfile::tempdir().unwrap();
+        let seq_len: usize = 300;
+        let sequence: Vec<Nucleotide> = (0..seq_len)
+            .map(|i| match i % 4 {
+                0 => A,
+                1 => C,
+                2 => G,
+                _ => T,
+            })
+            .collect();
+        let block = SequenceBlock {
+            contig: "chr1".to_string(),
+            ref_start: 0,
+            ref_end: seq_len,
+            sequence,
+            sequence_map: vec![SequenceMap::from(RegionType::NonNRegion, 0, seq_len)],
+        };
+        let mutated_map = MutatedMap::from_interval(0, seq_len, vec![]).unwrap();
+        let read_length = 70usize;
+        // zero-insert (must be skipped) + short insert (adapter-padded) + full insert.
+        let fragments = vec![(50, 50), (10, 40), (100, 170)];
+        let r1_path = temp_dir.path().join("r1.fastq.gz");
+        let r2_path = temp_dir.path().join("r2.fastq.gz");
+        let mut buf1 = GzEncoder::new(
+            create_output_file(&r1_path, true).unwrap(),
+            Compression::default(),
+        );
+        let mut buf2 = GzEncoder::new(
+            create_output_file(&r2_path, true).unwrap(),
+            Compression::default(),
+        );
+        let seq_err_model = SequencingErrorModel::default().unwrap();
+        let quality_model = QualityScoreModel::default().unwrap();
+        let mut rng = NeatRng::new_from_seed(&vec!["zero-insert".to_string()]).unwrap();
+        let adapter: Vec<Nucleotide> = vec![A, G, A, T, C, G, G, A, A, G, A, G, C];
+        write_block_fastq(
+            fragments,
+            &mutated_map,
+            &block,
+            true, // paired_ended
+            &mut buf1,
+            &mut buf2,
+            read_length,
+            false, // long_reads
+            "chr1",
+            &quality_model,
+            &seq_err_model,
+            &mut rng,
+            None,
+            &mut AdCounter::new(),
+            &adapter,
+            &adapter,
+        )
+        .unwrap();
+        buf1.finish().unwrap();
+        buf2.finish().unwrap();
+
+        for path in [&r1_path, &r2_path] {
+            let lines: Vec<String> = read_gzip_lines(path).unwrap().map(|l| l.unwrap()).collect();
+            // Two fragments produce reads; the zero-insert pair is skipped (4 lines each).
+            assert_eq!(
+                lines.len(),
+                8,
+                "expected 2 records (zero-insert skipped) in {:?}, got {} lines",
+                path,
+                lines.len()
+            );
+            let mut i = 0;
+            while i < lines.len() {
+                let seq = &lines[i + 1];
+                let qual = &lines[i + 3];
+                assert_eq!(
+                    seq.len(),
+                    qual.len(),
+                    "malformed FASTQ in {:?}: seq={} qual={}",
+                    path,
+                    seq.len(),
+                    qual.len()
+                );
+                assert_eq!(seq.len(), read_length, "read not padded to read_length in {:?}", path);
+                i += 4;
+            }
+        }
     }
 
     // --- CIGAR-building tests for the refactored generate_read ---

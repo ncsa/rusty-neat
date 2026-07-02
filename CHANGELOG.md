@@ -1,9 +1,11 @@
-Unreleased
-==========
-## Unreleased (targeting rneat v1.19.0)
+7/2/2026
+========
+## rneat v1.19.0
 
-_Version bump + date land with the develop→main release PR; captured here so the work
-isn't lost between merge and release._
+Optional Illumina 3′ adapter readthrough (#125) — realistic short-insert data that
+exercises adapter-trim QC — plus the correctness fix and Delta validation surfaced
+while building it. Default off; output byte-identical to v1.18.0 when the `adapters`
+block is omitted.
 
 ### Read generation
 - Optional 3′ adapter readthrough (#125): `adapters: {enabled, preset: truseq|nextera|custom, r1, r2}`.

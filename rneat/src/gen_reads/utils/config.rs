@@ -106,6 +106,13 @@ pub struct RunConfiguration {
     // when true, fragments shorter than read_len are kept and produce truncated reads
     // (long-read platforms); when false, such fragments are discarded (short-read default)
     pub long_reads: bool,
+    // when true, short-read PE keeps fragments whose insert < read_len and emits
+    // insert-length GENOMIC reads (no adapter). This is the short-insert library WITHOUT
+    // modeling 3' adapter readthrough — the isolation control for adapter validation
+    // (#125). adapters.enabled implies this (readthrough needs short fragments kept);
+    // set it on its own to get the adapter-free short-insert arm. Default off →
+    // short fragments discarded, output byte-identical to before.
+    pub keep_short_fragments: bool,
     // Scale applied to the SvModel's per-base SV rate at generation time.
     // 0.0 (default) disables de novo SV generation entirely — only SVs
     // from `input_vcf` flow through. Values > 0 enable sampling from
@@ -158,6 +165,7 @@ impl Default for RunConfiguration {
             num_threads: None,
             chunk_size: None,
             long_reads: false,
+            keep_short_fragments: false,
             sv_rate_scale: 0.0,
             sv_max_length_fraction: 0.25,
             adapters: AdapterConfig::default(),
@@ -502,6 +510,14 @@ impl RunConfiguration {
                             )
                         })?;
                     }
+                    "keep_short_fragments" => {
+                        config.keep_short_fragments = value.as_bool().ok_or_else(|| {
+                            GenerateReadsError::ConfigReadError(
+                                "keep_short_fragments".to_string(),
+                                "boolean".to_string(),
+                            )
+                        })?;
+                    }
                     "sv_rate_scale" => {
                         config.sv_rate_scale = value.as_f64().ok_or_else(|| {
                             GenerateReadsError::ConfigReadError(
@@ -585,6 +601,18 @@ impl RunConfiguration {
         info!("\t>paired ended: {}", config.paired_ended);
         if config.long_reads {
             info!("\t>long reads mode: enabled (short fragments produce truncated reads)");
+        }
+        if config.keep_short_fragments {
+            if config.long_reads {
+                error!(
+                    "Invalid config: keep_short_fragments=true is redundant/incompatible with \
+                     long_reads=true (long-read mode already keeps short fragments). Set one."
+                );
+                return Err(GenerateReadsError::ConfigError);
+            }
+            info!(
+                "\t>keep short fragments: enabled (short inserts kept as genomic reads, no adapter)"
+            );
         }
         if config.adapters.enabled {
             if config.long_reads {
@@ -788,6 +816,7 @@ mod tests {
             num_threads: None,
             chunk_size: None,
             long_reads: false,
+            keep_short_fragments: false,
             sv_rate_scale: 0.0,
             sv_max_length_fraction: 0.25,
             adapters: AdapterConfig::default(),

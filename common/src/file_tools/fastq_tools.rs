@@ -84,6 +84,11 @@ pub fn write_block_fastq<B1: Write, B2: Write>(
     buffer2: &mut B2,
     read_length: usize,
     long_reads: bool,
+    // Keep short inserts (insert < read_length) and emit insert-length reads instead
+    // of dropping them. Implied when adapters are on (readthrough pads them); set on its
+    // own for the adapter-free short-insert control. Independent of adapter padding,
+    // which is driven solely by non-empty r1_adapter/r2_adapter below.
+    keep_short: bool,
     read_name_prefix: &str,
     quality_score_model: &QualityScoreModel,
     sequencing_error_model: &SequencingErrorModel,
@@ -133,7 +138,10 @@ pub fn write_block_fastq<B1: Write, B2: Write>(
         if insert_len == 0 {
             continue;
         }
-        let effective_read_len = if adapters_on {
+        // Cap the read at the insert whenever short fragments are being kept — with
+        // adapters on (padded back to read_length below) OR in the adapter-free
+        // keep_short control (emitted as an insert-length genomic read).
+        let effective_read_len = if adapters_on || keep_short {
             insert_len.min(read_length)
         } else if long_reads {
             fragment.len().min(read_length)
@@ -906,6 +914,7 @@ mod tests {
             &mut buf2,
             10,
             false,
+            false, // keep_short
             "chr1",
             &quality_model,
             &seq_err_model,
@@ -1000,6 +1009,7 @@ mod tests {
             &mut buf2,
             70,
             false,
+            false, // keep_short
             "chr1",
             &quality_model,
             &seq_err_model,
@@ -1092,6 +1102,7 @@ mod tests {
             &mut buf2,
             read_length,
             false, // long_reads
+            true,  // keep_short (adapters on → short fragments kept)
             "chr1",
             &quality_model,
             &seq_err_model,
@@ -1131,6 +1142,79 @@ mod tests {
                 i += 4;
             }
         }
+    }
+
+    #[test]
+    fn test_write_block_fastq_keep_short_no_adapter_emits_genomic_insert_length_reads() {
+        // keep_short control (#125): short fragments kept, NO adapter (empty slices).
+        // A short insert must produce an insert-LENGTH genomic read (not padded to
+        // read_length, not dropped), and records stay well-formed (seq == qual).
+        use crate::structs::{
+            mutated_map::MutatedMap,
+            sequence_block::{RegionType, SequenceBlock, SequenceMap},
+        };
+        let temp_dir = tempfile::tempdir().unwrap();
+        let seq_len: usize = 300;
+        let sequence: Vec<Nucleotide> = (0..seq_len)
+            .map(|i| match i % 4 {
+                0 => A,
+                1 => C,
+                2 => G,
+                _ => T,
+            })
+            .collect();
+        let block = SequenceBlock {
+            contig: "chr1".to_string(),
+            ref_start: 0,
+            ref_end: seq_len,
+            sequence,
+            sequence_map: vec![SequenceMap::from(RegionType::NonNRegion, 0, seq_len)],
+        };
+        let mutated_map = MutatedMap::from_interval(0, seq_len, vec![]).unwrap();
+        let read_length = 70usize;
+        // one short insert (30 < read_length) + one full insert (== read_length).
+        let fragments = vec![(10, 40), (100, 170)];
+        let out_path = temp_dir.path().join("r1.fastq.gz");
+        let mut buf1 = GzEncoder::new(
+            create_output_file(&out_path, true).unwrap(),
+            Compression::default(),
+        );
+        use crate::file_tools::file_io::VectorBuffer;
+        let mut buf2 = GzEncoder::new(VectorBuffer::new(), Compression::default());
+        let seq_err_model = SequencingErrorModel::default().unwrap();
+        let quality_model = QualityScoreModel::default().unwrap();
+        let mut rng = NeatRng::new_from_seed(&vec!["keep-short".to_string()]).unwrap();
+        write_block_fastq(
+            fragments,
+            &mutated_map,
+            &block,
+            false, // single-ended (simplest) — R1 only
+            &mut buf1,
+            &mut buf2,
+            read_length,
+            false, // long_reads
+            true,  // keep_short
+            "chr1",
+            &quality_model,
+            &seq_err_model,
+            &mut rng,
+            None,
+            &mut AdCounter::new(),
+            &[], // NO adapter → genomic reads, no padding
+            &[],
+        )
+        .unwrap();
+        buf1.finish().unwrap();
+        let lines: Vec<String> = read_gzip_lines(&out_path).unwrap().map(|l| l.unwrap()).collect();
+        assert_eq!(lines.len(), 8, "expected 2 reads (both fragments kept), got {}", lines.len());
+        let read_lens: Vec<usize> = (0..lines.len()).step_by(4).map(|i| {
+            assert_eq!(lines[i + 1].len(), lines[i + 3].len(), "seq/qual mismatch");
+            lines[i + 1].len()
+        }).collect();
+        // Short insert (30) → 30 bp genomic read (NOT padded to 70); full insert → 70 bp.
+        let mut sorted = read_lens.clone();
+        sorted.sort();
+        assert_eq!(sorted, vec![30, 70], "expected insert-length reads [30, 70], got {:?}", read_lens);
     }
 
     // --- CIGAR-building tests for the refactored generate_read ---
@@ -1679,6 +1763,7 @@ mod tests {
             &mut buf2,
             read_len,
             false,
+            false, // keep_short
             "chr1",
             &quality_model,
             &seq_err_model,

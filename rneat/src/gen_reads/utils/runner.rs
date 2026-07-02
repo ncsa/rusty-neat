@@ -685,6 +685,11 @@ fn process_chunk(
     })?;
     let max_del_len = *ctx.max_del_lens.get(&contig_name).unwrap_or(&0);
 
+    // Keep short inserts when adapters are on (readthrough pads them) OR when the
+    // adapter-free short-insert control is requested. Drives both fragment retention
+    // (below) and the insert-length read cap in write_block_fastq.
+    let keep_short = ctx.config.adapters.enabled || ctx.config.keep_short_fragments;
+
     let block_fragments: Vec<(usize, usize)> = {
         let mut block_frags = Vec::new();
         // SV coverage multipliers are needed here to scale fragment counts.
@@ -714,7 +719,7 @@ fn process_chunk(
                         scaled,
                         ctx.config.paired_ended,
                         ctx.config.long_reads,
-                        ctx.config.adapters.enabled,
+                        keep_short,
                         ctx.fragment_length_model,
                         &mut rng,
                     )?
@@ -731,7 +736,7 @@ fn process_chunk(
                         ctx.config.gc_bias_normalize_coverage,
                         ctx.config.paired_ended,
                         ctx.config.long_reads,
-                        ctx.config.adapters.enabled,
+                        keep_short,
                         &mut rng,
                     )?
                 };
@@ -827,6 +832,7 @@ fn process_chunk(
                 &mut buffer2,
                 ctx.config.read_len,
                 ctx.config.long_reads,
+                keep_short,
                 &read_name_prefix,
                 ctx.quality_score_model,
                 ctx.seq_error_model,
@@ -851,6 +857,7 @@ fn process_chunk(
                 &mut buffer2,
                 ctx.config.read_len,
                 ctx.config.long_reads,
+                keep_short,
                 &read_name_prefix,
                 ctx.quality_score_model,
                 ctx.seq_error_model,
@@ -882,6 +889,7 @@ fn process_chunk(
             &mut buf2,
             ctx.config.read_len,
             ctx.config.long_reads,
+            keep_short,
             &read_name_prefix,
             ctx.quality_score_model,
             ctx.seq_error_model,

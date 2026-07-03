@@ -141,7 +141,11 @@ run_one() {
         # bad config is recorded (exit!=0) rather than killing the job.
         local ec=0
         if [[ "$tool" == "neat" ]]; then
-            /usr/bin/time -v -o "$tf" "$NEAT_BIN" read-simulator -c "$cfg" \
+            # Match rneat's minimal logging (WARNING) for an equal-to-equal comparison —
+            # NEAT defaults to INFO. NEAT has no per-read logging (its hot-loop debug
+            # lines are commented out), so this barely changes its time; it just makes
+            # both tools rigorously symmetric on log verbosity.
+            /usr/bin/time -v -o "$tf" "$NEAT_BIN" --log-level WARNING read-simulator -c "$cfg" \
                 -o "$run_dir" -p bench > "$log" 2>&1 || ec=$?
         else
             /usr/bin/time -v -o "$tf" "$RNEAT_BIN" --log-level warn gen-reads -c "$cfg" > "$log" 2>&1 || ec=$?

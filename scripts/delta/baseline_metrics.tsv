@@ -3,6 +3,10 @@
 #   regression_suite.sh MODE=submit TIER=2 ; ... ; regression_suite.sh MODE=collect ... > baseline_metrics.tsv
 # columns: metric <tab> value <tab> sd <tab> gate <tab> tier
 #   gate: exact | ge2sd (>= value-2*sd) | band:LO:HI | lepct:P (<= value*(1+P/100))
+# PERF rows (*_wall_s / *_rss_mb) re-frozen on the v1.19.1 fixed build (#340): the
+# original perf baseline was captured under the old default log-level `trace`
+# (per-base debug I/O), so it was 3-4x too slow. Fidelity/determinism rows unchanged
+# (the logging fix is output-preserving; Tier-1 gate re-confirmed all fidelity PASS).
 determinism_thread_invariant	PASS	0	exact	0
 contig_order_independent	FAIL	0	exact	0
 shard_order_independent	PASS	0	exact	1
@@ -11,15 +15,15 @@ ecoli_snp_recall	0.9859	0.0010	ge2sd	0
 ecoli_snp_precision	0.9998	0.0002	ge2sd	0
 ecoli_indel_recall	0.9836	0.0031	ge2sd	0
 ecoli_tstv	2.344	0.144	band:2.0:2.6	0
-ecoli_wall_s	33.0	0	lepct:20	0
-ecoli_rss_mb	41	0	lepct:15	0
+ecoli_wall_s	9.79	0	lepct:20	0
+ecoli_rss_mb	40.6	0	lepct:15	0
 chr22_snp_recall	0.989	0.010	ge2sd	1
 chr22_snp_precision	0.9996	0.0010	ge2sd	1
 chr22_indel_recall	0.982	0.050	ge2sd	1
 chr22_indel_precision	0.989	0.020	ge2sd	1
 chr22_tstv	2.35	0.14	band:2.0:2.6	1
-chr22_wall_s	255.0	0	lepct:20	1
-chr22_rss_mb	227	0	lepct:15	1
+chr22_wall_s	61.37	0	lepct:20	1
+chr22_rss_mb	225.6	0	lepct:15	1
 somatic_snv_recall	0.925	0.010	ge2sd	1
 somatic_indel_recall	0.900	0.050	ge2sd	1
 sv_del_recall	0.843	0.106	ge2sd	2

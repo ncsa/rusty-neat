@@ -52,19 +52,26 @@ hg002) # ── Track A: GIAB HG002, GRCh38 (all 5 builders, no gating) ──�
     ;;
 
 soy) # ── Track B: soybean Wm82 (scale/sharding + messy polyploid ref) ───────────
-    D="$NEAT_DATA/soy"; SOY_ACC="${SOY_ACC:-GCA_000004515.5}"   # Wm82.a4; a6 T2T = ask Phytozome
-    note "[soy] reference assembly $SOY_ACC via NCBI datasets"
-    if have datasets; then
-        ( cd "$D" 2>/dev/null || { mkdir -p "$D"; cd "$D"; }
+    D="$NEAT_DATA/soy"; mkdir -p "$D"; SOY_ACC="${SOY_ACC:-GCA_000004515.5}"   # Wm82.a4 (Glycine_max_v4.0)
+    # Direct NCBI FTP URL for the default accession — no CLI needed. (Delta has no
+    # `datasets`, so this is the primary path; `datasets` is used only if present, or
+    # if you override SOY_ACC to something without a hardcoded URL.)
+    SOY_FTP="https://ftp.ncbi.nlm.nih.gov/genomes/all/GCA/000/004/515/GCA_000004515.5_Glycine_max_v4.0/GCA_000004515.5_Glycine_max_v4.0_genomic.fna.gz"
+    note "[soy] reference assembly $SOY_ACC -> $D/soy.fa"
+    if [[ -s "$D/soy.fa" ]]; then
+        echo "  have soy.fa"
+    elif have datasets; then
+        ( cd "$D"
           datasets download genome accession "$SOY_ACC" --include genome --filename soy.zip \
             && unzip -o soy.zip -d soy_unzip >/dev/null \
             && find soy_unzip -name '*.fna' -exec mv {} "$D/soy.fa" \; \
-            && echo "  -> $D/soy.fa" )
+            && rm -rf soy.zip soy_unzip && echo "  -> $D/soy.fa" ) || echo "  datasets download FAILED" >&2
+    elif [[ "$SOY_ACC" == "GCA_000004515.5" ]]; then
+        if get "$SOY_FTP" "$D/soy.fa.gz" && gunzip -f "$D/soy.fa.gz"; then echo "  -> $D/soy.fa"; fi
     else
-        echo "  NCBI 'datasets' CLI not found. Options:"
+        echo "  no 'datasets' CLI and no hardcoded URL for $SOY_ACC. Options:"
         echo "    conda install -c conda-forge ncbi-datasets-cli   # then re-run"
-        echo "    or Phytozome v13 (Wm82.a4/a6, needs free JGI login): https://phytozome-next.jgi.doe.gov"
-        echo "    or SoyBase: https://www.soybase.org/collections/"
+        echo "    or Phytozome v13 (Wm82.a4/a6, JGI login): https://phytozome-next.jgi.doe.gov"
     fi
     note "[soy] resequencing reads (align -> BAM for frag/gc/bam-models; FASTQ for seq-error)"
     echo "  SRA study SRP062245 (106 lines ~17x). Pick one run, e.g. SOY_SRR=SRRxxxxxxx, then:"
@@ -100,4 +107,11 @@ esac
 
 # Index any FASTA we landed so it's ready for gen-reads / the builders.
 for fa in "$NEAT_DATA"/*/*.fa; do [[ -f "$fa" && ! -f "$fa.fai" ]] && { echo "  indexing $(basename "$fa")"; samtools faidx "$fa" 2>/dev/null || true; }; done
-note "done — staged under $NEAT_DATA/$DATA"
+
+# Honest summary: list what actually landed (a printed URL is guidance, not a file).
+note "staged files under $NEAT_DATA/$DATA:"
+if compgen -G "$NEAT_DATA/$DATA/*" >/dev/null; then
+    ( cd "$NEAT_DATA/$DATA" && ls -lh -- * 2>/dev/null | sed 's/^/  /' )
+else
+    echo "  (nothing downloaded — the steps above are guidance you still need to run/paste URLs for)"
+fi

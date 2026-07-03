@@ -310,6 +310,31 @@ if missing:
         w(f"- {m}")
     w()
 
+# ── 7. optional candidate TSV for regression_gate.sh (CANDIDATE_TSV env) ─────
+# Emits metric<TAB>value rows matching the adapter_* baseline in baseline_metrics.tsv,
+# so the adapter seam plugs into the same gate as the rest of the regression suite.
+cand_path = os.environ.get("CANDIDATE_TSV", "")
+if cand_path:
+    def mean_of(cond, metric):
+        m, _sd, n = stats(data.get(cond, {}).get(metric, []))
+        return m if n else None
+    crows = []
+    def put(name, val, prec=4):
+        if val is not None and val == val:
+            crows.append(f"{name}\t{val:.{prec}f}")
+    put("adapter_on_raw_snp_recall",    mean_of("on_raw", "snp_recall"))
+    put("adapter_on_trim_snp_recall",   mean_of("on_trim", "snp_recall"))
+    put("adapter_on_trim_indel_recall", mean_of("on_trim", "indel_recall"))
+    put("adapter_on_raw_softclip_frac", mean_of("on_raw", "softclip_frac"))
+    put("adapter_on_trim_softclip_frac", mean_of("on_trim", "softclip_frac"))
+    ot, sc = mean_of("on_trim", "snp_recall"), mean_of("short_ctrl", "snp_recall")
+    if ot is not None and sc is not None:
+        put("adapter_effect_snp_recall_delta", ot - sc)
+    with open(cand_path, "w") as fh:
+        fh.write("# adapter seam candidate metrics (collect_adapter_validation.sh)\n")
+        fh.write("\n".join(crows) + "\n")
+    sys.stderr.write(f"[wrote candidate] {cand_path}  ({len(crows)} metrics)\n")
+
 report = "\n".join(L) + "\n"
 with open(out_path, "w") as fh:
     fh.write(report)

@@ -114,7 +114,7 @@ YAML
         rm -rf "$run_dir"; mkdir -p "$run_dir"
         tf="$OUTDIR/${label}_t${nt}_r${rep}.time"
         ec=0
-        /usr/bin/time -v -o "$tf" "${pre[@]}" "${envp[@]}" "$RNEAT_BIN" gen-reads -c "$cfg" \
+        /usr/bin/time -v -o "$tf" "${pre[@]}" "${envp[@]}" "$RNEAT_BIN" --log-level warn gen-reads -c "$cfg" \
             >"$run_dir/log" 2>&1 || ec=$?
         parsed=$(parse_time "$tf")
         printf "%s\t%s\t%s\t%s\t%s\t%s\n" "$label" "$nt" "$rep" "${parsed% *}" "${parsed#* }" "$ec" >> "$TSV"

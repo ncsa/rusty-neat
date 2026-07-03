@@ -94,7 +94,7 @@ run_rneat() {
         [[ -n "$bed" ]] && echo "target_bed: $bed"
         echo "num_threads: $threads"
     } > "$wd/sim.yml"
-    "$RNEAT_BIN" gen-reads -c "$wd/sim.yml" > "$wd/run.log" 2>&1
+    "$RNEAT_BIN" --log-level warn gen-reads -c "$wd/sim.yml" > "$wd/run.log" 2>&1
     [[ -f "$wd/sample.vcf.gz" ]] || { echo "  no VCF from $wd (see run.log)" >&2; return 1; }
 }
 

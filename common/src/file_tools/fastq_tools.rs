@@ -508,23 +508,19 @@ pub fn generate_read(
             let score = quality_scores[quality_index];
             let prob = sequencing_error_model.convert_score(score)?;
             if rng.random()? < prob {
-                debug!("Creating sequencing error");
                 let error =
                     sequencing_error_model.generate_sequencing_error(reference_base, rng)?;
                 match error {
                     SequencingErrorType::SnpError(base) => {
-                        debug!("Snp error");
                         single[0] = base;
                     }
                     SequencingErrorType::DeletionError(length) => {
-                        debug!("Deletion error");
                         if seq_index + length < sequence.len() {
                             seq_index += length;
                             deletion_skip = length;
                         }
                     }
                     SequencingErrorType::InsertionError(vec) => {
-                        debug!("Insertion error");
                         ins_buf.clear();
                         ins_buf.push(reference_base);
                         ins_buf.extend(vec);

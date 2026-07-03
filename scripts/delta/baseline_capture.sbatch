@@ -130,14 +130,14 @@ if [[ -f "$DIR_A/${PREFIX}_r1.fastq.gz" && -f "$DIR_A/${PREFIX}.bam" ]]; then
 else
     echo "[1/5] Simulation run A (threads=$THREADS_A, +BAM)..."
     write_cfg "$DIR_A" "$THREADS_A" true
-    "$RNEAT_BIN" gen-reads -c "$DIR_A/sim.yml"
+    "$RNEAT_BIN" --log-level warn gen-reads -c "$DIR_A/sim.yml"
 fi
 if [[ -f "$DIR_B/${PREFIX}_r1.fastq.gz" ]]; then
     echo "[1/5] Run B outputs present — skipping."
 else
     echo "[1/5] Simulation run B (threads=$THREADS_B)..."
     write_cfg "$DIR_B" "$THREADS_B" false
-    "$RNEAT_BIN" gen-reads -c "$DIR_B/sim.yml"
+    "$RNEAT_BIN" --log-level warn gen-reads -c "$DIR_B/sim.yml"
 fi
 
 TRUTH_VCF="$DIR_A/${PREFIX}.vcf.gz"

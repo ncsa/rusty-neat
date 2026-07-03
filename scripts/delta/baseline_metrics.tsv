@@ -25,3 +25,15 @@ somatic_indel_recall	0.900	0.050	ge2sd	1
 sv_del_recall	0.843	0.106	ge2sd	2
 sv_dup_recall	0.853	0.111	ge2sd	2
 sv_inv_recall	0.916	0.092	ge2sd	2
+# Adapter readthrough seam (#125), from the 4-arm validation (chr22 30x TruSeq, run 6).
+# Checked via: run_adapter_validation.sh (CONTROL=1) -> collect_adapter_validation.sh
+# with CANDIDATE_TSV set -> regression_gate.sh. Gates callability (recall stays high →
+# catches a malformed-FASTQ/collapse regression), readthrough presence (on_raw soft-clip
+# elevated), trim recovery (on_trim soft-clip back to baseline), and the null adapter
+# effect (on_trim − short_ctrl ≈ 0).
+adapter_on_raw_snp_recall	0.9442	0.0012	ge2sd	2
+adapter_on_trim_snp_recall	0.9444	0.0013	ge2sd	2
+adapter_on_trim_indel_recall	0.9302	0.0044	ge2sd	2
+adapter_on_raw_softclip_frac	0.0804	0.0045	band:0.05:0.11	2
+adapter_on_trim_softclip_frac	0.0006	0.0002	band:0.0:0.004	2
+adapter_effect_snp_recall_delta	0.0003	0.0018	band:-0.006:0.006	2

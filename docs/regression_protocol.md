@@ -79,14 +79,44 @@ Adapters add read-level sequence (3′ adapter readthrough, etc.). Two question 
   no-adapter baseline within 2 sd. Adapters that survive trimming and corrupt
   calls would show up here.
 
-**New-feature checks (adapter-specific, added to Tier 0/1):**
-- Adapters present in raw reads at the configured rate and 3′ position
-  (cutadapt detection count ≈ expected).
-- A standard trimmer recovers the pre-adapter read set (read count + base-level).
-- No adapter bases leak into the aligned, properly soft-clipped fraction.
+**New-feature checks (adapter-specific) — built as a Tier-2 seam:**
+`run_adapter_validation.sh` (CONTROL=1) runs a four-arm matrix that isolates the
+adapter effect from the short-insert coverage effect (`off` rejects short inserts,
+so a naïve off-vs-on comparison is confounded):
 
-**Tier plan for adapters:** Tier 0 on every commit (incl. the adapter-presence
-check), Tier 1 on the PR; Tier 2 only if the same change also touches SVs.
+| arm | inserts | adapter |
+|---|---|---|
+| `off` | long (short rejected) | none — baseline |
+| `short_ctrl` | short (kept) | none — genomic reads (`keep_short_fragments`) |
+| `on_raw` | short | readthrough, aligned raw |
+| `on_trim` | short | readthrough, fastp-trimmed |
+
+The callability check rests on the **adapter-only contrasts** (`on_trim − short_ctrl`,
+`on_raw − on_trim`), not the confounded off-vs-on. `collect_adapter_validation.sh`
+with `CANDIDATE_TSV=…` emits `adapter_*` metrics that `regression_gate.sh` checks
+against the `adapter_*` rows in `baseline_metrics.tsv` — gating callability (recall
+stays high → catches a malformed-FASTQ/collapse regression), readthrough presence
+(`on_raw` soft-clip elevated), trim recovery, and the null adapter effect.
+
+```bash
+# after the 12 jobs finish:
+CANDIDATE_TSV=$RESULTS_DIR/adapter_candidate.tsv \
+  bash scripts/delta/collect_adapter_validation.sh $RESULTS_DIR/adapter_validation.manifest
+bash scripts/delta/regression_gate.sh scripts/delta/baseline_metrics.tsv \
+  $RESULTS_DIR/adapter_candidate.tsv 2
+```
+
+**Result (#125):** adapter readthrough is detectable and fully callable — the pure
+adapter effect is within replication noise; the only fidelity difference vs the
+long-insert baseline is the short-insert coverage effect, present with adapters
+entirely absent (`short_ctrl`). **Lesson:** the collapse bug that motivated this
+seam (a malformed FASTQ record) was invisible to `zcat`/`wc` read counts and only
+surfaced through a real aligner — so the gate keys on *aligned/called* metrics, not
+read counts.
+
+**Tier plan for adapters:** Tier 0/1 (default path, adapters off) on every commit /
+PR; run the Tier-2 adapter seam above when the change touches the adapter or
+fragment-generation code, or pre-release.
 
 ## Baseline management
 

@@ -126,6 +126,39 @@ fragment-generation code, or pre-release.
 - `regression_gate.sh` diffs the two, applies the gates + tolerances above, prints
   a PASS/FAIL table, and **exits non-zero on any FAIL** (CI / `--dependency`-friendly).
 
+### Re-freezing PERF rows without disturbing fidelity (the v1.19.1 logging fix)
+
+A change can be **output-preserving but performance-changing** — the v1.19.1
+logging fix (#340) is the canonical case. Every Phase-1/2 run used the old default
+log level `trace`, whose per-base debug events fire ~`coverage × read_len ×
+ref_bp` times and burned most of the wall-clock on log I/O; so the frozen
+`*_wall_s` / `*_rss_mb` rows were captured **under that handicap and are now
+stale** (the fixed build is faster). The fix does **not** change output bytes, so
+every fidelity / determinism / recall row stays valid — only the perf rows must be
+re-measured and re-frozen. Two steps:
+
+1. **Prove the change is output-preserving** (before trusting the split above). Run
+   `baseline_capture.sbatch` on the fixed build and compare its `baseline.json`
+   `fastq_md5` / `vcf_records_md5` against a pre-fix run's:
+   ```bash
+   bash scripts/delta/rebaseline_perf.sh --check-identity OLD.json NEW.json
+   ```
+   If this is not `PASS`, the change altered output and the fidelity rows must be
+   re-validated too — it is not a pure perf/logging change.
+
+2. **Re-freeze only the perf rows** from a fresh benchmark on the fixed build:
+   ```bash
+   MODE=submit TIER=0 LABEL=logfix bash scripts/delta/regression_suite.sh   # TIER=1 also re-freezes chr22_*
+   # …when the perf job finishes…
+   MODE=collect MANIFEST=$HOME/regression_logfix.manifest \
+     bash scripts/delta/regression_suite.sh > $HOME/logfix.candidate.tsv
+   bash scripts/delta/rebaseline_perf.sh $HOME/logfix.candidate.tsv          # rewrites *_wall_s / *_rss_mb only
+   ```
+   `rebaseline_perf.sh` touches **only** rows ending in `_wall_s` / `_rss_mb`
+   (preserving their gate + tier), writes a `.bak`, and leaves every other row
+   untouched — so a stray fidelity value in the candidate can never overwrite a
+   fidelity baseline. Commit the result with the fixed build's git SHA.
+
 ## Automation (built)
 
 Three files implement this, thin wrappers over the existing harnesses — no new

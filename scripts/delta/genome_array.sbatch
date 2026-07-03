@@ -117,7 +117,7 @@ target_bed: $bed
 num_threads: 1
 YAML
     echo "  shard $id start: $(cat "$bed")"
-    /usr/bin/time -v -o "$outdir/time.txt" "$RNEAT_BIN" gen-reads -c "$outdir/sim.yml" \
+    /usr/bin/time -v -o "$outdir/time.txt" "$RNEAT_BIN" --log-level warn gen-reads -c "$outdir/sim.yml" \
         > "$outdir/run.log" 2>&1
 }
 

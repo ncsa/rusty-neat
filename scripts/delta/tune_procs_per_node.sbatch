@@ -88,7 +88,7 @@ rng_seed: ppn $K $i
 num_threads: 1
 YAML
         # /usr/bin/time per process → per-proc elapsed; run in background.
-        ( /usr/bin/time -f '%e' -o "$d/t" "$RNEAT_BIN" gen-reads -c "$d/sim.yml" >/dev/null 2>"$d/log" ) &
+        ( /usr/bin/time -f '%e' -o "$d/t" "$RNEAT_BIN" --log-level warn gen-reads -c "$d/sim.yml" >/dev/null 2>"$d/log" ) &
     done
     wait
     makespan=$(( SECONDS - start ))

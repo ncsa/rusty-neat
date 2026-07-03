@@ -1,3 +1,29 @@
+Unreleased
+==========
+## Unreleased (targeting rneat v1.19.1)
+
+_Version bump + date land with the develop→main release PR._
+
+### Logging / performance
+- **Default `.neat.log` level is now `info`** (was effectively `trace`). The `--log-level`
+  arg carried `default_value("trace")`, which silently overrode the intended `info`
+  default, so every run wrote a trace-level log. On a human-sized reference the per-base
+  trace/debug events produced a multi-GB `.neat.log` and burned most of the wall-clock on
+  log I/O. Pass `--log-level debug`/`trace` to opt into verbosity; a bare `--log-level`
+  now means `debug`. The on-screen log is unchanged (always `info`). This is the likely
+  cause of the ~2× wall-clock seen in the v1.19.0 regression benchmark (#340).
+- Removed the per-base sequencing-error debug logs (`"Creating sequencing error"`,
+  `"Snp error"`, `"Deletion error"`, `"Insertion error"`, `"Generating basic SNP error"`) —
+  constant strings emitted ~once per erroneous base, no diagnostic value.
+- Delta harnesses (`scripts/delta/*`) now pass `--log-level warn` to `gen-reads` so a
+  benchmark/validation run never writes a large log to the shared filesystem.
+
+### Validation / tooling
+- Adapter readthrough is now part of the regression baseline (adapter_* rows in
+  `baseline_metrics.tsv`; `collect_adapter_validation.sh CANDIDATE_TSV=…` feeds
+  `regression_gate.sh`). See #338.
+
+
 7/2/2026
 ========
 ## rneat v1.19.0

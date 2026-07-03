@@ -122,15 +122,20 @@ fn main() -> Result<(), NeatErrors> {
                 .subcommand_value_name("SUB-COMMAND")
                 .subcommand_help_heading("SUB-COMMANDS")
                 .arg(
-					// This arg controls the amount of stuff shown in the display log.
+					// Verbosity of the WRITTEN .neat.log (WriteLogger). Default info: the
+					// per-base debug/trace events in gen-reads fire ~coverage×read_len×ref_bp
+					// times, so a default-trace run wrote a multi-GB log and burned most of the
+					// wall-clock on log I/O. Pass --log-level debug/trace to opt into verbosity.
+					// The on-screen log is always info. (default_value must agree with the info
+					// fallback below — a default_value of "trace" here silently overrode it.)
                     Arg::new("log_level")
                         .long("log-level")
-                        .help("Sets the log level for the display log.")
+                        .help("Verbosity of the written .neat.log (trace|debug|info|warn|error|off; default info). The on-screen log is always info.")
                         .action(ArgAction::Set)
                         .num_args(0..=1)
                         .value_parser(["trace", "debug", "info", "warn", "error", "off"])
-                        .default_value("trace")
-                        .default_missing_value("trace")
+                        .default_value("info")
+                        .default_missing_value("debug")
                 )
                 .arg(
 					// This arg controls where the log is written. The default is <current_working_dir>/.neat.log

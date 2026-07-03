@@ -144,7 +144,7 @@ run_one() {
             /usr/bin/time -v -o "$tf" "$NEAT_BIN" read-simulator -c "$cfg" \
                 -o "$run_dir" -p bench > "$log" 2>&1 || ec=$?
         else
-            /usr/bin/time -v -o "$tf" "$RNEAT_BIN" gen-reads -c "$cfg" > "$log" 2>&1 || ec=$?
+            /usr/bin/time -v -o "$tf" "$RNEAT_BIN" --log-level warn gen-reads -c "$cfg" > "$log" 2>&1 || ec=$?
         fi
 
         local parsed wall rss

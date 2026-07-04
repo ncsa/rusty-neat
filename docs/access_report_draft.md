@@ -137,6 +137,12 @@ only exposed by pushing the data through a real aligner at scale.
 
 ### 3.6 Multicore scaling and the whole-genome strategy
 
+> **Update (v1.19.1):** the wall-clock figures in this section were measured on
+> builds that defaulted to `--log-level trace`, whose per-base debug I/O we later
+> found dominated the runtime (issue #340). They are therefore **~3–4× too slow**
+> and are kept here for the investigation narrative. See **§3.6.1** for the
+> corrected simulation-only timing on the fixed build.
+
 Benchmarking exposed a scaling characteristic that reshaped the whole-genome
 plan. On Delta's dual-socket EPYC nodes, rneat's in-process (rayon) threading
 initially *regressed* — yeast 30× took 218 s on 1 thread but 278 s at 2 and
@@ -278,6 +284,62 @@ level sharding** — a defensible, mechanistically-grounded story rather than a
 (false) claim of linear thread scaling. Since each shard runs single-threaded on
 a (relatively slow) Delta core, ongoing single-thread optimization (reducing
 per-read allocations) compounds directly across the whole genome.
+
+### 3.6.1 Post-fix simulation-only timing (v1.19.1)
+
+The scaling investigation above ran on builds whose default log level was
+`trace`; rneat's per-base debug events fire on the order of `coverage × read_len
+× reference_bp`, so a default run wrote a multi-gigabyte `.neat.log` and spent
+most of its wall-clock on log I/O. Fixing the default to `info` and removing the
+per-base debug calls (issue #340, v1.19.1) is **output-preserving** — the Tier-1
+regression suite re-confirmed every fidelity and determinism metric unchanged —
+but it is a large *performance* change. On the seeded regression benchmark it cut
+wall-clock **3.4× on E. coli (33.0 → 9.79 s) and 4.2× on chr22 (255.0 → 61.37 s)**
+at flat peak RSS, and the perf baseline was re-frozen on the fixed build. The
+figures in §3.6 are therefore pre-fix and conservative, and the whole-genome
+strategy was re-measured.
+
+**Simulation-only timing (fixed build).** We re-ran the region-sharded
+whole-genome pipeline in generation-only mode (FASTQ + truth VCF, no downstream
+alignment or calling) on two whole genomes, capturing per-window wall-clock from
+each shard's `/usr/bin/time`:
+
+| Genome | Size | Windows | Coverage | Packing | per-window median / max | Total simulation compute |
+|---|---|---|---|---|---|---|
+| *Glycine max* (Wm82.a4) | ~1.01 Gb | 369 × 10 Mb | 30× | K=4 | 3.8 s / 49 s | **1.50 core-hours** |
+| GRCh38 (primary) | ~3.1 Gb | 306 × 25 Mb | 30× | K=16 | 18.3 s / 128 s | **4.87 core-hours** |
+
+Both runs completed every window (369/369, 306/306). "Total simulation compute"
+is the single-core sum of all window wall-clocks — the reproducible,
+node-availability-independent figure users can plan around: **a whole human
+genome at 30× is ≈4.9 core-hours of simulation; a whole soybean genome ≈1.5.**
+
+**How much the fix changed the picture.** The GRCh38 run is directly comparable
+to the pre-fix numbers above — same reference, same 25 Mb windows. Pre-fix, an
+isolated 25 Mb window took ~8 min (K=1) and packed heavy windows blew out to
+29 min (K=2) / 101 min (K=4), with the whole genome at 2 h 30 m. On the fixed
+build the **heaviest 25 Mb window is 128 s even at K=16 packing** — i.e. faster,
+under 16-way contention, than the old single-process window was in isolation.
+This points to the old superlinear packing penalty being substantially **trace-log
+I/O contention** (each packed process writing a multi-GB log to Lustre) rather
+than pure memory bandwidth: with logging gone, dense packing is cheap.
+
+**Revised HPC guidance.** This simplifies the three-regime recommendation above.
+Because per-window cost is now seconds-to-~2-minutes even at high packing, the
+"low-K-for-speed vs high-K-for-scheduling" tension largely dissolves: **dense
+packing (K≈16) is the sensible default** — fewest whole nodes (306 windows →
+~20 node-tasks, a single scheduling wave) at negligible per-window latency cost.
+Both runs sat far inside a generous walltime (human heaviest window 128 s against
+a 110-min ceiling). The residual memory-bandwidth effect is real (per-window time
+still rises with packing) but now second-order; a fixed-build K-sweep would
+quantify the now-shallow curve. Exclusive nodes remain mandatory — the
+shared-partition contention finding (§3.6) is independent of logging.
+
+*Framing:* the core-hour totals are hard numbers (summed per-window wall-clock);
+end-to-end wall-clock is still dominated by exclusive-node scheduling latency, so
+we report the reproducible compute figure rather than a node-availability-dependent
+wall time. All numbers are simulation-only — the rneat contribution — deliberately
+excluding downstream alignment/calling.
 
 ### 3.7 Structural-variant validation (chr22, Manta + truvari)
 

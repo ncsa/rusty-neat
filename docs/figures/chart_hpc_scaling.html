@@ -25,9 +25,9 @@
 </head>
 <body>
 <div class="wrap">
-  <h1>rneat HPC scaling — scale with processes, not threads</h1>
-  <p class="sub">rneat is memory-bandwidth-bound: in-process threads don't help, but independent
-  processes scale, so whole-genome speed comes from region-sharding across exclusive nodes.</p>
+  <h1>rneat HPC scaling — shard for throughput</h1>
+  <p class="sub">Fixed build (v1.19.1). Independent single-thread processes pack near-linearly;
+  in-process threads scale too, but only to the genome's contig count — so region-sharding is the throughput path.</p>
 
   <div class="row">
     <div class="panel">
@@ -36,23 +36,24 @@
       <svg id="proc" viewBox="0 0 440 280" role="img" aria-label="throughput vs processes per node"></svg>
     </div>
     <div class="panel">
-      <h2>Threads don't ✗</h2>
-      <div class="note">wall-clock vs in-process threads (yeast 30×) — 1 thread is fastest</div>
+      <h2>Threads scale — to contig count</h2>
+      <div class="note">wall-clock vs in-process threads (yeast 30×, 16 contigs) — ~6× then caps</div>
       <svg id="thr" viewBox="0 0 440 280" role="img" aria-label="wall-clock vs threads"></svg>
     </div>
   </div>
 
   <div class="panel full">
-    <h2>Whole human genome at 30× — wall-clock</h2>
-    <div class="note">GRCh38 region-sharded; the lever is exclusive-node availability, not packing</div>
+    <h2>Packing barely slows each window (25 Mb human window, 30×)</h2>
+    <div class="note">per-window wall-clock as you pack K single-thread shards onto one exclusive node</div>
     <svg id="wg" viewBox="0 0 920 200" role="img" aria-label="whole-genome wall-clock"></svg>
   </div>
 
-  <p class="cap"><b>Threading is break-even at best on Delta's dual-socket EPYC; processes scale ~3.5×
-  to a bandwidth plateau.</b> So whole-genome runs shard into single-thread region-workers across
-  exclusive nodes: a naive shared-partition run hit 3 h 41 m (cross-tenant contention), exclusive
-  K=2 packing 2 h 30 m, and the compute floor is ~30 min when enough whole nodes are available.
-  Source: ACCESS report §3.6.</p>
+  <p class="cap"><b>Independent single-thread shards pack near-linearly — ~99% efficiency to 64/node,
+  ~75% at 128 — while in-process threading scales only to the genome's contig count (~6–9×).</b>
+  So whole-genome runs shard into single-thread region-workers packed ~64/node across exclusive nodes:
+  a whole human genome at 30× is ~4.9 core-hours of simulation over ~5 node-tasks. (The earlier
+  "threads don't help / bandwidth saturates at K≈2 / 2 h 30 m" numbers were per-process trace-log I/O,
+  since fixed — #340.) Source: ACCESS report §3.6.1/§3.6.2.</p>
 </div>
 <script>
 const NS="http://www.w3.org/2000/svg";
@@ -83,23 +84,24 @@ function linePanel(id,xs,ys,{ymax,ylab,color,xlabels,annot,goodLow}){
 
 // Panel 1: process scaling (jobs/s)
 linePanel("proc",[1,2,4,8,16,32,64,128],
-  [0.0118,0.0142,0.0182,0.0275,0.0365,0.0407,0.0409,0.0390],
-  {ymax:0.048,ylab:"throughput (jobs/s)",color:"#16a34a",
+  [0.056,0.095,0.20,0.42,0.80,1.60,3.20,5.82],
+  {ymax:6,ylab:"throughput (jobs/s)",color:"#16a34a",
    xlabels:["1","2","4","8","16","32","64","128"],
-   annot:{x:300,y:70,s:"~3.5× → bandwidth plateau"}});
-// Panel 2: thread regression (wall-clock s)
-linePanel("thr",[1,2,4,8,16],[218,280,275,251,249],
-  {ymax:320,ylab:"wall-clock (s)",color:"#dc2626",
+   annot:{x:120,y:46,s:"near-linear to 128",anchor:"start"}});
+// Panel 2: thread scaling on the fixed build (wall-clock s), capped by contig count
+linePanel("thr",[1,2,4,8,16],[44.9,26.2,16.3,9.8,7.2],
+  {ymax:48,ylab:"wall-clock (s)",color:"#16a34a",
    xlabels:["1","2","4","8","16"],
-   annot:{x:300,y:60,s:"1 thread = fastest"}});
+   annot:{x:300,y:60,s:"~6× at 16 threads (=contigs)"}});
 
 // Panel 3: whole-genome wall-clock bars (minutes)
 (function(){
   const svg=document.getElementById("wg"),W=920,H=200,L=150,R=120,T=14,B=20,pw=W-L-R,ph=H-T-B;
-  const rows=[["Shared partition (naive)",221,"#dc2626","3 h 41 m"],
-              ["Exclusive nodes, K=2 packing",150,"#2563eb","2 h 30 m"],
-              ["Compute floor (enough nodes)",30,"#16a34a","~30 m"]];
-  const max=240, bh=ph/rows.length*0.6, gap=ph/rows.length;
+  const rows=[["1 shard / node",94,"#16a34a","94 s · 100%"],
+              ["16 shards / node",93,"#16a34a","93 s · 100%"],
+              ["64 shards / node",94,"#16a34a","94 s · 99%"],
+              ["128 shards / node",110,"#dc2626","110 s · 75%"]];
+  const max=130, bh=ph/rows.length*0.6, gap=ph/rows.length;
   rows.forEach((r,i)=>{
     const y=T+i*gap+gap*0.2, w=pw*r[1]/max;
     svg.appendChild(txt(L-10,y+bh*0.66,r[0],{anchor:"end",fill:"#334155",size:12.5}));

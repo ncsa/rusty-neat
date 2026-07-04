@@ -212,6 +212,17 @@ if [[ -n "$REFERENCE" && -f "$REFERENCE" ]] && grep -q 'PASS' "$SUMMARY"; then
     fi
 fi
 
+# No builder ran → every input was missing/unreadable. This is NOT a pass:
+# a stress test that exercises nothing must fail loudly, or a mis-staged run
+# (wrong paths, purged scratch) silently reports green. (see job 19887446)
+if [[ ! -s "$SUMMARY" ]]; then
+    echo "── no builder ran ──" >&2
+    echo "   FAIL  all inputs missing/unreadable — nothing was exercised." >&2
+    echo "         checked: ref=$REFERENCE bam=$INPUT_BAM fastq=$INPUT_FASTQ vcf=$INPUT_VCF" >&2
+    printf 'NONE\tFAIL-NO-INPUT\t-\t-\n' >> "$SUMMARY"
+    overall=1
+fi
+
 echo
 echo "════════════════════════════════════════════════════════════════"
 echo "Model-builder stress test summary (name / status / wall / peakRSS):"

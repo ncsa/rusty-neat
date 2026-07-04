@@ -72,21 +72,32 @@ population-realistic zygosity (common-variant spike-in / LD model) is wanted.
 
 | Genome | rneat wall | NEAT wall | **Speedup** | rneat RSS | NEAT RSS | **Memory** |
 |---|---|---|---|---|---|---|
-| E. coli (4.5 MB) | 33.0 s | 88.2 s | **2.7×** | 41 MB | 280 MB | **6.9×** |
-| yeast (11 MB) | 77.0 s | 214.7 s | **2.8×** | 53 MB | 172 MB | **3.2×** |
-| chr22 (49 MB) | 255.0 s | 749.0 s | **2.9×** | 227 MB | 1528 MB | **6.7×** |
+| E. coli (4.5 MB) | 9.27 s | 96.85 s | **10.4×** | 40 MB | 281 MB | **7.0×** |
+| yeast (11 MB) | 20.68 s | 231.1 s | **11.2×** | 53 MB | 168 MB | **3.2×** |
+| chr22 (49 MB) | 60.94 s | 810.3 s | **13.3×** | 227 MB | 1525 MB | **6.7×** |
 
-rneat is consistently ~2.7–2.9× faster and uses 3–7× less, flatter memory.
+rneat is **~10–13× faster** than NEAT 4 and uses 3–7× less, flatter memory (both
+tools single-threaded, 10× coverage, n=3 median on one exclusive node).
 
-**Multicore behavior (current default).** With its default per-contig
-parallelism, rneat does not gain from added threads on Delta's dual-socket EPYC —
-wall-clock is flat-to-slightly-higher with more threads (yeast: 1 thread 77 s →
-4 threads 110 s, plateau ~115 s), while on a single-socket machine it scales
-modestly (2 threads = 1.35×). rneat's single-thread efficiency, not thread
-scaling, is the source of its speed advantage. The behavior is consistent with
-memory-bandwidth saturation / allocator contention on NUMA hardware; Phase 2
-investigates whether code changes can recover multicore scaling, in which case
-these numbers will be revised.
+**Revision (v1.19.1).** An earlier draft reported ~2.7–2.9×. Those rneat timings
+were taken while rneat defaulted to `--log-level trace`, whose per-base debug I/O
+dominated its runtime (issue #340); NEAT's figures were unaffected. With the
+default corrected to `info`, rneat's true single-thread advantage is **~10–13×**.
+Memory was never affected (logging is CPU/I/O-bound), so the 3–7× memory advantage
+is unchanged. Both tools ran at minimal logging — rneat `warn`, NEAT its default
+`info`, which has no per-read logging and is timing-equivalent to `warn` (verified
+in NEAT's source; #346 makes NEAT `--log-level WARNING` explicit going forward).
+
+**Multicore behavior (v1.19.1).** The same fix also reverses rneat's apparent
+thread *regression*. On the multi-contig yeast genome, in-process threading now
+**scales** — 1 thread 20.7 s → 4 threads 9.5 s → 16 threads 5.3 s (**~3.9×**) —
+whereas the pre-fix build got *slower* with more threads (77 → 116 s). The
+regression was per-thread trace-log I/O contention (every worker writing the
+multi-GB log), not the compute engine. Whether this recovery persists at
+whole-genome scale — where §3.6 reported a memory-bandwidth ceiling, itself
+measured pre-fix — needs a fixed-build re-measurement. Regardless, the validated
+whole-genome path remains multi-process region-sharding (§3.6.1), which extracts a
+node's memory bandwidth better than threading a single process.
 
 ### 3.3 Germline fidelity vs NEAT 4 (chr22, 30×, identical pipeline)
 

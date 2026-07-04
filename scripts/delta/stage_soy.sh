@@ -63,10 +63,19 @@ echo "=== stage soy: SRR=$SRR  ref=$REF  max_pairs=$MAX_PAIRS  threads=$THREADS 
 # Optional subsample (head keeps R1/R2 in the same order → pairs stay matched).
 R1="$D/${SRR}_1.fastq.gz"; R2="$D/${SRR}_2.fastq.gz"
 if [[ "$MAX_PAIRS" -gt 0 ]]; then
-    if [[ ! -s "$D/sub_1.fastq.gz" ]]; then
+    # Require BOTH mates: a prior run that died mid-subsample (e.g. the pipefail/
+    # SIGPIPE abort) can leave sub_1 without sub_2 — redo it rather than march on
+    # to bwa-mem2 with a missing R2.
+    if [[ ! -s "$D/sub_1.fastq.gz" || ! -s "$D/sub_2.fastq.gz" ]]; then
         echo "subsampling first $MAX_PAIRS pairs..."
+        # `head` closes the pipe after N lines → `zcat` gets SIGPIPE (exit 141).
+        # That is expected here, not an error, but `set -o pipefail` would promote
+        # it to a pipeline failure and `set -e` would abort mid-subsample (leaving
+        # sub_1 written but sub_2 never created). Disable pipefail for just these.
+        set +o pipefail
         zcat "$R1" | head -n $(( MAX_PAIRS * 4 )) | gzip > "$D/sub_1.fastq.gz"
         zcat "$R2" | head -n $(( MAX_PAIRS * 4 )) | gzip > "$D/sub_2.fastq.gz"
+        set -o pipefail
     fi
     R1="$D/sub_1.fastq.gz"; R2="$D/sub_2.fastq.gz"
 fi

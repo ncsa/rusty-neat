@@ -14,25 +14,27 @@ things to your site and the rest is portable.
 
 ## 1. The one-paragraph mental model
 
-rneat is **single-thread efficient and memory-bandwidth-bound**, with **low, flat
-memory**. In-process (rayon) threading is *break-even at best* — a single rneat
-process already saturates a surprising amount of a node's memory bandwidth, so
-adding threads to one process buys little and can even regress. The way to use a
-big machine is therefore **not** "one process, many threads" but **many
-single-threaded processes**, each simulating a different region of the genome,
-spread across nodes. This is *region sharding*, and it is the entire HPC story.
+rneat is **single-thread efficient**, with **low, flat memory**. In-process (rayon)
+threading does scale — but only up to the genome's *contig count* (rneat's unit of
+parallelism), so it caps at ~6–9× and does nothing for a single-contig input. The
+way to use a big machine is therefore **many single-threaded processes**, each
+simulating a different region of the genome, packed onto nodes: this parallelizes
+at *sub-contig* granularity and, on current builds, packs **near-linearly** — many
+more independent shards than threading one process can ever reach. This is *region
+sharding*, and it is the HPC story.
 
 Three practical consequences follow, and the rest of this guide is just their
 detail:
 
-1. **Run one thread per process** (`num_threads: 1`). Pack multiple processes onto
-   a node instead of threading one.
-2. **Run on exclusive nodes.** rneat competes for memory bandwidth; a co-tenant's
-   bandwidth-hungry job on a shared node can inflate an 8-minute window to 170
-   minutes with no warning (measured — see §5).
-3. **Match packing density to node availability**, not to core count. More
-   processes per node ≠ proportionally more throughput past ~2 (the bandwidth
-   ceiling); it just makes each one slower.
+1. **Run one thread per process** (`num_threads: 1`) and pack many per node.
+   (Threading a single process is a fine *secondary* lever for a multi-contig
+   genome run as one job — ~6–9× — but sharding gives far more.)
+2. **Run on exclusive nodes.** On a shared node a co-tenant's bandwidth-hungry job
+   can inflate per-window time many-fold with no warning; a whole node to yourself
+   is the only way to get reproducible wall-clock (see §5).
+3. **Pack densely.** Independent single-thread shards pack at ~99% efficiency to
+   ~64 per node (one per physical core) and ~75% at 128 — so match K to core count,
+   not the old "keep it low" rule (see §5).
 
 ---
 
@@ -130,8 +132,8 @@ Then the full run:
 samtools faidx REF.fa
 N=$(bash scripts/delta/make_shard_beds.sh REF.fa.fai 25000000 $SCRATCH/shards)
 
-# 2. choose packing density K and derive node-tasks
-K=8; T=$(( (N + K - 1) / K ))
+# 2. choose packing density K and derive node-tasks (K=64 packs ~99%; see §5)
+K=64; T=$(( (N + K - 1) / K ))
 
 # 3. submit the exclusive-node array (%20 caps concurrent nodes — tune to availability)
 SHARD_DIR=$SCRATCH/shards OUTROOT=$SCRATCH/wg_run REFERENCE=REF.fa SHARDS_PER_NODE=$K \
@@ -149,49 +151,42 @@ FASTQ + truth VCF and the array's `time.txt` files hold the per-window wall-cloc
 
 ## 5. Choosing packing density (K) and whether to request a reservation
 
-This is the one genuinely non-obvious decision, and it is driven by three
-trade-offs we measured on GRCh38 (306 × 25 Mb shards):
+Good news: on current builds this is barely a decision. Independent single-thread
+shards pack **near-linearly** — measured on a real 25 Mb human window (30×), one
+exclusive node runs:
 
-- **Bandwidth saturates by K≈2.** A 25 Mb human window runs in ~8 min alone (K=1),
-  **29 min at K=2, and 101 min at K=4** on the same node — superlinear slowdown.
-  Packing more shards per node does *not* raise node throughput past ~2; it only
-  makes each shard slower.
-- **Low-K-many-nodes is the fastest compute but the hardest to schedule.**
-  `--exclusive` claims a whole node even for a 1-core task, so minimizing
-  wall-clock means grabbing dozens of whole nodes at once — which queues behind
-  everyone on a busy cluster.
-- **A tight per-task walltime is harmful once you're exclusive.** It silently kills
-  legitimately-slow packed windows. Use a *generous* walltime + `--requeue`
-  (`genome_array.sbatch` already does; `run_genome_reps.sh` sizes it `30 + 20K` min).
+| shards/node (K) | per-window time | per-process efficiency |
+|---|---|---|
+| 1 | ~94 s | 100% |
+| 16 | ~93 s | 100% |
+| 64 | ~94 s | **99%** |
+| 128 | ~110 s | 75% |
 
-Measured whole-genome results (each run complete, 306/306 shards):
+Per-window time is essentially flat to **64 shards/node** (one per physical core),
+dropping only when you oversubscribe hyperthreads at 128. **Default to K=64.** A
+whole human genome (306 × 25 Mb windows) is then just **~5 node-tasks**, each
+finishing in ~2 min of compute.
 
-| Configuration | Whole-genome wall | Heaviest window | Notes |
-|---|---|---|---|
-| Shared partition (16-core slice) | 3 h 41 m | **170 min** | contention-bound, irreproducible — avoid |
-| Exclusive, **K=2** | **2 h 30 m** | 29 min | ~30 nodes in waves; beat shared on every axis |
-| Exclusive, **K=4** | 12 h 32 m | 101 min | slow = *scheduling* (only ~10 nodes free), not compute |
+Two knobs:
+- **K=128** packs the node fullest → fewest node-tasks (~3 for a human genome) at
+  ~75% efficiency. Use it when whole nodes are scarce.
+- **Lower K** only if a genome's largest contig is big and RAM is tight — peak RSS
+  per node ≈ K × (largest contig loaded), since each shard loads its window's contig.
 
-**Rule of thumb:**
+**Do you need a reservation? Almost never.** A whole genome needs only ~3–5
+exclusive nodes at K=64–128, which schedules easily even on a busy cluster — you're
+not trying to grab 150 nodes for a low-K run. Submit with a `%`-throttle matched to
+node availability and let it drain; with no hard deadline, a reservation buys
+nothing.
 
-- **Cluster busy, no reservation, and you can wait:** exclusive, **K=8–16**. Fewer
-  whole-node grabs schedule sooner; each shard is slower but you're not paying for
-  idle cores and the run completes unattended. This is the pragmatic default.
-- **Cluster idle or you hold a reservation:** exclusive, **K=1–2** across as many
-  nodes as you can get. This is the ~30-min compute floor — a whole human genome at
-  30× in a single ~29-min wave when ~150 nodes are actually available.
+**Still run exclusive.** Dense packing only works because you hold the whole node.
+A shared per-core slice re-exposes rneat to cross-tenant memory-bandwidth theft,
+which is unbounded and makes wall-clock unreproducible — that finding is real and
+independent of packing density.
 
-**Do you need a reservation?** For most work, **no.** A reservation only buys the
-low-K compute floor (the "30-minute genome" headline). If you have no hard
-deadline and are fine letting a moderate-K run schedule and complete on its own
-time, skip the reservation and run K=8–16 exclusive. Request a reservation only
-when you specifically need many whole nodes *simultaneously* — i.e. you are chasing
-the minimum wall-clock, not just a finished dataset.
-
-**Cost intuition (SLURM node-hours):** a whole-genome 30× simulation is *cheap* —
-on the order of tens of node-hours of actual compute (each 25 Mb window is
-minutes). The binding constraint at scale is **per-run wall-clock and node
-availability, not accounting credits.** Plan around scheduling, not budget.
+**Cost:** a whole-genome 30× simulation is only ~1.5–5 core-hours of actual compute
+(soybean ~1.5, human ~4.9). Trivial against any allocation — the binding constraint
+is wall-clock / node availability, not credits.
 
 ---
 
@@ -270,7 +265,7 @@ Large simulation runs move a lot of FASTQ/BAM. On a shared parallel filesystem:
 |---|---|---|
 | Run is far slower than expected, huge `.neat.log` | `--log-level trace/debug` | use `--log-level info` (default ≥ v1.19.1) |
 | Whole-genome wall-clock wildly variable, some windows 10–20× slow | shared-partition co-tenant contention | request `--exclusive` nodes |
-| Array tasks stuck `PD (Resources/Priority)` forever | low-K wants too many whole nodes at once | raise K (8–16), or request a reservation |
+| Array tasks stuck `PD (Resources/Priority)` forever | asking for more whole nodes than are free | raise K (toward 64–128 → fewer node-tasks), or lower the `%`-throttle |
 | Packed windows all hit the walltime and finish incomplete | walltime ceiling below packed-window time | raise `--time` (never a tight ceiling once exclusive) |
 | Downstream aligner recovers almost no reads despite full read count | malformed FASTQ record | run `wg_smoke.sh`'s integrity check; upgrade to ≥ v1.19.0 |
 | Can't reproduce a previous run's variants | different reference contig order | use the byte-identical reference; or use the sharded path |

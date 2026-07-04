@@ -2,15 +2,17 @@
 # SLURM job: how many single-thread rneat processes saturate ONE Delta node?
 #
 # The whole-genome strategy is region-sharding (genome_array.sbatch): many
-# single-thread rneat processes, since in-process threading regresses on the
-# dual-socket EPYC. The open knob is how many shards to pack per node — too few
-# wastes cores, too many saturates per-node memory bandwidth (the bottleneck).
+# single-thread rneat processes, because sharding parallelizes sub-contig and packs
+# far denser than threading one process (which caps at the genome's contig count).
+# The knob is how many shards to pack per node. On the fixed build (v1.19.1, #340)
+# packing is near-linear — a real 25 Mb window holds ~99% per-process efficiency to
+# 64/node, dropping to ~75% at 128 (hyperthread oversubscription); the earlier
+# "efficient zone <=8" was an artifact of per-process trace-log I/O, since removed.
 #
 # This launches K identical single-thread rneat processes CONCURRENTLY on one
 # exclusive node for K in PROC_COUNTS, and measures aggregate throughput
-# (K / makespan) and per-process slowdown. Throughput climbs with K, then
-# plateaus/drops at the bandwidth wall — the peak is the optimal shards/node,
-# which maps to genome_array's cpus-per-task (= 128/K_opt) and %throttle.
+# (K / makespan) and per-process efficiency. The knee (where efficiency finally
+# falls off) is the optimal shards/node — currently ~64 (one per physical core).
 #
 # Per-process work is one full GENOME at COVERAGE (a stand-in for a shard);
 # outputs go to node-local /tmp (740 GB SSD) so the measurement reflects

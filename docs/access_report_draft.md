@@ -93,11 +93,11 @@ thread *regression*. On the multi-contig yeast genome, in-process threading now
 **scales** — 1 thread 20.7 s → 4 threads 9.5 s → 16 threads 5.3 s (**~3.9×**) —
 whereas the pre-fix build got *slower* with more threads (77 → 116 s). The
 regression was per-thread trace-log I/O contention (every worker writing the
-multi-GB log), not the compute engine. Whether this recovery persists at
-whole-genome scale — where §3.6 reported a memory-bandwidth ceiling, itself
-measured pre-fix — needs a fixed-build re-measurement. Regardless, the validated
-whole-genome path remains multi-process region-sharding (§3.6.1), which extracts a
-node's memory bandwidth better than threading a single process.
+multi-GB log), not the compute engine. This recovery is characterized fully in
+**§3.6.2** — threading scales up to the genome's contig count (~6–9×) — but the
+validated whole-genome path remains multi-process region-sharding (§3.6.1/§3.6.2),
+which parallelizes sub-contig and packs near-linearly across a node, well beyond
+what threading a single process can reach.
 
 ### 3.3 Germline fidelity vs NEAT 4 (chr22, 30×, identical pipeline)
 

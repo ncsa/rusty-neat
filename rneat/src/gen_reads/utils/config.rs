@@ -660,30 +660,46 @@ impl RunConfiguration {
         }
 
         if config.paired_ended {
+            // A paired-end run needs a fragment-length source. That can be an
+            // explicit fragment_mean + fragment_st_dev, OR a fragment_model — the
+            // runner uses the model in preference to mean/st_dev (see runner.rs),
+            // so requiring mean/st_dev when a model is present would reject a config
+            // the runtime handles fine. Accept whichever is provided; only error if
+            // neither is.
+            let have_mean_sd =
+                config.fragment_mean.is_some() && config.fragment_st_dev.is_some();
+            let have_model = config.fragment_model.is_some();
+            if !have_mean_sd && !have_model {
+                error!(
+                    "Paired ended is set to true, but no fragment-length source was \
+                    provided: set both fragment_mean and fragment_st_dev, or supply a \
+                    fragment_model."
+                );
+                return Err(GenerateReadsError::ConfigError);
+            }
+            if have_model && have_mean_sd {
+                warn!(
+                    "\t>Both a fragment_model and fragment_mean/fragment_st_dev are set; \
+                    the fragment_model takes precedence and mean/st_dev are ignored."
+                );
+            }
             match (config.fragment_mean, config.fragment_st_dev) {
                 (Some(mean), Some(st_dev)) => {
-                    if config.produce_fastq {
-                        info!("\t>fragment mean: {}", mean);
-                        info!("\t>fragment standard deviation: {}", st_dev);
-                        info!("\t>Producing fastq files:");
-
-                        let mut fastq_1 = config.output_dir.clone();
-                        fastq_1.push(format!("{}_r1.fastq.gz", config.output_filename));
-                        info!("\t\t> {:?}", &fastq_1);
-                        config.output_fastq_1 = Some(fastq_1);
-                        let mut fastq_2 = config.output_dir.clone();
-                        fastq_2.push(format!("{}_r2.fastq.gz", config.output_filename));
-                        info!("\t\t> {:?}", fastq_2);
-                        config.output_fastq_2 = Some(fastq_2);
-                    }
+                    info!("\t>fragment mean: {}", mean);
+                    info!("\t>fragment standard deviation: {}", st_dev);
                 }
-                _ => {
-                    error!(
-                        "Paired ended is set to true, but fragment mean \
-                        and standard deviation were not set."
-                    );
-                    return Err(GenerateReadsError::ConfigError);
-                }
+                _ => info!("\t>fragment length: from fragment_model"),
+            }
+            if config.produce_fastq {
+                info!("\t>Producing fastq files:");
+                let mut fastq_1 = config.output_dir.clone();
+                fastq_1.push(format!("{}_r1.fastq.gz", config.output_filename));
+                info!("\t\t> {:?}", &fastq_1);
+                config.output_fastq_1 = Some(fastq_1);
+                let mut fastq_2 = config.output_dir.clone();
+                fastq_2.push(format!("{}_r2.fastq.gz", config.output_filename));
+                info!("\t\t> {:?}", fastq_2);
+                config.output_fastq_2 = Some(fastq_2);
             }
         } else {
             // single-ended
@@ -728,11 +744,11 @@ impl RunConfiguration {
         if let Some(mutation_model) = &config.mutation_model {
             info!("\t>Mutation model: {:?}", mutation_model)
         }
-        if let Some(frament_model) = &config.fragment_model {
-            info!("\t>Mutation model: {:?}", frament_model)
+        if let Some(fragment_model) = &config.fragment_model {
+            info!("\t>Fragment model: {:?}", fragment_model)
         }
         if let Some(seq_err_model) = &config.sequence_error_model {
-            info!("\t>Mutation model: {:?}", seq_err_model)
+            info!("\t>Sequence error model: {:?}", seq_err_model)
         }
 
         if !config.produce_bam {
@@ -856,6 +872,22 @@ mod tests {
         config.paired_ended = true;
         config.fragment_mean = Some(100.0);
         config.fragment_st_dev = Some(10.0);
+        RunConfiguration::check_and_log_config(&mut config).unwrap();
+        assert!(config.output_fastq_1.is_some());
+        assert!(config.output_fastq_2.is_some());
+    }
+
+    #[test]
+    fn test_paired_ended_fragment_model_only() {
+        // A fragment_model alone satisfies the paired-end requirement — no
+        // fragment_mean/st_dev needed (the runner uses the model in preference to
+        // mean/st_dev). The validator must accept it and still set both fastq paths.
+        let mut config = RunConfiguration::default();
+        config.reference = PathBuf::from("test_data/references/H1N1.fa");
+        config.paired_ended = true;
+        config.fragment_model = Some(PathBuf::from(
+            "test_data/baseline_models/frag_length.canonical.json.gz",
+        ));
         RunConfiguration::check_and_log_config(&mut config).unwrap();
         assert!(config.output_fastq_1.is_some());
         assert!(config.output_fastq_2.is_some());

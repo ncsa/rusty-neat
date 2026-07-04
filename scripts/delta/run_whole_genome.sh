@@ -25,19 +25,20 @@
 #     bash scripts/delta/run_whole_genome.sh
 #
 #   # bigger/messier genome, smaller shards, timing-only (no merge):
-#   REFERENCE=$SCRATCH/neat_data/soy.fa TAG=soy SHARD_BP=10000000 K=4 DO_MERGE=0 \
+#   REFERENCE=$SCRATCH/neat_data/soy.fa TAG=soy SHARD_BP=10000000 DO_MERGE=0 \
 #     bash scripts/delta/run_whole_genome.sh
 #
-# KNOBS (env): REFERENCE TAG SHARD_BP(25M) K(4=shards/node) MAXNODES(20) COVERAGE(30)
+# KNOBS (env): REFERENCE TAG SHARD_BP(25M) K(64=shards/node) MAXNODES(20) COVERAGE(30)
 #   READ_LEN(151) FRAG_MEAN(350) FRAG_SD(50) PLOIDY(2) SV_RATE_SCALE(0)
-#   WALL_MINUTES(auto=30+20K) DO_MERGE(1) SKIP_SMOKE(0) OUTROOT(auto)
+#   WALL_MINUTES(auto=60) DO_MERGE(1) SKIP_SMOKE(0) OUTROOT(auto)
 #
-# PACKING (K) — see docs/hpc_guide.md §5. rneat is memory-bandwidth-bound, so the
-#   node saturates by K≈2; low K = fastest per-window but wants many whole nodes
-#   (hard to schedule on a busy cluster); high K = slower per-window but schedules
-#   sooner. K=4 is a schedulable default with no deadline; use K=1–2 only with a
-#   reservation / idle cluster. For big/messy genomes lower SHARD_BP so no single
-#   window's wall-clock blows past the per-task walltime.
+# PACKING (K) — see docs/hpc_guide.md §5. On the fixed build (#340) independent
+#   single-thread shards pack NEAR-LINEARLY: ~99% per-process efficiency to 64/node
+#   on a real 25 Mb window, ~75% at 128. So K=64 (one per physical core) is the
+#   default — whole human genome (306 windows) -> ~5 node-tasks. Use K=128 for the
+#   fewest nodes (~75% eff); lower K only if a genome's largest contig is big and
+#   RAM is tight (peak RSS/node ~= K * largest-contig-loaded). Windows run in ~1-2
+#   min even packed 64-deep, so packing no longer trades per-window speed.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -47,7 +48,7 @@ D="$REPO_ROOT/scripts/delta"
 REFERENCE="${REFERENCE:-$SCRATCH/neat_data/GRCh38.fa}"
 TAG="${TAG:-wg}"
 SHARD_BP="${SHARD_BP:-25000000}"
-K="${K:-4}"                       # shards per exclusive node
+K="${K:-64}"                      # shards per exclusive node (~99% eff on the fixed build)
 MAXNODES="${MAXNODES:-20}"        # concurrent exclusive nodes (%throttle)
 COVERAGE="${COVERAGE:-30}"
 READ_LEN="${READ_LEN:-151}"
@@ -76,7 +77,9 @@ module load samtools/1.22-cce19.0.0 2>/dev/null || true
 N=$(bash "$D/make_shard_beds.sh" "$REFERENCE.fai" "$SHARD_BP" "$SHARD_DIR")
 [[ "$N" =~ ^[0-9]+$ && "$N" -gt 0 ]] || { echo "make_shard_beds produced no shards" >&2; exit 1; }
 T=$(( (N + K - 1) / K ))                              # node-tasks
-MINUTES="${WALL_MINUTES:-$(( 30 + K * 20 ))}"
+# Windows run in ~1-2 min even packed 64-deep on the fixed build, so a flat 1 h is
+# generous headroom (and schedules far easier than the old K-scaled multi-hour ask).
+MINUTES="${WALL_MINUTES:-60}"
 WALL=$(printf '%02d:%02d:00' $(( MINUTES / 60 )) $(( MINUTES % 60 )))
 
 echo "════════════════════════════════════════════════════════════════"

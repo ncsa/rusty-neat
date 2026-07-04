@@ -28,7 +28,7 @@ source "$REPO_ROOT/scripts/delta/lib_report.sh"
 
 REFERENCE="${REFERENCE:-$SCRATCH/neat_data/GRCh38.fa}"
 SHARD_DIR="${SHARD_DIR:-$SCRATCH/shards_hg38}"
-KS="${KS:-4 8 16}"           # shards-per-node values to sweep (the packing knob)
+KS="${KS:-16 32 64}"         # shards-per-node values to sweep (fixed build packs ~99% to 64)
 REPS="${REPS:-3}"            # replicates per K
 MAXNODES="${MAXNODES:-20}"   # concurrent exclusive nodes (the %throttle)
 TAG="${TAG:-hg38}"
@@ -51,13 +51,11 @@ echo "NOTE: ~$(( $(echo "$KS" | wc -w) * REPS * 38 )) GB of FASTQ total across a
 
 for K in $KS; do
     T=$(( (N + K - 1) / K ))               # node-tasks = ceil(N / K)
-    # Per-task walltime. --exclusive already removes the cross-tenant straggler
-    # that motivated a tight ceiling, so this must be GENEROUS: a heavy 25 Mb
-    # window runs ~8 min alone but slows ~linearly under packing (~0.8*K), and a
-    # ceiling below that silently kills legitimate slow shards (the first sweep
-    # capped every heavy window exactly at a 10+6K ceiling -> incomplete runs).
-    # Override with WALL_MINUTES if needed.
-    MINUTES="${WALL_MINUTES:-$(( 30 + K * 20 ))}"
+    # Per-task walltime. On the fixed build (#340) packing is ~99% efficient to
+    # 64/node — windows run in ~1-2 min even packed deep, no superlinear slowdown —
+    # so a flat 1 h is generous headroom (the old 30+20K ask scaled multi-hour on a
+    # false premise and just hurt scheduling). Override with WALL_MINUTES if needed.
+    MINUTES="${WALL_MINUTES:-60}"
     WALL=$(printf '%02d:%02d:00' $(( MINUTES / 60 )) $(( MINUTES % 60 )))
     for r in $(seq 1 "$REPS"); do
         OUTROOT="$SCRATCH/wg_${TAG}_k${K}_rep${r}"

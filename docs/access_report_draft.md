@@ -352,6 +352,56 @@ we report the reproducible compute figure rather than a node-availability-depend
 wall time. All numbers are simulation-only — the rneat contribution — deliberately
 excluding downstream alignment/calling.
 
+### 3.6.2 Threading and packing re-characterized (fixed v1.19.1 build)
+
+Both scaling curves in §3.6 were measured under the old `trace` default. Re-running
+them on the fixed build changes the *mechanism* — though not the whole-genome
+*strategy*, which it puts on firmer ground.
+
+**In-process threading scales — bounded by contig count.** The apparent thread
+*regression* of §3.6 was per-thread trace-log I/O. On the fixed build a single
+process scales with threads, up to the genome's contig count (rneat's unit of
+parallelism is the contig):
+
+| threads | yeast 30× (16 contigs) | soy 10× (100s of contigs) |
+|---|---|---|
+| 1 | 44.9 s (1.0×) | 1237 s (1.0×) |
+| 2 | 26.2 s (1.7×) | 1228 s (1.0×) |
+| 8 | 9.8 s (4.6×) | 414 s (3.0×) |
+| 16 | 7.2 s (**6.2×**) | 231 s (5.4×) |
+| 64 | 7.5 s (6.0×) | 139 s (**8.9×**) |
+
+yeast (16 contigs) peaks at ~6× at 16 threads and flattens beyond — no contigs left
+to split. soy (hundreds of contigs) keeps climbing to ~9× at 64. Two real,
+non-logging limits remain: scaling is **sub-linear**, and on a large working set the
+**1→2-thread step is a wash** (soy 1.01×, the cross-socket bandwidth floor §3.6
+noted), while a cache-resident genome takes it cleanly (yeast 1.7×).
+
+**Multi-process packing is near-linear to 128/node.** §3.6's procs-per-node
+efficiency collapse (100% → 5% at 64, "bandwidth saturates by K≈2") was per-process
+log I/O. On the fixed build, K independent single-thread processes pack at ~90 %
+efficiency all the way to 128 — per-process time moves only 18.6 s → 20.1 s from 1
+to 128 processes:
+
+| procs/node | 1 | 16 | 64 | 128 |
+|---|---|---|---|---|
+| efficiency | 100% | 90% | 90% | 82% |
+| throughput (jobs/s) | 0.056 | 0.80 | 3.20 | 5.82 |
+
+**Strategy — region-sharding wins, on corrected and stronger grounds.** The
+whole-genome recommendation (multi-process region-sharding, §3.6.1) stands, but the
+reasoning is now: (1) region-sharding parallelizes at *sub-contig* window
+granularity — arbitrary parallelism, and the *only* option for few-/single-contig
+inputs (chr22) where threading does nothing; (2) independent shards pack
+near-linearly to ~128/node (~90 %), whereas threading one process is capped at
+contig count and reaches only ~6–9×. So many thin shards ≫ few fat-threaded
+processes, and packing is far cheaper than §3.6's pre-fix "K≈2" claim — dense
+packing (tens of shards/node) is efficient. In-process threading remains a useful
+*secondary* lever for running a multi-contig genome as a single job (~6–9×), but
+sharding is the throughput path. *(Caveat: the packing sweep used a small
+(ecoli, 4.5 MB) per-process workload; 25 MB human windows carry a larger working
+set, so their packing efficiency may fall off sooner — a bounded follow-up.)*
+
 ### 3.7 Structural-variant validation (chr22, Manta + truvari)
 
 The cancer workflow's structural variants (DEL / DUP / INV / BND / CNV) had only

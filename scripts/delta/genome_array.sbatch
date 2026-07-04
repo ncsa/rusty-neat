@@ -5,20 +5,20 @@
 # SHARDS_PER_NODE windows on it concurrently, one single-threaded rneat process
 # per window. This is the key to predictable performance on Delta:
 #
-#   rneat is memory-bandwidth-bound. On the SHARED `cpu` partition, a per-shard
-#   16-cpu slice lands our process on a node alongside other tenants' jobs, and
-#   they steal the memory bandwidth rneat needs — we measured 8-min windows
-#   blowing out to 100-170 min (10-20x) purely from co-tenant contention, with
-#   a bimodal time distribution (median ~2.5 min, p90 ~131 min) that made the
-#   whole-genome wall-clock unreproducible (one run: 3h41m, almost all of it
-#   stragglers on contended nodes).
+#   Use the SHARED `cpu` partition and a per-shard core slice lands our process
+#   alongside other tenants' jobs; they steal memory bandwidth and make per-window
+#   time (and thus the whole-genome wall-clock) unpredictable. So we take whole
+#   nodes with --exclusive: the only contention is our own SHARDS_PER_NODE
+#   processes, which is controllable and reproducible.
 #
-#   --exclusive removes the strangers: we hold the entire node, so the ONLY
-#   contention is our own SHARDS_PER_NODE processes competing for the node's
-#   bandwidth — and that is controllable and reproducible. The procs-per-node
-#   sweep put the efficient zone at <=8 procs/node (>=29% per-proc efficiency);
-#   raise SHARDS_PER_NODE for more per-node throughput (fewer nodes, cheaper),
-#   lower it for faster per-shard (more nodes, faster wall-clock).
+#   Packing density: the procs-per-node sweep on the FIXED build (v1.19.1, #340 —
+#   the earlier "efficient zone <=8" number was an artifact of per-process trace-log
+#   I/O, since corrected) shows K independent single-thread processes pack
+#   NEAR-LINEARLY — ~99% per-process efficiency to 64/node on a real 25 Mb window,
+#   dropping to ~75% at 128 (hyperthread oversubscription). So the default is 64
+#   (one per physical core): whole human genome = 306 windows -> ~5 node-tasks.
+#   Use 128 for the fewest nodes (~75% eff), or lower K if a genome's largest contig
+#   is big and RAM is tight (peak RSS/node ~= K * largest-contig-loaded).
 #
 # Reads/variants come out in absolute genome coordinates (target_bed is a
 # generation-time filter), so merge_shards.sh concatenates the per-shard outputs
@@ -27,7 +27,7 @@
 # Workflow:
 #   samtools faidx REF.fa
 #   N=$(bash scripts/delta/make_shard_beds.sh REF.fa.fai 25000000 $SCRATCH/shards)
-#   K=8; T=$(( (N + K - 1) / K ))          # node-tasks = ceil(N / SHARDS_PER_NODE)
+#   K=64; T=$(( (N + K - 1) / K ))         # node-tasks = ceil(N / SHARDS_PER_NODE)
 #   SHARD_DIR=$SCRATCH/shards OUTROOT=$SCRATCH/wg_$(date +%s) REFERENCE=REF.fa \
 #     SHARDS_PER_NODE=$K \
 #     sbatch --array=0-$((T-1))%20 scripts/delta/genome_array.sbatch
@@ -37,10 +37,11 @@
 # For replicated / swept runs, drive it with run_genome_reps.sh instead.
 #
 # The `%20` throttle caps concurrently-running NODES (each task = 1 exclusive
-# node), tune to your node availability. Straggler-proofing: --time is tight
-# (a healthy K<=8 batch finishes well inside it) and --requeue is set, so a task
-# stuck on a sick node is killed and rescheduled elsewhere — finished shards in
+# node), tune to your node availability. Straggler-proofing: --requeue is set, so a
+# task stuck on a sick node is killed and rescheduled elsewhere — finished shards in
 # the batch are skipped on the retry (idempotent), only the unfinished ones rerun.
+# On the fixed build a batch finishes in minutes (windows run in ~1-2 min even
+# packed 64-deep), so the 1 h --time is generous headroom, not a tight ceiling.
 
 #SBATCH --job-name=rneat-wgshard
 #SBATCH --partition=cpu
@@ -62,7 +63,7 @@ source "$REPO_ROOT/scripts/delta/lib_report.sh"   # $SCRATCH resolution
 REFERENCE="${REFERENCE:-$SCRATCH/neat_data/GRCh38.fa}"
 SHARD_DIR="${SHARD_DIR:-$SCRATCH/shards}"
 OUTROOT="${OUTROOT:-$SCRATCH/wg_$SLURM_ARRAY_JOB_ID}"
-SHARDS_PER_NODE="${SHARDS_PER_NODE:-8}"    # windows packed onto each exclusive node
+SHARDS_PER_NODE="${SHARDS_PER_NODE:-64}"   # windows packed per exclusive node (~99% eff on the fixed build; see header)
 COVERAGE="${COVERAGE:-30}"
 READ_LEN="${READ_LEN:-151}"
 FRAG_MEAN="${FRAG_MEAN:-350}"

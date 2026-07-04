@@ -178,6 +178,13 @@ if [[ -n "$REFERENCE" && -f "$REFERENCE" ]] && grep -q 'PASS' "$SUMMARY"; then
         echo "coverage: 30"
         echo "ploidy: 2"
         echo "paired_ended: true"
+        # paired-end config validation currently requires fragment_mean/st_dev even
+        # when a fragment_model is supplied (config.rs check_and_log_config vs the
+        # runner, which prioritizes fragment_model). Set them so the round-trip
+        # validates; the built fragment_model still overrides these at runtime
+        # (runner.rs). Drop these once the validator accepts fragment_model alone.
+        echo "fragment_mean: 350"
+        echo "fragment_st_dev: 50"
         echo "produce_fastq: true"
         echo "produce_vcf: true"
         echo "produce_bam: false"

@@ -48,18 +48,16 @@ links (all are real, runnable tests, not assertions on paper):
 | model → output | evidence |
 |----------------|----------|
 | explicit `fragment_mean` → BAM insert size (TLEN) | `gen_reads … test_paired_ended_insert_size_matches_model` |
-| **built `fragment_model` file → BAM insert size** | `tests/model_fragment_fidelity.rs` — fit a model on a 200 bp-mean BAM, simulate with the file, output insert mean = **199.8 bp** (fitted 200.0) |
+| **built `fragment_model` file → BAM insert size** | `tests/model_fragment_fidelity.rs` — fit on a 200 bp-mean BAM, simulate with the file, output insert mean = **199.8 bp** (fitted 200.0) |
+| **built `sequence_error_model` file → read qualities** | `tests/model_output_fidelity.rs` — train on a uniform-Phred-35 FASTQ, simulate, output mean quality = **35.0** |
+| **built `mutation_model` file → output variant count** | `tests/model_output_fidelity.rs` — a 139× rate difference between two fitted models yields 0 vs **405** output variants (405 ≈ rate 3.17e-2 × 13,133 bp) |
+| **built `gc_bias_model` file → which regions get sequenced** | `tests/model_output_fidelity.rs` — train on a BAM covering a 20%-GC contig but not an 80%-GC one (fitted `w[20]=1.98`, `w[80]=0.02`), simulate: output is **506 low-GC reads / 0 high-GC** |
 | input VCF variant → output reads | `gen_reads … test_input_vcf_snp_appears_in_bam_reads` |
 
 The `model_builders.sbatch` round-trip is only a *usability* smoke test (reads exist
-and are correctly-lengthed); the fragment fidelity test above is what proves the
-build→simulate path is numerically faithful through the model-file load path.
+and are correctly-lengthed); the fidelity tests above prove the build→simulate path
+is numerically faithful through the model-file load path — for **all four** builders.
 
-### Not yet numerically verified (follow-ups)
-
-The same "built model file drives output" proof is still open for the other three
-builders — worth closing the same way:
-
-- **seq_error**: built error/quality profile → output FASTQ quality distribution.
-- **gc_bias**: built bias curve → output coverage-vs-GC.
-- **mut_model**: built mutation rate/spectrum → output VCF variant rate.
+Because H1N1's ~40% GC can't populate distinct GC bins, the gc_bias test builds a
+synthetic 2-contig reference (a 20%-GC and an 80%-GC contig) so the weight table is
+deterministic; the others reuse the bundled H1N1 fixture.

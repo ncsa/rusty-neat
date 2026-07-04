@@ -16,6 +16,21 @@ use common::{h1n1_reference, rneat};
 use flate2::Compression;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
+use noodles::bam;
+use noodles::core::Position;
+use noodles::sam::{
+    self as sam,
+    alignment::{
+        RecordBuf,
+        io::Write as _,
+        record::{
+            Flags, MappingQuality,
+            cigar::{Op, op::Kind},
+        },
+        record_buf::{Cigar, Sequence},
+    },
+    header::record::value::{Map, map::ReferenceSequence},
+};
 use serde_json::Value;
 
 fn write_yaml(dir: &Path, tag: &str, body: &str) -> std::path::PathBuf {
@@ -266,5 +281,184 @@ fn built_mutation_model_rate_drives_output_variant_count() {
         "output variant count did not scale with the fitted mutation_rate \
          (lo model → {n_lo} variants, hi model → {n_hi}); the built mutation_model's \
          rate is NOT governing gen-reads output"
+    );
+}
+
+// ── GC-bias model ────────────────────────────────────────────────────────────
+
+/// Write a 2-contig reference: `lowgc` (~20% GC) and `highgc` (~80% GC), each
+/// `reps`*10 bp on a single line, plus a matching `.fai`. A wide, clean GC split
+/// (H1N1's ~40% range can't populate distinct GC bins) makes the model deterministic.
+/// Returns (path, contig_len).
+fn write_gc_reference(dir: &Path, reps: usize) -> (std::path::PathBuf, usize) {
+    let low = "ATATATATGC".repeat(reps); //  2/10 GC = 20%
+    let high = "GCGCGCGCTA".repeat(reps); // 8/10 GC = 80%
+    let path = dir.join("gc_ref.fa");
+    let mut buf = String::new();
+    let mut fai = String::new();
+    let mut offset = 0usize;
+    for (name, seq) in [("lowgc", &low), ("highgc", &high)] {
+        let hdr = format!(">{name}\n");
+        buf.push_str(&hdr);
+        offset += hdr.len();
+        let seq_offset = offset;
+        buf.push_str(seq);
+        buf.push('\n');
+        offset += seq.len() + 1;
+        // name, length, seq byte offset, bases-per-line, bytes-per-line (+newline)
+        fai.push_str(&format!(
+            "{name}\t{}\t{seq_offset}\t{}\t{}\n",
+            seq.len(),
+            seq.len(),
+            seq.len() + 1
+        ));
+    }
+    fs::write(&path, &buf).unwrap();
+    fs::write(dir.join("gc_ref.fa.fai"), &fai).unwrap();
+    (path, low.len())
+}
+
+/// Write an unpaired-read BAM over the given contigs. `reads` are (contig_id, start).
+fn write_coverage_bam(path: &Path, contigs: &[(&str, usize)], reads: &[(usize, usize)], read_len: usize) {
+    let mut hb = sam::Header::builder();
+    for (name, len) in contigs {
+        hb = hb.add_reference_sequence(
+            name.as_bytes().to_vec(),
+            Map::<ReferenceSequence>::new(std::num::NonZero::<usize>::new(*len).unwrap()),
+        );
+    }
+    let header = hb.build();
+    let mut writer = bam::io::Writer::new(fs::File::create(path).unwrap());
+    writer.write_header(&header).unwrap();
+    let cigar: Cigar = [Op::new(Kind::Match, read_len)].into_iter().collect();
+    let seq = vec![b'A'; read_len];
+    for &(cid, start) in reads {
+        let mut r = RecordBuf::default();
+        *r.flags_mut() = Flags::empty();
+        *r.cigar_mut() = cigar.clone();
+        *r.reference_sequence_id_mut() = Some(cid);
+        *r.alignment_start_mut() = Position::new(start);
+        *r.sequence_mut() = Sequence::from(seq.as_slice());
+        *r.mapping_quality_mut() = Some(MappingQuality::try_from(30u8).unwrap());
+        writer.write_alignment_record(&header, &r).unwrap();
+    }
+}
+
+fn gc_weights(path: &Path) -> Vec<f64> {
+    let mut raw = String::new();
+    GzDecoder::new(fs::File::open(path).unwrap())
+        .read_to_string(&mut raw)
+        .unwrap();
+    let v: Value = serde_json::from_str(&raw).unwrap();
+    v["weights_by_percent_gc"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x.as_f64().unwrap())
+        .collect()
+}
+
+/// Classify single-end FASTQ.gz reads by their own GC content: returns
+/// (reads with GC < 40%, reads with GC > 60%). The 20/80% contigs sit well outside
+/// this band, so a few simulated errors can't misclassify them.
+fn classify_reads_by_gc(fastq_gz: &Path) -> (usize, usize) {
+    let mut raw = String::new();
+    GzDecoder::new(fs::File::open(fastq_gz).unwrap())
+        .read_to_string(&mut raw)
+        .unwrap();
+    let (mut low, mut high) = (0usize, 0usize);
+    for (i, line) in raw.lines().enumerate() {
+        if i % 4 == 1 && !line.is_empty() {
+            let gc = line.bytes().filter(|b| matches!(b, b'G' | b'C' | b'g' | b'c')).count();
+            let frac = gc as f64 / line.len() as f64;
+            if frac < 0.40 {
+                low += 1;
+            } else if frac > 0.60 {
+                high += 1;
+            }
+        }
+    }
+    (low, high)
+}
+
+/// Build a GC-bias model from a BAM that covers the low-GC contig heavily and the
+/// high-GC contig barely, then simulate and confirm high-GC reads are strongly
+/// depleted in the output — i.e. the built weight table shapes which regions get
+/// sequenced, not just whether the run succeeds.
+#[test]
+fn built_gc_bias_model_depletes_disfavored_gc_in_output() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    let reps = 500;
+    let (reference, clen) = write_gc_reference(dir, reps); // two 5 kb contigs
+    let read_len = 100;
+
+    // training coverage: dense over lowgc (id 0), almost none over highgc (id 1).
+    let mut reads: Vec<(usize, usize)> = Vec::new();
+    let mut start = 1;
+    while start + read_len <= clen {
+        reads.push((0, start)); // lowgc, stride 20 → ~5x coverage
+        start += 20;
+    }
+    for s in [1usize, clen / 3, 2 * clen / 3] {
+        reads.push((1, s)); // highgc: 3 reads → ~0 coverage
+    }
+    let cov_bam = dir.join("cov.bam");
+    write_coverage_bam(&cov_bam, &[("lowgc", clen), ("highgc", clen)], &reads, read_len);
+
+    // build the GC-bias model.
+    let model = dir.join("gc.json.gz");
+    let build_cfg = write_yaml(
+        dir,
+        "gc_build",
+        &format!(
+            "reference: {ref}\nbam_file: {bam}\noutput_file: {model}\noverwrite_output: true\n\
+             min_mapq: 0\nbed_file: .\nwindow_size: 100\nwindow_stride: 100\n\
+             min_windows_per_bin: 1\n",
+            ref = reference.display(),
+            bam = cov_bam.display(),
+            model = model.display(),
+        ),
+    );
+    rneat()
+        .args(["gen-gc-bias-model", "-c"])
+        .arg(&build_cfg)
+        .assert()
+        .success();
+
+    // builder side: bin 20 up-weighted, bin 80 driven to ~0.
+    let w = gc_weights(&model);
+    eprintln!("[fidelity] gc weights: w[20]={:.3} w[80]={:.3}", w[20], w[80]);
+    assert!(w[20] > 1.2, "low-GC bin should be up-weighted, got w[20]={:.3}", w[20]);
+    assert!(w[80] < 0.2, "high-GC bin should be ~0, got w[80]={:.3}", w[80]);
+
+    // simulate with the model and classify output reads by GC.
+    let sim_cfg = write_yaml(
+        dir,
+        "gc_sim",
+        &format!(
+            "reference: {ref}\nread_len: {rl}\ncoverage: 20\npaired_ended: false\n\
+             gc_bias_model: {model}\nproduce_fastq: true\nproduce_bam: false\n\
+             produce_vcf: false\noverwrite_output: true\noutput_dir: {out}\n\
+             output_filename: rt\nrng_seed: gc fidelity\nnum_threads: 1\n",
+            ref = reference.display(),
+            rl = read_len,
+            model = model.display(),
+            out = dir.display(),
+        ),
+    );
+    rneat()
+        .args(["gen-reads", "-c"])
+        .arg(&sim_cfg)
+        .assert()
+        .success();
+
+    let (low_reads, high_reads) = classify_reads_by_gc(&dir.join("rt_r1.fastq.gz"));
+    eprintln!("[fidelity] output reads: low-GC={low_reads} high-GC={high_reads}");
+    assert!(low_reads > 0, "no low-GC reads produced at all");
+    assert!(
+        high_reads * 5 < low_reads,
+        "high-GC reads ({high_reads}) not depleted vs low-GC ({low_reads}) — the built \
+         gc_bias_model's weights are NOT shaping which regions gen-reads sequences"
     );
 }

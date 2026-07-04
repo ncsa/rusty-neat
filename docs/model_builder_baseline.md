@@ -48,18 +48,23 @@ links (all are real, runnable tests, not assertions on paper):
 | model → output | evidence |
 |----------------|----------|
 | explicit `fragment_mean` → BAM insert size (TLEN) | `gen_reads … test_paired_ended_insert_size_matches_model` |
-| **built `fragment_model` file → BAM insert size** | `tests/model_fragment_fidelity.rs` — fit a model on a 200 bp-mean BAM, simulate with the file, output insert mean = **199.8 bp** (fitted 200.0) |
+| **built `fragment_model` file → BAM insert size** | `tests/model_fragment_fidelity.rs` — fit on a 200 bp-mean BAM, simulate with the file, output insert mean = **199.8 bp** (fitted 200.0) |
+| **built `sequence_error_model` file → read qualities** | `tests/model_output_fidelity.rs` — train on a uniform-Phred-35 FASTQ, simulate, output mean quality = **35.0** |
+| **built `mutation_model` file → output variant count** | `tests/model_output_fidelity.rs` — a 139× rate difference between two fitted models yields 0 vs **405** output variants (405 ≈ rate 3.17e-2 × 13,133 bp) |
 | input VCF variant → output reads | `gen_reads … test_input_vcf_snp_appears_in_bam_reads` |
 
 The `model_builders.sbatch` round-trip is only a *usability* smoke test (reads exist
-and are correctly-lengthed); the fragment fidelity test above is what proves the
-build→simulate path is numerically faithful through the model-file load path.
+and are correctly-lengthed); the fidelity tests above prove the build→simulate path
+is numerically faithful through the model-file load path.
 
-### Not yet numerically verified (follow-ups)
+### Not yet numerically verified (follow-up)
 
-The same "built model file drives output" proof is still open for the other three
-builders — worth closing the same way:
+One builder remains:
 
-- **seq_error**: built error/quality profile → output FASTQ quality distribution.
-- **gc_bias**: built bias curve → output coverage-vs-GC.
-- **mut_model**: built mutation rate/spectrum → output VCF variant rate.
+- **gc_bias**: built bias curve → output coverage-vs-GC. Deferred because a clean,
+  non-flaky test needs a GC-correlated training BAM plus per-window coverage
+  measurement of the output — a larger harness than the other three, and noisy on
+  the 13 kb H1N1 fixture. The signal exists (gen-reads reweights fragments by GC
+  unless the model `is_uniform()`); a robust test likely builds a strongly-biased
+  model (some GC bins → ~0 weight) and asserts those GC windows are depleted in the
+  output relative to a neutral model.

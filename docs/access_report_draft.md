@@ -377,30 +377,35 @@ non-logging limits remain: scaling is **sub-linear**, and on a large working set
 **1→2-thread step is a wash** (soy 1.01×, the cross-socket bandwidth floor §3.6
 noted), while a cache-resident genome takes it cleanly (yeast 1.7×).
 
-**Multi-process packing is near-linear to 128/node.** §3.6's procs-per-node
+**Multi-process packing is near-linear to 64/node.** §3.6's procs-per-node
 efficiency collapse (100% → 5% at 64, "bandwidth saturates by K≈2") was per-process
-log I/O. On the fixed build, K independent single-thread processes pack at ~90 %
-efficiency all the way to 128 — per-process time moves only 18.6 s → 20.1 s from 1
-to 128 processes:
+log I/O. On the fixed build, K independent single-thread processes pack
+near-linearly, and a follow-up on a **real 25 Mb shard-window** confirms it holds at
+production window size — in fact *better* than the small ecoli workload:
 
 | procs/node | 1 | 16 | 64 | 128 |
 |---|---|---|---|---|
-| efficiency | 100% | 90% | 90% | 82% |
-| throughput (jobs/s) | 0.056 | 0.80 | 3.20 | 5.82 |
+| ecoli (4.5 Mb) efficiency | 100% | 90% | 90% | 82% |
+| **25 Mb window efficiency** | 100% | 100% | **99%** | 75% |
+
+The 25 Mb window's per-process time is flat at ~93 s from 1 to 64 processes, rising
+to 110 s only at 128 — a heavier per-process compute load amortizes fixed per-node
+overhead better, so it packs *better* than ecoli. **64/node (one per physical core)
+is the efficient sweet spot**, dropping only when hyperthreads are oversubscribed at
+128.
 
 **Strategy — region-sharding wins, on corrected and stronger grounds.** The
 whole-genome recommendation (multi-process region-sharding, §3.6.1) stands, but the
 reasoning is now: (1) region-sharding parallelizes at *sub-contig* window
 granularity — arbitrary parallelism, and the *only* option for few-/single-contig
 inputs (chr22) where threading does nothing; (2) independent shards pack
-near-linearly to ~128/node (~90 %), whereas threading one process is capped at
-contig count and reaches only ~6–9×. So many thin shards ≫ few fat-threaded
-processes, and packing is far cheaper than §3.6's pre-fix "K≈2" claim — dense
-packing (tens of shards/node) is efficient. In-process threading remains a useful
+near-linearly to ~64/node (~99 % on a real 25 Mb window), whereas threading one
+process is capped at contig count and reaches only ~6–9×. So many thin shards ≫ few
+fat-threaded processes, and packing is far cheaper than §3.6's pre-fix "K≈2" claim —
+64 shards/node (one per physical core) is efficient, and a whole human genome (306
+windows) is then just ~5 node-tasks. In-process threading remains a useful
 *secondary* lever for running a multi-contig genome as a single job (~6–9×), but
-sharding is the throughput path. *(Caveat: the packing sweep used a small
-(ecoli, 4.5 MB) per-process workload; 25 MB human windows carry a larger working
-set, so their packing efficiency may fall off sooner — a bounded follow-up.)*
+sharding is the throughput path.
 
 ### 3.7 Structural-variant validation (chr22, Manta + truvari)
 
@@ -796,6 +801,15 @@ timed-out benchmark that ran `--exclusive` (charging all 128 cores for 8 h ≈
 bug-fixing. Phase 1 was deliberately economical (chr22-scale); Phase 2's
 whole-genome runs and tuning sweeps are the primary consumers of the remaining
 allocation, where the binding constraint is per-run wall-clock, not core-hours.
+
+**Note (v1.19.1):** these charged core-hours were real, but they *overstate* the
+compute rneat actually needs — most runs predate the logging fix (#340) and ran
+3–4× slower than necessary under the old `trace` default. On the fixed build the
+figures are strikingly small: a whole soybean genome at 30× is **~1.5 core-hours**
+of simulation and a whole human genome **~4.9** (§3.6.1), and the tuning sweeps
+that motivated much of the "expensive" framing are no longer needed. Future
+Phase-2 work costs a fraction of the Phase-1 charge rate; the allocation is not a
+constraint.
 
 ---
 

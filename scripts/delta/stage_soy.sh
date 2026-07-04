@@ -13,12 +13,20 @@
 # Outputs (in $DATA_DIR): soy.chr.fa, soy.chr.bam, soy.chr.fastq.gz, soy.chr.vcf.gz.
 # It prints the ready model_builders.sbatch command at the end.
 #
+# FULL_GENOME=1 instead stages the WHOLE messy assembly: keeps the genome-wide
+# soy.full.bam, calls a genome-wide VCF (soy.full.vcf.gz, fanned out per contig),
+# and points the builders at soy.fa + soy.full.bam + the raw reads. That exposes the
+# multi-contig / big-BAM / peak-RSS / OOM behavior the single-chromosome slice hides
+# — the actual stress test. NOTE: the chr run reclaims soy.full.bam, so a full run
+# re-aligns from scratch.
+#
 # Prereqs: soy.fa staged (fetch_validation_data.sh DATA=soy); bwa-mem2 + bcftools
 # (bioinf conda env), samtools/htslib modules. rneat NOT needed here.
 #
 # Usage:
 #   sbatch scripts/delta/stage_soy.sh
 #   SRR=SRR2163317 MAX_PAIRS=40000000 sbatch scripts/delta/stage_soy.sh   # MAX_PAIRS=0 -> all
+#   FULL_GENOME=1 sbatch scripts/delta/stage_soy.sh                        # whole-genome stress
 #
 # HEAVY: ~10 GB FASTQ download, ~28 GB bwa-mem2 index build, multi-hour alignment.
 
@@ -42,6 +50,7 @@ D="${DATA_DIR:-$SCRATCH/neat_data/soy}"
 REF="${REFERENCE:-$D/soy.fa}"
 SRR="${SRR:-SRR2163317}"                 # SRP062245, paired, ~15x of the 1 Gb genome
 MAX_PAIRS="${MAX_PAIRS:-40000000}"       # subsample for speed; 0 = align all 81M pairs
+FULL_GENOME="${FULL_GENOME:-}"           # non-empty -> whole-genome stress inputs (no chr subset)
 THREADS="${SLURM_CPUS_PER_TASK:-16}"
 # ENA direct FASTQ (no sra-tools needed). Path layout: SRR216/007/SRR2163317/...
 R1_URL="https://ftp.sra.ebi.ac.uk/vol1/fastq/SRR216/007/${SRR}/${SRR}_1.fastq.gz"
@@ -93,6 +102,46 @@ if [[ ! -s "$D/soy.full.bam" ]]; then
     bwa-mem2 mem -t "$THREADS" "$REF" "$R1" "$R2" 2> "$D/bwa.log" \
         | samtools sort -@ "$THREADS" -o "$D/soy.full.bam" -
     samtools index "$D/soy.full.bam"
+fi
+
+# ── FULL-GENOME mode: stage the whole messy assembly, skip the chr subset ───────
+# The default (below) scopes to one clean chromosome for a fast correctness check.
+# FULL_GENOME keeps the genome-wide BAM and calls a genome-wide VCF so the builders
+# see every contig/scaffold, the full read volume, and real peak RSS.
+if [[ -n "$FULL_GENOME" ]]; then
+    ncontig=$(wc -l < "$REF.fai")
+    echo "FULL_GENOME: whole-genome inputs across $ncontig contigs (no chr subset)"
+
+    # Genome-wide VCF. bcftools mpileup is single-threaded per region, so fan out
+    # one call per contig (in $REF.fai / genome order) and concat — this keeps a
+    # ~1 Gb genome inside the wall clock. Each part is resumable ([-s] guard).
+    if [[ ! -s "$D/soy.full.vcf.gz" ]]; then
+        parts="$D/vcf_parts"; mkdir -p "$parts"
+        echo "calling genome-wide VCF ($ncontig contigs, ${THREADS}-way)..."
+        cut -f1 "$REF.fai" | xargs -P "$THREADS" -I CTG bash -c '
+            ctg="$1"; out="'"$parts"'/$ctg.vcf.gz"
+            [[ -s "$out" ]] && exit 0
+            bcftools mpileup -r "$ctg" -f "'"$REF"'" "'"$D"'/soy.full.bam" 2>/dev/null \
+                | bcftools call -mv -Oz -o "$out" 2>/dev/null
+        ' _ CTG
+        # concat parts in genome (fai) order; same reference header → no -a needed
+        cut -f1 "$REF.fai" | sed "s#^#$parts/#; s#\$#.vcf.gz#" > "$D/vcf_parts.list"
+        bcftools concat -Oz -f "$D/vcf_parts.list" -o "$D/soy.full.vcf.gz"
+        bcftools index -t "$D/soy.full.vcf.gz"
+        rm -rf "$parts" "$D/vcf_parts.list"
+    fi
+
+    nvar=$(bcftools view -H "$D/soy.full.vcf.gz" | wc -l)
+    nreads=$(( $(zcat "$R1" | wc -l) / 4 ))
+    echo
+    echo "════════════════════════════════════════════════════════════════"
+    echo "Soy staged FULL GENOME: $ncontig contigs, ~$nreads read pairs, $nvar variants"
+    echo "Run the model-builders (whole-genome stress):"
+    echo "  REFERENCE=$REF INPUT_BAM=$D/soy.full.bam \\"
+    echo "  INPUT_FASTQ=$R1 INPUT_VCF=$D/soy.full.vcf.gz \\"
+    echo "    sbatch scripts/delta/model_builders.sbatch"
+    echo "════════════════════════════════════════════════════════════════"
+    exit 0
 fi
 
 # ── 4. subset BAM + reference to the largest contig (a real chromosome) ─────────

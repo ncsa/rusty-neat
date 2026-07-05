@@ -31,6 +31,10 @@ pub struct CancerConfig {
     pub paired_ended: bool,
     pub fragment_mean: Option<f64>,
     pub fragment_st_dev: Option<f64>,
+    /// A built fragment-length model. Like gen-reads (#355), it satisfies the
+    /// paired-end fragment-source requirement on its own and takes precedence over
+    /// fragment_mean/st_dev at runtime.
+    pub fragment_model: Option<PathBuf>,
     pub rng_seed_root: String,
     pub normal_model: Option<PathBuf>,
     pub tumor_model: Option<PathBuf>,
@@ -58,6 +62,7 @@ impl Default for CancerConfig {
             paired_ended: false,
             fragment_mean: None,
             fragment_st_dev: None,
+            fragment_model: None,
             rng_seed_root: "cancer-simulate".to_string(),
             normal_model: None,
             tumor_model: None,
@@ -110,6 +115,7 @@ impl CancerConfig {
                 "paired_ended" => cfg.paired_ended = as_bool(value, "paired_ended")?,
                 "fragment_mean" => cfg.fragment_mean = Some(as_f64(value, "fragment_mean")?),
                 "fragment_st_dev" => cfg.fragment_st_dev = Some(as_f64(value, "fragment_st_dev")?),
+                "fragment_model" => cfg.fragment_model = Some(req_path(value, "fragment_model")?),
                 "rng_seed" | "rng_seed_root" => {
                     cfg.rng_seed_root = value
                         .as_str()
@@ -156,9 +162,17 @@ impl CancerConfig {
         if !(self.purity > 0.0 && self.purity < 1.0) {
             return Err(GenCancerReadsError::PurityOutOfRange(self.purity));
         }
-        if self.paired_ended && (self.fragment_mean.is_none() || self.fragment_st_dev.is_none()) {
+        // A paired-end run needs a fragment-length source: a fragment_model, OR both
+        // fragment_mean and fragment_st_dev. Mirrors gen-reads check_and_log_config
+        // (#355) — the model takes precedence at runtime, so requiring mean/st_dev when
+        // a model is present would reject a config the runtime handles fine.
+        if self.paired_ended
+            && self.fragment_model.is_none()
+            && (self.fragment_mean.is_none() || self.fragment_st_dev.is_none())
+        {
             return Err(GenCancerReadsError::ConfigError(
-                "paired_ended requires fragment_mean and fragment_st_dev".into(),
+                "paired_ended requires a fragment_model, or both fragment_mean and fragment_st_dev"
+                    .into(),
             ));
         }
         let (n, t) = self.per_pass_coverage();
@@ -185,6 +199,7 @@ impl CancerConfig {
             paired_ended: self.paired_ended,
             fragment_mean: self.fragment_mean,
             fragment_st_dev: self.fragment_st_dev,
+            fragment_model: self.fragment_model.clone(),
             produce_fastq: true,
             produce_vcf: true,
             overwrite_output: self.overwrite_output,
@@ -328,6 +343,39 @@ mod tests {
         let cfg = CancerConfig::from_scrape(s).unwrap();
         assert!(nested.is_dir(), "output_dir should be created (create_dir_all)");
         assert_eq!(cfg.output_dir, nested);
+    }
+
+    #[test]
+    fn paired_ended_accepts_fragment_model_alone() {
+        // #355 gave gen-reads this; gen-cancer-reads now matches. A fragment_model
+        // satisfies the paired-end fragment-source requirement with no mean/st_dev,
+        // and must flow through to BOTH the normal and tumor passes.
+        let mut s = base_scrape();
+        s.insert("paired_ended".into(), Value::Bool(true));
+        s.insert(
+            "fragment_model".into(),
+            Value::String("/tmp/frag.json.gz".into()),
+        );
+        let cfg = CancerConfig::from_scrape(s)
+            .expect("fragment_model alone should satisfy paired_ended");
+        let want = Some(PathBuf::from("/tmp/frag.json.gz"));
+        assert_eq!(cfg.fragment_model, want);
+        assert_eq!(cfg.normal_pass().unwrap().fragment_model, want);
+        assert_eq!(
+            cfg.tumor_pass(PathBuf::from("/tmp/g.vcf.gz")).unwrap().fragment_model,
+            want
+        );
+    }
+
+    #[test]
+    fn paired_ended_requires_a_fragment_source() {
+        // Neither a fragment_model nor mean/st_dev → still rejected.
+        let mut s = base_scrape();
+        s.insert("paired_ended".into(), Value::Bool(true));
+        assert!(matches!(
+            CancerConfig::from_scrape(s),
+            Err(GenCancerReadsError::ConfigError(_))
+        ));
     }
 
     #[test]

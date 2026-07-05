@@ -63,7 +63,7 @@ GENOMES=(
     "ecoli:$DATA_DIR/ecoli.fa"        # single-contig, tiny
     "yeast:$DATA_DIR/yeast.fa"        # MULTI-contig (~16) — also the Phase B genome
     "chr22:$DATA_DIR/chr22.fa"        # single-contig, ~50 Mb
-    "human:$DATA_DIR/GRCh38.fa"       # multi-contig, large — staged only for a big run
+    "human:$DATA_DIR/GRCh38.fa"       # multi-contig, large — rneat-only (NEAT arm auto-skipped: too big, see run_neat)
 )
 HEADTOHEAD_THREADS="${HEADTOHEAD_THREADS:-1}"
 
@@ -192,6 +192,17 @@ YAML
 run_neat() {
     local label="$1" fasta="$2" nthreads="$3"
     [[ -n "${NEAT_BIN:-}" ]] || { echo "  NEAT binary not found — skipping NEAT for $label"; return; }
+    # NEAT 4 (Python) wall scales with genome size: ~12 min/rep on chr22 (50 Mb), so a
+    # full human genome (~3.1 Gb) is ~12 h/rep — a 3-rep sweep can never finish and
+    # times out the whole job (job 19891600 died here). Cap the NEAT arm by genome
+    # size; rneat still runs on the large genome for its own numbers, and that rneat-
+    # only result (rneat does human in ~1 h; NEAT can't) is itself the comparison.
+    local neat_cap_mb="${NEAT_MAX_GENOME_MB:-200}"
+    local sz_mb; sz_mb=$(awk -v b="$(stat -c%s "$fasta")" 'BEGIN{printf "%.0f", b/1048576}')
+    if (( sz_mb > neat_cap_mb )); then
+        echo "  [neat] SKIP $label (${sz_mb} MB > NEAT_MAX_GENOME_MB=${neat_cap_mb} MB): NEAT 4 is intractable at this size"
+        return
+    fi
     local cfg="$OUTDIR/neat_${label}_t${nthreads}.yml"
     cat > "$cfg" <<YAML
 reference: $fasta

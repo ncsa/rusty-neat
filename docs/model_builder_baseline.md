@@ -8,37 +8,49 @@ and the proof that a fitted model actually shapes gen-reads output.
 
 Harness: `scripts/delta/model_builders.sbatch`, fed by `scripts/delta/stage_soy.sh`.
 
-## Resource envelope (Delta, soybean Wm82, ~978 Mb, ~200 contigs)
+## Resource envelope (Delta) — soybean ~978 Mb and human GRCh38 ~3.1 Gb
 
-Two staging modes, same builders. Chr mode scopes to the largest contig (fast
-correctness check); `FULL_GENOME=1` stages the whole messy assembly (the real
-stress). Numbers are wall-clock and peak RSS from `/usr/bin/time -v`.
+soy uses two staging modes: chr scopes to the largest contig (fast correctness
+check); `FULL_GENOME=1` stages the whole ~200-contig assembly. human is the full
+GRCh38 with the GIAB HG002 v4.2.1 truth VCF (`stage_hg002.sh`). Numbers are
+wall-clock and peak RSS from `/usr/bin/time -v`.
 
-| builder      | chr wall / RSS | full-genome wall / RSS | notes |
-|--------------|----------------|------------------------|-------|
-| seq_error    | 0:06.7 / 19 MB | 0:53.8 / **18 MB**     | streams the FASTQ — memory-flat at any scale |
-| frag_length  | 0:03.3 / 50 MB | 0:42.0 / 748 MB        | BAM TLEN scan |
-| gc_bias      | 0:04.5 / 323 MB| 1:03.5 / **3.6 GB**    | loads reference + per-GC windows across all contigs |
-| mut_model    | 0:03.4 / 228 MB| 0:39.9 / 1.3 GB        | reference + genome-wide VCF |
-| bam_models   | 0:04.5 / 352 MB| 1:04.3 / **4.2 GB**    | frag + GC in one BAM pass — heaviest |
-| roundtrip    | 177,275 reads  | 183,583 reads          | gen-reads consumes the built models, emits valid pairs |
+| builder      | soy chr        | soy full-genome    | human GRCh38        | notes |
+|--------------|----------------|--------------------|---------------------|-------|
+| seq_error    | 0:06.7 / 19 MB | 0:53.8 / 18 MB     | 1:46.4 / **35 MB**  | streams the FASTQ — memory-flat at any scale |
+| frag_length  | 0:03.3 / 50 MB | 0:42.0 / 748 MB    | 1:00.0 / 738 MB     | BAM TLEN scan |
+| gc_bias      | 0:04.5 / 323 MB| 1:03.5 / 3.6 GB    | 2:18.0 / **11.4 GB**| loads reference + per-GC windows across all contigs |
+| mut_model    | 0:03.4 / 228 MB| 0:39.9 / 1.3 GB    | 1:55.0 / 1.9 GB     | reference + VCF (human = ~4M-variant GIAB truth set) |
+| bam_models   | 0:04.5 / 352 MB| 1:04.3 / 4.2 GB    | 2:19.3 / **11.4 GB**| frag + GC in one BAM pass — heaviest |
+| roundtrip    | 177,275 reads  | 183,583 reads      | 187,966 reads       | gen-reads consumes the built models, emits valid pairs |
 
-Source runs: chr = job 19887967, full-genome = job 19888625. Both `overall: PASS`.
+Source runs: soy chr = job 19887967, soy full = 19888625, human = 19899988. All `overall: PASS`.
 
 ### Memory scales with reference size — plan accordingly
 
 The heavy builders (`gc_bias`, `bam_models`) hold the reference plus per-window
-state, so peak RSS tracks **genome size**, not read count:
+state, so peak RSS tracks **genome size**, not read count. Measured:
 
-- ~4.2 GB peak at ~1 Gb (soybean).
-- Extrapolated **~12–14 GB for a 3.1 Gb human genome.**
+- ~4 GB peak at ~1 Gb (soybean full genome).
+- **11.4 GB peak at ~3.1 Gb (human GRCh38)** — the soy→human extrapolation
+  (predicted ~11–13 GB) held; `gc_bias` landed exactly, `bam_models` mildly sublinear.
 
 Trivial on an HPC node, but a user building `bam_models`/`gc_bias` against a human
-reference on a 16 GB laptop is near the edge. `seq_error` is the exception — it
-streams and stays flat (~18 MB) regardless of input size.
+reference on a 16 GB laptop is near the edge — budget ~12 GB. `seq_error` is the
+exception — it streams and stays flat (18–35 MB) regardless of genome or input size.
 
-Nothing approached the harness's 128 GB / 8 h request at soybean scale; no OOM, no
-runtime cliff, clean on a ~200-contig assembly.
+Nothing approached the harness's 128 GB / 8 h request at either scale; no OOM, no
+runtime cliff, clean on both a ~200-contig assembly and full GRCh38.
+
+### A real bug the human run caught
+
+The first human run (job 19899126) `FAIL`ed `mut_model`: `gen-mut-model` rejected the
+GIAB truth VCF with `MalformedVcf("FORMAT list and sample list different lengths")`.
+The VCF is spec-compliant — trailing per-sample FORMAT fields may be dropped (all but
+GT) — so rneat's reader was too strict. Fixed in #364 (`read_open_vcf` + `extract_gt_str`
+pad dropped trailing fields; over-long samples still rejected); the re-run (19899988)
+passes all five. This is exactly the first-contact-on-real-data failure the harness
+exists to surface — the H1N1 fixture never exercised a dropped-FORMAT record.
 
 ## Output fidelity — do the fitted numbers reach the reads?
 

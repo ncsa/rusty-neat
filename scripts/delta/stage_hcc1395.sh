@@ -54,6 +54,7 @@ BAM_BASE="https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/seqc/Somatic_Mutat
 VCF_BASE="https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/seqc/Somatic_Mutation_WG/release/latest"
 TUMOR_BAM="${TUMOR_BAM:-WGS_NS_T_1.bwa.dedup.bam}"    # NovaSeq replicate 1
 NORMAL_BAM="${NORMAL_BAM:-WGS_NS_N_1.bwa.dedup.bam}"
+RNEAT_HINT="${RNEAT_BIN:-$SCRATCH/cargo-target/rusty-neat/release/rneat}"   # for the printed next-step cmds
 
 mkdir -p "$D"
 module load samtools/1.22-cce19.0.0
@@ -159,16 +160,22 @@ cut -f1 "$REF.fai" | grep -qxF "$som_ctg" \
 n_som=$(bcftools view -H "$D/somatic.vcf.gz" ${vcf_region:+-r "$vcf_region"} 2>/dev/null | wc -l)
 n_germ=$(bcftools view -H "$D/germline.vcf.gz" 2>/dev/null | wc -l)
 set -o pipefail
+
+# Pre-write the two gen-mut-model configs to SHARED fs ($D) — NOT /tmp, which is
+# node-local on Delta and invisible to an srun/sbatch task on a compute node.
+for pair in "tumor_model:$D/somatic.vcf.gz" "normal_model:$D/germline.vcf.gz"; do
+    name="${pair%%:*}"; vcf="${pair##*:}"
+    printf 'reference: %s\nvcf_file: %s\noutput_file: %s\noverwrite_output: true\nbed_file: .\n' \
+        "$REF" "$vcf" "$D/$name.json.gz" > "$D/$name.yml"
+done
+
 echo
 echo "════════════════════════════════════════════════════════════════"
 echo "HCC1395 staged (region [$REGION]): $n_som somatic, $n_germ germline variants"
-echo "Build the COMPOUND model, then simulate:"
-echo "  # somatic tumor_model (real TNBC signature):"
-echo "  rneat gen-mut-model  -c <(printf 'reference: %s\\nvcf_file: %s\\noutput_file: %s\\noverwrite_output: true\\nbed_file: .\\n' \\"
-echo "      $REF $D/somatic.vcf.gz $D/tumor_model.json.gz)"
-echo "  # germline normal_model (this donor):"
-echo "  rneat gen-mut-model  -c <(printf 'reference: %s\\nvcf_file: %s\\noutput_file: %s\\noverwrite_output: true\\nbed_file: .\\n' \\"
-echo "      $REF $D/germline.vcf.gz $D/normal_model.json.gz)"
+echo "Build the COMPOUND model, then simulate (configs written to $D):"
+echo "  # somatic tumor_model (real TNBC signature) + germline normal_model (this donor):"
+echo "  srun --account=bhrd-delta-cpu -p cpu --mem=8G -t 00:30:00 $RNEAT_HINT gen-mut-model -c $D/tumor_model.yml"
+echo "  srun --account=bhrd-delta-cpu -p cpu --mem=8G -t 00:30:00 $RNEAT_HINT gen-mut-model -c $D/normal_model.yml"
 echo "  # sequencing models from the real tumor BAM/FASTQ:"
 echo "  REFERENCE=$REF INPUT_BAM=$D/tumor.bam INPUT_FASTQ=$D/tumor.fastq.gz INPUT_VCF=$D/somatic.vcf.gz \\"
 echo "    sbatch scripts/delta/model_builders.sbatch"

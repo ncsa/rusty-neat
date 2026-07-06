@@ -1,8 +1,28 @@
 Unreleased
 ==========
-## Unreleased (targeting rneat v1.19.1)
+_Nothing yet._
 
-_Version bump + date land with the develop→main release PR._
+
+7/6/2026
+========
+## rneat v1.19.1
+
+Bug-fix + logging release on top of v1.19.0. The output-affecting changes are the VCF
+dropped-FORMAT fix and the `fragment_model` input paths; the logging change is
+output-preserving (verbosity/perf only), so fidelity is unchanged from v1.19.0.
+
+### Read generation
+- `gen-reads` accepts a `fragment_model` as a paired-end fragment source — no longer
+  requires explicit `fragment_mean`/`fragment_st_dev` when a model is supplied; the model
+  takes precedence at runtime, mean/st_dev are ignored if both are set (#355).
+- `gen-cancer-reads` accepts a `fragment_model` for paired-end runs, at parity with
+  gen-reads (#366).
+
+### Model building / VCF input
+- `gen-mut-model` (and every VCF input path) now accepts spec-compliant records that drop
+  trailing per-sample FORMAT fields (all but GT). Previously these errored with "FORMAT
+  list and sample list different lengths", silently failing the model build on standard
+  GIAB / bcftools-mpileup VCFs. Samples with *more* fields than FORMAT are still rejected (#364).
 
 ### Logging / performance
 - **Default `.neat.log` level is now `info`** (was effectively `trace`). The `--log-level`

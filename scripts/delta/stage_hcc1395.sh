@@ -65,6 +65,21 @@ conda_activate bioinf                     # bcftools (+ samtools with libcurl if
 [[ -f "$REF.fai" ]] || samtools faidx "$REF"
 echo "=== stage HCC1395: region=[$REGION] mode=$MODE ref=$REF threads=$THREADS ==="
 
+# Preflight (fail fast + loud): the SEQC2 BAMs and truth VCF are chr-prefixed (chr1).
+# If REFERENCE is plain/Ensembl-named ("1"), mpileup emits N ref bases and germline
+# calling silently yields ZERO variants — job 19901611 burned 55 min on exactly this.
+if [[ "$REGION" != "all" ]]; then
+    for ctg in $REGION; do
+        cut -f1 "$REF.fai" | grep -qxF "$ctg" || {
+            echo "FATAL: contig '$ctg' not found in $REF" >&2
+            echo "       reference contigs look like: $(cut -f1 "$REF.fai" | head -3 | tr '\n' ' ')" >&2
+            echo "       SEQC2 data is chr-prefixed — point REFERENCE at a chr-prefixed GRCh38" >&2
+            echo "       (GDC GRCh38.d1.vd1, or GIAB no_alt analysis set)." >&2
+            exit 1
+        }
+    done
+fi
+
 # ── 1. somatic truth VCF (SNV + INDEL, high-conf in high-conf regions; GRCh38) ──
 if [[ ! -s "$D/somatic.vcf.gz" ]]; then
     for f in high-confidence_sSNV_in_HC_regions_v1.2.vcf.gz \
@@ -118,8 +133,10 @@ if [[ ! -s "$D/germline.vcf.gz" ]]; then
     printf '%s\n' $contigs | xargs -P "$THREADS" -I CTG bash -c '
         ctg="$1"; out="'"$parts"'/$ctg.vcf.gz"
         [[ -s "$out" ]] && exit 0
-        bcftools mpileup -r "$ctg" -f "'"$REF"'" "'"$D"'/normal.bam" 2>/dev/null \
-            | bcftools call -mv -Oz -o "$out" 2>/dev/null
+        # NOTE: mpileup stderr is NOT suppressed — a "sequence not found" ref/BAM
+        # naming error must surface (the preflight above should already catch it).
+        bcftools mpileup -r "$ctg" -f "'"$REF"'" "'"$D"'/normal.bam" \
+            | bcftools call -mv -Oz -o "$out"
     ' _ CTG
     printf '%s\n' $contigs | sed "s#^#$parts/#; s#\$#.vcf.gz#" > "$D/germ_parts.list"
     bcftools concat -Oz -f "$D/germ_parts.list" -o "$D/germline.vcf.gz"

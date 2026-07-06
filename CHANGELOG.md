@@ -1,13 +1,18 @@
-Unreleased
-==========
-### Read generation
-- **Context-weighted mutation placement (#372):** gen-reads now weights *where* mutations
-  land by the local trinucleotide's fitted propensity `w(ctx)`, so context-specific
-  mutational signatures (e.g. APOBEC SBS2/13) reproduce in the simulated output — not just
-  the overall mutation rate. Placement was previously context-independent, which flattened
-  signatures. Validated on SEQC2 HCC1395: the SBS-96 cosine of real-vs-simulated somatic
-  SNVs rose from 0.72 to 0.99. Models with uniform context weights (default / untrained)
-  take an unchanged fast path, so output is byte-identical when no signature is fitted.
+Unreleased (targeting rneat v1.20.0 — realism update)
+=====================================================
+
+### Read generation — mutational-signature realism (#372)
+- gen-reads now weights *where* mutations land by the local trinucleotide's fitted
+  propensity `w(ctx)`, so simulated data reproduces context-specific mutational signatures
+  (e.g. APOBEC SBS2/13), not just the overall mutation rate. Placement was previously
+  context-independent, which flattened signatures. **On by default.** Validated on SEQC2
+  HCC1395: the SBS-96 cosine of real-vs-simulated somatic SNVs rose from **0.72 to 0.99**.
+- **Output-compatibility note:** for any run whose mutation model carries context bias —
+  which includes the bundled default model and all bundled COSMIC models — simulated
+  mutation *positions* differ from v1.19.1 and earlier (they are now context-realistic).
+  The mutation *rate* / count is unchanged, and `gen-mut-model` / the model builders are
+  unaffected. A workflow that needs byte-identical output to ≤1.19.1 should pin that
+  version. (Only a genuinely context-flat model takes the unchanged fast path.)
 
 
 7/6/2026

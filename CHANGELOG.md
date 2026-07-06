@@ -1,6 +1,13 @@
 Unreleased
 ==========
-_Nothing yet._
+### Read generation
+- **Context-weighted mutation placement (#372):** gen-reads now weights *where* mutations
+  land by the local trinucleotide's fitted propensity `w(ctx)`, so context-specific
+  mutational signatures (e.g. APOBEC SBS2/13) reproduce in the simulated output — not just
+  the overall mutation rate. Placement was previously context-independent, which flattened
+  signatures. Validated on SEQC2 HCC1395: the SBS-96 cosine of real-vs-simulated somatic
+  SNVs rose from 0.72 to 0.99. Models with uniform context weights (default / untrained)
+  take an unchanged fast path, so output is byte-identical when no signature is fitted.
 
 
 7/6/2026

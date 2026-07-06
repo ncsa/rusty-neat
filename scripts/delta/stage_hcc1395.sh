@@ -129,12 +129,19 @@ fi
 
 # ── 4. FASTQ for seq-error (tumor reads) + contig-naming sanity ─────────────────
 [[ -s "$D/tumor.fastq.gz" ]] || samtools fastq -n "$D/tumor.bam" 2>/dev/null | gzip > "$D/tumor.fastq.gz"
+
+# Summary + sanity below use `head` and `grep -q`, which close their pipe early →
+# the upstream bcftools/cut take SIGPIPE (exit 141), and set -o pipefail + set -e
+# would turn that into a fatal false-failure AFTER all real staging finished (job
+# 19901611 died here). Disable pipefail for this block. (Same footgun as stage_soy.)
+set +o pipefail
 som_ctg=$(bcftools view -H "$D/somatic.vcf.gz" 2>/dev/null | head -1 | cut -f1)
 cut -f1 "$REF.fai" | grep -qxF "$som_ctg" \
     || echo "WARNING: somatic VCF contig '$som_ctg' not in $REF.fai — check GRCh38 contig naming" >&2
 
 n_som=$(bcftools view -H "$D/somatic.vcf.gz" ${vcf_region:+-r "$vcf_region"} 2>/dev/null | wc -l)
 n_germ=$(bcftools view -H "$D/germline.vcf.gz" 2>/dev/null | wc -l)
+set -o pipefail
 echo
 echo "════════════════════════════════════════════════════════════════"
 echo "HCC1395 staged (region [$REGION]): $n_som somatic, $n_germ germline variants"

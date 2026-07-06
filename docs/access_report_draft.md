@@ -72,21 +72,32 @@ population-realistic zygosity (common-variant spike-in / LD model) is wanted.
 
 | Genome | rneat wall | NEAT wall | **Speedup** | rneat RSS | NEAT RSS | **Memory** |
 |---|---|---|---|---|---|---|
-| E. coli (4.5 MB) | 33.0 s | 88.2 s | **2.7×** | 41 MB | 280 MB | **6.9×** |
-| yeast (11 MB) | 77.0 s | 214.7 s | **2.8×** | 53 MB | 172 MB | **3.2×** |
-| chr22 (49 MB) | 255.0 s | 749.0 s | **2.9×** | 227 MB | 1528 MB | **6.7×** |
+| E. coli (4.5 MB) | 9.27 s | 96.85 s | **10.4×** | 40 MB | 281 MB | **7.0×** |
+| yeast (11 MB) | 20.68 s | 231.1 s | **11.2×** | 53 MB | 168 MB | **3.2×** |
+| chr22 (49 MB) | 60.94 s | 810.3 s | **13.3×** | 227 MB | 1525 MB | **6.7×** |
 
-rneat is consistently ~2.7–2.9× faster and uses 3–7× less, flatter memory.
+rneat is **~10–13× faster** than NEAT 4 and uses 3–7× less, flatter memory (both
+tools single-threaded, 10× coverage, n=3 median on one exclusive node).
 
-**Multicore behavior (current default).** With its default per-contig
-parallelism, rneat does not gain from added threads on Delta's dual-socket EPYC —
-wall-clock is flat-to-slightly-higher with more threads (yeast: 1 thread 77 s →
-4 threads 110 s, plateau ~115 s), while on a single-socket machine it scales
-modestly (2 threads = 1.35×). rneat's single-thread efficiency, not thread
-scaling, is the source of its speed advantage. The behavior is consistent with
-memory-bandwidth saturation / allocator contention on NUMA hardware; Phase 2
-investigates whether code changes can recover multicore scaling, in which case
-these numbers will be revised.
+**Revision (v1.19.1).** An earlier draft reported ~2.7–2.9×. Those rneat timings
+were taken while rneat defaulted to `--log-level trace`, whose per-base debug I/O
+dominated its runtime (issue #340); NEAT's figures were unaffected. With the
+default corrected to `info`, rneat's true single-thread advantage is **~10–13×**.
+Memory was never affected (logging is CPU/I/O-bound), so the 3–7× memory advantage
+is unchanged. Both tools ran at minimal logging — rneat `warn`, NEAT its default
+`info`, which has no per-read logging and is timing-equivalent to `warn` (verified
+in NEAT's source; #346 makes NEAT `--log-level WARNING` explicit going forward).
+
+**Multicore behavior (v1.19.1).** The same fix also reverses rneat's apparent
+thread *regression*. On the multi-contig yeast genome, in-process threading now
+**scales** — 1 thread 20.7 s → 4 threads 9.5 s → 16 threads 5.3 s (**~3.9×**) —
+whereas the pre-fix build got *slower* with more threads (77 → 116 s). The
+regression was per-thread trace-log I/O contention (every worker writing the
+multi-GB log), not the compute engine. This recovery is characterized fully in
+**§3.6.2** — threading scales up to the genome's contig count (~6–9×) — but the
+validated whole-genome path remains multi-process region-sharding (§3.6.1/§3.6.2),
+which parallelizes sub-contig and packs near-linearly across a node, well beyond
+what threading a single process can reach.
 
 ### 3.3 Germline fidelity vs NEAT 4 (chr22, 30×, identical pipeline)
 
@@ -136,6 +147,12 @@ correct (line counts are unaffected by a too-long quality string), so the bug wa
 only exposed by pushing the data through a real aligner at scale.
 
 ### 3.6 Multicore scaling and the whole-genome strategy
+
+> **Update (v1.19.1):** the wall-clock figures in this section were measured on
+> builds that defaulted to `--log-level trace`, whose per-base debug I/O we later
+> found dominated the runtime (issue #340). They are therefore **~3–4× too slow**
+> and are kept here for the investigation narrative. See **§3.6.1** for the
+> corrected simulation-only timing on the fixed build.
 
 Benchmarking exposed a scaling characteristic that reshaped the whole-genome
 plan. On Delta's dual-socket EPYC nodes, rneat's in-process (rayon) threading
@@ -278,6 +295,117 @@ level sharding** — a defensible, mechanistically-grounded story rather than a
 (false) claim of linear thread scaling. Since each shard runs single-threaded on
 a (relatively slow) Delta core, ongoing single-thread optimization (reducing
 per-read allocations) compounds directly across the whole genome.
+
+### 3.6.1 Post-fix simulation-only timing (v1.19.1)
+
+The scaling investigation above ran on builds whose default log level was
+`trace`; rneat's per-base debug events fire on the order of `coverage × read_len
+× reference_bp`, so a default run wrote a multi-gigabyte `.neat.log` and spent
+most of its wall-clock on log I/O. Fixing the default to `info` and removing the
+per-base debug calls (issue #340, v1.19.1) is **output-preserving** — the Tier-1
+regression suite re-confirmed every fidelity and determinism metric unchanged —
+but it is a large *performance* change. On the seeded regression benchmark it cut
+wall-clock **3.4× on E. coli (33.0 → 9.79 s) and 4.2× on chr22 (255.0 → 61.37 s)**
+at flat peak RSS, and the perf baseline was re-frozen on the fixed build. The
+figures in §3.6 are therefore pre-fix and conservative, and the whole-genome
+strategy was re-measured.
+
+**Simulation-only timing (fixed build).** We re-ran the region-sharded
+whole-genome pipeline in generation-only mode (FASTQ + truth VCF, no downstream
+alignment or calling) on two whole genomes, capturing per-window wall-clock from
+each shard's `/usr/bin/time`:
+
+| Genome | Size | Windows | Coverage | Packing | per-window median / max | Total simulation compute |
+|---|---|---|---|---|---|---|
+| *Glycine max* (Wm82.a4) | ~1.01 Gb | 369 × 10 Mb | 30× | K=4 | 3.8 s / 49 s | **1.50 core-hours** |
+| GRCh38 (primary) | ~3.1 Gb | 306 × 25 Mb | 30× | K=16 | 18.3 s / 128 s | **4.87 core-hours** |
+
+Both runs completed every window (369/369, 306/306). "Total simulation compute"
+is the single-core sum of all window wall-clocks — the reproducible,
+node-availability-independent figure users can plan around: **a whole human
+genome at 30× is ≈4.9 core-hours of simulation; a whole soybean genome ≈1.5.**
+
+**How much the fix changed the picture.** The GRCh38 run is directly comparable
+to the pre-fix numbers above — same reference, same 25 Mb windows. Pre-fix, an
+isolated 25 Mb window took ~8 min (K=1) and packed heavy windows blew out to
+29 min (K=2) / 101 min (K=4), with the whole genome at 2 h 30 m. On the fixed
+build the **heaviest 25 Mb window is 128 s even at K=16 packing** — i.e. faster,
+under 16-way contention, than the old single-process window was in isolation.
+This points to the old superlinear packing penalty being substantially **trace-log
+I/O contention** (each packed process writing a multi-GB log to Lustre) rather
+than pure memory bandwidth: with logging gone, dense packing is cheap.
+
+**Revised HPC guidance.** This simplifies the three-regime recommendation above.
+Because per-window cost is now seconds-to-~2-minutes even at high packing, the
+"low-K-for-speed vs high-K-for-scheduling" tension largely dissolves: **dense
+packing (K≈16) is the sensible default** — fewest whole nodes (306 windows →
+~20 node-tasks, a single scheduling wave) at negligible per-window latency cost.
+Both runs sat far inside a generous walltime (human heaviest window 128 s against
+a 110-min ceiling). The residual memory-bandwidth effect is real (per-window time
+still rises with packing) but now second-order; a fixed-build K-sweep would
+quantify the now-shallow curve. Exclusive nodes remain mandatory — the
+shared-partition contention finding (§3.6) is independent of logging.
+
+*Framing:* the core-hour totals are hard numbers (summed per-window wall-clock);
+end-to-end wall-clock is still dominated by exclusive-node scheduling latency, so
+we report the reproducible compute figure rather than a node-availability-dependent
+wall time. All numbers are simulation-only — the rneat contribution — deliberately
+excluding downstream alignment/calling.
+
+### 3.6.2 Threading and packing re-characterized (fixed v1.19.1 build)
+
+Both scaling curves in §3.6 were measured under the old `trace` default. Re-running
+them on the fixed build changes the *mechanism* — though not the whole-genome
+*strategy*, which it puts on firmer ground.
+
+**In-process threading scales — bounded by contig count.** The apparent thread
+*regression* of §3.6 was per-thread trace-log I/O. On the fixed build a single
+process scales with threads, up to the genome's contig count (rneat's unit of
+parallelism is the contig):
+
+| threads | yeast 30× (16 contigs) | soy 10× (100s of contigs) |
+|---|---|---|
+| 1 | 44.9 s (1.0×) | 1237 s (1.0×) |
+| 2 | 26.2 s (1.7×) | 1228 s (1.0×) |
+| 8 | 9.8 s (4.6×) | 414 s (3.0×) |
+| 16 | 7.2 s (**6.2×**) | 231 s (5.4×) |
+| 64 | 7.5 s (6.0×) | 139 s (**8.9×**) |
+
+yeast (16 contigs) peaks at ~6× at 16 threads and flattens beyond — no contigs left
+to split. soy (hundreds of contigs) keeps climbing to ~9× at 64. Two real,
+non-logging limits remain: scaling is **sub-linear**, and on a large working set the
+**1→2-thread step is a wash** (soy 1.01×, the cross-socket bandwidth floor §3.6
+noted), while a cache-resident genome takes it cleanly (yeast 1.7×).
+
+**Multi-process packing is near-linear to 64/node.** §3.6's procs-per-node
+efficiency collapse (100% → 5% at 64, "bandwidth saturates by K≈2") was per-process
+log I/O. On the fixed build, K independent single-thread processes pack
+near-linearly, and a follow-up on a **real 25 Mb shard-window** confirms it holds at
+production window size — in fact *better* than the small ecoli workload:
+
+| procs/node | 1 | 16 | 64 | 128 |
+|---|---|---|---|---|
+| ecoli (4.5 Mb) efficiency | 100% | 90% | 90% | 82% |
+| **25 Mb window efficiency** | 100% | 100% | **99%** | 75% |
+
+The 25 Mb window's per-process time is flat at ~93 s from 1 to 64 processes, rising
+to 110 s only at 128 — a heavier per-process compute load amortizes fixed per-node
+overhead better, so it packs *better* than ecoli. **64/node (one per physical core)
+is the efficient sweet spot**, dropping only when hyperthreads are oversubscribed at
+128.
+
+**Strategy — region-sharding wins, on corrected and stronger grounds.** The
+whole-genome recommendation (multi-process region-sharding, §3.6.1) stands, but the
+reasoning is now: (1) region-sharding parallelizes at *sub-contig* window
+granularity — arbitrary parallelism, and the *only* option for few-/single-contig
+inputs (chr22) where threading does nothing; (2) independent shards pack
+near-linearly to ~64/node (~99 % on a real 25 Mb window), whereas threading one
+process is capped at contig count and reaches only ~6–9×. So many thin shards ≫ few
+fat-threaded processes, and packing is far cheaper than §3.6's pre-fix "K≈2" claim —
+64 shards/node (one per physical core) is efficient, and a whole human genome (306
+windows) is then just ~5 node-tasks. In-process threading remains a useful
+*secondary* lever for running a multi-contig genome as a single job (~6–9×), but
+sharding is the throughput path.
 
 ### 3.7 Structural-variant validation (chr22, Manta + truvari)
 
@@ -673,6 +801,15 @@ timed-out benchmark that ran `--exclusive` (charging all 128 cores for 8 h ≈
 bug-fixing. Phase 1 was deliberately economical (chr22-scale); Phase 2's
 whole-genome runs and tuning sweeps are the primary consumers of the remaining
 allocation, where the binding constraint is per-run wall-clock, not core-hours.
+
+**Note (v1.19.1):** these charged core-hours were real, but they *overstate* the
+compute rneat actually needs — most runs predate the logging fix (#340) and ran
+3–4× slower than necessary under the old `trace` default. On the fixed build the
+figures are strikingly small: a whole soybean genome at 30× is **~1.5 core-hours**
+of simulation and a whole human genome **~4.9** (§3.6.1), and the tuning sweeps
+that motivated much of the "expensive" framing are no longer needed. Future
+Phase-2 work costs a fraction of the Phase-1 charge rate; the allocation is not a
+constraint.
 
 ---
 

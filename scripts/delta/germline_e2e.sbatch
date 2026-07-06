@@ -221,7 +221,7 @@ YAML
         # (Only when ADAPTERS!=1 — adapters.enabled already implies keeping them.)
         echo "keep_short_fragments: true" >> "$wd/sim.yml"
     fi
-    "$RNEAT_BIN" gen-reads -c "$wd/sim.yml"
+    "$RNEAT_BIN" --log-level warn gen-reads -c "$wd/sim.yml"
 }
 
 # NEAT 4: default variant model is already SNP/indel only (no symbolic SVs);

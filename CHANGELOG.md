@@ -1,3 +1,49 @@
+Unreleased
+==========
+_Nothing yet._
+
+
+7/6/2026
+========
+## rneat v1.19.1
+
+Bug-fix + logging release on top of v1.19.0. The output-affecting changes are the VCF
+dropped-FORMAT fix and the `fragment_model` input paths; the logging change is
+output-preserving (verbosity/perf only), so fidelity is unchanged from v1.19.0.
+
+### Read generation
+- `gen-reads` accepts a `fragment_model` as a paired-end fragment source — no longer
+  requires explicit `fragment_mean`/`fragment_st_dev` when a model is supplied; the model
+  takes precedence at runtime, mean/st_dev are ignored if both are set (#355).
+- `gen-cancer-reads` accepts a `fragment_model` for paired-end runs, at parity with
+  gen-reads (#366).
+
+### Model building / VCF input
+- `gen-mut-model` (and every VCF input path) now accepts spec-compliant records that drop
+  trailing per-sample FORMAT fields (all but GT). Previously these errored with "FORMAT
+  list and sample list different lengths", silently failing the model build on standard
+  GIAB / bcftools-mpileup VCFs. Samples with *more* fields than FORMAT are still rejected (#364).
+
+### Logging / performance
+- **Default `.neat.log` level is now `info`** (was effectively `trace`). The `--log-level`
+  arg carried `default_value("trace")`, which silently overrode the intended `info`
+  default, so every run wrote a trace-level log. On a human-sized reference the per-base
+  trace/debug events produced a multi-GB `.neat.log` and burned most of the wall-clock on
+  log I/O. Pass `--log-level debug`/`trace` to opt into verbosity; a bare `--log-level`
+  now means `debug`. The on-screen log is unchanged (always `info`). This is the likely
+  cause of the ~2× wall-clock seen in the v1.19.0 regression benchmark (#340).
+- Removed the per-base sequencing-error debug logs (`"Creating sequencing error"`,
+  `"Snp error"`, `"Deletion error"`, `"Insertion error"`, `"Generating basic SNP error"`) —
+  constant strings emitted ~once per erroneous base, no diagnostic value.
+- Delta harnesses (`scripts/delta/*`) now pass `--log-level warn` to `gen-reads` so a
+  benchmark/validation run never writes a large log to the shared filesystem.
+
+### Validation / tooling
+- Adapter readthrough is now part of the regression baseline (adapter_* rows in
+  `baseline_metrics.tsv`; `collect_adapter_validation.sh CANDIDATE_TSV=…` feeds
+  `regression_gate.sh`). See #338.
+
+
 7/2/2026
 ========
 ## rneat v1.19.0

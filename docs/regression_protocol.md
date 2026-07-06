@@ -79,14 +79,44 @@ Adapters add read-level sequence (3′ adapter readthrough, etc.). Two question 
   no-adapter baseline within 2 sd. Adapters that survive trimming and corrupt
   calls would show up here.
 
-**New-feature checks (adapter-specific, added to Tier 0/1):**
-- Adapters present in raw reads at the configured rate and 3′ position
-  (cutadapt detection count ≈ expected).
-- A standard trimmer recovers the pre-adapter read set (read count + base-level).
-- No adapter bases leak into the aligned, properly soft-clipped fraction.
+**New-feature checks (adapter-specific) — built as a Tier-2 seam:**
+`run_adapter_validation.sh` (CONTROL=1) runs a four-arm matrix that isolates the
+adapter effect from the short-insert coverage effect (`off` rejects short inserts,
+so a naïve off-vs-on comparison is confounded):
 
-**Tier plan for adapters:** Tier 0 on every commit (incl. the adapter-presence
-check), Tier 1 on the PR; Tier 2 only if the same change also touches SVs.
+| arm | inserts | adapter |
+|---|---|---|
+| `off` | long (short rejected) | none — baseline |
+| `short_ctrl` | short (kept) | none — genomic reads (`keep_short_fragments`) |
+| `on_raw` | short | readthrough, aligned raw |
+| `on_trim` | short | readthrough, fastp-trimmed |
+
+The callability check rests on the **adapter-only contrasts** (`on_trim − short_ctrl`,
+`on_raw − on_trim`), not the confounded off-vs-on. `collect_adapter_validation.sh`
+with `CANDIDATE_TSV=…` emits `adapter_*` metrics that `regression_gate.sh` checks
+against the `adapter_*` rows in `baseline_metrics.tsv` — gating callability (recall
+stays high → catches a malformed-FASTQ/collapse regression), readthrough presence
+(`on_raw` soft-clip elevated), trim recovery, and the null adapter effect.
+
+```bash
+# after the 12 jobs finish:
+CANDIDATE_TSV=$RESULTS_DIR/adapter_candidate.tsv \
+  bash scripts/delta/collect_adapter_validation.sh $RESULTS_DIR/adapter_validation.manifest
+bash scripts/delta/regression_gate.sh scripts/delta/baseline_metrics.tsv \
+  $RESULTS_DIR/adapter_candidate.tsv 2
+```
+
+**Result (#125):** adapter readthrough is detectable and fully callable — the pure
+adapter effect is within replication noise; the only fidelity difference vs the
+long-insert baseline is the short-insert coverage effect, present with adapters
+entirely absent (`short_ctrl`). **Lesson:** the collapse bug that motivated this
+seam (a malformed FASTQ record) was invisible to `zcat`/`wc` read counts and only
+surfaced through a real aligner — so the gate keys on *aligned/called* metrics, not
+read counts.
+
+**Tier plan for adapters:** Tier 0/1 (default path, adapters off) on every commit /
+PR; run the Tier-2 adapter seam above when the change touches the adapter or
+fragment-generation code, or pre-release.
 
 ## Baseline management
 
@@ -95,6 +125,39 @@ check), Tier 1 on the PR; Tier 2 only if the same change also touches SVs.
 - A candidate run produces `candidate_metrics.tsv` in the same shape.
 - `regression_gate.sh` diffs the two, applies the gates + tolerances above, prints
   a PASS/FAIL table, and **exits non-zero on any FAIL** (CI / `--dependency`-friendly).
+
+### Re-freezing PERF rows without disturbing fidelity (the v1.19.1 logging fix)
+
+A change can be **output-preserving but performance-changing** — the v1.19.1
+logging fix (#340) is the canonical case. Every Phase-1/2 run used the old default
+log level `trace`, whose per-base debug events fire ~`coverage × read_len ×
+ref_bp` times and burned most of the wall-clock on log I/O; so the frozen
+`*_wall_s` / `*_rss_mb` rows were captured **under that handicap and are now
+stale** (the fixed build is faster). The fix does **not** change output bytes, so
+every fidelity / determinism / recall row stays valid — only the perf rows must be
+re-measured and re-frozen. Two steps:
+
+1. **Prove the change is output-preserving** (before trusting the split above). Run
+   `baseline_capture.sbatch` on the fixed build and compare its `baseline.json`
+   `fastq_md5` / `vcf_records_md5` against a pre-fix run's:
+   ```bash
+   bash scripts/delta/rebaseline_perf.sh --check-identity OLD.json NEW.json
+   ```
+   If this is not `PASS`, the change altered output and the fidelity rows must be
+   re-validated too — it is not a pure perf/logging change.
+
+2. **Re-freeze only the perf rows** from a fresh benchmark on the fixed build:
+   ```bash
+   MODE=submit TIER=0 LABEL=logfix bash scripts/delta/regression_suite.sh   # TIER=1 also re-freezes chr22_*
+   # …when the perf job finishes…
+   MODE=collect MANIFEST=$HOME/regression_logfix.manifest \
+     bash scripts/delta/regression_suite.sh > $HOME/logfix.candidate.tsv
+   bash scripts/delta/rebaseline_perf.sh $HOME/logfix.candidate.tsv          # rewrites *_wall_s / *_rss_mb only
+   ```
+   `rebaseline_perf.sh` touches **only** rows ending in `_wall_s` / `_rss_mb`
+   (preserving their gate + tier), writes a `.bak`, and leaves every other row
+   untouched — so a stray fidelity value in the candidate can never overwrite a
+   fidelity baseline. Commit the result with the fixed build's git SHA.
 
 ## Automation (built)
 

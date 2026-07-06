@@ -295,15 +295,21 @@ fn read_open_vcf<P: Read>(
                             let format_split: Vec<&str> = fmt.split(":").collect();
                             let sample_split: Vec<&str> = smp.split(":").collect();
                             let format_len = format_split.len();
-                            if sample_split.len() != format_len {
+                            // The VCF spec allows trailing per-sample FORMAT fields to be
+                            // dropped (all but GT), so a sample may carry FEWER values than
+                            // FORMAT declares — pad the missing trailing values as "." rather
+                            // than rejecting spec-compliant VCFs (e.g. the GIAB truth sets:
+                            // FORMAT=GT:PS with an unphased sample of just "1/1"). Only MORE
+                            // sample values than FORMAT keys is genuinely malformed.
+                            if sample_split.len() > format_len {
                                 return Err(VcfToolsError::MalformedVcf(
-                                    "FORMAT list and sample list different lengths, invalid VCF"
+                                    "sample has more fields than FORMAT declares, invalid VCF"
                                         .to_string(),
                                 ));
                             }
                             for i in 0..format_len {
                                 format.push(format_split[i].to_string());
-                                sample.push(sample_split[i].to_string());
+                                sample.push(sample_split.get(i).copied().unwrap_or(".").to_string());
                             }
                         }
                     }
@@ -423,7 +429,7 @@ fn read_open_vcf_lean<P: Read>(
 /// `Vec<String>` for either. Returns the GT token (e.g. `"0/1"`) by
 /// reference into the input. Mirrors the validation in `read_open_vcf`:
 ///   - `fmt == "."` or `smp == "."`  → `Ok(None)` (sites-only fallback)
-///   - mismatched lengths            → `MalformedVcf` error
+///   - sample longer than FORMAT     → `MalformedVcf` error (trailing-dropped is allowed)
 ///   - no GT key                     → `Ok(None)` (defaults applied by caller)
 fn extract_gt_str<'a>(fmt: &'a str, smp: &'a str) -> Result<Option<&'a str>, VcfToolsError> {
     if fmt == "." || smp == "." {
@@ -431,14 +437,17 @@ fn extract_gt_str<'a>(fmt: &'a str, smp: &'a str) -> Result<Option<&'a str>, Vcf
     }
     let format_parts: Vec<&str> = fmt.split(':').collect();
     let sample_parts: Vec<&str> = smp.split(':').collect();
-    if sample_parts.len() != format_parts.len() {
+    // Trailing FORMAT fields may be dropped per-sample (all but GT), so the sample
+    // can be shorter than FORMAT; only more sample values than keys is malformed.
+    if sample_parts.len() > format_parts.len() {
         return Err(VcfToolsError::MalformedVcf(
-            "FORMAT list and sample list different lengths, invalid VCF".to_string(),
+            "sample has more fields than FORMAT declares, invalid VCF".to_string(),
         ));
     }
     for (i, key) in format_parts.iter().enumerate() {
         if *key == "GT" {
-            return Ok(Some(sample_parts[i]));
+            // GT is not droppable, but guard against a truncated sample anyway.
+            return Ok(sample_parts.get(i).copied());
         }
     }
     Ok(None)
@@ -692,6 +701,58 @@ chr1\t100\t.\tA\tT\t.\tPASS\t.\tGT\t0/1\n";
         let variants = records.get("chr1").expect("chr1 not found");
         assert_eq!(variants.len(), 1);
         assert_eq!(variants[0].quality_score, Some(0));
+    }
+
+    #[test]
+    fn test_read_vcf_trailing_format_fields_dropped() {
+        // Per the VCF spec, trailing per-sample FORMAT fields may be dropped
+        // (all but GT). GIAB truth VCFs do this — e.g. FORMAT=GT:PS with an
+        // unphased sample carrying only the GT. The parser must accept it and
+        // still recover the genotype, not reject it as malformed (job 19899126:
+        // gen-mut-model on the HG002 v4.2.1 truth VCF died here).
+        let vcf_content = "\
+##fileformat=VCFv4.2\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n\
+chr1\t100\t.\tA\tT\t60\tPASS\t.\tGT:PS\t0/1\n";
+        let mut tmp = tempfile::Builder::new().suffix(".vcf").tempfile().unwrap();
+        write!(tmp, "{}", vcf_content).unwrap();
+        let records = read_vcf(tmp.path().to_path_buf())
+            .expect("trailing-dropped FORMAT must parse, not error");
+        let variants = records.get("chr1").expect("chr1 not found");
+        assert_eq!(variants.len(), 1);
+        assert!(matches!(variants[0].genotype, Genotype::Heterozygous));
+    }
+
+    #[test]
+    fn test_read_vcf_lean_trailing_format_fields_dropped() {
+        // Same spec allowance via the lean path (extract_gt_str).
+        let vcf_content = "\
+##fileformat=VCFv4.2\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n\
+chr1\t100\t.\tA\tT\t60\tPASS\t.\tGT:PS:DP\t1/1\n";
+        let mut tmp = tempfile::Builder::new().suffix(".vcf").tempfile().unwrap();
+        write!(tmp, "{}", vcf_content).unwrap();
+        let records = read_vcf_lean(tmp.path().to_path_buf())
+            .expect("trailing-dropped FORMAT must parse via the lean path");
+        let v = &records.get("chr1").expect("chr1 missing")[0];
+        assert!(matches!(v.genotype, Genotype::Homozygous));
+    }
+
+    #[test]
+    fn test_read_vcf_sample_longer_than_format_rejected() {
+        // The inverse is still malformed: MORE sample values than FORMAT keys.
+        let vcf_content = "\
+##fileformat=VCFv4.2\n\
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n\
+chr1\t100\t.\tA\tT\t60\tPASS\t.\tGT\t0/1:99\n";
+        let mut tmp = tempfile::Builder::new().suffix(".vcf").tempfile().unwrap();
+        write!(tmp, "{}", vcf_content).unwrap();
+        let result = read_vcf(tmp.path().to_path_buf());
+        assert!(
+            matches!(result, Err(VcfToolsError::MalformedVcf(_))),
+            "sample longer than FORMAT should be rejected, got {:?}",
+            result
+        );
     }
 
     #[test]

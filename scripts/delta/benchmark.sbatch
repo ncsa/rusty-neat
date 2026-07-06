@@ -63,7 +63,7 @@ GENOMES=(
     "ecoli:$DATA_DIR/ecoli.fa"        # single-contig, tiny
     "yeast:$DATA_DIR/yeast.fa"        # MULTI-contig (~16) — also the Phase B genome
     "chr22:$DATA_DIR/chr22.fa"        # single-contig, ~50 Mb
-    "human:$DATA_DIR/GRCh38.fa"       # multi-contig, large — staged only for a big run
+    "human:$DATA_DIR/GRCh38.fa"       # multi-contig, large — rneat-only (NEAT arm auto-skipped: too big, see run_neat)
 )
 HEADTOHEAD_THREADS="${HEADTOHEAD_THREADS:-1}"
 
@@ -141,10 +141,14 @@ run_one() {
         # bad config is recorded (exit!=0) rather than killing the job.
         local ec=0
         if [[ "$tool" == "neat" ]]; then
-            /usr/bin/time -v -o "$tf" "$NEAT_BIN" read-simulator -c "$cfg" \
+            # Match rneat's minimal logging (WARNING) for an equal-to-equal comparison —
+            # NEAT defaults to INFO. NEAT has no per-read logging (its hot-loop debug
+            # lines are commented out), so this barely changes its time; it just makes
+            # both tools rigorously symmetric on log verbosity.
+            /usr/bin/time -v -o "$tf" "$NEAT_BIN" --log-level WARNING read-simulator -c "$cfg" \
                 -o "$run_dir" -p bench > "$log" 2>&1 || ec=$?
         else
-            /usr/bin/time -v -o "$tf" "$RNEAT_BIN" gen-reads -c "$cfg" > "$log" 2>&1 || ec=$?
+            /usr/bin/time -v -o "$tf" "$RNEAT_BIN" --log-level warn gen-reads -c "$cfg" > "$log" 2>&1 || ec=$?
         fi
 
         local parsed wall rss
@@ -188,6 +192,17 @@ YAML
 run_neat() {
     local label="$1" fasta="$2" nthreads="$3"
     [[ -n "${NEAT_BIN:-}" ]] || { echo "  NEAT binary not found — skipping NEAT for $label"; return; }
+    # NEAT 4 (Python) wall scales with genome size: ~12 min/rep on chr22 (50 Mb), so a
+    # full human genome (~3.1 Gb) is ~12 h/rep — a 3-rep sweep can never finish and
+    # times out the whole job (job 19891600 died here). Cap the NEAT arm by genome
+    # size; rneat still runs on the large genome for its own numbers, and that rneat-
+    # only result (rneat does human in ~1 h; NEAT can't) is itself the comparison.
+    local neat_cap_mb="${NEAT_MAX_GENOME_MB:-200}"
+    local sz_mb; sz_mb=$(awk -v b="$(stat -c%s "$fasta")" 'BEGIN{printf "%.0f", b/1048576}')
+    if (( sz_mb > neat_cap_mb )); then
+        echo "  [neat] SKIP $label (${sz_mb} MB > NEAT_MAX_GENOME_MB=${neat_cap_mb} MB): NEAT 4 is intractable at this size"
+        return
+    fi
     local cfg="$OUTDIR/neat_${label}_t${nthreads}.yml"
     cat > "$cfg" <<YAML
 reference: $fasta

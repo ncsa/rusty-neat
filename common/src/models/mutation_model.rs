@@ -219,6 +219,13 @@ impl MutationModel {
         }
     }
 
+    /// Relative per-trinucleotide-context mutation propensity `w(ctx)`, for
+    /// context-weighted mutation placement (#372). Delegates to the SNP trinucleotide
+    /// model's `snp_distro`. A uniform distribution → context-neutral placement.
+    pub fn context_weights(&self) -> Result<HashMap<TrinucFrame, f64>, MutationModelError> {
+        Ok(self.statistical_models.snp_trinuc_model.context_weights()?)
+    }
+
     pub fn generate_mutation(
         &self,
         // A pointer to the reference sequence to be mutated

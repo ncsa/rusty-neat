@@ -54,6 +54,7 @@ BAM_BASE="https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/seqc/Somatic_Mutat
 VCF_BASE="https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/seqc/Somatic_Mutation_WG/release/latest"
 TUMOR_BAM="${TUMOR_BAM:-WGS_NS_T_1.bwa.dedup.bam}"    # NovaSeq replicate 1
 NORMAL_BAM="${NORMAL_BAM:-WGS_NS_N_1.bwa.dedup.bam}"
+RNEAT_HINT="${RNEAT_BIN:-$SCRATCH/cargo-target/rusty-neat/release/rneat}"   # for the printed next-step cmds
 
 mkdir -p "$D"
 module load samtools/1.22-cce19.0.0
@@ -64,6 +65,21 @@ conda_activate bioinf                     # bcftools (+ samtools with libcurl if
 [[ -f "$REF" ]] || { echo "GRCh38 reference not staged: $REF" >&2; exit 1; }
 [[ -f "$REF.fai" ]] || samtools faidx "$REF"
 echo "=== stage HCC1395: region=[$REGION] mode=$MODE ref=$REF threads=$THREADS ==="
+
+# Preflight (fail fast + loud): the SEQC2 BAMs and truth VCF are chr-prefixed (chr1).
+# If REFERENCE is plain/Ensembl-named ("1"), mpileup emits N ref bases and germline
+# calling silently yields ZERO variants — job 19901611 burned 55 min on exactly this.
+if [[ "$REGION" != "all" ]]; then
+    for ctg in $REGION; do
+        cut -f1 "$REF.fai" | grep -qxF "$ctg" || {
+            echo "FATAL: contig '$ctg' not found in $REF" >&2
+            echo "       reference contigs look like: $(cut -f1 "$REF.fai" | head -3 | tr '\n' ' ')" >&2
+            echo "       SEQC2 data is chr-prefixed — point REFERENCE at a chr-prefixed GRCh38" >&2
+            echo "       (GDC GRCh38.d1.vd1, or GIAB no_alt analysis set)." >&2
+            exit 1
+        }
+    done
+fi
 
 # ── 1. somatic truth VCF (SNV + INDEL, high-conf in high-conf regions; GRCh38) ──
 if [[ ! -s "$D/somatic.vcf.gz" ]]; then
@@ -118,8 +134,10 @@ if [[ ! -s "$D/germline.vcf.gz" ]]; then
     printf '%s\n' $contigs | xargs -P "$THREADS" -I CTG bash -c '
         ctg="$1"; out="'"$parts"'/$ctg.vcf.gz"
         [[ -s "$out" ]] && exit 0
-        bcftools mpileup -r "$ctg" -f "'"$REF"'" "'"$D"'/normal.bam" 2>/dev/null \
-            | bcftools call -mv -Oz -o "$out" 2>/dev/null
+        # NOTE: mpileup stderr is NOT suppressed — a "sequence not found" ref/BAM
+        # naming error must surface (the preflight above should already catch it).
+        bcftools mpileup -r "$ctg" -f "'"$REF"'" "'"$D"'/normal.bam" \
+            | bcftools call -mv -Oz -o "$out"
     ' _ CTG
     printf '%s\n' $contigs | sed "s#^#$parts/#; s#\$#.vcf.gz#" > "$D/germ_parts.list"
     bcftools concat -Oz -f "$D/germ_parts.list" -o "$D/germline.vcf.gz"
@@ -129,22 +147,35 @@ fi
 
 # ── 4. FASTQ for seq-error (tumor reads) + contig-naming sanity ─────────────────
 [[ -s "$D/tumor.fastq.gz" ]] || samtools fastq -n "$D/tumor.bam" 2>/dev/null | gzip > "$D/tumor.fastq.gz"
+
+# Summary + sanity below use `head` and `grep -q`, which close their pipe early →
+# the upstream bcftools/cut take SIGPIPE (exit 141), and set -o pipefail + set -e
+# would turn that into a fatal false-failure AFTER all real staging finished (job
+# 19901611 died here). Disable pipefail for this block. (Same footgun as stage_soy.)
+set +o pipefail
 som_ctg=$(bcftools view -H "$D/somatic.vcf.gz" 2>/dev/null | head -1 | cut -f1)
 cut -f1 "$REF.fai" | grep -qxF "$som_ctg" \
     || echo "WARNING: somatic VCF contig '$som_ctg' not in $REF.fai — check GRCh38 contig naming" >&2
 
 n_som=$(bcftools view -H "$D/somatic.vcf.gz" ${vcf_region:+-r "$vcf_region"} 2>/dev/null | wc -l)
 n_germ=$(bcftools view -H "$D/germline.vcf.gz" 2>/dev/null | wc -l)
+set -o pipefail
+
+# Pre-write the two gen-mut-model configs to SHARED fs ($D) — NOT /tmp, which is
+# node-local on Delta and invisible to an srun/sbatch task on a compute node.
+for pair in "tumor_model:$D/somatic.vcf.gz" "normal_model:$D/germline.vcf.gz"; do
+    name="${pair%%:*}"; vcf="${pair##*:}"
+    printf 'reference: %s\nvcf_file: %s\noutput_file: %s\noverwrite_output: true\nbed_file: .\n' \
+        "$REF" "$vcf" "$D/$name.json.gz" > "$D/$name.yml"
+done
+
 echo
 echo "════════════════════════════════════════════════════════════════"
 echo "HCC1395 staged (region [$REGION]): $n_som somatic, $n_germ germline variants"
-echo "Build the COMPOUND model, then simulate:"
-echo "  # somatic tumor_model (real TNBC signature):"
-echo "  rneat gen-mut-model  -c <(printf 'reference: %s\\nvcf_file: %s\\noutput_file: %s\\noverwrite_output: true\\nbed_file: .\\n' \\"
-echo "      $REF $D/somatic.vcf.gz $D/tumor_model.json.gz)"
-echo "  # germline normal_model (this donor):"
-echo "  rneat gen-mut-model  -c <(printf 'reference: %s\\nvcf_file: %s\\noutput_file: %s\\noverwrite_output: true\\nbed_file: .\\n' \\"
-echo "      $REF $D/germline.vcf.gz $D/normal_model.json.gz)"
+echo "Build the COMPOUND model, then simulate (configs written to $D):"
+echo "  # somatic tumor_model (real TNBC signature) + germline normal_model (this donor):"
+echo "  srun --account=bhrd-delta-cpu -p cpu --mem=8G -t 00:30:00 $RNEAT_HINT gen-mut-model -c $D/tumor_model.yml"
+echo "  srun --account=bhrd-delta-cpu -p cpu --mem=8G -t 00:30:00 $RNEAT_HINT gen-mut-model -c $D/normal_model.yml"
 echo "  # sequencing models from the real tumor BAM/FASTQ:"
 echo "  REFERENCE=$REF INPUT_BAM=$D/tumor.bam INPUT_FASTQ=$D/tumor.fastq.gz INPUT_VCF=$D/somatic.vcf.gz \\"
 echo "    sbatch scripts/delta/model_builders.sbatch"

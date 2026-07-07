@@ -292,6 +292,28 @@ impl SnpTrinucModel {
         })
     }
 
+    /// Relative per-context mutation propensity `w(ctx)`, reconstructed from the
+    /// 64-frame `snp_distro` (built at fit time from each trinucleotide's observed
+    /// mutation frequency = mutations/occurrences). Returns normalized weights keyed
+    /// by frame. gen-reads uses this to weight WHERE mutations land so trinucleotide
+    /// signatures reproduce in the output (#372). A uniform `snp_distro` (default /
+    /// untrained model) yields all-equal weights → context-neutral placement (the
+    /// pre-#372 behavior).
+    pub fn context_weights(&self) -> Result<HashMap<TrinucFrame, f64>, SnpTrinucError> {
+        // snp_distro holds cumulative-normalized weights over the frames in ALL_FRAMES
+        // order (its values are 0..len). Difference consecutive cumulatives to recover
+        // each frame's normalized weight.
+        let cumulative = self.snp_distro.weights()?;
+        let mut weights = HashMap::with_capacity(ALL_FRAMES.len());
+        let mut prev = 0.0f64;
+        for (idx, frame) in ALL_FRAMES.iter().enumerate() {
+            let cum = cumulative.get(idx).copied().unwrap_or(prev);
+            weights.insert(*frame, (cum - prev).max(0.0));
+            prev = cum;
+        }
+        Ok(weights)
+    }
+
     pub fn default_minimal() -> Result<Self, SnpTrinucError> {
         // Creating the default trinuc bias model for snps. In this model, all trinucleotides
         // mutate with equal probability and middle base mutates with the same probability no matter
@@ -377,6 +399,24 @@ mod tests {
         let result = model.write_out(&output_file);
         assert_eq!(result.unwrap(), ());
         fs::remove_file(output_file).unwrap();
+    }
+
+    #[test]
+    fn context_weights_reflect_trinuc_frequency() {
+        // A model fit with one context (TCT) 10x more frequent than another (AAA)
+        // should expose w(TCT) ≈ 10 × w(AAA), normalized, so gen-reads can weight
+        // placement toward the mutable contexts (#372).
+        let hot = TrinucFrame::from((T, C, T));
+        let cold = TrinucFrame::from((A, A, A));
+        let mut freq: HashMap<TrinucFrame, f64> = HashMap::new();
+        freq.insert(hot, 10.0);
+        freq.insert(cold, 1.0);
+        let model = SnpTrinucModel::from_raw_data(freq, HashMap::new()).unwrap();
+        let w = model.context_weights().unwrap();
+        assert!(w[&hot] > w[&cold], "w(hot)={} !> w(cold)={}", w[&hot], w[&cold]);
+        assert!(w[&hot] / w[&cold] > 5.0, "ratio {} should be ~10", w[&hot] / w[&cold]);
+        let total: f64 = w.values().sum();
+        assert!((total - 1.0).abs() < 1e-6, "weights should be normalized, sum={total}");
     }
 
     #[test]

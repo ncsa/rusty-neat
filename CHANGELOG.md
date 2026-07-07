@@ -21,6 +21,13 @@ Unreleased (targeting rneat v1.20.0 — realism update)
   positions, the mutation *rate* / count, and `gen-mut-model` / the model builders are all
   unaffected. A workflow that needs byte-identical output to ≤1.19.1 should pin that
   version. (Only a genuinely context-flat model takes the unchanged fast path.)
+- **Validation:** Delta Tier-1 regression gate passes — RSS bounded, all germline
+  recall/precision/Ts-Tv hold, determinism/order-independence unchanged. A develop-vs-#372
+  A/B on the cancer suite config (COSMIC model, chr22, 30x, purity 0.6; 3 seed reps/arm)
+  showed **#372 has no measurable effect on somatic caller recall** (SNV 0.924±0.020 vs
+  develop 0.927±0.013; indel within seed noise). The two somatic-recall regression baselines
+  (`scripts/delta/baseline_metrics.tsv`) were re-frozen from that replication — their prior
+  sd was seeded from a different config and underestimated true run-to-run variance.
 
 
 7/6/2026

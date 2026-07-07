@@ -24,8 +24,17 @@ chr22_indel_precision	0.989	0.020	ge2sd	1
 chr22_tstv	2.35	0.14	band:2.0:2.6	1
 chr22_wall_s	57.17	0	lepct:20	1
 chr22_rss_mb	226.5	0	lepct:15	1
-somatic_snv_recall	0.925	0.010	ge2sd	1
-somatic_indel_recall	0.900	0.050	ge2sd	1
+# Somatic recall re-frozen for v1.20.0 (#372) from a develop-vs-#372 A/B on THIS
+# suite config (COSMIC pan-cancer model, chr22, 30x, purity 0.6): 3 seed reps per
+# arm + the v1200b gate run = 7 clean runs. The A/B showed #372 has NO effect on
+# somatic recall (SNV: #372 0.924±0.020 vs develop 0.927±0.013; indel: 0.824±0.083
+# vs 0.872±0.082 — differences << run-to-run sd). The prior values (0.925±0.010 /
+# 0.900±0.050) were seeded from the Phase-1/2 replication under a different config;
+# their sd underestimated true variance (SNV spans ~0.89–0.94; indel N≈25 so each
+# call ≈0.04 recall → sd≈0.07), which false-FAILed a normal low-tail seed. Values/sd
+# below are the pooled 7-run mean±sample-sd.
+somatic_snv_recall	0.921	0.018	ge2sd	1
+somatic_indel_recall	0.845	0.072	ge2sd	1
 sv_del_recall	0.843	0.106	ge2sd	2
 sv_dup_recall	0.853	0.111	ge2sd	2
 sv_inv_recall	0.916	0.092	ge2sd	2

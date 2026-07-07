@@ -1,5 +1,11 @@
-Unreleased (targeting rneat v1.20.0 — realism update)
-=====================================================
+7/7/2026
+========
+## rneat v1.20.0 — realism update
+
+Adds trinucleotide-context-aware SNP placement so simulated data reproduces
+context-specific mutational signatures (e.g. APOBEC), not just the overall mutation
+rate. On by default; indel placement and the model builders are unaffected. See the
+output-compatibility note below.
 
 ### Read generation — mutational-signature realism (#372)
 - gen-reads now weights *where SNPs land* by the local trinucleotide's fitted propensity

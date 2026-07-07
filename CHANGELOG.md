@@ -2,15 +2,23 @@ Unreleased (targeting rneat v1.20.0 — realism update)
 =====================================================
 
 ### Read generation — mutational-signature realism (#372)
-- gen-reads now weights *where* mutations land by the local trinucleotide's fitted
-  propensity `w(ctx)`, so simulated data reproduces context-specific mutational signatures
-  (e.g. APOBEC SBS2/13), not just the overall mutation rate. Placement was previously
+- gen-reads now weights *where SNPs land* by the local trinucleotide's fitted propensity
+  `w(ctx)`, so simulated data reproduces context-specific mutational signatures (e.g.
+  APOBEC SBS2/13), not just the overall mutation rate. SNP placement was previously
   context-independent, which flattened signatures. **On by default.** Validated on SEQC2
   HCC1395: the SBS-96 cosine of real-vs-simulated somatic SNVs rose from **0.72 to 0.99**.
+- **SNPs only.** `w(ctx)` is a SNP substitution propensity, so it drives SNP placement
+  alone; indels stay context-neutral (regional-rate placement, unchanged). Their positional
+  biology — homopolymers, short-tandem-repeats, microhomology — is not the SNP trinucleotide
+  signature, and applying the SNP weight to them concentrates indels and degrades indel
+  recall. A separate indel-context placement model is tracked under the realism epic (#311).
+- **Memory-bounded.** Context-weighted placement processes each contig in chunks
+  (≤ 4M positions) rather than materializing a contig-length per-position weight array, so
+  peak memory stays flat on large chromosomes.
 - **Output-compatibility note:** for any run whose mutation model carries context bias —
-  which includes the bundled default model and all bundled COSMIC models — simulated
-  mutation *positions* differ from v1.19.1 and earlier (they are now context-realistic).
-  The mutation *rate* / count is unchanged, and `gen-mut-model` / the model builders are
+  which includes the bundled default model and all bundled COSMIC models — simulated *SNP
+  positions* differ from v1.19.1 and earlier (they are now context-realistic). Indel
+  positions, the mutation *rate* / count, and `gen-mut-model` / the model builders are all
   unaffected. A workflow that needs byte-identical output to ≤1.19.1 should pin that
   version. (Only a genuinely context-flat model takes the unchanged fast path.)
 

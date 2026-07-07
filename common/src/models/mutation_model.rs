@@ -235,15 +235,22 @@ impl MutationModel {
         // The ploidy of this organism. We'll make determinations about heterzygous
         // v homozygous based on this
         ploidy: usize,
+        // Force this variant's type instead of sampling it. Used by context-weighted
+        // placement (#372), which routes SNPs and indels to different position
+        // distributions and so must know the type before this call. `None` samples
+        // the type from the model's variant_dist as before.
+        forced_type: Option<VariantType>,
         // The run's rng. Needed to determine type then generate the mutation
         rng: &mut NeatRng,
     ) -> Result<Variant, MutationModelError> {
         // Select a genotype for the variant
         let mut genotype =
             self.generate_genotype(ploidy, rng.gen_bool(self.homozygous_frequency)?)?;
-        // Select a type of mutation.
-        let index = self.variant_dist.sample(rng.random()?)?;
-        let mut variant_type = index;
+        // Select a type of mutation (or use the caller-forced type).
+        let mut variant_type = match forced_type {
+            Some(t) => t,
+            None => self.variant_dist.sample(rng.random()?)?,
+        };
         // Unmask before use: soft-masked (a/c/g/t) and post-N-substitution bases
         // must not appear as-is in VCF REF/ALT or FASTQ reads.
         let ref_base = check_base(reference_sequence[variant_location]);
@@ -429,7 +436,7 @@ mod tests {
             NeatRng::new_from_seed(&vec!["test".to_string(), "seed".to_string()]).unwrap();
         // 20-base sequence with room on both sides of position 5
         let seq = vec![A, C, G, T, A, C, G, T, A, C, G, T, A, C, G, T, A, C, G, T];
-        let variant = model.generate_mutation(&seq, 5, 2, &mut rng).unwrap();
+        let variant = model.generate_mutation(&seq, 5, 2, None, &mut rng).unwrap();
         // alternate must differ from reference
         assert_ne!(variant.reference.as_slice(), variant.alternate.as_literal().unwrap());
         assert_eq!(variant.location, 5);
@@ -442,8 +449,8 @@ mod tests {
         let seed = vec!["det".to_string(), "seed".to_string()];
         let mut rng1 = NeatRng::new_from_seed(&seed).unwrap();
         let mut rng2 = NeatRng::new_from_seed(&seed).unwrap();
-        let v1 = model.generate_mutation(&seq, 5, 2, &mut rng1).unwrap();
-        let v2 = model.generate_mutation(&seq, 5, 2, &mut rng2).unwrap();
+        let v1 = model.generate_mutation(&seq, 5, 2, None, &mut rng1).unwrap();
+        let v2 = model.generate_mutation(&seq, 5, 2, None, &mut rng2).unwrap();
         assert_eq!(v1, v2);
     }
 

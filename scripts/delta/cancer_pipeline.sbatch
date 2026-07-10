@@ -112,6 +112,7 @@ MERGED_R1="${PREFIX}_merged_r1.fastq.gz"
 NORMAL_R1="${PREFIX}_normal_r1.fastq.gz"
 TRUTH_VCF="${PREFIX}_merged_truth.vcf.gz"
 
+SIM_REGENERATED=0
 if [[ -f "$MERGED_R1" && -f "$NORMAL_R1" && -f "$TRUTH_VCF" ]]; then
     echo "[1/6] Simulation outputs already present — skipping."
 else
@@ -137,11 +138,26 @@ else
         $TMR_FLAG \
         $PAIRED_FLAG
     echo "[1/6] Simulation complete."
+    SIM_REGENERATED=1
 fi
 
 # ── Stage 2 & 3: Index reference, align FASTQs ──────────────────────────
 NORMAL_BAM="$OUTDIR/normal.bam"
 TUMOR_BAM="$OUTDIR/tumor.bam"
+
+# If the simulation was (re)generated this run, any pre-existing downstream artifacts
+# (BAMs, caller VCFs, scoring truth + scores) were built from a DIFFERENT truth VCF and
+# are now stale. The idempotent stages below would otherwise skip on those and score the
+# fresh truth against stale calls (a re-run with a fixed OUTDIR + PRUNE=1 hit exactly this).
+# Invalidate them so they rebuild consistently against the new simulation.
+if [[ "$SIM_REGENERATED" == "1" ]]; then
+    echo "[1/6] Simulation regenerated — invalidating stale downstream outputs."
+    rm -f "$NORMAL_BAM" "${NORMAL_BAM}.bai" "$TUMOR_BAM" "${TUMOR_BAM}.bai" \
+          "$OUTDIR"/mutect2.*.vcf.gz "$OUTDIR"/mutect2.*.vcf.gz.tbi "$OUTDIR"/mutect2.*.vcf.gz.stats \
+          "$OUTDIR"/varscan.somatic.vcf.gz* "$OUTDIR"/strelka.somatic.vcf.gz* \
+          "$OUTDIR/scoring_truth.vcf.gz" "$OUTDIR/scoring_truth.vcf.gz.tbi" \
+          "$OUTDIR"/scored*.csv "$OUTDIR"/scored*.json "$OUTDIR"/scored*.vcf.gz* 2>/dev/null || true
+fi
 
 index_and_align() {
     local in_fq="$1" out_bam="$2" sample="$3"

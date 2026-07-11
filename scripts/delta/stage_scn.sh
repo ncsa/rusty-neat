@@ -87,7 +87,11 @@ ena_url() {
 # fall back to the computed URL + wget's exit code (unverified). Guards against a truncated
 # transfer AND against silently accepting one.
 fetch_read() {
-    local mate="$1" dst="$D/${SRR}_${mate}.fastq.gz" url md5 bytes rc tries=0 got
+    local mate="$1" url md5 bytes rc tries=0 got
+    # dst on its own line: in a single `local`, every RHS is expanded BEFORE any name is
+    # assigned, so ${mate} here would read the still-unset outer `mate` → "mate: unbound
+    # variable" under `set -u` (same gotcha as ena_url above).
+    local dst="$D/${SRR}_${mate}.fastq.gz"
     url="$(  awk -F'\t' 'NR==1{print $2}' <<<"$ENA_META" | cut -d';' -f"$mate")"
     md5="$(  awk -F'\t' 'NR==1{print $3}' <<<"$ENA_META" | cut -d';' -f"$mate")"
     bytes="$(awk -F'\t' 'NR==1{print $4}' <<<"$ENA_META" | cut -d';' -f"$mate")"

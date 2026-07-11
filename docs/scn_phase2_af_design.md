@@ -15,6 +15,22 @@ allele-frequency spectrum** over variant sites), produce simulated reads such th
 measure the alt-allele fraction at each site from the simulated BAM, it matches the **real
 pool's observed AF** at that site.
 
+### Scope decision (2026-07-11): reproductive replay, NOT a generative population model
+
+This is deliberately **reproductive** — rneat is *fed* the pool's observed per-site AFs and
+plays them back faithfully; success = simulated AF ≈ real AF. It does **not** model *why* the
+frequencies are what they are (drift, selection, the 150-individual pool sampling, linkage) —
+it takes the observed spectrum as input. That is exactly what João's question asks ("are the
+resulting frequencies captured in the target variants"), and it makes rneat able to simulate
+realistic pool / somatic-AF data, which it cannot today.
+
+**Out of scope (possible future extension):** a *generative* AF model — fit an
+allele-frequency distribution / site-frequency-spectrum from the pool and *sample* per-variant
+frequencies from it during generation (like the trinucleotide / fragment models). That would
+let rneat produce realistic spectra from first principles rather than replaying a fixed list.
+It is strictly a superset: it reuses the same per-variant `allele_fraction` primitive below,
+so nothing here is wasted if we pursue it later.
+
 ## 2. Why this does NOT map onto rneat today (the core constraint)
 
 rneat is a single-sample simulator. Tracing the read path:

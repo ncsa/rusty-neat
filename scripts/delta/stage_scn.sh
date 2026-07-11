@@ -77,6 +77,51 @@ ena_url() {
     echo "https://ftp.sra.ebi.ac.uk/vol1/fastq/${dir6}/${sub:+$sub/}${acc}/${acc}_${mate}.fastq.gz"
 }
 
+# Robustly fetch one mate ($1 = 1|2) of $SRR into $D. ENA truncates large HTTPS
+# transfers mid-stream (TLS drop / transient 403 on resume), so: resume with retry
+# backoff, then verify the result against the ENA API's size + md5 and re-resume /
+# re-download until it matches. $ENA_META (queried once below) is a single TSV line
+# run_accession<TAB>fastq_ftp<TAB>fastq_md5<TAB>fastq_bytes — note the API ALWAYS prepends
+# run_accession as col 1 even though we don't request it, so the fields we want are $2/$3/$4;
+# each of those is ';'-joined per mate. If the API is unreachable ENA_META is empty and we
+# fall back to the computed URL + wget's exit code (unverified). Guards against a truncated
+# transfer AND against silently accepting one.
+fetch_read() {
+    local mate="$1" dst="$D/${SRR}_${mate}.fastq.gz" url md5 bytes rc tries=0 got
+    url="$(  awk -F'\t' 'NR==1{print $2}' <<<"$ENA_META" | cut -d';' -f"$mate")"
+    md5="$(  awk -F'\t' 'NR==1{print $3}' <<<"$ENA_META" | cut -d';' -f"$mate")"
+    bytes="$(awk -F'\t' 'NR==1{print $4}' <<<"$ENA_META" | cut -d';' -f"$mate")"
+    if [[ -n "$url" ]]; then url="https://$url"; else url="$(ena_url "$SRR" "$mate")"; fi
+    while :; do
+        tries=$((tries + 1))
+        if wget -c --tries=20 --waitretry=30 --retry-connrefused --read-timeout=60 --timeout=60 \
+                -O "$dst" "$url"; then rc=0; else rc=$?; fi
+        if [[ -n "$bytes" ]]; then
+            got="$(stat -c%s "$dst" 2>/dev/null || echo 0)"
+            if [[ "$got" != "$bytes" ]]; then
+                echo "  $dst size $got != $bytes (attempt $tries) — resuming" >&2
+            elif [[ -n "$md5" ]] && [[ "$(md5sum "$dst" | cut -d' ' -f1)" != "$md5" ]]; then
+                echo "  $dst md5 mismatch (attempt $tries) — re-downloading from scratch" >&2
+                rm -f "$dst"
+            else
+                echo "  $dst verified (size${md5:+ + md5})"
+                return 0
+            fi
+        else
+            if [[ $rc -eq 0 && -s "$dst" ]]; then
+                echo "  $dst downloaded (ENA API gave no size/md5 → UNVERIFIED)"
+                return 0
+            fi
+            echo "  $dst wget rc=$rc (attempt $tries)" >&2
+        fi
+        if (( tries >= 6 )); then
+            echo "ERROR: $dst failed to fetch/verify after $tries attempts" >&2
+            return 1
+        fi
+        sleep 30
+    done
+}
+
 echo "=== stage SCN: ref=$ACC  reads=$SRR  max_pairs=$MAX_PAIRS  threads=$THREADS ==="
 
 # ── 1. reference assembly (NCBI datasets → single FASTA) ─────────────────────────
@@ -93,10 +138,16 @@ if [[ ! -s "$REF" ]]; then
 fi
 [[ -f "$REF.fai" ]] || samtools faidx "$REF"
 
-# ── 2. reads (ENA, resumable) ────────────────────────────────────────────────────
-R1_URL="$(ena_url "$SRR" 1)"; R2_URL="$(ena_url "$SRR" 2)"
-[[ -s "$D/${SRR}_1.fastq.gz" ]] || wget -c -O "$D/${SRR}_1.fastq.gz" "$R1_URL"
-[[ -s "$D/${SRR}_2.fastq.gz" ]] || wget -c -O "$D/${SRR}_2.fastq.gz" "$R2_URL"
+# ── 2. reads (ENA, resumable + verified against the ENA API) ─────────────────────
+# One API call → canonical URLs + md5 + byte sizes for both mates; fetch_read resumes
+# on drops and re-checks size/md5 so a broken transfer self-heals instead of aborting
+# the job or being silently accepted as complete (the old bare `-s` guard did the latter).
+ENA_META="$(curl -s --max-time 60 \
+    "https://www.ebi.ac.uk/ena/portal/api/filereport?accession=${SRR}&result=read_run&fields=fastq_ftp,fastq_md5,fastq_bytes" \
+    2>/dev/null | tail -n +2 | head -1 || true)"
+[[ -n "$ENA_META" ]] || echo "WARN: ENA API gave nothing for $SRR — using computed URL, no size/md5 verification" >&2
+fetch_read 1
+fetch_read 2
 
 R1="$D/${SRR}_1.fastq.gz"; R2="$D/${SRR}_2.fastq.gz"
 if [[ "$MAX_PAIRS" -gt 0 ]]; then

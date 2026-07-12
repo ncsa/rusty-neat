@@ -22,7 +22,7 @@
 #   - Pool-seq: the sample is 150 pooled individuals, so SV genotypes/AF are pooled pseudo-
 #     values (as with the short VCF). Fine for populating + exercising the SV model.
 #
-# Pipeline: delly call on the staged BAM -> keep PASS -> report SVTYPE counts -> merge with the
+# Pipeline: delly short-read SV call (sr on 2.x, call on 1.x) on the staged BAM -> keep PASS -> report SVTYPE counts -> merge with the
 # short VCF (sample-name normalized) into an all-variants VCF -> print the gen-mut-model command
 # so the built model carries SVs. Delly emits symbolic ALTs (<DEL>/<DUP>/<INV>/<INS>/BND) that
 # gen-mut-model's SvType::from_alt parses directly.
@@ -86,9 +86,17 @@ echo "=== SCN SV calling: ref=$ACC  bam=$(basename "$BAM") ==="
 BCF="$D/${SRR}.delly.bcf"
 SV_VCF="$D/${SRR}.sv.vcf.gz"
 if [[ ! -s "$SV_VCF" ]]; then
-    echo "delly call (single sample; DEL/DUP/INV/INS/BND)..."
+    # Delly 2.x renamed short-read SV calling from `call` to `sr` (and added `lr` for
+    # long reads — useful when we get the PacBio/ONT data). Auto-detect so this works on
+    # both delly 1.x (`call`) and 2.x (`sr`); same -g/-o/BAM interface either way.
+    if "$DELLY" --help 2>&1 | grep -qE '^[[:space:]]*sr[[:space:]]'; then
+        SV_CMD=sr
+    else
+        SV_CMD=call
+    fi
+    echo "delly $SV_CMD (single sample; DEL/DUP/INV/INS/BND)..."
     # OMP threads via env; delly parallelizes across SV types.
-    OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-8}" "$DELLY" call -g "$REF" -o "$BCF" "$BAM"
+    OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-8}" "$DELLY" "$SV_CMD" -g "$REF" -o "$BCF" "$BAM"
     bcftools view -f PASS -O z -o "$SV_VCF" "$BCF"
     bcftools index -t "$SV_VCF"
 fi

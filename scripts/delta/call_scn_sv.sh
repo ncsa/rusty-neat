@@ -62,8 +62,18 @@ module load htslib/1.22-gcc13.3.1
 setup_conda
 conda_activate bioinf
 
-command -v delly >/dev/null 2>&1 || {
-    echo "delly not on PATH — install into the conda env: conda install -n bioinf -c bioconda delly" >&2
+# Delly: default to `delly` on PATH, override with DELLY=<path>. bioconda's delly often can't
+# load its Boost at runtime (libboost_iostreams.so.1.85.0 — and Delta's `module load boost` is
+# 1.88, the WRONG soname, so it won't satisfy it). Robust fix = Delly's statically-linked
+# release binary (no shared-lib deps):
+#   wget -O $SCRATCH/bin/delly https://github.com/dellytools/delly/releases/download/v2.3.1/delly-v2.3.1-linux-amd64
+#   chmod +x $SCRATCH/bin/delly     # then run this job with  DELLY=$SCRATCH/bin/delly
+DELLY="${DELLY:-delly}"
+# Actually RUN it (not just `command -v`) so a binary that resolves but can't load its libs
+# fails here with a clear message instead of mid-call.
+"$DELLY" --version >/dev/null 2>&1 || {
+    echo "delly '$DELLY' not runnable (missing on PATH, or a shared-lib load error like the Boost one)." >&2
+    echo "Use the static binary and pass DELLY=<path> — see the comment above this line." >&2
     exit 1; }
 [[ -s "$REF" ]] || { echo "reference not staged: $REF (run stage_scn.sh first)" >&2; exit 1; }
 [[ -s "$BAM" ]] || { echo "BAM not staged: $BAM (run stage_scn.sh first)" >&2; exit 1; }
@@ -78,7 +88,7 @@ SV_VCF="$D/${SRR}.sv.vcf.gz"
 if [[ ! -s "$SV_VCF" ]]; then
     echo "delly call (single sample; DEL/DUP/INV/INS/BND)..."
     # OMP threads via env; delly parallelizes across SV types.
-    OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-8}" delly call -g "$REF" -o "$BCF" "$BAM"
+    OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-8}" "$DELLY" call -g "$REF" -o "$BCF" "$BAM"
     bcftools view -f PASS -O z -o "$SV_VCF" "$BCF"
     bcftools index -t "$SV_VCF"
 fi

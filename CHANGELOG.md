@@ -1,5 +1,11 @@
-Unreleased
-==========
+7/13/2026
+=========
+## rneat v1.20.1 — bug-fix
+
+Patch release on top of v1.20.0. Fixes a core RNG bug where `NeatRng::random()` could
+return values outside `[0,1)` for certain seeds. Output-preserving for all well-behaved
+seeds (model-parity + full suite unchanged), so v1.20.0 outputs are unaffected except where
+the RNG was previously producing out-of-range draws.
 
 ### Bug fixes
 - **RNG: `NeatRng::random()` could return values outside `[0,1)`.** `new_from_seed` only

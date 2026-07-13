@@ -1,3 +1,19 @@
+Unreleased
+==========
+
+### Bug fixes
+- **RNG: `NeatRng::random()` could return values outside `[0,1)`.** `new_from_seed` only
+  nudged out-of-range seed state by `+1` (`if x < 0 { x += 1 }`), but `mash()` can return
+  `>= 1`, so certain seeds — notably RNGs from `derive_child(idx)` (one per contig/chunk in
+  whole-genome gen-reads) — left the state far outside `[0,1)` (observed: a child whose first
+  `random()` was `-8311.87`). Downstream this crashed `Normal::inverse_cdf` in fragment-length
+  sampling on the SV-weighted path (`x must be in [0, 1]`) at whole-genome scale, and could
+  have mis-fed other RNG consumers. Fixed by normalizing seed state with `rem_euclid(1.0)`,
+  which is byte-identical to the old wrap for the well-behaved `[-1,1)` range — so existing
+  seeds/outputs are unchanged (model-parity + full suite green); only previously-broken seeds
+  change. Regression test added.
+
+
 7/7/2026
 ========
 ## rneat v1.20.0 — realism update

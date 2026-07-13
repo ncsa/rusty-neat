@@ -1,3 +1,26 @@
+7/13/2026
+=========
+## rneat v1.20.1 — bug-fix
+
+Patch release on top of v1.20.0. Fixes a core RNG bug where `NeatRng::random()` could
+return values outside `[0,1)` for certain seeds. Output-preserving for all well-behaved
+seeds (model-parity + full suite unchanged), so v1.20.0 outputs are unaffected except where
+the RNG was previously producing out-of-range draws.
+
+### Bug fixes
+- **RNG: `NeatRng::random()` could return values outside `[0,1)`.** The `mash()` seed hasher
+  dropped the u32 truncation the JS/Alea algorithm it ports applies to its return
+  (`(n >>> 0) * 2^-32`) — `n` was an unmasked `u64`, so `mash()` could return `>= 1`. That let
+  `new_from_seed` state escape `[0,1)` for certain seeds — notably RNGs from `derive_child(idx)`
+  (one per contig/chunk in whole-genome gen-reads) — and `random()` then produced out-of-range
+  draws (observed: a child whose first `random()` was `-8311.87`). Downstream this crashed
+  `Normal::inverse_cdf` in fragment-length sampling on the SV-weighted path (`x must be in
+  [0, 1]`) at whole-genome scale, and could have mis-fed other RNG consumers. Fixed at the
+  source by masking `mash()`'s return to 32 bits, which is a no-op whenever `n < 2^32` (every
+  seed that already behaved) — so existing seeds/outputs are unchanged (model-parity + full
+  suite green); only previously-broken seeds change. Regression test added.
+
+
 7/7/2026
 ========
 ## rneat v1.20.0 — realism update

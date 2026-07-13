@@ -57,7 +57,9 @@ impl NeatRng {
             // vectorize the seed and add it to the master list
             let vector_seed = seed.chars().collect::<Vec<char>>();
             seed_vec.push(vector_seed.clone());
-            // update the parameters
+            // update the parameters. mash() is now bounded to [0,1) (see mash.rs), so each
+            // subtraction lands in (-1,1) and this single `+1` wrap keeps state in [0,1) —
+            // the out-of-range escape came from mash() returning >= 1, fixed at the source.
             s0 -= masher.mash(&vector_seed);
             if s0 < 0f64 {
                 s0 += 1f64;
@@ -150,6 +152,26 @@ impl NeatRng {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Regression: `random()` must ALWAYS return a finite value in [0,1), including for
+    // derived children (whole-genome gen-reads derives one RNG per contig/chunk). Before the
+    // mash() u32-mask fix (mash.rs), some derived seeds left the state far outside [0,1)
+    // (e.g. derive_child(6097) → random() == -8311.87), which crashed Normal::inverse_cdf in
+    // fragment-length sampling on the SV-weighted path at whole-genome scale.
+    #[test]
+    fn random_always_in_unit_interval_across_derived_children() {
+        let base = NeatRng::new_from_seed(&vec!["scn sv render check".to_string()]).unwrap();
+        for idx in 0..30_000u64 {
+            let mut child = base.derive_child(idx);
+            for _ in 0..40 {
+                let x = child.random().unwrap();
+                assert!(
+                    x.is_finite() && (0.0..1.0).contains(&x),
+                    "derive_child({idx}).random() = {x} is out of [0,1)"
+                );
+            }
+        }
+    }
 
     #[test]
     fn test_gen_bool() {

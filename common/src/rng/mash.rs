@@ -63,7 +63,15 @@ impl Mash {
             n += (h * NORM) as u64;
         }
         self.n = n;
-        self.n as f64 / NORM
+        // Mask to 32 bits before normalizing. The JS/Alea reference this ports does
+        // `(n >>> 0) * 2^-32` — a u32 truncation on the return — but the port dropped it
+        // (`n` is an unmasked u64), so `self.n` can exceed 2^32 and the return exceed 1.0,
+        // violating mash's implicit [0,1) contract. That let NeatRng seed state escape
+        // [0,1) and produced out-of-range `random()` draws (crashing Normal::inverse_cdf
+        // in fragment sampling). Masking restores the contract for ALL consumers and is a
+        // no-op whenever `self.n < 2^32` (every seed that already behaved), so existing
+        // output is unchanged.
+        (self.n & 0xFFFF_FFFF) as f64 / NORM
     }
 }
 

@@ -57,18 +57,21 @@ impl NeatRng {
             // vectorize the seed and add it to the master list
             let vector_seed = seed.chars().collect::<Vec<char>>();
             seed_vec.push(vector_seed.clone());
-            // update the parameters
-            // Normalize the state into [0,1) with rem_euclid. The old `if sX < 0 { += 1 }`
-            // only nudged by one, so when `mash()` returns >= 1 (its `n/NORM` can exceed 1),
-            // the state escaped [0,1) — sometimes by thousands. `random()` then produced
-            // out-of-range/garbage draws (its `t.floor() as u32` truncation compounds it),
-            // which crashed `Normal::inverse_cdf` downstream (fragment-length sampling in the
-            // SV-weighted path). rem_euclid maps ANY finite value into [0,1); for the
-            // well-behaved range [-1,1) it is byte-identical to the old wrap, so seeds that
-            // already worked are unaffected — only the previously-broken ones change.
-            s0 = (s0 - masher.mash(&vector_seed)).rem_euclid(1.0);
-            s1 = (s1 - masher.mash(&vector_seed)).rem_euclid(1.0);
-            s2 = (s2 - masher.mash(&vector_seed)).rem_euclid(1.0);
+            // update the parameters. mash() is now bounded to [0,1) (see mash.rs), so each
+            // subtraction lands in (-1,1) and this single `+1` wrap keeps state in [0,1) —
+            // the out-of-range escape came from mash() returning >= 1, fixed at the source.
+            s0 -= masher.mash(&vector_seed);
+            if s0 < 0f64 {
+                s0 += 1f64;
+            }
+            s1 -= masher.mash(&vector_seed);
+            if s1 < 0f64 {
+                s1 += 1f64;
+            }
+            s2 -= masher.mash(&vector_seed);
+            if s2 < 0f64 {
+                s2 += 1f64;
+            }
         }
 
         Ok(NeatRng { s0, s1, s2, c })
@@ -152,7 +155,7 @@ mod tests {
 
     // Regression: `random()` must ALWAYS return a finite value in [0,1), including for
     // derived children (whole-genome gen-reads derives one RNG per contig/chunk). Before the
-    // rem_euclid fix in new_from_seed, some derived seeds left the state far outside [0,1)
+    // mash() u32-mask fix (mash.rs), some derived seeds left the state far outside [0,1)
     // (e.g. derive_child(6097) → random() == -8311.87), which crashed Normal::inverse_cdf in
     // fragment-length sampling on the SV-weighted path at whole-genome scale.
     #[test]

@@ -70,16 +70,19 @@ echo "=== banner: ACC=$ACC SRR=$SRR ref=$REF pool_vcf=$POOL_VCF cov=$COV ==="
 mkdir -p "$OUTDIR"
 
 # ── Step 1: per-site AF from AD, SNVs only ───────────────────────────────────
-# The pool VCF needs FORMAT/AD to derive AF. stage_scn.sh now emits it (mpileup
-# -a FORMAT/AD); VCFs staged before that fix lack it, so fall back to re-deriving
-# AD from the BAM at just the SNV sites (fast, -R site-restricted) rather than
-# forcing a full re-stage. POOL_AF is BOTH the gen-reads input and the truth, so
-# the comparison stays self-consistent regardless of which route produced it.
+# The pooled allele fraction is the READ fraction FORMAT/AD (alt/(ref+alt)), NOT the
+# GT-derived AF. Do NOT run `bcftools +fill-tags -t AF` here — that tag is computed from
+# GT, so on a diploid-called pool it collapses every het to 0.5 and every hom to 1.0
+# (the exact bug that produced a piled-at-0.5 "truth" and r=0.61 in job 20270457). Instead
+# pass the AD-carrying VCF straight through with NO INFO/AF: both gen-reads (from_file) and
+# scn_af_compare.py then derive the fraction from FORMAT/AD, which is the real pool spectrum.
+# stage_scn.sh emits AD (mpileup -a FORMAT/AD); VCFs staged before that fix lack it, so fall
+# back to re-deriving AD from the BAM at just the SNV sites (fast, -R restricted). POOL_AF is
+# BOTH the gen-reads input and the truth, so the comparison stays self-consistent either way.
 POOL_AF="$OUTDIR/pool.af.vcf.gz"
 if bcftools view -h "$POOL_VCF" | grep -q '##FORMAT=<ID=AD,'; then
-    echo "pool VCF carries FORMAT/AD — deriving AF directly"
-    bcftools view -v snps "$POOL_VCF" -Ou \
-      | bcftools +fill-tags -Oz -o "$POOL_AF" -- -t AF
+    echo "pool VCF carries FORMAT/AD — using AD-based fraction directly"
+    bcftools view -v snps "$POOL_VCF" -Oz -o "$POOL_AF"
 elif [[ -s "$BAM" ]]; then
     echo "pool VCF lacks FORMAT/AD — re-deriving AD from BAM at the SNV sites"
     SITES="$OUTDIR/snv_sites.vcf.gz"
@@ -87,8 +90,7 @@ elif [[ -s "$BAM" ]]; then
     bcftools index -t "$SITES"
     bcftools mpileup -a FORMAT/AD -f "$REF" -R "$SITES" "$BAM" 2>/dev/null \
       | bcftools call -m -Oz 2>/dev/null \
-      | bcftools view -v snps -Ou \
-      | bcftools +fill-tags -Oz -o "$POOL_AF" -- -t AF
+      | bcftools view -v snps -Oz -o "$POOL_AF"
 else
     echo "ABORT: $POOL_VCF has no FORMAT/AD and no BAM at $BAM to re-derive it." >&2
     echo "       Re-stage with the current stage_scn.sh (emits FORMAT/AD), or set INPUT_BAM." >&2
@@ -96,8 +98,14 @@ else
 fi
 bcftools index -t "$POOL_AF"
 naf=$(bcftools view -H "$POOL_AF" | wc -l)
-echo "pool AF sites (SNVs): $naf"
-[[ "$naf" -gt 0 ]] || { echo "ABORT: 0 SNV sites after AF fill — check the pool VCF / BAM." >&2; exit 1; }
+echo "pool AD-SNV sites: $naf"
+[[ "$naf" -gt 0 ]] || { echo "ABORT: 0 SNV sites — check the pool VCF / BAM." >&2; exit 1; }
+# Sanity: the AD-derived truth must NOT be piled at 0.5/1.0 (that = GT-derived, the bug above).
+# Report the spread so a green run can't hide a collapsed spectrum.
+echo "truth AF spread (from FORMAT/AD, should span deciles, not pile at 0.5):"
+bcftools query -f '[%AD]\n' "$POOL_AF" \
+  | awk -F',' '{r=$1;a=$2;t=r+a; if(t>0){printf "%.3f\n", a/t}}' \
+  | awk '{b=int($1*10); if(b>9)b=9; c[b]++} END{for(i=0;i<10;i++)printf "  [%.1f,%.1f) %d\n", i/10,(i+1)/10,c[i]+0}'
 
 # ── Step 2: gen-reads honoring the input AF (nothing de novo) ─────────────────
 cat > "$OUTDIR/af.yml" <<YML

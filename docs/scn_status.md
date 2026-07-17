@@ -2,7 +2,7 @@
 
 Consolidated status for the soybean-cyst-nematode (SCN, *Heterodera glycines*) real-data
 work under the realism epic (#311). Data from **João Gomes Viana** (Matt Hudson lab).
-Keep this current as the SCN work progresses. Last updated: **2026-07-15**.
+Keep this current as the SCN work progresses. Last updated: **2026-07-16**.
 
 Goal: use real SCN Pool-seq data to (Phase 1) build genuine per-strain rneat models covering
 **all variant classes — SNP/indel, structural variants, and copy-number** — and (Phase 2)
@@ -124,11 +124,25 @@ gap baseline.
 
 ## Open / next steps
 
-1. **Common-reference variant comparison** — align both pools to one reference to remove the
-   strain-fitting confound; the only path to a defensible virulent-vs-avirulent *biological* claim.
-2. **Phase 2** — allele-frequency replay (designed; needs the `allele_fraction` enabling change).
-3. **Harness (issue #395)** — edge-case script fixes; bake the `RDCN`→`INFO/CN` lift + FORMAT-strip
+The planned **validation** track is complete (per-strain sim-vs-truth fidelity, build → simulate →
+render, on both lines). Remaining items split into tool/validation work that can proceed and
+**biology extensions parked pending colleague feedback**.
+
+**Validation / tooling (can proceed):**
+
+1. **Phase 2** — allele-frequency replay (designed; needs the `allele_fraction` enabling change).
+   This is the genuine remaining *sim-vs-truth* fidelity test — feed observed pool AFs, emit reads,
+   validate sim-AF ≈ real-AF.
+2. **Harness (issue #395)** — edge-case script fixes; bake the `RDCN`→`INFO/CN` lift + FORMAT-strip
    into `call_scn_cnv.sh` so the CNV merge is turnkey.
-4. **CNV biology sanity** — the ~78–92% loss-dominated CNV spectra on same/near-strain alignments
-   are surprising; check with João (likely partly low-mappability/repeat regions).
-5. **Long reads** — `delly lr` on the PacBio/ONT data (PRJNA852516) to recover TEs short reads miss.
+
+**Biology extensions — PARKED pending feedback from João / colleagues:**
+
+- **Common-reference variant comparison** — align both pools to one reference to remove the
+  strain-fitting confound. This is *not* a validation gap: per-strain sim-vs-truth fidelity stands
+  on its own regardless of reference. It only matters for turning the strain contrast into a
+  defensible virulent-vs-avirulent *biological* claim, which is a project riding on top of the
+  validated tool. Do not start without colleague sign-off that the biological claim is wanted.
+- **CNV biology sanity** — the ~78–92% loss-dominated CNV spectra on same/near-strain alignments
+  are surprising; check with João (likely partly low-mappability/repeat regions).
+- **Long reads** — `delly lr` on the PacBio/ONT data (PRJNA852516) to recover TEs short reads miss.

@@ -193,7 +193,7 @@ if [[ ! -s "$VCF" ]]; then
     cut -f1 "$REF.fai" | xargs -P "$THREADS" -I CTG bash -c '
         ctg="$1"; out="'"$parts"'/$ctg.vcf.gz"
         [[ -s "$out" ]] && exit 0
-        bcftools mpileup -r "$ctg" -f "'"$REF"'" "'"$BAM"'" 2>/dev/null \
+        bcftools mpileup -a FORMAT/AD -r "$ctg" -f "'"$REF"'" "'"$BAM"'" 2>/dev/null \
             | bcftools call -mv -Oz -o "$out" 2>/dev/null
     ' _ CTG
     cut -f1 "$REF.fai" | sed "s#^#$parts/#; s#\$#.vcf.gz#" > "$D/${SRR}_parts.list"

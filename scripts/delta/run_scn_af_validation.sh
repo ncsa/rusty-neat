@@ -44,7 +44,8 @@ D="${DATA_DIR:-$SCRATCH/neat_data/scn}"
 ACC="${ACC:-GCA_040805935.1}"
 SRR="${SRR:-SRR27329602}"
 REF="${REFERENCE:-$D/${ACC}.fa}"
-POOL_VCF="${POOL_VCF:-$D/${SRR}.vcf.gz}"      # staged short-variant VCF (must have FORMAT/AD)
+POOL_VCF="${POOL_VCF:-$D/${SRR}.vcf.gz}"      # staged short-variant VCF
+BAM="${INPUT_BAM:-$D/${SRR}.bam}"             # staged pool BAM (fallback AD source)
 MODELS="${MODELS:?set MODELS=<model_builders output>/models}"
 COV="${COV:-50}"                               # match the real pool depth so AF noise matches
 MIN_DEPTH="${MIN_DEPTH:-20}"                    # gate low-depth sites in the comparison
@@ -69,18 +70,34 @@ echo "=== banner: ACC=$ACC SRR=$SRR ref=$REF pool_vcf=$POOL_VCF cov=$COV ==="
 mkdir -p "$OUTDIR"
 
 # ── Step 1: per-site AF from AD, SNVs only ───────────────────────────────────
-# Preflight: the pool VCF must carry FORMAT/AD, else +fill-tags can't derive AF.
-if ! bcftools view -h "$POOL_VCF" | grep -q '##FORMAT=<ID=AD,'; then
-    echo "ABORT: $POOL_VCF has no FORMAT/AD — re-call with 'bcftools call -a AD' (or mpileup -a AD)." >&2
+# The pool VCF needs FORMAT/AD to derive AF. stage_scn.sh now emits it (mpileup
+# -a FORMAT/AD); VCFs staged before that fix lack it, so fall back to re-deriving
+# AD from the BAM at just the SNV sites (fast, -R site-restricted) rather than
+# forcing a full re-stage. POOL_AF is BOTH the gen-reads input and the truth, so
+# the comparison stays self-consistent regardless of which route produced it.
+POOL_AF="$OUTDIR/pool.af.vcf.gz"
+if bcftools view -h "$POOL_VCF" | grep -q '##FORMAT=<ID=AD,'; then
+    echo "pool VCF carries FORMAT/AD — deriving AF directly"
+    bcftools view -v snps "$POOL_VCF" -Ou \
+      | bcftools +fill-tags -Oz -o "$POOL_AF" -- -t AF
+elif [[ -s "$BAM" ]]; then
+    echo "pool VCF lacks FORMAT/AD — re-deriving AD from BAM at the SNV sites"
+    SITES="$OUTDIR/snv_sites.vcf.gz"
+    bcftools view -v snps "$POOL_VCF" -Oz -o "$SITES"
+    bcftools index -t "$SITES"
+    bcftools mpileup -a FORMAT/AD -f "$REF" -R "$SITES" "$BAM" 2>/dev/null \
+      | bcftools call -m -Oz 2>/dev/null \
+      | bcftools view -v snps -Ou \
+      | bcftools +fill-tags -Oz -o "$POOL_AF" -- -t AF
+else
+    echo "ABORT: $POOL_VCF has no FORMAT/AD and no BAM at $BAM to re-derive it." >&2
+    echo "       Re-stage with the current stage_scn.sh (emits FORMAT/AD), or set INPUT_BAM." >&2
     exit 1
 fi
-POOL_AF="$OUTDIR/pool.af.vcf.gz"
-bcftools view -v snps "$POOL_VCF" -Ou \
-  | bcftools +fill-tags -Oz -o "$POOL_AF" -- -t AF
 bcftools index -t "$POOL_AF"
 naf=$(bcftools view -H "$POOL_AF" | wc -l)
 echo "pool AF sites (SNVs): $naf"
-[[ "$naf" -gt 0 ]] || { echo "ABORT: 0 SNV sites after AF fill — check the pool VCF." >&2; exit 1; }
+[[ "$naf" -gt 0 ]] || { echo "ABORT: 0 SNV sites after AF fill — check the pool VCF / BAM." >&2; exit 1; }
 
 # ── Step 2: gen-reads honoring the input AF (nothing de novo) ─────────────────
 cat > "$OUTDIR/af.yml" <<YML

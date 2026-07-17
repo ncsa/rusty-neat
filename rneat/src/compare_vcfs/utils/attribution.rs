@@ -274,6 +274,7 @@ mod tests {
             alternate: AlternateType::Literal(vec![Nucleotide::G]),
             genotype_str: "0/1".to_string(),
             genotype: Genotype::Heterozygous,
+            allele_fraction: None,
             id: None,
             quality_score: None,
             filter: Some("PASS".to_string()),

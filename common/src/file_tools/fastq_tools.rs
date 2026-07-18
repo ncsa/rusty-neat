@@ -459,7 +459,17 @@ pub fn generate_read(
                 "symbolic ALT reached generate_read at position {fragment_position}"
             );
             let entry = ad_counter.entry(variant.location).or_insert((0, 0));
-            if (variant.genotype == Genotype::Homozygous) || (rng.random()? < 0.5) {
+            // When the variant carries an explicit allele_fraction (from an input
+            // VCF, #398), emit the alt allele on that fraction of reads. Otherwise
+            // fall back to the Genotype default: homozygous always alt, het ~0.5.
+            // The else-branch keeps the exact same short-circuit (homozygous draws
+            // no rng) so default runs stay byte-identical.
+            let is_alt = if let Some(f) = variant.allele_fraction {
+                rng.random()? < f
+            } else {
+                (variant.genotype == Genotype::Homozygous) || (rng.random()? < 0.5)
+            };
+            if is_alt {
                 let alt = variant.alternate.as_literal().unwrap();
                 let alt_len = alt.len();
                 // Reverse reads are generated forward then flipped by the
@@ -1413,6 +1423,38 @@ mod tests {
             "het split should be roughly 50/50 ({}/1000 ref, {} alt)",
             refs,
             alts
+        );
+    }
+
+    #[test]
+    fn test_generate_read_counter_honors_allele_fraction() {
+        // An explicit allele_fraction overrides the Genotype-based fraction: the alt
+        // allele should appear on ~f of reads (here 0.2), regardless of Het/Hom (#398).
+        let sequence = make_sequence(30);
+        let read_length = 10;
+        let mut snp =
+            Variant::new(VariantType::SNP, 5, &vec![T], &vec![C], &mut vec![0, 1]).unwrap();
+        snp.allele_fraction = Some(0.2);
+        let variant_map = HashMap::from([(5usize, &snp)]);
+        let quality_scores = vec![40usize; read_length];
+        let model = SequencingErrorModel::default().unwrap();
+        let mut rng = NeatRng::new_from_seed(&vec!["af".to_string()]).unwrap();
+        let mut ad: AdCounter = HashMap::new();
+        let n = 1000;
+        for i in 0..n {
+            let _ = generate_read(
+                &sequence, &[5], &variant_map, read_length, format!("r{i}/1"),
+                Strand::Forward, quality_scores.clone(), &model, &mut rng,
+                "chr1".to_string(), 0, "chr1".to_string(), 0, 0, false, &mut ad,
+            )
+            .unwrap();
+        }
+        let (refs, alts) = ad[&5];
+        assert_eq!(refs + alts, n, "every read should increment exactly one slot");
+        // Binomial(1000, 0.2): mean 200, sd ~12.6 → generous CI well clear of 0.5.
+        assert!(
+            (150..250).contains(&(alts as usize)),
+            "alt count should track allele_fraction=0.2 ({alts}/1000 alt, {refs} ref)"
         );
     }
 

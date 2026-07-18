@@ -103,15 +103,27 @@ impl MutatedMap {
             Some(bases) => bases.to_vec(),
             None => return Ok(variant.reference.clone()),
         };
-        match variant.genotype {
-            Genotype::Homozygous => Ok(alt_bases),
-            Genotype::Heterozygous => {
-                if rng.gen_bool(0.5).unwrap() {
-                    Ok(variant.reference.clone())
-                } else {
+        // An explicit allele_fraction (input VCF, #398) emits alt with probability f.
+        // Otherwise the Genotype default: homozygous always alt (no rng draw, so the
+        // default path stays byte-identical), het a 0.5 coin flip.
+        match variant.allele_fraction {
+            Some(f) => {
+                if rng.gen_bool(f).unwrap() {
                     Ok(alt_bases)
+                } else {
+                    Ok(variant.reference.clone())
                 }
             }
+            None => match variant.genotype {
+                Genotype::Homozygous => Ok(alt_bases),
+                Genotype::Heterozygous => {
+                    if rng.gen_bool(0.5).unwrap() {
+                        Ok(variant.reference.clone())
+                    } else {
+                        Ok(alt_bases)
+                    }
+                }
+            },
         }
     }
 }
@@ -189,6 +201,7 @@ mod tests {
             alternate: AlternateType::Symbolic(SvData::new("<DEL>", SvType::Del)),
             genotype_str: "1/1".to_string(),
             genotype: Genotype::Homozygous,
+            allele_fraction: None,
             id: None,
             quality_score: None,
             filter: None,
@@ -220,6 +233,7 @@ mod tests {
             alternate: AlternateType::Symbolic(SvData::new("<DUP>", SvType::Dup)),
             genotype_str: "1/1".to_string(),
             genotype: Genotype::Homozygous,
+            allele_fraction: None,
             id: None,
             quality_score: None,
             filter: None,

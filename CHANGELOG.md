@@ -1,3 +1,31 @@
+7/18/2026
+=========
+## rneat v1.21.0 — per-variant allele fraction
+
+Adds an optional per-variant allele fraction so an input VCF can drive a continuous
+allele-frequency spectrum in the simulated reads, instead of only the `{0.5, 1.0}` the
+genotype-based fraction could produce. Backward-compatible: variants without an allele
+fraction are unchanged (model-parity + full suite green).
+
+### Read generation — allele-frequency realism (#398)
+- gen-reads now honors an optional per-variant `allele_fraction` parsed from the input VCF —
+  `INFO/AF` if present, else `FORMAT/AD` as `alt / (ref + alt)`. When set, the alt allele is
+  emitted on that fraction of overlapping reads, and the golden VCF's measured `GT:AD:DP:AF`
+  tracks it. This lets rneat replay pooled or somatic allele-frequency spectra from a real
+  sample — the reproductive-replay case the model builders could not express before. Allele
+  depth is used over genotype for pooled data, where `GT` is not diploid-meaningful.
+- **Backward-compatible.** Variants with no allele fraction keep the genotype-based behavior
+  (homozygous → all alt, heterozygous → ~0.5) with the identical RNG draw, so default runs are
+  byte-identical to prior output.
+- **Validated on real data.** On soybean-cyst-nematode Pool-seq, simulated-vs-real per-site
+  allele frequency reached Pearson r = 0.98 at 150x coverage, unbiased, with the residual
+  error tracking the binomial coverage-noise floor.
+
+### Notes
+- `Variant` no longer derives `Eq` / `Hash` — the new `Option<f64>` field is only `PartialEq`,
+  and `Variant` was never used as a map key or set member (a separate `VariantKey` is hashed).
+
+
 7/13/2026
 =========
 ## rneat v1.20.1 — bug-fix

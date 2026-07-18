@@ -598,11 +598,21 @@ represent.
 distribution and transition bias (Ts/Tv 2.34, §3.1/3.3) and recovers variants well
 across independent callers and at scale (§3.3/3.4/3.7/3.8) — but simulated somatic
 SNVs do not reconstruct the input COSMIC *signature* under signature extraction.
-This is a limitation of the underlying NEAT trinucleotide approach (the germline
-default model shares it), and the fix is to weight mutation *placement* by the
-signature's per-context probability rather than placing uniformly (tracked: #320).
-It is exactly the class of gap recall-based metrics cannot surface — and the reason
-the signature check was added.
+This was a **regression in rneat's port, not an inherent NEAT limitation**: NEAT 2.x
+and 4.x both weight SNP *placement* by trinucleotide context (`sample_trinucs` /
+`init_trinucBias`), but the Rust port applied context only to the *alt allele* and
+placed positions uniformly (the germline default model shared the gap). The fix is to
+restore per-context placement weighting rather than placing uniformly. It is exactly
+the class of gap recall-based metrics cannot surface — and the reason the signature
+check was added.
+
+> **Update (v1.20.0, #372).** Context-weighted placement has since been restored: SNP
+> positions are now drawn with probability proportional to each site's fitted
+> trinucleotide mutability (matching NEAT 2/4), on by default; context-flat models keep
+> uniform placement byte-identically. Re-validated on SEQC2 HCC1395, the SBS-96 cosine of
+> real-vs-simulated somatic SNVs rose from **0.72 to 0.99**. Signature-*extraction*
+> confirmation — recovering SBS1/CpG under SigProfiler, the specific test above — remains
+> to be re-run and is tracked in **#320**.
 
 **Cross-caller results (#317).** The broadened coverage reinforces the anti-overfit
 picture across independent callers. **SVs:** Delly reproduces Manta's per-type recall

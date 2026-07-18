@@ -79,10 +79,7 @@ mod tests {
             "@RNEAT_generated_chr1_100_170/1\nACGT\n+\nIIII\n\
              @RNEAT_generated_chr1_200_270/1\nTTTT\n+\n@@@@\n",
         );
-        write_gz(
-            &t,
-            "@RNEAT_generated_chr1_100_170/1\nGGGG\n+\nIIII\n",
-        );
+        write_gz(&t, "@RNEAT_generated_chr1_100_170/1\nGGGG\n+\nIIII\n");
 
         tag_and_concat(&[(&n as &Path, "N"), (&t as &Path, "T")], &out).unwrap();
         let merged = read_gz(&out);
@@ -100,7 +97,10 @@ mod tests {
         // the "@@@@" quality line is NOT prefixed.
         assert_eq!(lines[1], "ACGT");
         assert_eq!(lines[6], "+");
-        assert_eq!(lines[7], "@@@@", "quality line starting with '@' must not be tagged");
+        assert_eq!(
+            lines[7], "@@@@",
+            "quality line starting with '@' must not be tagged"
+        );
         assert_eq!(lines[9], "GGGG");
 
         // The same coordinate (chr1_100_170) appears under both N_ and T_ — which

@@ -16,9 +16,9 @@ mod common;
 
 use std::path::PathBuf;
 
-use common::{GenReadsConfig, fresh_workdir, h1n1_reference, rneat};
 use ::common::models::mutation_model::MutationModel;
 use ::common::structs::variants::SvType;
+use common::{GenReadsConfig, fresh_workdir, h1n1_reference, rneat};
 
 fn cosmic_model_path() -> PathBuf {
     PathBuf::from(format!(

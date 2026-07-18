@@ -7,8 +7,8 @@ extern crate simplelog;
 
 pub mod compare_vcfs;
 pub mod filter_reads;
-pub mod gen_cancer_reads;
 pub mod gen_bam_models;
+pub mod gen_cancer_reads;
 pub mod gen_frag_length_model;
 pub mod gen_gc_bias_model;
 pub mod gen_mut_model;
@@ -28,8 +28,7 @@ use thiserror::Error;
 
 use crate::{
     compare_vcfs::errors::CompareVcfsError, filter_reads::errors::FilterReadsError,
-    gen_bam_models::errors::GenBamModelsError,
-    gen_cancer_reads::errors::GenCancerReadsError,
+    gen_bam_models::errors::GenBamModelsError, gen_cancer_reads::errors::GenCancerReadsError,
     gen_frag_length_model::errors::GenFragLengthModelError,
     gen_gc_bias_model::errors::GenGcBiasModelError, gen_mut_model::errors::GenMutationModelError,
     gen_reads::errors::GenerateReadsError, gen_seq_error_model::errors::GenSeqErrorModelError,
@@ -414,10 +413,12 @@ fn main() -> Result<(), NeatErrors> {
                     .to_path_buf();
 
                 if !file.is_file() {
-                    return Err(NeatErrors::GenCancerReads(GenCancerReadsError::ConfigError(
-                        "Must supply a valid configuration file to run gen-cancer-reads!"
-                            .to_string(),
-                    )));
+                    return Err(NeatErrors::GenCancerReads(
+                        GenCancerReadsError::ConfigError(
+                            "Must supply a valid configuration file to run gen-cancer-reads!"
+                                .to_string(),
+                        ),
+                    ));
                 }
                 info!("Running gen-cancer-reads to simulate a tumor/normal mixture.");
                 let result = gen_cancer_reads::main(&file);

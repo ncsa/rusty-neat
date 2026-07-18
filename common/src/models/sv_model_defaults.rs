@@ -188,7 +188,10 @@ mod tests {
                 assert_eq!(*sigma, 0.0);
             } else {
                 assert!(*mu > 2.0 && *mu < 14.0, "mu={mu} out of plausible range");
-                assert!(*sigma > 0.0 && *sigma < 4.0, "sigma={sigma} out of plausible range");
+                assert!(
+                    *sigma > 0.0 && *sigma < 4.0,
+                    "sigma={sigma} out of plausible range"
+                );
             }
         }
         for cn in m.cnv_copy_number_distribution.keys() {

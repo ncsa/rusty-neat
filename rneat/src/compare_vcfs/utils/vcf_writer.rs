@@ -128,11 +128,11 @@ fn format_record(chrom: &str, v: &Variant, reasons: Option<&[Reason]>) -> String
 #[cfg(test)]
 mod tests {
     use super::*;
+    use common::structs::variants::{AlternateType, Provenance};
     use common::structs::{
         nucleotides::Nucleotide,
         variants::{Genotype, VariantType},
     };
-    use common::structs::variants::{AlternateType, Provenance};
 
     fn snp_with(loc: usize, info: Option<&str>) -> Variant {
         Variant {

@@ -196,7 +196,8 @@ pub fn write_block_fastq<B1: Write, B2: Write>(
         // the caller must still prefix each run's reads (e.g. cancer_simulate.sh
         // does N_/T_ between normal and tumor passes).
         let base_name = format!(
-            "{}_{:010}_{:010}_{:016x}", read_name_prefix, abs_start, abs_end, frag_idx,
+            "{}_{:010}_{:010}_{:016x}",
+            read_name_prefix, abs_start, abs_end, frag_idx,
         );
 
         let r2_start = if paired_ended && abs_end >= effective_read_len {
@@ -504,9 +505,7 @@ pub fn generate_read(
                     // Cap at remaining buffer so we don't read past the
                     // fragment end. Truncated cases fall through to the
                     // existing TruncatedRead error path.
-                    let max_skip = fragment_length
-                        .saturating_sub(seq_index)
-                        .saturating_sub(1);
+                    let max_skip = fragment_length.saturating_sub(seq_index).saturating_sub(1);
                     let actual_skip = want_skip.min(max_skip);
                     seq_index += actual_skip;
                     deletion_skip = actual_skip;
@@ -598,8 +597,14 @@ fn reverse_complement_record(mut record: ReadRecord) -> ReadRecord {
         .chars()
         .rev()
         .map(|c| match c {
-            'A' => 'T', 'C' => 'G', 'G' => 'C', 'T' => 'A',
-            'a' => 't', 'c' => 'g', 'g' => 'c', 't' => 'a',
+            'A' => 'T',
+            'C' => 'G',
+            'G' => 'C',
+            'T' => 'A',
+            'a' => 't',
+            'c' => 'g',
+            'g' => 'c',
+            't' => 'a',
             other => other,
         })
         .collect();
@@ -677,13 +682,13 @@ pub fn quality_scores_to_char_vec(array: &[usize]) -> Result<Vec<u8>, FastqTools
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flate2::Compression;
-    use flate2::write::GzEncoder;
     use crate::file_tools::bam_writer::{BamRecordStager, BamWriter};
     use crate::file_tools::file_io::{VectorBuffer, create_output_file, read_gzip_lines};
     use crate::structs::nucleotides::Nucleotide::*;
     use crate::structs::sequence_block::{RegionType, SequenceMap};
     use crate::structs::variants::{Variant, VariantType};
+    use flate2::Compression;
+    use flate2::write::GzEncoder;
     use std::io::Write;
 
     #[test]
@@ -824,14 +829,25 @@ mod tests {
         let mut rng = NeatRng::new_from_seed(&vec!["adapter".to_string()]).unwrap();
         let out = append_adapter_readthrough(
             adapter_rec(&"A".repeat(insert_len), true, false),
-            &adapter, read_length, &qm, &em, &mut rng,
-        ).unwrap();
+            &adapter,
+            read_length,
+            &qm,
+            &em,
+            &mut rng,
+        )
+        .unwrap();
         assert_eq!(out.sequence.len(), read_length, "padded to read_length");
         assert_eq!(out.quality_scores.len(), read_length);
         assert_eq!(out.cigar_ops.len(), read_length);
-        assert!(out.cigar_ops[..insert_len].iter().all(|&c| c == 'M'), "insert stays M");
+        assert!(
+            out.cigar_ops[..insert_len].iter().all(|&c| c == 'M'),
+            "insert stays M"
+        );
         assert_eq!(
-            out.cigar_ops[insert_len..].iter().filter(|&&c| c == 'S').count(),
+            out.cigar_ops[insert_len..]
+                .iter()
+                .filter(|&&c| c == 'S')
+                .count(),
             read_length - insert_len,
             "adapter region is soft-clipped",
         );
@@ -846,8 +862,12 @@ mod tests {
         let mut rng = NeatRng::new_from_seed(&vec!["x".to_string()]).unwrap();
         let rec = adapter_rec("ACGTACGTAC", false, false); // already read_length
         let before = rec.sequence.clone();
-        let out = append_adapter_readthrough(rec, &adapter, read_length, &qm, &em, &mut rng).unwrap();
-        assert_eq!(out.sequence, before, "no adapter when insert >= read_length");
+        let out =
+            append_adapter_readthrough(rec, &adapter, read_length, &qm, &em, &mut rng).unwrap();
+        assert_eq!(
+            out.sequence, before,
+            "no adapter when insert >= read_length"
+        );
     }
 
     #[test]
@@ -858,17 +878,23 @@ mod tests {
         let read_length = 30usize;
         let flipped = reverse_complement_record(adapter_rec("ACGTAC", true, false));
         assert!(flipped.is_reverse);
-        let r2_adapter: Vec<Nucleotide> =
-            "AAAACCCCAAAACCCCAAAACCCC".chars().map(Nucleotide::from).collect();
+        let r2_adapter: Vec<Nucleotide> = "AAAACCCCAAAACCCCAAAACCCC"
+            .chars()
+            .map(Nucleotide::from)
+            .collect();
         let qm = QualityScoreModel::default().unwrap();
         let em = SequencingErrorModel::default().unwrap();
         let mut rng = NeatRng::new_from_seed(&vec!["r2".to_string()]).unwrap();
-        let out = append_adapter_readthrough(flipped, &r2_adapter, read_length, &qm, &em, &mut rng).unwrap();
+        let out = append_adapter_readthrough(flipped, &r2_adapter, read_length, &qm, &em, &mut rng)
+            .unwrap();
         assert_eq!(out.sequence.len(), read_length);
         let tail = &out.sequence[6..];
         let ac = tail.chars().filter(|c| matches!(c, 'A' | 'C')).count();
         let gt = tail.chars().filter(|c| matches!(c, 'G' | 'T')).count();
-        assert!(ac > gt, "R2 adapter must be forward (A/C-rich), not revcomp'd; tail={tail}");
+        assert!(
+            ac > gt,
+            "R2 adapter must be forward (A/C-rich), not revcomp'd; tail={tail}"
+        );
     }
 
     #[test]
@@ -1144,7 +1170,12 @@ mod tests {
                     seq.len(),
                     qual.len()
                 );
-                assert_eq!(seq.len(), read_length, "read not padded to read_length in {:?}", path);
+                assert_eq!(
+                    seq.len(),
+                    read_length,
+                    "read not padded to read_length in {:?}",
+                    path
+                );
                 i += 4;
             }
         }
@@ -1211,16 +1242,32 @@ mod tests {
         )
         .unwrap();
         buf1.finish().unwrap();
-        let lines: Vec<String> = read_gzip_lines(&out_path).unwrap().map(|l| l.unwrap()).collect();
-        assert_eq!(lines.len(), 8, "expected 2 reads (both fragments kept), got {}", lines.len());
-        let read_lens: Vec<usize> = (0..lines.len()).step_by(4).map(|i| {
-            assert_eq!(lines[i + 1].len(), lines[i + 3].len(), "seq/qual mismatch");
-            lines[i + 1].len()
-        }).collect();
+        let lines: Vec<String> = read_gzip_lines(&out_path)
+            .unwrap()
+            .map(|l| l.unwrap())
+            .collect();
+        assert_eq!(
+            lines.len(),
+            8,
+            "expected 2 reads (both fragments kept), got {}",
+            lines.len()
+        );
+        let read_lens: Vec<usize> = (0..lines.len())
+            .step_by(4)
+            .map(|i| {
+                assert_eq!(lines[i + 1].len(), lines[i + 3].len(), "seq/qual mismatch");
+                lines[i + 1].len()
+            })
+            .collect();
         // Short insert (30) → 30 bp genomic read (NOT padded to 70); full insert → 70 bp.
         let mut sorted = read_lens.clone();
         sorted.sort();
-        assert_eq!(sorted, vec![30, 70], "expected insert-length reads [30, 70], got {:?}", read_lens);
+        assert_eq!(
+            sorted,
+            vec![30, 70],
+            "expected insert-length reads [30, 70], got {:?}",
+            read_lens
+        );
     }
 
     // --- CIGAR-building tests for the refactored generate_read ---
@@ -1327,9 +1374,22 @@ mod tests {
         let mut ad: AdCounter = HashMap::new();
         for i in 0..50 {
             let _ = generate_read(
-                &sequence, &[5], &variant_map, read_length, format!("r{i}/1"),
-                Strand::Forward, quality_scores.clone(), &model, &mut rng,
-                "chr1".to_string(), 0, "chr1".to_string(), 0, 0, false, &mut ad,
+                &sequence,
+                &[5],
+                &variant_map,
+                read_length,
+                format!("r{i}/1"),
+                Strand::Forward,
+                quality_scores.clone(),
+                &model,
+                &mut rng,
+                "chr1".to_string(),
+                0,
+                "chr1".to_string(),
+                0,
+                0,
+                false,
+                &mut ad,
             )
             .unwrap();
         }
@@ -1358,17 +1418,36 @@ mod tests {
         let mut ad: AdCounter = HashMap::new();
         for i in 0..50 {
             let _ = generate_read(
-                &sequence, &[5], &variant_map, read_length, format!("r{i}/2"),
-                Strand::Reverse, quality_scores.clone(), &model, &mut rng,
-                "chr1".to_string(), 0, "chr1".to_string(), 0, 0, true, &mut ad,
+                &sequence,
+                &[5],
+                &variant_map,
+                read_length,
+                format!("r{i}/2"),
+                Strand::Reverse,
+                quality_scores.clone(),
+                &model,
+                &mut rng,
+                "chr1".to_string(),
+                0,
+                "chr1".to_string(),
+                0,
+                0,
+                true,
+                &mut ad,
             )
             .unwrap();
         }
         let (refs, alts) = ad[&5];
         // The pre-fix reflection put the lookup at index 25, outside the
         // 10-base read, so alt would be 0 here. The fix applies it at index 5.
-        assert_eq!(refs, 0, "reverse homozygous SNP must produce zero ref reads");
-        assert_eq!(alts, 50, "reverse read must carry the alt (strand-bias regression)");
+        assert_eq!(
+            refs, 0,
+            "reverse homozygous SNP must produce zero ref reads"
+        );
+        assert_eq!(
+            alts, 50,
+            "reverse read must carry the alt (strand-bias regression)"
+        );
     }
 
     /// reverse_complement_record must reverse-complement the sequence and reverse
@@ -1390,8 +1469,16 @@ mod tests {
         };
         let f = reverse_complement_record(rec);
         assert_eq!(f.sequence, "ACGTT", "sequence must be reverse-complemented");
-        assert_eq!(f.quality_scores, vec![5, 4, 3, 2, 1], "qualities must be reversed");
-        assert_eq!(f.cigar_ops, vec!['M', 'M', 'M', 'I', 'M'], "CIGAR must be reversed");
+        assert_eq!(
+            f.quality_scores,
+            vec![5, 4, 3, 2, 1],
+            "qualities must be reversed"
+        );
+        assert_eq!(
+            f.cigar_ops,
+            vec!['M', 'M', 'M', 'I', 'M'],
+            "CIGAR must be reversed"
+        );
         assert!(f.is_reverse, "flipped record must be marked reverse");
     }
 
@@ -1409,14 +1496,31 @@ mod tests {
         let n = 1000;
         for i in 0..n {
             let _ = generate_read(
-                &sequence, &[5], &variant_map, read_length, format!("r{i}/1"),
-                Strand::Forward, quality_scores.clone(), &model, &mut rng,
-                "chr1".to_string(), 0, "chr1".to_string(), 0, 0, false, &mut ad,
+                &sequence,
+                &[5],
+                &variant_map,
+                read_length,
+                format!("r{i}/1"),
+                Strand::Forward,
+                quality_scores.clone(),
+                &model,
+                &mut rng,
+                "chr1".to_string(),
+                0,
+                "chr1".to_string(),
+                0,
+                0,
+                false,
+                &mut ad,
             )
             .unwrap();
         }
         let (refs, alts) = ad[&5];
-        assert_eq!(refs + alts, n, "every read should increment exactly one slot");
+        assert_eq!(
+            refs + alts,
+            n,
+            "every read should increment exactly one slot"
+        );
         // Binomial(1000, 0.5) → 99.99% CI is well within [400, 600]
         assert!(
             (400..600).contains(&(refs as usize)),
@@ -1443,14 +1547,31 @@ mod tests {
         let n = 1000;
         for i in 0..n {
             let _ = generate_read(
-                &sequence, &[5], &variant_map, read_length, format!("r{i}/1"),
-                Strand::Forward, quality_scores.clone(), &model, &mut rng,
-                "chr1".to_string(), 0, "chr1".to_string(), 0, 0, false, &mut ad,
+                &sequence,
+                &[5],
+                &variant_map,
+                read_length,
+                format!("r{i}/1"),
+                Strand::Forward,
+                quality_scores.clone(),
+                &model,
+                &mut rng,
+                "chr1".to_string(),
+                0,
+                "chr1".to_string(),
+                0,
+                0,
+                false,
+                &mut ad,
             )
             .unwrap();
         }
         let (refs, alts) = ad[&5];
-        assert_eq!(refs + alts, n, "every read should increment exactly one slot");
+        assert_eq!(
+            refs + alts,
+            n,
+            "every read should increment exactly one slot"
+        );
         // Binomial(1000, 0.2): mean 200, sd ~12.6 → generous CI well clear of 0.5.
         assert!(
             (150..250).contains(&(alts as usize)),

@@ -47,8 +47,14 @@ pub fn run_cancer(cfg: &CancerConfig) -> Result<(), GenCancerReadsError> {
     // ── Pass 2: tumor ───────────────────────────────────────────────────
     let tumor = cfg.tumor_pass(germline_vcf)?;
     match cfg.tumor_mutation_rate {
-        Some(r) => info!(">> Pass 2 (tumor): {tumor_cov}x coverage, somatic rate {r} → {}", tumor.output_filename),
-        None => info!(">> Pass 2 (tumor): {tumor_cov}x coverage, model-fitted rate → {}", tumor.output_filename),
+        Some(r) => info!(
+            ">> Pass 2 (tumor): {tumor_cov}x coverage, somatic rate {r} → {}",
+            tumor.output_filename
+        ),
+        None => info!(
+            ">> Pass 2 (tumor): {tumor_cov}x coverage, model-fitted rate → {}",
+            tumor.output_filename
+        ),
     }
     let mut rng_t = NeatRng::new_from_seed(&tumor.seed_vec)
         .map_err(|e| GenCancerReadsError::Rng(format!("{e:?}")))?;
@@ -126,8 +132,15 @@ fn print_summary(cfg: &CancerConfig, truth: &Path) {
     let (n, t) = cfg.per_pass_coverage();
     info!("──────────────────────────────────────────────");
     info!("Cancer simulation complete");
-    info!("  total coverage {}x, purity {} (normal {n}x / tumor {t}x)", cfg.total_coverage, cfg.purity);
-    info!("  merged FASTQ:  {}_merged_r1.fastq.gz{}", cfg.output_prefix, if cfg.paired_ended { " (+ _r2)" } else { "" });
+    info!(
+        "  total coverage {}x, purity {} (normal {n}x / tumor {t}x)",
+        cfg.total_coverage, cfg.purity
+    );
+    info!(
+        "  merged FASTQ:  {}_merged_r1.fastq.gz{}",
+        cfg.output_prefix,
+        if cfg.paired_ended { " (+ _r2)" } else { "" }
+    );
     info!("  merged truth:  {truth:?} (INFO/NEAT_ORIGIN = germline | somatic | shared)");
     info!("──────────────────────────────────────────────");
 }

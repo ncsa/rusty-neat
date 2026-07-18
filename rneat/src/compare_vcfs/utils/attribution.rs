@@ -260,11 +260,11 @@ pub fn detect_chrom_naming_mismatch(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use common::structs::variants::{AlternateType, Provenance};
     use common::structs::{
         nucleotides::Nucleotide,
         variants::{Genotype, Variant, VariantType},
     };
-    use common::structs::variants::{AlternateType, Provenance};
 
     fn snp(loc: usize) -> Variant {
         Variant {

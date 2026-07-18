@@ -35,7 +35,11 @@ fn gen_reads_emits_bnd_inv_and_de_novo_ins_in_one_run() {
             "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">"
         )
         .unwrap();
-        writeln!(f, "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS").unwrap();
+        writeln!(
+            f,
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS"
+        )
+        .unwrap();
         // BND pair: H1N1_HA:500 ↔ H1N1_HA:1500 (intra-contig translocation).
         writeln!(
             f,
@@ -95,7 +99,9 @@ fn gen_reads_emits_bnd_inv_and_de_novo_ins_in_one_run() {
     // `##contig=<ID=chimeric,length=0>` line breaks strict downstream
     // parsers (truvari refuses to score against it).
     assert!(
-        !vcf_lines.iter().any(|l| l.contains("##contig=<ID=chimeric")),
+        !vcf_lines
+            .iter()
+            .any(|l| l.contains("##contig=<ID=chimeric")),
         "##contig=<ID=chimeric,...> leaked into output VCF — \
          see collect_contig_result's pseudo-contig skip. Got: {:?}",
         vcf_lines
@@ -131,9 +137,13 @@ fn gen_reads_emits_bnd_inv_and_de_novo_ins_in_one_run() {
             let fields: Vec<&str> = l.split('\t').collect();
             fields.len() >= 5
                 && fields[3].len() == 1
-                && fields[3].chars().all(|c| matches!(c, 'A' | 'C' | 'G' | 'T'))
+                && fields[3]
+                    .chars()
+                    .all(|c| matches!(c, 'A' | 'C' | 'G' | 'T'))
                 && fields[4].len() > 30
-                && fields[4].chars().all(|c| matches!(c, 'A' | 'C' | 'G' | 'T'))
+                && fields[4]
+                    .chars()
+                    .all(|c| matches!(c, 'A' | 'C' | 'G' | 'T'))
         })
         .count();
     assert!(
@@ -145,7 +155,9 @@ fn gen_reads_emits_bnd_inv_and_de_novo_ins_in_one_run() {
     let fastq_names: Vec<String> = {
         use flate2::read::MultiGzDecoder;
         use std::io::{BufRead, BufReader};
-        let r = BufReader::new(MultiGzDecoder::new(std::fs::File::open(&out_fastq).unwrap()));
+        let r = BufReader::new(MultiGzDecoder::new(
+            std::fs::File::open(&out_fastq).unwrap(),
+        ));
         r.lines()
             .enumerate()
             .filter(|(i, _)| i % 4 == 0)
@@ -198,7 +210,9 @@ fn gen_reads_emits_bnd_inv_and_de_novo_ins_in_one_run() {
             if fields.len() >= 5
                 && fields[3].len() == 1
                 && fields[4].len() > 30
-                && fields[4].chars().all(|c| matches!(c, 'A' | 'C' | 'G' | 'T'))
+                && fields[4]
+                    .chars()
+                    .all(|c| matches!(c, 'A' | 'C' | 'G' | 'T'))
             {
                 // Skip the anchor base, take the next 20.
                 Some(fields[4][1..21].to_string())
@@ -212,8 +226,9 @@ fn gen_reads_emits_bnd_inv_and_de_novo_ins_in_one_run() {
         let read_seqs: Vec<String> = {
             use flate2::read::MultiGzDecoder;
             use std::io::{BufRead, BufReader};
-            let r =
-                BufReader::new(MultiGzDecoder::new(std::fs::File::open(&out_fastq).unwrap()));
+            let r = BufReader::new(MultiGzDecoder::new(
+                std::fs::File::open(&out_fastq).unwrap(),
+            ));
             r.lines()
                 .enumerate()
                 .filter(|(i, _)| i % 4 == 1)

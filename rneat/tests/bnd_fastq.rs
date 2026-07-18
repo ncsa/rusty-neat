@@ -1,7 +1,5 @@
 mod common;
-use common::{
-    GenReadsConfig, fresh_workdir, h1n1_reference, rneat,
-};
+use common::{GenReadsConfig, fresh_workdir, h1n1_reference, rneat};
 use std::io::Write as _;
 
 #[test]
@@ -12,8 +10,16 @@ fn gen_reads_with_bnd_variant_produces_chimeric_reads_in_fastq() {
     {
         let mut f = std::fs::File::create(&input_vcf).unwrap();
         writeln!(f, "##fileformat=VCFv4.2").unwrap();
-        writeln!(f, "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">").unwrap();
-        writeln!(f, "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS").unwrap();
+        writeln!(
+            f,
+            "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">"
+        )
+        .unwrap();
+        writeln!(
+            f,
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS"
+        )
+        .unwrap();
         // BND variant: H1N1_HA:500 joined to H1N1_HA:1000
         writeln!(
             f,
@@ -34,16 +40,26 @@ fn gen_reads_with_bnd_variant_produces_chimeric_reads_in_fastq() {
         .success();
 
     let out_fastq_1 = work.join("bnd_fastq_r1.fastq.gz");
-    assert!(out_fastq_1.exists(), "output FASTQ 1 not produced at {:?}", out_fastq_1);
-    
+    assert!(
+        out_fastq_1.exists(),
+        "output FASTQ 1 not produced at {:?}",
+        out_fastq_1
+    );
+
     // Check if any read name contains "chimeric"
     let fastq_lines: Vec<String> = {
         use flate2::read::MultiGzDecoder;
         use std::io::{BufRead, BufReader};
-        let r = BufReader::new(MultiGzDecoder::new(std::fs::File::open(&out_fastq_1).unwrap()));
+        let r = BufReader::new(MultiGzDecoder::new(
+            std::fs::File::open(&out_fastq_1).unwrap(),
+        ));
         r.lines().map(|l| l.unwrap()).collect()
     };
-    
+
     let has_chimeric = fastq_lines.iter().any(|l| l.contains("RNEAT_chimeric"));
-    assert!(has_chimeric, "Expected to find chimeric reads in FASTQ output. Lines: {:?}", &fastq_lines[..fastq_lines.len().min(10)]);
+    assert!(
+        has_chimeric,
+        "Expected to find chimeric reads in FASTQ output. Lines: {:?}",
+        &fastq_lines[..fastq_lines.len().min(10)]
+    );
 }

@@ -192,8 +192,7 @@ mod tests {
     #[test]
     fn test_from_interval_routes_symbolic_to_sv_records() {
         use crate::structs::variants::{AlternateType, Provenance, SvData, SvType};
-        let snp =
-            Variant::new(VariantType::SNP, 50, &vec![A], &vec![G], &mut vec![1, 1]).unwrap();
+        let snp = Variant::new(VariantType::SNP, 50, &vec![A], &vec![G], &mut vec![1, 1]).unwrap();
         let sv = Variant {
             variant_type: VariantType::Complex,
             location: 100,

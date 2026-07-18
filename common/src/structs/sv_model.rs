@@ -51,13 +51,8 @@ const MIN_OBS_FOR_LENGTH_FIT: usize = 2;
 /// `cnv_copy_number_distribution` — duplicated here as a local constant
 /// to avoid a `structs::sv_model` ↔ `models::sv_model_defaults` module
 /// dependency cycle. Keep the two in sync if either drifts.
-const FALLBACK_CN_DISTRIBUTION: &[(u32, f64)] = &[
-    (0, 0.15),
-    (1, 0.35),
-    (3, 0.30),
-    (4, 0.15),
-    (5, 0.05),
-];
+const FALLBACK_CN_DISTRIBUTION: &[(u32, f64)] =
+    &[(0, 0.15), (1, 0.35), (3, 0.30), (4, 0.15), (5, 0.05)];
 
 /// Learned statistical model for symbolic-SV generation.
 ///
@@ -137,10 +132,7 @@ impl SvModel {
     ///
     /// Each filter stage logs a count so a "why is my SV model None?"
     /// debug is grep-able in the trainer output.
-    pub fn fit_from_observations(
-        observations: &[Variant],
-        total_reflen: usize,
-    ) -> Option<SvModel> {
+    pub fn fit_from_observations(observations: &[Variant], total_reflen: usize) -> Option<SvModel> {
         if total_reflen == 0 {
             warn!("SvModel: total_reflen is zero, cannot estimate per-base rate");
             return None;
@@ -164,7 +156,12 @@ impl SvModel {
                 }
             };
             match sv.sv_type {
-                SvType::Del | SvType::Dup | SvType::Cnv | SvType::Bnd | SvType::Inv | SvType::Ins => {}
+                SvType::Del
+                | SvType::Dup
+                | SvType::Cnv
+                | SvType::Bnd
+                | SvType::Inv
+                | SvType::Ins => {}
                 _ => {
                     dropped_unsupported_type += 1;
                     continue;
@@ -255,11 +252,10 @@ impl SvModel {
         let length_log_normal: HashMap<SvType, (f64, f64)> = by_type
             .iter()
             .map(|(sv_type, obs)| {
-                let log_lens: Vec<f64> =
-                    obs.iter().map(|(s, _)| (*s as f64).ln()).collect();
+                let log_lens: Vec<f64> = obs.iter().map(|(s, _)| (*s as f64).ln()).collect();
                 let mu = log_lens.iter().sum::<f64>() / log_lens.len() as f64;
-                let variance = log_lens.iter().map(|x| (x - mu).powi(2)).sum::<f64>()
-                    / log_lens.len() as f64;
+                let variance =
+                    log_lens.iter().map(|x| (x - mu).powi(2)).sum::<f64>() / log_lens.len() as f64;
                 (*sv_type, (mu, variance.sqrt()))
             })
             .collect();
@@ -416,8 +412,7 @@ impl SvModel {
             let weights: Vec<f64> = FALLBACK_CN_DISTRIBUTION.iter().map(|(_, p)| *p).collect();
             (values, cumulative_normalized(&weights))
         } else {
-            let mut values: Vec<u32> =
-                self.cnv_copy_number_distribution.keys().copied().collect();
+            let mut values: Vec<u32> = self.cnv_copy_number_distribution.keys().copied().collect();
             values.sort_unstable();
             let weights: Vec<f64> = values
                 .iter()
@@ -508,7 +503,9 @@ impl SvModel {
             if sv_type != SvType::Bnd
                 && !anchor_window_alignable(
                     sequence,
-                    sv_end_1based.saturating_sub(1).min(sequence.len().saturating_sub(1)),
+                    sv_end_1based
+                        .saturating_sub(1)
+                        .min(sequence.len().saturating_sub(1)),
                     ALIGNABLE_WINDOW,
                 )
             {
@@ -539,12 +536,8 @@ impl SvModel {
             // around the anchor; #190 calls out trinucleotide-context
             // sampling as a possible refinement.
             if sv_type == SvType::Ins {
-                let novel = match sample_novel_insertion_bases(
-                    sequence,
-                    anchor_0based,
-                    length,
-                    rng,
-                ) {
+                let novel = match sample_novel_insertion_bases(sequence, anchor_0based, length, rng)
+                {
                     Ok(bases) => bases,
                     Err(_) => continue, // RNG hiccup; retry the slot
                 };
@@ -728,11 +721,7 @@ fn sample_poisson(lambda: f64, rng: &mut NeatRng) -> Result<u64, NeatRngError> {
 }
 
 /// Sample `round(exp(N(mu, sigma)))` via inverse-CDF on a uniform draw.
-fn sample_log_normal_usize(
-    mu: f64,
-    sigma: f64,
-    rng: &mut NeatRng,
-) -> Result<usize, NeatRngError> {
+fn sample_log_normal_usize(mu: f64, sigma: f64, rng: &mut NeatRng) -> Result<usize, NeatRngError> {
     if !mu.is_finite() || !sigma.is_finite() || sigma < 0.0 {
         return Err(NeatRngError::SamplingError(format!(
             "log-normal parameters invalid: mu={mu} sigma={sigma}"
@@ -825,10 +814,7 @@ fn place_sv(
     if max_anchor_inclusive == 0 {
         return None;
     }
-    let anchor = rng
-        .range_i64(0, max_anchor_inclusive as i64)
-        .ok()?
-        .max(0) as usize;
+    let anchor = rng.range_i64(0, max_anchor_inclusive as i64).ok()?.max(0) as usize;
     let (start, end, sv_end_1based) = match sv_type {
         SvType::Del => {
             let s = anchor + 1;
@@ -897,11 +883,7 @@ fn ranges_overlap(a_start: usize, a_end: usize, b_start: usize, b_end: usize) ->
 /// The 80% threshold is loose on purpose: BWA-MEM tolerates some N
 /// bases, and a few percent N is fine. The pathological case is windows
 /// that are 100% N (centromere/telomere bulk) or close to it.
-pub(crate) fn anchor_window_alignable(
-    sequence: &[Nucleotide],
-    pos: usize,
-    window: usize,
-) -> bool {
+pub(crate) fn anchor_window_alignable(sequence: &[Nucleotide], pos: usize, window: usize) -> bool {
     let start = pos.saturating_sub(window);
     let end = pos.saturating_add(window).min(sequence.len());
     if end <= start {
@@ -1147,8 +1129,8 @@ mod tests {
             sv(500, Some(700), SvType::Del, Genotype::Heterozygous, None), // 201bp DEL — keep
             sv(800, Some(829), SvType::Del, Genotype::Heterozygous, None), // 30bp — drop (sub-50)
             sv(1000, Some(2000), SvType::Inv, Genotype::Homozygous, None), // INV — drop
-            sv(3000, None, SvType::Bnd, Genotype::Heterozygous, None),     // BND — keep
-            sv(4000, None, SvType::Bnd, Genotype::Heterozygous, None),     // BND — keep (need 2 for fit)
+            sv(3000, None, SvType::Bnd, Genotype::Heterozygous, None),   // BND — keep
+            sv(4000, None, SvType::Bnd, Genotype::Heterozygous, None), // BND — keep (need 2 for fit)
         ];
         let m = SvModel::fit_from_observations(&obs, 100_000).unwrap();
         assert!(m.is_usable());
@@ -1192,7 +1174,13 @@ mod tests {
         let mut pos = 100usize;
         let mut obs = Vec::new();
         for &len in &lens {
-            obs.push(sv(pos, Some(pos + len - 1), SvType::Del, Genotype::Heterozygous, None));
+            obs.push(sv(
+                pos,
+                Some(pos + len - 1),
+                SvType::Del,
+                Genotype::Heterozygous,
+                None,
+            ));
             pos += len + 1000; // separate them in coords (doesn't affect fit)
         }
         let m = SvModel::fit_from_observations(&obs, 1_000_000).unwrap();
@@ -1200,7 +1188,10 @@ mod tests {
         // Rounding through usize introduces tiny error vs the exact
         // analytic value, but it should easily land within 5%.
         assert!((mu - 7.5).abs() < 0.05, "mu was {mu}, expected ~7.5");
-        assert!((sigma - 0.5).abs() < 0.05, "sigma was {sigma}, expected ~0.5");
+        assert!(
+            (sigma - 0.5).abs() < 0.05,
+            "sigma was {sigma}, expected ~0.5"
+        );
     }
 
     #[test]
@@ -1210,8 +1201,20 @@ mod tests {
         // the CN distribution (cn_counts is empty for those).
         let obs = vec![
             sv(100, Some(500), SvType::Cnv, Genotype::Heterozygous, Some(1)),
-            sv(1000, Some(1500), SvType::Cnv, Genotype::Heterozygous, Some(1)),
-            sv(2000, Some(2500), SvType::Cnv, Genotype::Heterozygous, Some(3)),
+            sv(
+                1000,
+                Some(1500),
+                SvType::Cnv,
+                Genotype::Heterozygous,
+                Some(1),
+            ),
+            sv(
+                2000,
+                Some(2500),
+                SvType::Cnv,
+                Genotype::Heterozygous,
+                Some(3),
+            ),
             sv(3000, Some(3500), SvType::Cnv, Genotype::Heterozygous, None),
             sv(4000, Some(4500), SvType::Cnv, Genotype::Heterozygous, None),
         ];
@@ -1259,11 +1262,7 @@ mod tests {
     // ── sample_variants tests ────────────────────────────────────────
 
     fn deterministic_rng() -> NeatRng {
-        NeatRng::new_from_seed(&vec![
-            "phase3".to_string(),
-            "sample_variants".to_string(),
-        ])
-        .unwrap()
+        NeatRng::new_from_seed(&vec!["phase3".to_string(), "sample_variants".to_string()]).unwrap()
     }
 
     /// Build a usable `SvModel` with a single SV type so we can assert
@@ -1578,7 +1577,9 @@ mod tests {
         for v in &out {
             let sv = v.alternate.as_symbolic().expect("must be symbolic");
             assert_eq!(sv.sv_type, SvType::Cnv);
-            let cn = sv.copy_number.expect("CNV must carry CN even with empty trained dist");
+            let cn = sv
+                .copy_number
+                .expect("CNV must carry CN even with empty trained dist");
             assert!(
                 fallback_cns.contains(&cn),
                 "sampled CN={cn} not in FALLBACK_CN_DISTRIBUTION {:?}",
@@ -1719,8 +1720,7 @@ mod tests {
         for v in &out {
             let loc = v.location;
             let clipped = loc.saturating_sub(200)..loc.saturating_add(200).min(seq.len());
-            let in_n_window = (clipped.start..clipped.end)
-                .any(|i| i >= n_start && i < n_end);
+            let in_n_window = (clipped.start..clipped.end).any(|i| i >= n_start && i < n_end);
             assert!(
                 !in_n_window || {
                     // It's fine if the window CLIPS the N-tract — as long
@@ -1962,7 +1962,10 @@ mod tests {
             );
             for (i, &b) in alt.iter().enumerate().skip(1) {
                 assert!(
-                    matches!(b, Nucleotide::A | Nucleotide::C | Nucleotide::G | Nucleotide::T),
+                    matches!(
+                        b,
+                        Nucleotide::A | Nucleotide::C | Nucleotide::G | Nucleotide::T
+                    ),
                     "novel-insertion base {i} must be ACGT; got {:?}",
                     b
                 );
@@ -1973,10 +1976,9 @@ mod tests {
         // not sv_records. Confirm that's where the de novo INS lands.
         let map = MutatedMap::from_interval(0, 50_000, sampled).unwrap();
         assert!(
-            map.sv_records.iter().all(|v| !matches!(
-                v.variant_type,
-                VariantType::Insertion
-            )),
+            map.sv_records
+                .iter()
+                .all(|v| !matches!(v.variant_type, VariantType::Insertion)),
             "de novo INS landed in sv_records; expected variant_map"
         );
         assert!(

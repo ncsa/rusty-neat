@@ -623,7 +623,8 @@ impl RunConfiguration {
                 );
                 return Err(GenerateReadsError::ConfigError);
             }
-            let acgt = |s: &str| !s.is_empty() && s.chars().all(|c| matches!(c, 'A' | 'C' | 'G' | 'T'));
+            let acgt =
+                |s: &str| !s.is_empty() && s.chars().all(|c| matches!(c, 'A' | 'C' | 'G' | 'T'));
             if config.adapters.r1.is_empty() || config.adapters.r2.is_empty() {
                 error!(
                     "Invalid config: adapters.enabled=true but an adapter sequence is empty \
@@ -666,8 +667,7 @@ impl RunConfiguration {
             // so requiring mean/st_dev when a model is present would reject a config
             // the runtime handles fine. Accept whichever is provided; only error if
             // neither is.
-            let have_mean_sd =
-                config.fragment_mean.is_some() && config.fragment_st_dev.is_some();
+            let have_mean_sd = config.fragment_mean.is_some() && config.fragment_st_dev.is_some();
             let have_model = config.fragment_model.is_some();
             if !have_mean_sd && !have_model {
                 error!(
@@ -1192,7 +1192,10 @@ mod tests {
     #[test]
     fn test_adapters_nextera_preset() {
         let dir = tempfile::tempdir().unwrap();
-        let yaml = write_cfg(dir.path(), "adapters:\n  enabled: true\n  preset: nextera\n");
+        let yaml = write_cfg(
+            dir.path(),
+            "adapters:\n  enabled: true\n  preset: nextera\n",
+        );
         let cfg = RunConfiguration::from_yaml_file(&yaml).unwrap();
         assert_eq!(cfg.adapters.r1, "CTGTCTCTTATACACATCT");
         assert_eq!(cfg.adapters.r2, "CTGTCTCTTATACACATCT");

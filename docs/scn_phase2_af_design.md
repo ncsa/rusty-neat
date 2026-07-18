@@ -1,8 +1,35 @@
 # SCN Phase 2 — Pool allele-frequency reproduction (design)
 
-Status: **design draft** (2026-07-11). Track: realism epic #311, SCN data from João Gomes
-Viana. Phase 1 (build real per-strain models from SCN Pool-seq data) is **done and
-validated**; see `docs/` history and the memory note. This is the design for Phase 2.
+Status: **design draft** (2026-07-11; **code anchors re-verified 2026-07-17**). Track: realism
+epic #311, SCN data from João Gomes Viana. Phase 1 (build real per-strain models from SCN
+Pool-seq data) is **done and validated**; see `docs/` history and the memory note. This is the
+design for Phase 2.
+
+> **2026-07-17 re-trace (supersedes the stale line numbers below).** The alt-fraction mechanism
+> was traced end-to-end against current `develop`. Key corrections, which make this change
+> **small and well-contained**:
+> - **The primary lever is the per-read decision in `generate_read`
+>   (`common/src/file_tools/fastq_tools.rs:462`):**
+>   `if (variant.genotype == Homozygous) || (rng.random()? < 0.5) { …alt; entry.1 += 1 } else
+>   { …ref; entry.0 += 1 }`. This one branch decides whether the read carries alt or ref **and**
+>   increments the `AdCounter` — so it drives both the emitted reads and the measured AF. Input-VCF
+>   variants reach it via `variant_map` (`flagged_positions.contains(pos)` → `variant_map[pos]`).
+> - There is a **second** het flip in `MutatedMap::mutate_position`
+>   (`common/src/structs/mutated_map.rs:106`), but it is reached only by `get_stitched_sequence`
+>   → `get_mutated_subseq` (`runner.rs:2183`) for reads that **span an SV junction**, and it does
+>   **not** touch the `AdCounter`. Honoring AF there is a secondary correctness item (minority of
+>   reads, not AD-counted), not the main path.
+> - The `genotype_fraction` closure at `runner.rs:2368` is **not** a lever — it only feeds
+>   SV-junction double-count suppression. The coverage-multiplier path is SV-only.
+> - Both flips are hardcoded **0.5**, not `1/ploidy` — the SNV read path ignores `ploidy`
+>   entirely (they coincide only at diploid). So the reachable fractions today are `{0.5, 1.0}`.
+> - **Open question RESOLVED:** input-VCF variants flow through the main path.
+>   `read_vcf` (`runner.rs:145`, uses `Variant::from_file` — the full parser with INFO+FORMAT) →
+>   `input_variants` → `generate_mutated_map` → literal variants land in `variant_map` →
+>   `fastq_tools.rs:462`. One primary fraction-source to change (plus the secondary SV-junction one).
+> - **Measuring simulated AF is already free:** the golden VCF emits `GT:AD:DP:AF` with
+>   AF = alt_count/depth from the same `AdCounter` the `:462` branch increments (`vcf_tools.rs:184`).
+>   Step 3 below (re-align to measure sim AF) is unnecessary — read the golden AF.
 
 ## 1. The goal (João's ask, verbatim intent)
 
@@ -60,30 +87,49 @@ So Phase 2 needs a **small, targeted enabling change**, not just a clever invoca
 
 ## 3. Enabling change: optional per-variant allele fraction
 
-Add an optional `allele_fraction: Option<f64>` carried on a variant, honored by read
-generation when present:
+Add an optional `allele_fraction: Option<f64>` carried on a variant, honored by the per-read
+alt/ref decision when present. Confirmed to be a **small, contained change**:
 
-- `common/src/structs/variants.rs` — add `allele_fraction: Option<f64>` to `Variant`.
-- Input-VCF ingestion (the path `gen-cancer-reads` already uses to carry germline into the
-  tumor pass) — parse a per-site AF into it. Source of the AF:
-  - `INFO/AF` if present, else compute from `FORMAT/AD` (alt_depth / total_depth) — a pooled
-    VCF's per-site alt fraction. `bcftools +fill-tags -- -t AF` or a direct AD ratio.
-- Read-gen coverage path — where `genotype_fraction` (runner.rs:2368) and the coverage
-  multipliers (`coverage_multiplier_for`, runner.rs:2580; `scale_coverage`, 2694) decide how
-  many alt-bearing fragments to emit: when `allele_fraction` is `Some(f)`, use `f` directly
-  instead of the Het/Hom value. The machinery to scale fragment counts by a fraction already
-  exists (it's how Het vs Hom already differ) — this generalizes the fraction from
-  `{1/ploidy, 1.0}` to any `f ∈ (0,1]`.
-- Golden VCF output — emit the intended AF so the truth set records it.
+1. `common/src/structs/variants.rs` — add `allele_fraction: Option<f64>` to `Variant`. This is
+   the only churny part: ~32 struct-literal construction sites across 9 files each need
+   `allele_fraction: None` added (mostly test fixtures + `compare_vcfs` writers where `None` is
+   correct); only `from_file` sets it meaningfully.
+2. `Variant::from_file` (`vcf_tools.rs`) — populate `allele_fraction` from the input VCF:
+   `INFO/AF` if present, else compute from `FORMAT/AD` = alt_depth / (ref+alt). For pooled
+   data use **AD, not GT** (§7). `bcftools +fill-tags -- -t AF` upstream also works.
+   (`from_file_lean` only has INFO, no FORMAT/SAMPLE — leave it `None`; it feeds gen-mut-model
+   training, not the gen-reads input path.)
+3. **Primary:** `generate_read` in `common/src/file_tools/fastq_tools.rs:462` — generalize the
+   branch. Today:
+   ```
+   if (variant.genotype == Homozygous) || (rng.random()? < 0.5) { …alt; entry.1 += 1 }
+   else { …ref; entry.0 += 1 }
+   ```
+   becomes: when `variant.allele_fraction == Some(f)`, use `rng.random()? < f` as the alt
+   predicate; otherwise the existing `Homozygous || <0.5`. The fixed 0.5 becomes any
+   `f ∈ (0,1]`, per variant — and because this same branch increments the `AdCounter`, the
+   golden AF tracks it automatically.
+4. **Secondary (correctness):** `MutatedMap::mutate_position` (`mutated_map.rs:106`) — the same
+   generalization for the SV-junction-spanning read path. Lower priority (minority of reads, not
+   AD-counted); can land with (3) or as a follow-up.
+5. Golden VCF output — **no change needed.** AF is already measured from the reads and emitted
+   (`vcf_tools.rs:184`, `GT:AD:DP:AF`). The truth set already records the realized fraction.
 
 This is **bounded and general**: "simulate reads matching an input VCF's allele frequencies"
 is useful for any population / somatic-AF simulation, not just SCN — so it earns its place as
 a real rneat feature (candidate issue under #311), not a one-off hack.
 
-**Scope note / open question:** confirm exactly how the input-VCF path currently instantiates
-input variants into the read stream (do they flow through the same coverage/`genotype_fraction`
-path as model-generated variants, or a separate one?). That determines whether the change is a
-single fraction-source swap or two. First implementation task = trace that path.
+**Determinism note:** the `None` path must remain byte-identical — keep the exact same
+`rng.random()?` draw and comparison so no existing fixture shifts. Only an input VCF that
+actually carries AF changes output, so `model_parity`/output-fidelity baselines are unaffected
+unless a fixture is deliberately given an AF-bearing input VCF.
+
+**Overlap with parked polyploidy epic (#265–#270):** issue #266 ("dosage-aware genotype model +
+read sampler") generalizes the *same* `:462` branch from Het/Hom to per-copy dosage. `allele_fraction`
+and dosage are complementary levers on one choke point — design the AF field so a future dosage
+model composes with it (e.g. dosage sets a default fraction, explicit `allele_fraction` overrides)
+rather than the two fighting over the branch. The polyploidy epic is on hold (see memory), so AF
+can land first; just leave the branch factored so #266 slots in cleanly.
 
 ## 4. Pipeline (per strain: MM26/MM26A, PA3/MM-BD3A)
 
@@ -94,14 +140,16 @@ single fraction-source swap or two. First implementation task = trace that path.
 2. **Simulate** reads from the strain assembly with gen-reads in the new honor-input-AF mode,
    consuming `pool.af.vcf.gz`. Use the Phase-1 built models (seq-error / frag / GC) for
    realistic reads. Coverage ≈ the real pool's, so AF estimation noise matches.
-3. **Measure** the simulated AF: align the simulated reads back to the assembly (or use the
-   golden BAM), compute per-site alt fraction the same way as step 1 → `sim.af.vcf.gz`.
-4. **Compare** `sim.af` vs `pool.af` at the shared sites.
+3. **Measure** the simulated AF: **read it straight from the golden VCF's `AF` field** — it is
+   already alt_count/depth over the actual simulated reads (no re-alignment). Optionally
+   re-align for an independent check, but the golden AF is the primary measurement.
+4. **Compare** the golden VCF `AF` (sim) vs `pool.af` (target/input) at the shared sites.
 
 ## 5. Validation tool: `scripts/delta/scn_af_compare.py`
 
-Dependency-free, mirroring `sbs96_compare.py`. Inputs: `--truth pool.af.vcf.gz --sim
-sim.af.vcf.gz`. Reports:
+Dependency-free, mirroring `sbs96_compare.py`. Inputs: `--truth pool.af.vcf.gz` (input AF) and
+`--sim golden.vcf.gz` (read the emitted `AF` field — no separate `sim.af.vcf.gz` step needed).
+Reports:
 - Pearson/Spearman correlation of per-site AF (truth vs sim).
 - RMSE / mean abs error overall and per AF-decile bin (does it hold across rare→common?).
 - A text scatter / binned table, and count of sites recovered vs dropped.
@@ -110,11 +158,13 @@ at that coverage. (Analogous to the SBS-96 cosine ≥ 0.9 bar from #372.)
 
 ## 6. Phase 2 Step 0 — quantify the gap first (NO code)
 
-Before building anything: run gen-reads with the pool VCF as input at `ploidy=2` (so
-het→0.5, hom→1.0) and run `scn_af_compare.py`. This measures how badly the current binary
-model reproduces a continuous spectrum — expected to be poor (everything piles at 0.5/1.0) —
-and gives the baseline the enabling change must beat. Cheap, motivates the feature, and
-shakes out the AF-extraction + comparison tooling before any Rust change.
+Before building anything: run gen-reads **today, zero code** with the pool VCF as `input_vcf`,
+then read the golden VCF's `AF` field and run `scn_af_compare.py` against the input AF. Because
+the golden VCF already measures realized AF from the reads, the gap is directly observable:
+het sites pile at ~0.5, hom at 1.0, versus the real continuous spectrum. This gives the
+baseline the enabling change must beat, motivates the feature, and shakes out the
+AF-extraction + comparison tooling before any Rust change. (The het coin flip is a fixed 0.5
+regardless of `ploidy`, so `ploidy` does not change this baseline for SNVs.)
 
 ## 7. Risks / open questions
 
@@ -132,7 +182,8 @@ shakes out the AF-extraction + comparison tooling before any Rust change.
 
 ## 8. Sequenced deliverables
 
-1. AF-extraction + `scn_af_compare.py` + **Step 0 baseline** (no Rust change) — quantify gap.
-2. Trace the input-VCF → read-stream path; write the enabling `allele_fraction` change
-   (issue under #311).
+1. AF-extraction + `scn_af_compare.py` (input-AF vs golden-VCF-`AF`) + **Step 0 baseline**
+   (no Rust change) — quantify the gap. Runnable today; the golden VCF already emits `AF`.
+2. Enabling `allele_fraction` change (issue under #311) — the four edits in §3. The path is
+   already traced (§ header note); no separate trace task needed.
 3. Re-run pipeline with honor-input-AF; validate correlation ≥ target; A/B MM26 vs PA3/BD3.

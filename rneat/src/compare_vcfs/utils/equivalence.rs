@@ -164,11 +164,11 @@ fn eq_ignore_case(a: &[u8], b: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use common::structs::variants::{AlternateType, Provenance};
     use common::structs::{
         nucleotides::Nucleotide,
         variants::{Genotype, VariantType},
     };
-    use common::structs::variants::{AlternateType, Provenance};
 
     fn variant(
         loc: usize,
@@ -183,6 +183,7 @@ mod tests {
             alternate: AlternateType::Literal(alt_seq.to_vec()),
             genotype_str: "0/1".to_string(),
             genotype: Genotype::Heterozygous,
+            allele_fraction: None,
             id: None,
             quality_score: None,
             filter: Some("PASS".to_string()),

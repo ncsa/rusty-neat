@@ -27,11 +27,26 @@ Description=\"Origin in tumor/normal mix: germline | somatic | shared\">";
 /// SV INFO declarations injected if the per-pass headers don't already carry
 /// them, so symbolic-SV records in the merged truth validate.
 const SV_INFO_DECLS: &[(&str, &str)] = &[
-    ("SVTYPE", "##INFO=<ID=SVTYPE,Number=1,Type=String,Description=\"Type of structural variant\">"),
-    ("END", "##INFO=<ID=END,Number=1,Type=Integer,Description=\"End position of the variant\">"),
-    ("SVLEN", "##INFO=<ID=SVLEN,Number=.,Type=Integer,Description=\"Difference in length between REF and ALT\">"),
-    ("CN", "##INFO=<ID=CN,Number=1,Type=Integer,Description=\"Copy number of segment\">"),
-    ("MATEID", "##INFO=<ID=MATEID,Number=.,Type=String,Description=\"ID of mate breakends\">"),
+    (
+        "SVTYPE",
+        "##INFO=<ID=SVTYPE,Number=1,Type=String,Description=\"Type of structural variant\">",
+    ),
+    (
+        "END",
+        "##INFO=<ID=END,Number=1,Type=Integer,Description=\"End position of the variant\">",
+    ),
+    (
+        "SVLEN",
+        "##INFO=<ID=SVLEN,Number=.,Type=Integer,Description=\"Difference in length between REF and ALT\">",
+    ),
+    (
+        "CN",
+        "##INFO=<ID=CN,Number=1,Type=Integer,Description=\"Copy number of segment\">",
+    ),
+    (
+        "MATEID",
+        "##INFO=<ID=MATEID,Number=.,Type=String,Description=\"ID of mate breakends\">",
+    ),
 ];
 
 type Key = (String, String, String, String);
@@ -40,7 +55,12 @@ fn key_of(cols: &[&str]) -> Option<Key> {
     if cols.len() < 5 {
         return None;
     }
-    Some((cols[0].into(), cols[1].into(), cols[3].into(), cols[4].into()))
+    Some((
+        cols[0].into(),
+        cols[1].into(),
+        cols[3].into(),
+        cols[4].into(),
+    ))
 }
 
 /// Origin for a tumor-pass record, from its INFO/NEAT_PROVENANCE.
@@ -83,7 +103,11 @@ fn make_rec(
     if new_cols.len() > 7 {
         new_cols[7] = append_origin(&new_cols[7], origin);
     }
-    Rec { contig, pos, line: new_cols.join("\t") }
+    Rec {
+        contig,
+        pos,
+        line: new_cols.join("\t"),
+    }
 }
 
 fn parse_info_id(line: &str) -> Option<String> {
@@ -161,7 +185,11 @@ pub fn merge_goldens(
         recs.push(make_rec(&cols, "germline", &mut order, &mut next));
     }
 
-    recs.sort_by(|a, b| order[&a.contig].cmp(&order[&b.contig]).then(a.pos.cmp(&b.pos)));
+    recs.sort_by(|a, b| {
+        order[&a.contig]
+            .cmp(&order[&b.contig])
+            .then(a.pos.cmp(&b.pos))
+    });
 
     let f = File::create(out)?;
     let mut w = GzEncoder::new(BufWriter::new(f), Compression::default());
@@ -251,15 +279,34 @@ mod tests {
         let body = read_gz(&out);
 
         // origin tags
-        let line = |pos: &str| body.lines().find(|l| l.starts_with(&format!("chr1\t{pos}\t"))).unwrap();
-        assert!(line("100").contains("NEAT_ORIGIN=shared"), "pos100 = {}", line("100"));
-        assert!(line("200").contains("NEAT_ORIGIN=germline"), "pos200 = {}", line("200"));
-        assert!(line("300").contains("NEAT_ORIGIN=somatic"), "pos300 = {}", line("300"));
+        let line = |pos: &str| {
+            body.lines()
+                .find(|l| l.starts_with(&format!("chr1\t{pos}\t")))
+                .unwrap()
+        };
+        assert!(
+            line("100").contains("NEAT_ORIGIN=shared"),
+            "pos100 = {}",
+            line("100")
+        );
+        assert!(
+            line("200").contains("NEAT_ORIGIN=germline"),
+            "pos200 = {}",
+            line("200")
+        );
+        assert!(
+            line("300").contains("NEAT_ORIGIN=somatic"),
+            "pos300 = {}",
+            line("300")
+        );
         // header declares NEAT_ORIGIN and is position-sorted (100<200<300)
         assert!(body.contains("##INFO=<ID=NEAT_ORIGIN"));
         let p100 = body.find("chr1\t100").unwrap();
         let p200 = body.find("chr1\t200").unwrap();
         let p300 = body.find("chr1\t300").unwrap();
-        assert!(p100 < p200 && p200 < p300, "records must be position-sorted");
+        assert!(
+            p100 < p200 && p200 < p300,
+            "records must be position-sorted"
+        );
     }
 }

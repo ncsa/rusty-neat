@@ -2,16 +2,19 @@
 
 Consolidated status for the soybean-cyst-nematode (SCN, *Heterodera glycines*) real-data
 work under the realism epic (#311). Data from **João Gomes Viana** (Matt Hudson lab).
-Keep this current as the SCN work progresses. Last updated: **2026-07-12**.
+Keep this current as the SCN work progresses. Last updated: **2026-07-16**.
 
-Goal: use real SCN Pool-seq data to (Phase 1) build genuine per-strain rneat models incl.
-**structural variants**, and (Phase 2) reproduce the population allele-frequency spectrum in
-simulated reads.
+Goal: use real SCN Pool-seq data to (Phase 1) build genuine per-strain rneat models covering
+**all variant classes — SNP/indel, structural variants, and copy-number** — and (Phase 2)
+reproduce the population allele-frequency spectrum in simulated reads.
+
+**Status: the planned track is COMPLETE.** Both strains have full four-class models built from
+real data and verified end-to-end (build → simulate → render); the virulent-vs-avirulent
+contrast is done. Remaining items are enhancements (see *Open / next steps*).
 
 ## Data & accessions (BioProject PRJNA1055977)
 
-**Strain reference assemblies** (Walden et al. 2025, doi:10.1186/s12864-025-12493-x;
-download via NCBI `datasets`):
+**Strain reference assemblies** (Walden et al. 2025, doi:10.1186/s12864-025-12493-x; via NCBI `datasets`):
 
 | strain | assembly | phenotype | genome |
 |---|---|---|---|
@@ -20,127 +23,126 @@ download via NCBI `datasets`):
 
 **Population Pool-seq reads** (Illumina NextSeq 2000, paired, pools of 150 virgin females):
 
-| pool | SRA run | aligned to | R1/R2 md5 (ENA) |
-|---|---|---|---|
-| MM26A   | `SRR27329602` | MM26 (`GCA_040805935.1`) | `8e233e2d…` / `6843e5e2…` |
-| MM-BD3A | `SRR27329600` | PA3 (`GCA_040805705.1`) | `41e8850a…` / `7b9a8b9f…` |
+| pool | SRA run | aligned to |
+|---|---|---|
+| MM26A   | `SRR27329602` | MM26 (`GCA_040805935.1`) |
+| MM-BD3A | `SRR27329600` | PA3 (`GCA_040805705.1`) |
 
-**Reference strategy:** SCN strains differ in virulence, so each pool is aligned to its
-best-fit strain reference to mitigate reference bias (MM26→MM26, BD3→PA3), per João. Other
-assemblies exist (TN10 by Masonbrink; X12) but PA3/MM26 fit their categories best.
+**Reference strategy:** each pool is aligned to its best-fit strain reference (MM26→MM26,
+BD3→PA3) to mitigate reference bias, per João. **Consequence for the contrast:** MM26A is a
+*same-strain* pairing while BD3A→PA3 is *cross-population*, so cross-strain raw comparisons are
+confounded (see Contrast). A clean virulence comparison needs a **common reference** (not yet done).
 
-**Pool-seq caveat:** these are *pooled* samples (150 individuals → allele **frequencies**,
-not diploid genotypes). Use allele **depths (AD)**, not `GT`, for anything AF-related.
+**Pool-seq caveat:** pooled samples (150 individuals → allele **frequencies**, not diploid
+genotypes). Use allele **depths (AD)**, not `GT`, for anything AF-related.
 
-## Phase 1 — build real per-strain models — **DONE ✅**
+## Phase 1 — per-strain SNP/indel models — **DONE ✅**
 
-`scripts/delta/stage_scn.sh` (SCN analogue of `stage_soy.sh`) stages a self-consistent
-reference + BAM + VCF (align pool reads → call VCF *from* that BAM), then
-`model_builders.sbatch` builds all five models and round-trips them through gen-reads.
+`scripts/delta/stage_scn.sh` stages a self-consistent reference + BAM + VCF (align pool reads →
+call VCF *from* that BAM), then `model_builders.sbatch` builds all five models. Verified by the
+actual statistics (not just PASS):
 
-Both strains built and **verified by the actual statistics** (not just the PASS):
+| statistic | MM26 / MM26A | PA3 / MM-BD3A |
+|---|---|---|
+| mutation_rate | 2.44×10⁻³ | 3.71×10⁻³ |
+| homozygous_frequency | 0.126 | 0.298 |
+| error_rate | 4.35×10⁻³ | 3.99×10⁻³ (consistent — sequencing property ✓) |
+| frag length | Normal(516, 154) | Normal(448, 178) |
 
-| statistic | MM26 / MM26A (job 20039284) | PA3 / MM-BD3A (job 20046157) | note |
-|---|---|---|---|
-| mutation_rate | 2.44×10⁻³ | 3.68×10⁻³ | pooled diversity vs own ref |
-| homozygous_frequency | 0.126 | 0.298 | finite/real (pooled near-fixation fraction) |
-| error_rate | 4.35×10⁻³ | 3.99×10⁻³ | **consistent** — sequencing property ✓ |
-| frag length | Normal(516, 154) | Normal(448, 178) | real inserts |
-| called variants | 475,587 | 611,155 | vs *own* reference |
-| model rate ÷ naive (vars/genome) | 74.3% | 74.5% | **identical ratio → builder is consistent** ✓ |
-| round-trip reads | 219,404 pairs | 243,464 pairs | models usable |
+## Phase 1b — Structural variants + copy-number — **DONE ✅ (the "complex organism" payoff)**
 
-Artifacts archived to `/projects/bhrd/jallen17/rneat-access-results/modelbuild/job_{20039284,20046157}`.
+bcftools only calls SNP/indel, so SV/CNV are added with Delly and folded into the model:
 
-**Interpretation:** both builds are sound (error_rate consistent; identical rate/naive ratio).
-BD3 shows higher diversity + near-fixation, but this is **confounded** — each pool is measured
-against a *different* reference, so raw variant counts aren't a clean cross-strain comparison.
-A true virulence-linked variant comparison needs both pools on a **common** reference (a
-separate, orthogonal task, not yet done).
+- **SVs** — `scripts/delta/call_scn_sv.sh` (Delly 2.x `sr`) → merge with the short VCF → rebuild.
+  MM26A: **9,410 PASS SVs** (DEL 55% / INV 16% / BND 15% / DUP 11% / INS 2%). The rebuilt
+  `mut_model` has a **populated `sv_model`** (per-base rate 4.3×10⁻⁵; length log-normals DEL ~6.6 kb,
+  DUP ~16 kb, INV ~60 kb). INS/TEs are under-called (short reads can't span the repeats they live
+  in) — the empirical case for long reads. (`type_probabilities` differ from raw counts because
+  `SvModel::fit_from_observations` drops SVs < `MIN_SV_LENGTH_BP`=50.)
+- **CNV** — `scripts/delta/call_scn_cnv.sh` (Delly `cnv`; auto-builds a `dicey` mappability map).
+  MM26A: **433 PASS CNV segments**. ⚠️ **Format gap:** `gen-mut-model` reads copy number from
+  `INFO/CN` (`variants.rs` `parse_sv_info`) but Delly writes `FORMAT/RDCN` — so the merge must
+  **lift `RDCN`→`INFO/CN`** (and strip `RDCN`, which also resolves a `bcftools concat` header
+  type-conflict). After the lift, `cnv_copy_number_distribution` populates (real, ≠ the bundled
+  default): MM26 ~92% losses (CN0 0.42 / CN1 0.50), ~8% gains.
+- **Rendering (loop closed)** — `scripts/delta/simulate_scn_sv.sh` runs gen-reads with
+  `sv_rate_scale=1.0` and confirms SVs **and CNVs render** into the golden VCF. MM26 sim:
+  6,701 SVs incl. **465 `SVTYPE=CNV`** (~model weight). So: real SCN SV/CNV → model → simulated output.
 
-## Phase 1b — Structural variants — **DONE ✅ (the "complex organism" payoff)**
+## Contrast — MM26 (virulent) vs PA3/BD3 (avirulent) — **DONE ✅**
 
-The short-variant staging yields only SNPs + small indels, so the model's `sv_model` was empty
-and rneat's flagship SV machinery was untested on SCN. `scripts/delta/call_scn_sv.sh` fixes that:
-Delly (`sr` on 2.x) on the staged BAM → merge with the short VCF → rebuild the model.
+Same pipeline on the avirulent line (`ACC=GCA_040805705.1 SRR=SRR27329600`): 10,495 PASS SVs,
+320 CNV segments, full four-class model built. Model comparison:
 
-MM26A (Delly v2.3.1, PASS SVs): **9,410 SVs** — DEL 5,169 (55%), INV 1,541 (16%), BND 1,449 (15%),
-DUP 1,081 (11%), INS 170 (2%). The rebuilt `mut_model` (job 20101361) has a **populated
-`sv_model`**: per-base SV rate 4.28×10⁻⁵; type mix Del .34 / Inv .25 / Bnd .23 / Dup .17; length
-log-normals DEL ~6.6 kb, DUP ~16 kb, INV ~60 kb (BND lengthless).
+| statistic | MM26 (virulent) | PA3/BD3 (avirulent) |
+|---|---|---|
+| mutation_rate | 2.44×10⁻³ | 3.71×10⁻³ |
+| homozygous_frequency | 0.126 | 0.298 |
+| SV type mix | Del-heavy (Del .32, Cnv .065) | rearrangement-heavy (Inv .27, Bnd .26) |
+| CNV spectrum | ~92% losses, ~8% gains | ~78% losses, ~22% gains |
 
-- **Biology matches predictions:** DEL-dominant, **DUP present** (SCN's copy-number/duplication
-  character), and **INS/TEs suppressed** (2%) — the empirical demonstration that short reads
-  can't span the repeats where TEs live (→ the long-read motivation).
-- **Model type mix ≠ raw counts** (DEL .34 vs .56) is *expected*: `SvModel::fit_from_observations`
-  drops SVs < `MIN_SV_LENGTH_BP` = 50 (`common/src/structs/sv_model.rs:32`), filtering short DELs
-  and all 170 small INS. Not a bug.
-- **`cnv_copy_number_distribution` is empty** because `delly sr` gives DEL/DUP/INV/BND, not
-  explicit copy-number — that's what `delly cnv` (below) adds.
+The two models are genuinely distinct — PA3/BD3 shows higher diversity, ~2.4× more near-fixation,
+a more rearrangement-heavy SV profile, and ~3× more CNV gains. **But this is confounded by the
+strain-fitting design** (same-strain vs cross-population reference pairing), so it is **not** a
+clean virulence signal. What the contrast establishes: the pipeline reproduces per-strain
+four-class models on a second real line, and the results differ. A causal virulence claim needs
+a common-reference alignment.
 
-Follow-ups (this PR):
-- **`scripts/delta/simulate_scn_sv.sh`** — simulate reads *from* the SV-inclusive model with
-  `sv_rate_scale=1.0` and verify SVs actually **render** in the golden VCF (closes the loop).
-- **`scripts/delta/call_scn_cnv.sh`** — `delly cnv` read-depth copy-number (the biologically
-  central SCN signal). Needs a mappability map (auto-built with `dicey`; `dicey` CLI is
-  version-sensitive — pass `MAP=<prebuilt>` to skip). Merge its calls to populate
-  `cnv_copy_number_distribution`.
+## Phase 2 — reproduce the pool allele-frequency spectrum — **designed, not built**
 
-Delly 2.x note: `call` → `sr` (short-read SV); `cnv` (read-depth CNV); **`lr` = native long-read
-SV discovery** — directly usable on the PRJNA852516 PacBio/ONT data (no rneat long-read
-generation needed to *call* SVs on real long reads).
-
-## Phase 2 — reproduce the pool allele-frequency spectrum — **designed**
-
-Full design: **`docs/scn_phase2_af_design.md`** (PR #386). Summary:
-
-- **Scope: reproductive replay** (decided 2026-07-11) — feed rneat the pool's observed
-  per-site AFs, emit reads that match them, validate sim-AF ≈ real-AF (João's question). NOT a
-  generative population/SFS model (a future superset that reuses the same primitive).
-- **Core constraint:** rneat can't do this today — `genotype_fraction` (`runner.rs:2368`) emits
-  only `{1/ploidy, 1.0}`, `Genotype` is a binary Het/Hom enum, and `ploidy` is global. Cancer
-  `purity` is a global scalar, so it doesn't help either.
-- **Enabling change:** an optional per-variant `allele_fraction: Option<f64>` on `Variant`,
-  read from the input VCF (from AD) and honored by the read-gen coverage path. Bounded and
-  general (useful for any population/somatic-AF simulation).
-- **Validation:** a dependency-free `scripts/delta/scn_af_compare.py` (mirrors
-  `sbs96_compare.py`) — per-site correlation + per-decile MAE, target ≥ 0.95.
-- **Step 0 (no code, do first):** run at `ploidy=2` and measure how far the current binary
-  model is from the real spectrum — quantifies the gap, motivates the change, and builds the
-  AF-extraction + comparison tooling before any Rust.
+Full design: `docs/scn_phase2_af_design.md`. Reproductive replay (feed observed pool AFs, emit
+reads that match them, validate sim-AF ≈ real-AF). Core constraint: rneat has no per-variant
+continuous allele fraction today (`genotype_fraction` emits only `{1/ploidy, 1.0}`); the enabling
+change is an optional per-variant `allele_fraction` on `Variant`. Step 0 (no code): a ploidy=2
+gap baseline.
 
 ## Merged tooling
 
 | PR | what |
 |---|---|
-| #383 | `stage_scn.sh` — SCN staging (Phase 1) |
-| #384 | robust, ENA-verified read download (retry + size/md5) |
-| #385 | `set -u` hotfix (unbound `mate` in `fetch_read`) |
+| #383 / #384 / #385 | `stage_scn.sh` + robust ENA download + `set -u` hotfix |
+| #388 / #390 / #391 | `call_scn_sv.sh` (Delly SV) + static-binary/Boost override + Delly 2.x `call`→`sr` |
+| #392 | `simulate_scn_sv.sh` (SV/CNV render) + `call_scn_cnv.sh` (CNV) + this status doc |
 | #382 | cancer-pipeline re-run staleness fix (adjacent, found during this track) |
-| #386 | Phase 2 (allele-frequency) design doc |
-| #388 | `call_scn_sv.sh` — Delly structural-variant calling → SV model |
-| #389 | long-read epic scope doc |
-| #390 / #391 | Delly static-binary override + Boost fix; Delly 2.x `call`→`sr` |
-| #387 | this status doc |
-| *(this PR)* | `simulate_scn_sv.sh` (SV render check) + `call_scn_cnv.sh` (CNV) |
+| #386 / #389 | Phase-2 AF design + long-read epic scope docs |
+| #393 / #394 | **RNG out-of-range fix** (`mash()` u32 mask) → released as **v1.20.1** |
+| #396 | conda recipe → 1.20.1 |
 
 ## Operational notes (Delta)
 
-- **`$SCRATCH` must be the per-user path** `/scratch/bhrd/jallen17` (not the project root
-  `/scratch/bhrd`) — the rneat binary lives at `$SCRATCH/cargo-target/...`. Sharing data with
-  João = perms/ACL on the data dir, **not** repointing `$SCRATCH`.
-- `stage_scn.sh` needs NCBI `datasets` on PATH (for the assembly) and writes to
-  `$SCRATCH/neat_data/scn`. Downloads ~45 GB/pool then subsamples to ~30× (`MAX_PAIRS`).
-- Always **verify the staging summary's variant count is non-zero** before building models —
-  a contig-naming mismatch silently produces hollow-but-valid models.
+- **`$SCRATCH` must be the per-user path** `/scratch/bhrd/jallen17` (not `/scratch/bhrd`) — the
+  rneat binary lives at `$SCRATCH/cargo-target/...`. Share data with João via perms/ACL, not by
+  repointing `$SCRATCH`.
+- Tools: NCBI `datasets` (assemblies), Delly **static binary** `DELLY=$SCRATCH/bin/delly` (bioconda
+  Delly fails a Boost load; Delta's `module load boost` is the wrong version), `dicey` (CNV map).
+- Pass strain overrides explicitly to jobs — e.g. `sbatch --export=ALL,ACC=…,SRR=… …` — and
+  **check the job banner** (`ref=`/`bam=`) before trusting output; a strain mix builds silently-wrong
+  models (a PA3-ref + MM26-BAM build failed exactly this way).
+- **Verify the statistic, not the PASS:** confirm non-zero variant/SV/CNV counts and that
+  `cnv_copy_number_distribution` populates — a green build can still be hollow.
+- Rebuild the binary (`setup.sh`) before whole-genome gen-reads so the RNG fix (v1.20.1) is in play.
 
-## Next steps
+## Open / next steps
 
-1. **Run the SV follow-ups (in progress):** `simulate_scn_sv.sh` (confirm SVs render from the
-   trained model) + `call_scn_cnv.sh` (populate the CNV distribution).
-2. **PA3 / MM-BD3 SV contrast** — run the SV + CNV pipeline on the avirulent line and compare SV
-   spectra virulent-vs-avirulent (reference-bias caveat applies).
-3. **Long reads:** `delly lr` on the PRJNA852516 PacBio/ONT data to recover the TEs short reads
-   under-call (no rneat long-read *generation* needed). See `docs/longread_epic_scope.md`.
-4. **Phase 2 Step 0** — AF extraction + `scn_af_compare.py` + ploidy=2 gap baseline (no code),
-   then the `allele_fraction` enabling change (issue under #311).
+The planned **validation** track is complete (per-strain sim-vs-truth fidelity, build → simulate →
+render, on both lines). Remaining items split into tool/validation work that can proceed and
+**biology extensions parked pending colleague feedback**.
+
+**Validation / tooling (can proceed):**
+
+1. **Phase 2** — allele-frequency replay (designed; needs the `allele_fraction` enabling change).
+   This is the genuine remaining *sim-vs-truth* fidelity test — feed observed pool AFs, emit reads,
+   validate sim-AF ≈ real-AF.
+2. **Harness (issue #395)** — edge-case script fixes; bake the `RDCN`→`INFO/CN` lift + FORMAT-strip
+   into `call_scn_cnv.sh` so the CNV merge is turnkey.
+
+**Biology extensions — PARKED pending feedback from João / colleagues:**
+
+- **Common-reference variant comparison** — align both pools to one reference to remove the
+  strain-fitting confound. This is *not* a validation gap: per-strain sim-vs-truth fidelity stands
+  on its own regardless of reference. It only matters for turning the strain contrast into a
+  defensible virulent-vs-avirulent *biological* claim, which is a project riding on top of the
+  validated tool. Do not start without colleague sign-off that the biological claim is wanted.
+- **CNV biology sanity** — the ~78–92% loss-dominated CNV spectra on same/near-strain alignments
+  are surprising; check with João (likely partly low-mappability/repeat regions).
+- **Long reads** — `delly lr` on the PacBio/ONT data (PRJNA852516) to recover TEs short reads miss.

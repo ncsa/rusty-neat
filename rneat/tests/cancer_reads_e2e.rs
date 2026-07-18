@@ -64,8 +64,14 @@ fn gen_cancer_reads_produces_tagged_fastqs_and_origin_truth() {
     // Merged FASTQ read names carry both N_ and T_ tags.
     let r1 = read_gz_lines(&work.join("ctest_merged_r1.fastq.gz"));
     let headers: Vec<&String> = r1.iter().step_by(4).collect();
-    assert!(headers.iter().any(|h| h.starts_with("@N_")), "no N_-tagged reads");
-    assert!(headers.iter().any(|h| h.starts_with("@T_")), "no T_-tagged reads");
+    assert!(
+        headers.iter().any(|h| h.starts_with("@N_")),
+        "no N_-tagged reads"
+    );
+    assert!(
+        headers.iter().any(|h| h.starts_with("@T_")),
+        "no T_-tagged reads"
+    );
 
     // Truth VCF: NEAT_ORIGIN present, with somatic AND shared (germline carried
     // through the tumor pass) classes represented.
@@ -75,9 +81,15 @@ fn gen_cancer_reads_produces_tagged_fastqs_and_origin_truth() {
         "truth VCF missing NEAT_ORIGIN header declaration"
     );
     let body: Vec<&String> = truth.iter().filter(|l| !l.starts_with('#')).collect();
-    let has = |tag: &str| body.iter().any(|l| l.contains(&format!("NEAT_ORIGIN={tag}")));
+    let has = |tag: &str| {
+        body.iter()
+            .any(|l| l.contains(&format!("NEAT_ORIGIN={tag}")))
+    };
     assert!(has("somatic"), "no somatic records in truth");
-    assert!(has("shared"), "no shared (germline-carried) records in truth");
+    assert!(
+        has("shared"),
+        "no shared (germline-carried) records in truth"
+    );
     // every body record must be origin-tagged
     assert!(
         body.iter().all(|l| l.contains("NEAT_ORIGIN=")),

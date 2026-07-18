@@ -543,6 +543,7 @@ mod tests {
             alternate: AlternateType::Literal(vec![alt_b]),
             genotype_str: "0/1".to_string(),
             genotype: Genotype::Heterozygous,
+            allele_fraction: None,
             id: None,
             quality_score: None,
             filter: filter.map(str::to_string),
@@ -684,6 +685,7 @@ mod tests {
             alternate: AlternateType::Symbolic(SvData::new("<DEL>", SvType::Del)),
             genotype_str: "1/1".to_string(),
             genotype: Genotype::Homozygous,
+            allele_fraction: None,
             id: None,
             quality_score: None,
             filter: Some("PASS".to_string()),
@@ -695,10 +697,7 @@ mod tests {
         let mut raw = HashMap::new();
         raw.insert(
             "chr1".into(),
-            vec![
-                sv,
-                snp(50, Nucleotide::A, Nucleotide::C, Some("PASS")),
-            ],
+            vec![sv, snp(50, Nucleotide::A, Nucleotide::C, Some("PASS"))],
         );
         // filter_vcf must route the symbolic record into `skipped.symbolic`
         // rather than calling `.as_literal().unwrap()` on it — that path

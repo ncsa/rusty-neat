@@ -280,7 +280,10 @@ impl AlternateType {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Hash)]
+// `allele_fraction: Option<f64>` means Variant can't derive `Eq`/`Hash` (f64 is
+// only `PartialEq`). Neither was used — Variant is always a value in a Vec/HashMap,
+// never a key or set member; compare_vcfs hashes a separate `VariantKey` projection.
+#[derive(Debug, PartialEq, Clone)]
 pub struct Variant {
     // This is a basic holder for a variant. There are several aspects of the variant that we
     // don't need to store, such as which ploid the variant appears on and the context sequence,
@@ -301,6 +304,12 @@ pub struct Variant {
     pub genotype_str: String,
     // The genotype is either heterozygous (not on all alleles) or homozygous (on all alleles)
     pub genotype: Genotype,
+    // Optional per-variant alt-allele fraction in (0, 1], parsed from an input VCF
+    // (INFO/AF, else FORMAT/AD). When present, read generation emits the alt allele on
+    // this fraction of overlapping reads instead of the {homozygous=1.0, het=0.5} default —
+    // letting an input VCF drive a continuous AF spectrum (e.g. pooled/somatic data, #398).
+    // `None` for model-generated (de novo) variants, which keep the Genotype-based behavior.
+    pub allele_fraction: Option<f64>,
 
     // VCF files specific. These are variables specific to VCF files read as input,
     // either for variant inputs or for generating models.
@@ -320,6 +329,51 @@ pub struct Variant {
     // Where this variant came from in the current gen-reads run.
     // Emitted as INFO/NEAT_PROVENANCE in the golden VCF.
     pub provenance: Provenance,
+}
+
+/// Clamps a parsed allele fraction to the valid `(0, 1]` domain used by read
+/// generation. Non-finite or non-positive values become `None` (fall back to the
+/// Genotype-based fraction); values above 1.0 are clamped to 1.0.
+fn sanitize_fraction(f: f64) -> Option<f64> {
+    if !f.is_finite() || f <= 0.0 {
+        None
+    } else if f > 1.0 {
+        Some(1.0)
+    } else {
+        Some(f)
+    }
+}
+
+/// Parses an optional alt-allele fraction from an input-VCF record. Prefers
+/// `INFO/AF` (first value if comma-separated); falls back to `FORMAT/AD`
+/// (sum of alt depths / total depth). Returns `None` when neither is present or
+/// usable — the variant then keeps its Genotype-based fraction. AD is the correct
+/// source for pooled data, where GT is not diploid-meaningful (see #398).
+fn parse_allele_fraction(info_field: &str, format: &[String], sample: &[String]) -> Option<f64> {
+    if let Some(af) = info_field
+        .split(';')
+        .find_map(|kv| kv.strip_prefix("AF="))
+        .and_then(|v| v.split(',').next())
+        .and_then(|v| v.trim().parse::<f64>().ok())
+    {
+        return sanitize_fraction(af);
+    }
+    if let Some(pos) = format.iter().position(|f| f == "AD")
+        && let Some(ad) = sample.get(pos)
+    {
+        let counts: Vec<f64> = ad
+            .split(',')
+            .filter_map(|x| x.trim().parse::<f64>().ok())
+            .collect();
+        if counts.len() >= 2 {
+            let total: f64 = counts.iter().sum();
+            let alt: f64 = counts[1..].iter().sum();
+            if total > 0.0 {
+                return sanitize_fraction(alt / total);
+            }
+        }
+    }
+    None
 }
 
 impl Variant {
@@ -350,6 +404,7 @@ impl Variant {
         let (variant_type, alternate, reference) =
             parse_alt_payload(location, info_field, vcf_reference, vcf_alternate)?;
         let genotype = gt_from_str(&genotype_str);
+        let allele_fraction = parse_allele_fraction(info_field, &format, &sample);
         Ok(Variant {
             variant_type,
             location,
@@ -357,6 +412,7 @@ impl Variant {
             alternate,
             genotype_str,
             genotype,
+            allele_fraction,
             id: Some(id.to_string()),
             quality_score: Some(quality_score),
             filter: Some(filter.to_string()),
@@ -394,6 +450,9 @@ impl Variant {
             alternate,
             genotype_str: String::new(),
             genotype,
+            // gen_mut_model (the only from_file_lean caller) trains on positions/types
+            // and never reads allele_fraction, so skip the parse.
+            allele_fraction: None,
             id: None,
             quality_score: None,
             filter: None,
@@ -450,6 +509,8 @@ impl Variant {
             alternate: AlternateType::Literal(alternate.clone()),
             genotype_str: genotype_to_string(genotype)?,
             genotype: genotype_label,
+            // De novo variants use the Genotype-based fraction (Het/Hom), not an input AF.
+            allele_fraction: None,
             id: None,
             quality_score: None,
             filter: None,
@@ -481,8 +542,7 @@ fn parse_alt_payload(
     }
     let (variant_type, alternate) = match parse_alternate(vcf_reference, vcf_alternate)? {
         ParsedAlt::Literal(vt) => {
-            let alt_bases: Vec<Nucleotide> =
-                vcf_alternate.chars().map(Nucleotide::from).collect();
+            let alt_bases: Vec<Nucleotide> = vcf_alternate.chars().map(Nucleotide::from).collect();
             (vt, AlternateType::Literal(alt_bases))
         }
         ParsedAlt::Symbolic { sv_type, raw_alt } => {
@@ -730,6 +790,7 @@ mod tests {
             alternate: AlternateType::Literal(vec![Nucleotide::A]),
             genotype_str: "1/1/1".to_string(),
             genotype: Genotype::Homozygous,
+            allele_fraction: None,
             id: None,
             quality_score: None,
             filter: None,
@@ -770,7 +831,14 @@ mod tests {
         // InputVcf so the cancer-simulator merge step can distinguish
         // them from de-novo somatic draws on the tumor pass.
         let v = Variant::from_file(
-            99, "rs1", "PASS", ".", "A", "G", 60, vec!["GT".to_string()],
+            99,
+            "rs1",
+            "PASS",
+            ".",
+            "A",
+            "G",
+            60,
+            vec!["GT".to_string()],
             vec!["0/1".to_string()],
         )
         .unwrap();
@@ -902,7 +970,9 @@ mod tests {
                     assert_eq!(sv_type, expected, "wrong SvType for {alt}");
                     assert_eq!(raw_alt, alt, "raw_alt should be verbatim");
                 }
-                ParsedAlt::Literal(vt) => panic!("expected Symbolic for {alt}, got Literal({vt:?})"),
+                ParsedAlt::Literal(vt) => {
+                    panic!("expected Symbolic for {alt}, got Literal({vt:?})")
+                }
             }
         }
     }
@@ -935,7 +1005,10 @@ mod tests {
                     assert_eq!(raw_alt, alt, "form {} raw_alt mismatch", desc);
                 }
                 ParsedAlt::Literal(vt) => {
-                    panic!("expected Symbolic(Bnd) for form {}, got Literal({vt:?})", desc)
+                    panic!(
+                        "expected Symbolic(Bnd) for form {}, got Literal({vt:?})",
+                        desc
+                    )
                 }
             }
 
@@ -1118,18 +1191,9 @@ mod tests {
     #[test]
     fn sv_type_from_alt_string_breakend() {
         // VCF 4.2 breakend forms — any of these should be tagged Bnd.
-        assert_eq!(
-            SvType::from_alt_string("G]17:198982]"),
-            Some(SvType::Bnd)
-        );
-        assert_eq!(
-            SvType::from_alt_string("]13:123456]T"),
-            Some(SvType::Bnd)
-        );
-        assert_eq!(
-            SvType::from_alt_string("[2:321682[A"),
-            Some(SvType::Bnd)
-        );
+        assert_eq!(SvType::from_alt_string("G]17:198982]"), Some(SvType::Bnd));
+        assert_eq!(SvType::from_alt_string("]13:123456]T"), Some(SvType::Bnd));
+        assert_eq!(SvType::from_alt_string("[2:321682[A"), Some(SvType::Bnd));
     }
 
     #[test]
@@ -1250,5 +1314,94 @@ mod tests {
             VariantError::InvalidVcf(msg) => assert!(msg.contains("REF")),
             other => panic!("expected InvalidVcf, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn allele_fraction_prefers_info_af() {
+        assert_eq!(
+            parse_allele_fraction("DP=100;AF=0.25", &[], &[]),
+            Some(0.25)
+        );
+    }
+
+    #[test]
+    fn allele_fraction_info_af_takes_first_of_multiallelic() {
+        assert_eq!(parse_allele_fraction("AF=0.3,0.5", &[], &[]), Some(0.3));
+    }
+
+    #[test]
+    fn allele_fraction_falls_back_to_ad() {
+        let format = vec!["GT".to_string(), "AD".to_string(), "DP".to_string()];
+        let sample = vec!["0/1".to_string(), "18,12".to_string(), "30".to_string()];
+        // No INFO/AF → 12 alt / 30 total = 0.4.
+        let af = parse_allele_fraction("DP=30", &format, &sample).unwrap();
+        assert!(
+            (af - 0.4).abs() < 1e-9,
+            "AD-derived AF should be 0.4, got {af}"
+        );
+    }
+
+    #[test]
+    fn allele_fraction_none_when_absent() {
+        assert_eq!(parse_allele_fraction("DP=30", &[], &[]), None);
+    }
+
+    #[test]
+    fn allele_fraction_sanitizes_out_of_range() {
+        assert_eq!(parse_allele_fraction("AF=0", &[], &[]), None);
+        assert_eq!(parse_allele_fraction("AF=-0.1", &[], &[]), None);
+        assert_eq!(parse_allele_fraction("AF=1.5", &[], &[]), Some(1.0));
+    }
+
+    #[test]
+    fn from_file_populates_allele_fraction_from_info() {
+        let v = Variant::from_file(
+            100,
+            ".",
+            "PASS",
+            "AF=0.15",
+            "A",
+            "C",
+            37,
+            vec!["GT".to_string()],
+            vec!["0/1".to_string()],
+        )
+        .unwrap();
+        assert_eq!(v.allele_fraction, Some(0.15));
+    }
+
+    #[test]
+    fn from_file_ad_derived_allele_fraction() {
+        let v = Variant::from_file(
+            100,
+            ".",
+            "PASS",
+            "DP=40",
+            "A",
+            "C",
+            37,
+            vec!["GT".to_string(), "AD".to_string()],
+            vec!["0/1".to_string(), "30,10".to_string()],
+        )
+        .unwrap();
+        // 10 alt / 40 total = 0.25.
+        assert_eq!(v.allele_fraction, Some(0.25));
+    }
+
+    #[test]
+    fn from_file_no_af_yields_none() {
+        let v = Variant::from_file(
+            100,
+            ".",
+            "PASS",
+            "DP=40",
+            "A",
+            "C",
+            37,
+            vec!["GT".to_string()],
+            vec!["0/1".to_string()],
+        )
+        .unwrap();
+        assert_eq!(v.allele_fraction, None);
     }
 }

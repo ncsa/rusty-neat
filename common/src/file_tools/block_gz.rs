@@ -248,6 +248,9 @@ mod tests {
         let b = compress_finish(b"second contig reads\n");
         let mut joined = a.clone();
         joined.extend_from_slice(&b);
-        assert_eq!(gunzip(&joined), b"first contig reads\nsecond contig reads\n");
+        assert_eq!(
+            gunzip(&joined),
+            b"first contig reads\nsecond contig reads\n"
+        );
     }
 }

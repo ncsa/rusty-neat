@@ -260,11 +260,11 @@ pub fn detect_chrom_naming_mismatch(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use common::structs::variants::{AlternateType, Provenance};
     use common::structs::{
         nucleotides::Nucleotide,
         variants::{Genotype, Variant, VariantType},
     };
-    use common::structs::variants::{AlternateType, Provenance};
 
     fn snp(loc: usize) -> Variant {
         Variant {
@@ -274,6 +274,7 @@ mod tests {
             alternate: AlternateType::Literal(vec![Nucleotide::G]),
             genotype_str: "0/1".to_string(),
             genotype: Genotype::Heterozygous,
+            allele_fraction: None,
             id: None,
             quality_score: None,
             filter: Some("PASS".to_string()),

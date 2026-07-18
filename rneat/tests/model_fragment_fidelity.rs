@@ -39,7 +39,13 @@ use noodles::sam::{
 /// Write a paired-end BAM whose fragments have the given `tlens` (one proper pair
 /// per entry). Mirrors `model_parity::write_test_bam` but varies TLEN per pair so
 /// the fitted Normal has a realistic non-zero st_dev.
-fn write_paired_bam_with_tlens(path: &Path, contig: &[u8], contig_len: usize, tlens: &[usize], read_len: usize) {
+fn write_paired_bam_with_tlens(
+    path: &Path,
+    contig: &[u8],
+    contig_len: usize,
+    tlens: &[usize],
+    read_len: usize,
+) {
     let header = sam::Header::builder()
         .add_reference_sequence(
             contig.to_vec(),
@@ -118,7 +124,11 @@ fn mean_r1_insert_size(bam_path: &Path) -> f64 {
             tlens.push(tlen);
         }
     }
-    assert!(!tlens.is_empty(), "no positive R1 TLENs in {}", bam_path.display());
+    assert!(
+        !tlens.is_empty(),
+        "no positive R1 TLENs in {}",
+        bam_path.display()
+    );
     tlens.iter().sum::<f64>() / tlens.len() as f64
 }
 
@@ -186,7 +196,9 @@ fn built_fragment_model_drives_output_insert_size() {
     // 4. output side: simulated insert sizes reflect the fitted model, not a default.
     let out_bam = tmp.path().join("rt.bam");
     let out_mean = mean_r1_insert_size(&out_bam);
-    eprintln!("[fidelity] fitted model mean = {fitted:.1} bp; simulated output insert mean = {out_mean:.1} bp");
+    eprintln!(
+        "[fidelity] fitted model mean = {fitted:.1} bp; simulated output insert mean = {out_mean:.1} bp"
+    );
     let tolerance = 0.20;
     assert!(
         (out_mean - fitted).abs() <= fitted * tolerance,

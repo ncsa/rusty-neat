@@ -94,7 +94,10 @@ fn native_gen_cancer_reads_matches_cancer_simulate_sh() {
         .join("..")
         .join("tools")
         .join("cancer_simulate.sh");
-    assert!(script.is_file(), "cancer_simulate.sh not found at {script:?}");
+    assert!(
+        script.is_file(),
+        "cancer_simulate.sh not found at {script:?}"
+    );
 
     // The same rneat binary drives both paths (bash shells out to it via --rneat-bin).
     let bin = assert_cmd::cargo::cargo_bin("rneat");

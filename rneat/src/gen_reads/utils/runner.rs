@@ -16,7 +16,10 @@ use crate::{
             bam_writer::{BamBodyWriter, BamContext, BamRecordStager, concat_temp_bams},
             bed_reader::read_bed,
             fasta_stream::{FastaStream, map_buffer, resolve_iupac_bases},
-            fastq_tools::{combine_temp_fastqs, write_block_fastq, generate_read, write_read_to_fastq, reverse_complement, Strand},
+            fastq_tools::{
+                Strand, combine_temp_fastqs, generate_read, reverse_complement, write_block_fastq,
+                write_read_to_fastq,
+            },
             file_io::{VectorBuffer, append_to_file},
             vcf_tools::{read_vcf, write_vcf},
         },
@@ -30,7 +33,7 @@ use crate::{
             nucleotides::Nucleotide,
             read_record::ReadRecord,
             sequence_block::{RegionType, SequenceBlock, SequenceMap},
-            variants::{Variant, SvData},
+            variants::{SvData, Variant},
         },
     },
     gen_reads::{
@@ -295,32 +298,33 @@ pub fn run_neat(
         })
         .collect();
 
-    let parallel_iter = chunk_work
-        .into_par_iter()
-        .map(|w| -> Result<ChunkResult, GenerateReadsError> {
-            // Deterministic per-chunk seed. Chunk 0 (the only chunk when
-            // chunking is disabled) uses the plain per-contig derivation so its
-            // RNG stream — and therefore its reads — matches the pre-chunking
-            // behaviour exactly. Later chunks derive a sub-seed from it.
-            let child_rng = if w.chunk_idx == 0 {
-                ctx.base_rng.derive_child(w.contig_idx as u64)
-            } else {
-                ctx.base_rng
-                    .derive_child(w.contig_idx as u64)
-                    .derive_child(w.chunk_idx as u64)
-            };
-            let block = seq_cache.get(&w.name);
-            process_chunk(
-                w.contig_idx,
-                w.chunk_idx,
-                w.name,
-                w.chunk_start,
-                w.chunk_end,
-                block,
-                &ctx,
-                child_rng,
-            )
-        });
+    let parallel_iter =
+        chunk_work
+            .into_par_iter()
+            .map(|w| -> Result<ChunkResult, GenerateReadsError> {
+                // Deterministic per-chunk seed. Chunk 0 (the only chunk when
+                // chunking is disabled) uses the plain per-contig derivation so its
+                // RNG stream — and therefore its reads — matches the pre-chunking
+                // behaviour exactly. Later chunks derive a sub-seed from it.
+                let child_rng = if w.chunk_idx == 0 {
+                    ctx.base_rng.derive_child(w.contig_idx as u64)
+                } else {
+                    ctx.base_rng
+                        .derive_child(w.contig_idx as u64)
+                        .derive_child(w.chunk_idx as u64)
+                };
+                let block = seq_cache.get(&w.name);
+                process_chunk(
+                    w.contig_idx,
+                    w.chunk_idx,
+                    w.name,
+                    w.chunk_start,
+                    w.chunk_end,
+                    block,
+                    &ctx,
+                    child_rng,
+                )
+            });
     let collected: Result<Vec<ChunkResult>, _> = match config.num_threads {
         Some(n) => rayon::ThreadPoolBuilder::new()
             .num_threads(n)
@@ -694,15 +698,12 @@ fn process_chunk(
         let mut block_frags = Vec::new();
         // SV coverage multipliers are needed here to scale fragment counts.
         // Even though they are also in MutatedMap, we need them as intervals.
-        let sv_variants: Vec<Variant> = mutated_map
-            .sv_records
-            .iter()
-            .cloned()
-            .collect();
+        let sv_variants: Vec<Variant> = mutated_map.sv_records.iter().cloned().collect();
         let coverage_multipliers =
             build_coverage_multipliers(&sv_variants, ctx.config.ploidy, contig_len);
 
-        for (region_start, region_end) in regions_of_interest.into_iter().map(|r| (r.start, r.end)) {
+        for (region_start, region_end) in regions_of_interest.into_iter().map(|r| (r.start, r.end))
+        {
             for (sub_start, sub_end, mult) in
                 split_region_by_multipliers(region_start, region_end, &coverage_multipliers)
             {
@@ -794,8 +795,18 @@ fn process_chunk(
     let (r1_adapter, r2_adapter): (Vec<Nucleotide>, Vec<Nucleotide>) =
         if ctx.config.adapters.enabled {
             (
-                ctx.config.adapters.r1.chars().map(Nucleotide::from).collect(),
-                ctx.config.adapters.r2.chars().map(Nucleotide::from).collect(),
+                ctx.config
+                    .adapters
+                    .r1
+                    .chars()
+                    .map(Nucleotide::from)
+                    .collect(),
+                ctx.config
+                    .adapters
+                    .r2
+                    .chars()
+                    .map(Nucleotide::from)
+                    .collect(),
             )
         } else {
             (Vec::new(), Vec::new())
@@ -1122,9 +1133,19 @@ fn process_chimeric_variants(
                 let here = (contig_name.as_str(), sv_rec.location);
                 let mate = (mate_contig.as_str(), mate_pos);
                 let bnd_id = if here <= mate {
-                    (contig_name.clone(), sv_rec.location, mate_contig.clone(), mate_pos)
+                    (
+                        contig_name.clone(),
+                        sv_rec.location,
+                        mate_contig.clone(),
+                        mate_pos,
+                    )
                 } else {
-                    (mate_contig.clone(), mate_pos, contig_name.clone(), sv_rec.location)
+                    (
+                        mate_contig.clone(),
+                        mate_pos,
+                        contig_name.clone(),
+                        sv_rec.location,
+                    )
                 };
                 if !processed_ids.insert(format!("BND_{:?}", bnd_id)) {
                     continue;
@@ -1169,7 +1190,11 @@ fn process_chimeric_variants(
                         let mut f = 0;
                         while attempts < 100 {
                             let rand_val = rng.random().map_err(GenerateReadsError::from)?;
-                            f = ctx.fragment_length_model.generate_fragment(rand_val).map_err(GenerateReadsError::from)? as usize;
+                            f = ctx
+                                .fragment_length_model
+                                .generate_fragment(rand_val)
+                                .map_err(GenerateReadsError::from)?
+                                as usize;
                             if ctx.config.long_reads || f >= ctx.config.read_len + 10 {
                                 break;
                             }
@@ -1203,7 +1228,9 @@ fn process_chimeric_variants(
                                 all_reads.push(r2);
                             }
                         }
-                        Err(GenerateReadsError::FqToolsError(common::file_tools::fastq_tools::FastqToolsError::TruncatedRead(msg))) => {
+                        Err(GenerateReadsError::FqToolsError(
+                            common::file_tools::fastq_tools::FastqToolsError::TruncatedRead(msg),
+                        )) => {
                             debug!("Skipping truncated chimeric read: {}", msg);
                         }
                         Err(e) => return Err(e),
@@ -1250,7 +1277,11 @@ fn process_chimeric_variants(
                         let mut f = 0;
                         while attempts < 100 {
                             let rand_val = rng.random().map_err(GenerateReadsError::from)?;
-                            f = ctx.fragment_length_model.generate_fragment(rand_val).map_err(GenerateReadsError::from)? as usize;
+                            f = ctx
+                                .fragment_length_model
+                                .generate_fragment(rand_val)
+                                .map_err(GenerateReadsError::from)?
+                                as usize;
                             if ctx.config.long_reads || f >= ctx.config.read_len + 10 {
                                 break;
                             }
@@ -1271,7 +1302,8 @@ fn process_chimeric_variants(
                     // junction number disambiguates the QNAMEs that
                     // generate_inv_pair emits.
                     for junction in 1..=2 {
-                        let offset = balanced_chimeric_offset(frag_len, ctx.config.read_len, &mut rng)?;
+                        let offset =
+                            balanced_chimeric_offset(frag_len, ctx.config.read_len, &mut rng)?;
                         let result = generate_inv_pair(
                             ctx,
                             contig_name,
@@ -1291,7 +1323,11 @@ fn process_chimeric_variants(
                                     all_reads.push(r2);
                                 }
                             }
-                            Err(GenerateReadsError::FqToolsError(common::file_tools::fastq_tools::FastqToolsError::TruncatedRead(msg))) => {
+                            Err(GenerateReadsError::FqToolsError(
+                                common::file_tools::fastq_tools::FastqToolsError::TruncatedRead(
+                                    msg,
+                                ),
+                            )) => {
                                 debug!("Skipping truncated chimeric read: {}", msg);
                             }
                             Err(e) => return Err(e),
@@ -1310,7 +1346,8 @@ fn process_chimeric_variants(
                     None => {
                         debug!(
                             "Skipping <CNV> at {}:{} with no INFO/CN — chimeric path needs CN to choose DEL vs DUP signature",
-                            contig_name, sv_rec.location + 1
+                            contig_name,
+                            sv_rec.location + 1
                         );
                         continue;
                     }
@@ -1362,7 +1399,11 @@ fn process_chimeric_variants(
                         let mut f = 0;
                         while attempts < 100 {
                             let rand_val = rng.random().map_err(GenerateReadsError::from)?;
-                            f = ctx.fragment_length_model.generate_fragment(rand_val).map_err(GenerateReadsError::from)? as usize;
+                            f = ctx
+                                .fragment_length_model
+                                .generate_fragment(rand_val)
+                                .map_err(GenerateReadsError::from)?
+                                as usize;
                             if ctx.config.long_reads || f >= ctx.config.read_len + 10 {
                                 break;
                             }
@@ -1382,13 +1423,25 @@ fn process_chimeric_variants(
                     // CN > ploidy → emit DUP-like junction reads (gain).
                     let result = if cn < ploidy {
                         generate_del_pair(
-                            ctx, contig_name, sv_rec.location, end,
-                            frag_len, offset, frag_idx, &mut rng,
+                            ctx,
+                            contig_name,
+                            sv_rec.location,
+                            end,
+                            frag_len,
+                            offset,
+                            frag_idx,
+                            &mut rng,
                         )
                     } else {
                         generate_dup_pair(
-                            ctx, contig_name, sv_rec.location, end,
-                            frag_len, offset, frag_idx, &mut rng,
+                            ctx,
+                            contig_name,
+                            sv_rec.location,
+                            end,
+                            frag_len,
+                            offset,
+                            frag_idx,
+                            &mut rng,
                         )
                     };
 
@@ -1399,7 +1452,9 @@ fn process_chimeric_variants(
                                 all_reads.push(r2);
                             }
                         }
-                        Err(GenerateReadsError::FqToolsError(common::file_tools::fastq_tools::FastqToolsError::TruncatedRead(msg))) => {
+                        Err(GenerateReadsError::FqToolsError(
+                            common::file_tools::fastq_tools::FastqToolsError::TruncatedRead(msg),
+                        )) => {
                             debug!("Skipping truncated chimeric read: {}", msg);
                         }
                         Err(e) => return Err(e),
@@ -1451,7 +1506,11 @@ fn process_chimeric_variants(
                         let mut f = 0;
                         while attempts < 100 {
                             let rand_val = rng.random().map_err(GenerateReadsError::from)?;
-                            f = ctx.fragment_length_model.generate_fragment(rand_val).map_err(GenerateReadsError::from)? as usize;
+                            f = ctx
+                                .fragment_length_model
+                                .generate_fragment(rand_val)
+                                .map_err(GenerateReadsError::from)?
+                                as usize;
                             if ctx.config.long_reads || f >= ctx.config.read_len + 10 {
                                 break;
                             }
@@ -1485,7 +1544,9 @@ fn process_chimeric_variants(
                                 all_reads.push(r2);
                             }
                         }
-                        Err(GenerateReadsError::FqToolsError(common::file_tools::fastq_tools::FastqToolsError::TruncatedRead(msg))) => {
+                        Err(GenerateReadsError::FqToolsError(
+                            common::file_tools::fastq_tools::FastqToolsError::TruncatedRead(msg),
+                        )) => {
                             debug!("Skipping truncated chimeric read: {}", msg);
                         }
                         Err(e) => return Err(e),
@@ -1553,7 +1614,11 @@ fn process_chimeric_variants(
                         let mut f = 0;
                         while attempts < 100 {
                             let rand_val = rng.random().map_err(GenerateReadsError::from)?;
-                            f = ctx.fragment_length_model.generate_fragment(rand_val).map_err(GenerateReadsError::from)? as usize;
+                            f = ctx
+                                .fragment_length_model
+                                .generate_fragment(rand_val)
+                                .map_err(GenerateReadsError::from)?
+                                as usize;
                             if ctx.config.long_reads || f >= ctx.config.read_len + 10 {
                                 break;
                             }
@@ -1587,7 +1652,9 @@ fn process_chimeric_variants(
                                 all_reads.push(r2);
                             }
                         }
-                        Err(GenerateReadsError::FqToolsError(common::file_tools::fastq_tools::FastqToolsError::TruncatedRead(msg))) => {
+                        Err(GenerateReadsError::FqToolsError(
+                            common::file_tools::fastq_tools::FastqToolsError::TruncatedRead(msg),
+                        )) => {
                             debug!("Skipping truncated chimeric read: {}", msg);
                         }
                         Err(e) => return Err(e),
@@ -1600,7 +1667,7 @@ fn process_chimeric_variants(
     // Write all chimeric reads to a temp fastq and BAM
     let contig_name = "chimeric".to_string();
     let idx = 999999;
-    
+
     let mut contig_files_r1 = Vec::new();
     let mut contig_files_r2 = Vec::new();
     let mut bam_body_file = None;
@@ -1621,9 +1688,11 @@ fn process_chimeric_variants(
                 let mut buffer2 = GzEncoder::new(writer2, Compression::default());
 
                 for i in (0..all_reads.len()).step_by(2) {
-                    write_read_to_fastq(&all_reads[i], &mut buffer1).map_err(GenerateReadsError::from)?;
+                    write_read_to_fastq(&all_reads[i], &mut buffer1)
+                        .map_err(GenerateReadsError::from)?;
                     if i + 1 < all_reads.len() {
-                        write_read_to_fastq(&all_reads[i+1], &mut buffer2).map_err(GenerateReadsError::from)?;
+                        write_read_to_fastq(&all_reads[i + 1], &mut buffer2)
+                            .map_err(GenerateReadsError::from)?;
                     }
                 }
                 contig_files_r1.push(file_to_write_1);
@@ -1635,12 +1704,17 @@ fn process_chimeric_variants(
                 contig_files_r1.push(file_to_write_1);
             }
         }
-        
+
         if let Some(bam_ctx) = &ctx.bam_context {
             let bam_temp_path = PathBuf::from(ctx.working_dir).join("temp_bam_chimeric.bam");
             let mut writer = BamBodyWriter::new(bam_temp_path.clone(), Arc::clone(bam_ctx))?;
             for read in &all_reads {
-                writer.stage_read_record(read).map_err(|e| GenerateReadsError::IoError(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+                writer.stage_read_record(read).map_err(|e| {
+                    GenerateReadsError::IoError(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        e.to_string(),
+                    ))
+                })?;
             }
             // BamBodyWriter::stage_read_record buffers for deferred
             // coordinate-sorted output. flush_all drains the buffer; without
@@ -1693,11 +1767,18 @@ fn generate_chimeric_pair(
     // a QNAME and Picard MarkDuplicates would drop one as a "PCR duplicate".
     let base_name = format!(
         "RNEAT_chimeric_{}_{}_{}_{}_{:016x}",
-        c1, pos, c2, sv.mate_pos.unwrap_or(0), frag_idx,
+        c1,
+        pos,
+        c2,
+        sv.mate_pos.unwrap_or(0),
+        frag_idx,
     );
-    
-    let quality_scores_1 = ctx.quality_score_model.generate_quality_scores(read_len, rng).map_err(GenerateReadsError::from)?;
-    
+
+    let quality_scores_1 = ctx
+        .quality_score_model
+        .generate_quality_scores(read_len, rng)
+        .map_err(GenerateReadsError::from)?;
+
     // Chimeric pairs don't drive AD/DP/AF (BND junction reads are span/
     // discordant-pair signal, not point-coverage signal). Pass a throwaway
     // local AdCounter so generate_read still increments somewhere but the
@@ -1720,11 +1801,15 @@ fn generate_chimeric_pair(
         frag_len as i32,
         ctx.config.paired_ended,
         &mut throwaway_ad,
-    ).map_err(GenerateReadsError::from)?;
+    )
+    .map_err(GenerateReadsError::from)?;
 
     let mut r2 = None;
     if ctx.config.paired_ended {
-        let quality_scores_2 = ctx.quality_score_model.generate_quality_scores(read_len, rng).map_err(GenerateReadsError::from)?;
+        let quality_scores_2 = ctx
+            .quality_score_model
+            .generate_quality_scores(read_len, rng)
+            .map_err(GenerateReadsError::from)?;
         let r2_record = generate_read(
             &reverse_complement(seq1),
             &[],
@@ -1742,7 +1827,8 @@ fn generate_chimeric_pair(
             -(frag_len as i32),
             true,
             &mut throwaway_ad,
-        ).map_err(GenerateReadsError::from)?;
+        )
+        .map_err(GenerateReadsError::from)?;
         r2 = Some(r2_record);
     }
 
@@ -1753,15 +1839,22 @@ fn generate_inv_pair(
     ctx: &ContigContext,
     contig: &str,
     location: usize, // 0-based
-    end: usize, // 1-based
+    end: usize,      // 1-based
     junction: usize,
     frag_len: usize,
     offset: usize,
     frag_idx: usize,
     rng: &mut NeatRng,
 ) -> Result<(ReadRecord, Option<ReadRecord>), GenerateReadsError> {
-    let ((c1, s1, e1, rev1), (c2, s2, e2, rev2)) =
-        get_inv_pieces(contig, location, end, junction, offset, frag_len - offset, ctx)?;
+    let ((c1, s1, e1, rev1), (c2, s2, e2, rev2)) = get_inv_pieces(
+        contig,
+        location,
+        end,
+        junction,
+        offset,
+        frag_len - offset,
+        ctx,
+    )?;
 
     let seq1 = get_stitched_sequence(ctx, &c1, s1, e1, rev1, &c2, s2, e2, rev2, rng)?;
 
@@ -1773,10 +1866,17 @@ fn generate_inv_pair(
     // num_frags > 1.
     let base_name = format!(
         "RNEAT_chimeric_INV_{}_{}_{}_{}_{:016x}",
-        contig, location + 1, end, junction, frag_idx,
+        contig,
+        location + 1,
+        end,
+        junction,
+        frag_idx,
     );
 
-    let quality_scores_1 = ctx.quality_score_model.generate_quality_scores(read_len, rng).map_err(GenerateReadsError::from)?;
+    let quality_scores_1 = ctx
+        .quality_score_model
+        .generate_quality_scores(read_len, rng)
+        .map_err(GenerateReadsError::from)?;
 
     // Inversion-junction reads contribute to junction signal, not point
     // coverage — same rationale as generate_chimeric_pair. Use a throwaway
@@ -1801,11 +1901,15 @@ fn generate_inv_pair(
         frag_len as i32,
         ctx.config.paired_ended,
         &mut throwaway_ad,
-    ).map_err(GenerateReadsError::from)?;
+    )
+    .map_err(GenerateReadsError::from)?;
 
     let mut r2 = None;
     if ctx.config.paired_ended {
-        let quality_scores_2 = ctx.quality_score_model.generate_quality_scores(read_len, rng).map_err(GenerateReadsError::from)?;
+        let quality_scores_2 = ctx
+            .quality_score_model
+            .generate_quality_scores(read_len, rng)
+            .map_err(GenerateReadsError::from)?;
         let r2_record = generate_read(
             &reverse_complement(seq1),
             &[],
@@ -1823,7 +1927,8 @@ fn generate_inv_pair(
             -(frag_len as i32),
             true,
             &mut throwaway_ad,
-        ).map_err(GenerateReadsError::from)?;
+        )
+        .map_err(GenerateReadsError::from)?;
         r2 = Some(r2_record);
     }
 
@@ -1842,7 +1947,7 @@ fn generate_del_pair(
     ctx: &ContigContext,
     contig: &str,
     location: usize, // 0-based location (POS-1 = anchor index)
-    end: usize, // 1-based VCF END (= 0-based start of post-DEL right piece)
+    end: usize,      // 1-based VCF END (= 0-based start of post-DEL right piece)
     frag_len: usize,
     offset: usize,
     frag_idx: usize,
@@ -1861,10 +1966,16 @@ fn generate_del_pair(
     // and INV (`RNEAT_chimeric_INV_<contig>_<pos>_<end>_<junction>_...`).
     let base_name = format!(
         "RNEAT_chimeric_DEL_{}_{}_{}_{:016x}",
-        contig, location + 1, end, frag_idx,
+        contig,
+        location + 1,
+        end,
+        frag_idx,
     );
 
-    let quality_scores_1 = ctx.quality_score_model.generate_quality_scores(read_len, rng).map_err(GenerateReadsError::from)?;
+    let quality_scores_1 = ctx
+        .quality_score_model
+        .generate_quality_scores(read_len, rng)
+        .map_err(GenerateReadsError::from)?;
 
     // DEL junction reads are span/discordant-pair signal, not point-
     // coverage signal — same rationale as generate_chimeric_pair. Use a
@@ -1889,11 +2000,15 @@ fn generate_del_pair(
         frag_len as i32,
         ctx.config.paired_ended,
         &mut throwaway_ad,
-    ).map_err(GenerateReadsError::from)?;
+    )
+    .map_err(GenerateReadsError::from)?;
 
     let mut r2 = None;
     if ctx.config.paired_ended {
-        let quality_scores_2 = ctx.quality_score_model.generate_quality_scores(read_len, rng).map_err(GenerateReadsError::from)?;
+        let quality_scores_2 = ctx
+            .quality_score_model
+            .generate_quality_scores(read_len, rng)
+            .map_err(GenerateReadsError::from)?;
         let r2_record = generate_read(
             &reverse_complement(seq1),
             &[],
@@ -1911,7 +2026,8 @@ fn generate_del_pair(
             -(frag_len as i32),
             true,
             &mut throwaway_ad,
-        ).map_err(GenerateReadsError::from)?;
+        )
+        .map_err(GenerateReadsError::from)?;
         r2 = Some(r2_record);
     }
 
@@ -1962,7 +2078,7 @@ fn generate_dup_pair(
     ctx: &ContigContext,
     contig: &str,
     location: usize, // 0-based POS (first base of dup region)
-    end: usize, // 1-based END (= 0-based exclusive end of dup region)
+    end: usize,      // 1-based END (= 0-based exclusive end of dup region)
     frag_len: usize,
     offset: usize,
     frag_idx: usize,
@@ -1976,10 +2092,16 @@ fn generate_dup_pair(
     let read_len = ctx.config.read_len;
     let base_name = format!(
         "RNEAT_chimeric_DUP_{}_{}_{}_{:016x}",
-        contig, location + 1, end, frag_idx,
+        contig,
+        location + 1,
+        end,
+        frag_idx,
     );
 
-    let quality_scores_1 = ctx.quality_score_model.generate_quality_scores(read_len, rng).map_err(GenerateReadsError::from)?;
+    let quality_scores_1 = ctx
+        .quality_score_model
+        .generate_quality_scores(read_len, rng)
+        .map_err(GenerateReadsError::from)?;
     let mut throwaway_ad = AdCounter::new();
 
     let r1 = generate_read(
@@ -1999,11 +2121,15 @@ fn generate_dup_pair(
         frag_len as i32,
         ctx.config.paired_ended,
         &mut throwaway_ad,
-    ).map_err(GenerateReadsError::from)?;
+    )
+    .map_err(GenerateReadsError::from)?;
 
     let mut r2 = None;
     if ctx.config.paired_ended {
-        let quality_scores_2 = ctx.quality_score_model.generate_quality_scores(read_len, rng).map_err(GenerateReadsError::from)?;
+        let quality_scores_2 = ctx
+            .quality_score_model
+            .generate_quality_scores(read_len, rng)
+            .map_err(GenerateReadsError::from)?;
         let r2_record = generate_read(
             &reverse_complement(seq1),
             &[],
@@ -2021,7 +2147,8 @@ fn generate_dup_pair(
             -(frag_len as i32),
             true,
             &mut throwaway_ad,
-        ).map_err(GenerateReadsError::from)?;
+        )
+        .map_err(GenerateReadsError::from)?;
         r2 = Some(r2_record);
     }
 
@@ -2042,7 +2169,7 @@ fn generate_dup_pair(
 fn get_dup_pieces(
     contig: &str,
     location: usize, // 0-based POS (first base of dup region)
-    end: usize, // 1-based END (= 0-based exclusive end of dup region)
+    end: usize,      // 1-based END (= 0-based exclusive end of dup region)
     len1: usize,
     len2: usize,
     ctx: &ContigContext,
@@ -2069,7 +2196,7 @@ fn get_dup_pieces(
 fn get_inv_pieces(
     contig: &str,
     location: usize, // 0-based location (POS-1)
-    end: usize, // 1-based END
+    end: usize,      // 1-based END
     junction: usize, // 1 or 2
     len1: usize,
     len2: usize,
@@ -2091,7 +2218,10 @@ fn get_inv_pieces(
 
         let e2 = end.min(c_len);
         let s2 = e2.saturating_sub(len2).max(location);
-        ((contig.to_string(), s1, e1, false), (contig.to_string(), s2, e2, true))
+        (
+            (contig.to_string(), s1, e1, false),
+            (contig.to_string(), s2, e2, true),
+        )
     } else {
         // Junction 2: RC(REF[POS..END]) | REF[END+1..]
         // Left piece ends at RC(index location). Right piece starts at index end.
@@ -2100,7 +2230,10 @@ fn get_inv_pieces(
 
         let s2 = end.min(c_len);
         let e2 = (s2 + len2).min(c_len);
-        ((contig.to_string(), s1, e1, true), (contig.to_string(), s2, e2, false))
+        (
+            (contig.to_string(), s1, e1, true),
+            (contig.to_string(), s2, e2, false),
+        )
     })
 }
 
@@ -2136,14 +2269,20 @@ fn get_bnd_pieces(
             let e1 = pos + 1;
             let s2 = mate_pos;
             let e2 = (mate_pos + len2).min(c2_len);
-            ((contig.to_string(), s1, e1, false), (mate_contig, s2, e2, false))
+            (
+                (contig.to_string(), s1, e1, false),
+                (mate_contig, s2, e2, false),
+            )
         } else {
             // Case 2: t]p] -> REF[..=pos] + revcomp(MATE[..=mate_pos])
             let s1 = pos.saturating_sub(len1.saturating_sub(1));
             let e1 = pos + 1;
             let e2 = mate_pos + 1;
             let s2 = e2.saturating_sub(len2);
-            ((contig.to_string(), s1, e1, false), (mate_contig, s2, e2, true))
+            (
+                (contig.to_string(), s1, e1, false),
+                (mate_contig, s2, e2, true),
+            )
         }
     } else if sv.bnd_mate_extends_right {
         // Case 3: [p[t -> revcomp(MATE[mate_pos..]) + REF[pos..]
@@ -2151,21 +2290,33 @@ fn get_bnd_pieces(
         let e1 = (mate_pos + len1).min(c2_len);
         let s2 = pos;
         let e2 = (pos + len2).min(c1_len);
-        ((mate_contig, s1, e1, true), (contig.to_string(), s2, e2, false))
+        (
+            (mate_contig, s1, e1, true),
+            (contig.to_string(), s2, e2, false),
+        )
     } else {
         // Case 4: ]p]t -> MATE[..=mate_pos] + REF[pos..]
         let e1 = mate_pos + 1;
         let s1 = e1.saturating_sub(len1);
         let s2 = pos;
         let e2 = (pos + len2).min(c1_len);
-        ((mate_contig, s1, e1, false), (contig.to_string(), s2, e2, false))
+        (
+            (mate_contig, s1, e1, false),
+            (contig.to_string(), s2, e2, false),
+        )
     })
 }
 
 fn get_stitched_sequence(
     ctx: &ContigContext,
-    c1: &str, s1: usize, e1: usize, rev1: bool,
-    c2: &str, s2: usize, e2: usize, rev2: bool,
+    c1: &str,
+    s1: usize,
+    e1: usize,
+    rev1: bool,
+    c2: &str,
+    s2: usize,
+    e2: usize,
+    rev2: bool,
     rng: &mut NeatRng,
 ) -> Result<Vec<Nucleotide>, GenerateReadsError> {
     let mut seq1 = get_mutated_subseq(ctx, c1, s1, e1, rng)?;
@@ -2187,9 +2338,19 @@ fn get_mutated_subseq(
     end: usize,
     rng: &mut NeatRng,
 ) -> Result<Vec<Nucleotide>, GenerateReadsError> {
-    let ref_seq = ctx.reference.get(contig).ok_or_else(|| GenerateReadsError::IoError(std::io::Error::new(std::io::ErrorKind::NotFound, format!("Contig {} not found", contig))))?;
-    let m_map = ctx.mutated_maps.get(contig).ok_or_else(|| GenerateReadsError::IoError(std::io::Error::new(std::io::ErrorKind::NotFound, format!("MutatedMap for {} not found", contig))))?;
-    
+    let ref_seq = ctx.reference.get(contig).ok_or_else(|| {
+        GenerateReadsError::IoError(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("Contig {} not found", contig),
+        ))
+    })?;
+    let m_map = ctx.mutated_maps.get(contig).ok_or_else(|| {
+        GenerateReadsError::IoError(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("MutatedMap for {} not found", contig),
+        ))
+    })?;
+
     let mut seq = Vec::new();
     for i in start..end {
         if i >= ref_seq.len() {
@@ -2197,7 +2358,9 @@ fn get_mutated_subseq(
             continue;
         }
         if m_map.is_flagged(&i) {
-            let variants = m_map.mutate_position(i, rng).map_err(GenerateReadsError::from)?;
+            let variants = m_map
+                .mutate_position(i, rng)
+                .map_err(GenerateReadsError::from)?;
             seq.extend(variants);
         } else {
             seq.push(ref_seq[i]);
@@ -2466,8 +2629,7 @@ fn suppress_junction_double_count(
     let positions: Vec<usize> = junctions.iter().map(|&(p, _)| p).collect();
     let mut kept: Vec<(usize, usize)> = Vec::with_capacity(fragments.len());
     for (start, end) in fragments {
-        let mut bf =
-            max_broken_fraction_in_window(&junctions, &positions, start, start + read_len);
+        let mut bf = max_broken_fraction_in_window(&junctions, &positions, start, start + read_len);
         if paired_ended && end > read_len {
             bf = bf.max(max_broken_fraction_in_window(
                 &junctions,
@@ -2535,7 +2697,8 @@ fn build_coverage_multipliers(
         if (mult - 1.0).abs() < f64::EPSILON {
             continue;
         }
-        let (mod_start, mod_end) = sv_modulation_range(v.location, sv.sv_type, span_bases, block_end);
+        let (mod_start, mod_end) =
+            sv_modulation_range(v.location, sv.sv_type, span_bases, block_end);
         if mod_start >= mod_end {
             continue;
         }
@@ -2815,6 +2978,7 @@ mod tests {
             alternate: AlternateType::Literal(vec![Nucleotide::T]),
             variant_type: VariantType::SNP,
             genotype: Genotype::Homozygous,
+            allele_fraction: None,
             genotype_str: "1/1".to_string(),
             id: None,
             quality_score: None,
@@ -2830,6 +2994,7 @@ mod tests {
             alternate: AlternateType::Literal(vec![Nucleotide::C, Nucleotide::G]),
             variant_type: VariantType::Complex,
             genotype: Genotype::Homozygous,
+            allele_fraction: None,
             genotype_str: "1/1".to_string(),
             id: None,
             quality_score: None,
@@ -2849,6 +3014,7 @@ mod tests {
             alternate: AlternateType::Symbolic(SvData::new("<DEL>", SvType::Del)),
             variant_type: VariantType::Complex,
             genotype: Genotype::Homozygous,
+            allele_fraction: None,
             genotype_str: "1/1".to_string(),
             id: None,
             quality_score: None,
@@ -2902,6 +3068,7 @@ mod tests {
             variant_type: VariantType::Complex,
             genotype,
             genotype_str,
+            allele_fraction: None,
             id: None,
             quality_score: None,
             filter: None,
@@ -2922,9 +3089,15 @@ mod tests {
         assert_eq!(j.len(), 3, "BND→1 junction, INV→2");
         // sorted by position
         assert_eq!(j[0].0, 100);
-        assert!((j[0].1 - 1.0).abs() < 1e-9, "homozygous broken_fraction = 1.0");
+        assert!(
+            (j[0].1 - 1.0).abs() < 1e-9,
+            "homozygous broken_fraction = 1.0"
+        );
         assert_eq!(j[1].0, 200);
-        assert!((j[1].1 - 0.5).abs() < 1e-9, "het broken_fraction = 1/ploidy");
+        assert!(
+            (j[1].1 - 0.5).abs() < 1e-9,
+            "het broken_fraction = 1/ploidy"
+        );
         assert_eq!(j[2].0, 300);
         assert!((j[2].1 - 0.5).abs() < 1e-9);
     }
@@ -2940,12 +3113,19 @@ mod tests {
         let cnv_gain = sv_variant_with_span(700, 800, SvType::Cnv, Genotype::Homozygous, Some(4));
         let j = collect_suppressible_junctions(&[del, dup, cnv_loss, cnv_gain], 2);
         // Only DEL (100) and CNV-loss (500) contribute.
-        assert_eq!(j.len(), 2, "expected DEL + CNV-loss junctions only, got {j:?}");
+        assert_eq!(
+            j.len(),
+            2,
+            "expected DEL + CNV-loss junctions only, got {j:?}"
+        );
         assert_eq!(j[0].0, 100);
         assert!((j[0].1 - 1.0).abs() < 1e-9, "homozygous DEL → 1.0");
         assert_eq!(j[1].0, 500);
         // CNV cn=1, ploidy 2 → (2−1)/2 = 0.5.
-        assert!((j[1].1 - 0.5).abs() < 1e-9, "CNV-loss cn=1 → (ploidy−cn)/ploidy = 0.5");
+        assert!(
+            (j[1].1 - 0.5).abs() < 1e-9,
+            "CNV-loss cn=1 → (ploidy−cn)/ploidy = 0.5"
+        );
     }
 
     #[test]
@@ -2967,8 +3147,7 @@ mod tests {
             (600, 700), // flank-right → keep
         ];
         let mut rng = NeatRng::new_from_seed(&vec!["bp".to_string()]).unwrap();
-        let kept =
-            suppress_junction_double_count(frags, &[bnd], 2, 100, false, &mut rng).unwrap();
+        let kept = suppress_junction_double_count(frags, &[bnd], 2, 100, false, &mut rng).unwrap();
         assert_eq!(kept, vec![(300, 400), (600, 700)]);
     }
 
@@ -3007,8 +3186,7 @@ mod tests {
         let het = sv_variant_with_span(500, 0, SvType::Bnd, Genotype::Heterozygous, None);
         let frags: Vec<(usize, usize)> = vec![(450usize, 550usize); 1000];
         let mut rng = NeatRng::new_from_seed(&vec!["bp het".to_string()]).unwrap();
-        let kept =
-            suppress_junction_double_count(frags, &[het], 2, 100, false, &mut rng).unwrap();
+        let kept = suppress_junction_double_count(frags, &[het], 2, 100, false, &mut rng).unwrap();
         assert!(
             (300..700).contains(&kept.len()),
             "expected ~50% of 1000 het-crossing pairs kept, got {}",
@@ -3021,45 +3199,30 @@ mod tests {
         // POS=101 (1-based) → location_0based=100. END=200 (1-based incl) so
         // span = 100. DEL anchor (POS, 0-based 100) is NOT deleted: range
         // starts at 101. End is 200 (= POS + span - 1 + 1 = 0-based half-open).
-        assert_eq!(
-            sv_modulation_range(100, SvType::Del, 100, 1000),
-            (101, 200)
-        );
+        assert_eq!(sv_modulation_range(100, SvType::Del, 100, 1000), (101, 200));
         // Single-base DEL where span_bases==1 collapses to empty (just the
         // anchor) — caller must skip via mod_start >= mod_end.
         let (s, e) = sv_modulation_range(100, SvType::Del, 1, 1000);
-        assert!(s >= e, "expected empty range for span==1 DEL, got [{s}, {e})");
+        assert!(
+            s >= e,
+            "expected empty range for span==1 DEL, got [{s}, {e})"
+        );
     }
 
     #[test]
     fn test_sv_modulation_range_dup_cnv_inv_include_anchor() {
         // For DUP / CNV / INV, POS is conventionally inside the affected
         // region — range starts at the anchor.
-        assert_eq!(
-            sv_modulation_range(100, SvType::Dup, 100, 1000),
-            (100, 200)
-        );
-        assert_eq!(
-            sv_modulation_range(100, SvType::Cnv, 100, 1000),
-            (100, 200)
-        );
-        assert_eq!(
-            sv_modulation_range(100, SvType::Inv, 100, 1000),
-            (100, 200)
-        );
+        assert_eq!(sv_modulation_range(100, SvType::Dup, 100, 1000), (100, 200));
+        assert_eq!(sv_modulation_range(100, SvType::Cnv, 100, 1000), (100, 200));
+        assert_eq!(sv_modulation_range(100, SvType::Inv, 100, 1000), (100, 200));
     }
 
     #[test]
     fn test_sv_modulation_range_clipped_to_block_end() {
         // SV running past block_end gets clipped on both ends.
-        assert_eq!(
-            sv_modulation_range(95, SvType::Del, 100, 110),
-            (96, 110)
-        );
-        assert_eq!(
-            sv_modulation_range(95, SvType::Dup, 100, 110),
-            (95, 110)
-        );
+        assert_eq!(sv_modulation_range(95, SvType::Del, 100, 110), (96, 110));
+        assert_eq!(sv_modulation_range(95, SvType::Dup, 100, 110), (95, 110));
         // Start clipped above block_end → empty range.
         let (s, e) = sv_modulation_range(150, SvType::Del, 50, 100);
         assert!(s >= e);
@@ -3150,10 +3313,7 @@ mod tests {
             None,
         )];
         let segs = build_coverage_multipliers(&svs, 2, 500);
-        assert_eq!(
-            segs,
-            vec![(0, 101, 1.0), (101, 200, 0.0), (200, 500, 1.0)]
-        );
+        assert_eq!(segs, vec![(0, 101, 1.0), (101, 200, 0.0), (200, 500, 1.0)]);
     }
 
     #[test]
@@ -3168,10 +3328,7 @@ mod tests {
         )];
         // span = 149 - 51 + 1 = 99; range = [50, 50 + 99) = [50, 149).
         let segs = build_coverage_multipliers(&svs, 2, 300);
-        assert_eq!(
-            segs,
-            vec![(0, 50, 1.0), (50, 149, 1.5), (149, 300, 1.0)]
-        );
+        assert_eq!(segs, vec![(0, 50, 1.0), (50, 149, 1.5), (149, 300, 1.0)]);
     }
 
     #[test]

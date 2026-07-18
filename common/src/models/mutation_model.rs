@@ -438,7 +438,10 @@ mod tests {
         let seq = vec![A, C, G, T, A, C, G, T, A, C, G, T, A, C, G, T, A, C, G, T];
         let variant = model.generate_mutation(&seq, 5, 2, None, &mut rng).unwrap();
         // alternate must differ from reference
-        assert_ne!(variant.reference.as_slice(), variant.alternate.as_literal().unwrap());
+        assert_ne!(
+            variant.reference.as_slice(),
+            variant.alternate.as_literal().unwrap()
+        );
         assert_eq!(variant.location, 5);
     }
 
@@ -449,8 +452,12 @@ mod tests {
         let seed = vec!["det".to_string(), "seed".to_string()];
         let mut rng1 = NeatRng::new_from_seed(&seed).unwrap();
         let mut rng2 = NeatRng::new_from_seed(&seed).unwrap();
-        let v1 = model.generate_mutation(&seq, 5, 2, None, &mut rng1).unwrap();
-        let v2 = model.generate_mutation(&seq, 5, 2, None, &mut rng2).unwrap();
+        let v1 = model
+            .generate_mutation(&seq, 5, 2, None, &mut rng1)
+            .unwrap();
+        let v2 = model
+            .generate_mutation(&seq, 5, 2, None, &mut rng2)
+            .unwrap();
         assert_eq!(v1, v2);
     }
 
@@ -523,10 +530,7 @@ mod tests {
         let original = MutationModel::default().unwrap();
         let mut as_value = serde_json::to_value(&original).unwrap();
         // Strip the new field to simulate a v1.9-era file.
-        as_value
-            .as_object_mut()
-            .unwrap()
-            .remove("sv_model");
+        as_value.as_object_mut().unwrap().remove("sv_model");
         assert!(
             !as_value.as_object().unwrap().contains_key("sv_model"),
             "test setup: sv_model should be absent after strip"
@@ -562,6 +566,9 @@ mod tests {
         let back_sv = back.sv_model.expect("sv_model dropped on round-trip");
         assert!((back_sv.per_base_rate - 1.5e-7).abs() < 1e-12);
         assert_eq!(back_sv.type_probabilities.get(&SvType::Del), Some(&0.7));
-        assert_eq!(back_sv.length_log_normal.get(&SvType::Del), Some(&(7.0, 1.5)));
+        assert_eq!(
+            back_sv.length_log_normal.get(&SvType::Del),
+            Some(&(7.0, 1.5))
+        );
     }
 }

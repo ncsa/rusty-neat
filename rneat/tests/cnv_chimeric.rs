@@ -43,7 +43,11 @@ fn run_cnv(test_name: &str, cn: u32) -> Vec<String> {
             "##INFO=<ID=CN,Number=1,Type=Integer,Description=\"Copy number\">"
         )
         .unwrap();
-        writeln!(f, "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS").unwrap();
+        writeln!(
+            f,
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS"
+        )
+        .unwrap();
         // 400 bp CNV at H1N1_HA:400-799 with the supplied CN.
         writeln!(
             f,
@@ -68,7 +72,9 @@ fn run_cnv(test_name: &str, cn: u32) -> Vec<String> {
 
     use flate2::read::MultiGzDecoder;
     use std::io::{BufRead, BufReader};
-    let r = BufReader::new(MultiGzDecoder::new(std::fs::File::open(&out_fastq).unwrap()));
+    let r = BufReader::new(MultiGzDecoder::new(
+        std::fs::File::open(&out_fastq).unwrap(),
+    ));
     r.lines()
         .enumerate()
         .filter(|(i, _)| i % 4 == 0)

@@ -26,7 +26,11 @@ fn tissue_model_path(tissue: &str) -> PathBuf {
 fn bundled_per_tissue_models_carry_valid_sv_components() {
     for tissue in ["BRCA", "skin", "lung"] {
         let path = tissue_model_path(tissue);
-        assert!(path.exists(), "bundled {tissue} model missing at {}", path.display());
+        assert!(
+            path.exists(),
+            "bundled {tissue} model missing at {}",
+            path.display()
+        );
 
         let model = MutationModel::from_file(&path)
             .unwrap_or_else(|e| panic!("deserialize {tissue} model: {e:?}"));
@@ -78,7 +82,10 @@ fn bundled_per_tissue_models_carry_valid_sv_components() {
 
         // BND stays a major class (the cosmic_bundle.rs ≥0.20 canary).
         let bnd = sv.type_probabilities[&SvType::Bnd];
-        assert!(bnd >= 0.20, "{tissue}: BND proportion {bnd} too low for cancer");
+        assert!(
+            bnd >= 0.20,
+            "{tissue}: BND proportion {bnd} too low for cancer"
+        );
     }
 }
 
@@ -93,10 +100,7 @@ fn bundled_per_tissue_models_have_distinct_snp_indel_spectra() {
         .map(|tissue| {
             let model = MutationModel::from_file(&tissue_model_path(tissue))
                 .unwrap_or_else(|e| panic!("deserialize {tissue} model: {e:?}"));
-            let weights = model
-                .variant_dist
-                .weights()
-                .expect("variant_dist weights");
+            let weights = model.variant_dist.weights().expect("variant_dist weights");
             (tissue.to_string(), model.mutation_rate, weights)
         })
         .collect();
@@ -106,8 +110,8 @@ fn bundled_per_tissue_models_have_distinct_snp_indel_spectra() {
             let (ti, ri, wi) = &fingerprints[i];
             let (tj, rj, wj) = &fingerprints[j];
             let same_rate = (ri - rj).abs() < 1e-12;
-            let same_weights = wi.len() == wj.len()
-                && wi.iter().zip(wj).all(|(a, b)| (a - b).abs() < 1e-12);
+            let same_weights =
+                wi.len() == wj.len() && wi.iter().zip(wj).all(|(a, b)| (a - b).abs() < 1e-12);
             assert!(
                 !(same_rate && same_weights),
                 "{ti} and {tj} have identical SNP/indel spectra — \

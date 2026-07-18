@@ -15,8 +15,8 @@ mod common;
 
 use common::{GenReadsConfig, fresh_workdir, h1n1_reference, rneat};
 use flate2::read::MultiGzDecoder;
-use std::io::{BufRead, BufReader};
 use std::io::Write as _;
+use std::io::{BufRead, BufReader};
 
 const READ_LEN: usize = 151;
 
@@ -28,10 +28,22 @@ fn run_hom_sv(test_name: &str, svtype: &str, sv_start: usize, sv_end: usize) -> 
     {
         let mut f = std::fs::File::create(&input_vcf).unwrap();
         writeln!(f, "##fileformat=VCFv4.2").unwrap();
-        writeln!(f, "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"GT\">").unwrap();
-        writeln!(f, "##INFO=<ID=SVTYPE,Number=1,Type=String,Description=\"t\">").unwrap();
+        writeln!(
+            f,
+            "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"GT\">"
+        )
+        .unwrap();
+        writeln!(
+            f,
+            "##INFO=<ID=SVTYPE,Number=1,Type=String,Description=\"t\">"
+        )
+        .unwrap();
         writeln!(f, "##INFO=<ID=END,Number=1,Type=Integer,Description=\"e\">").unwrap();
-        writeln!(f, "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS").unwrap();
+        writeln!(
+            f,
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS"
+        )
+        .unwrap();
         writeln!(
             f,
             "H1N1_HA\t{sv_start}\t.\tA\t<{svtype}>\t60\tPASS\tSVTYPE={svtype};END={sv_end}\tGT\t1/1"
@@ -45,7 +57,11 @@ fn run_hom_sv(test_name: &str, svtype: &str, sv_start: usize, sv_end: usize) -> 
     config.produce_fastq = true;
     config.input_vcf = Some(input_vcf);
     let yaml = config.write_yaml();
-    rneat().args(["gen-reads", "-c"]).arg(yaml.path()).assert().success();
+    rneat()
+        .args(["gen-reads", "-c"])
+        .arg(yaml.path())
+        .assert()
+        .success();
 
     let out = work.join(format!("{test_name}_r1.fastq.gz"));
     assert!(out.exists(), "FASTQ not produced at {:?}", out);

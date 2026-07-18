@@ -42,8 +42,9 @@ fn write_yaml(dir: &Path, tag: &str, body: &str) -> std::path::PathBuf {
 /// Write a gzipped single-end FASTQ where every base has the same Phred quality.
 fn write_uniform_quality_fastq_gz(path: &Path, n_reads: usize, read_len: usize, phred: u8) {
     let seq: String = "ACGT".chars().cycle().take(read_len).collect();
-    let qual: String =
-        std::iter::repeat(char::from(phred + 33)).take(read_len).collect();
+    let qual: String = std::iter::repeat(char::from(phred + 33))
+        .take(read_len)
+        .collect();
     let f = fs::File::create(path).unwrap();
     let mut enc = GzEncoder::new(f, Compression::default());
     for i in 0..n_reads {
@@ -125,7 +126,9 @@ fn built_seq_error_model_drives_output_quality() {
 
     // 4. output qualities should track the trained Phred 35.
     let out_q = mean_fastq_quality(&tmp.path().join("rt_r1.fastq.gz"));
-    eprintln!("[fidelity] trained quality = {trained_q}; simulated output mean quality = {out_q:.1}");
+    eprintln!(
+        "[fidelity] trained quality = {trained_q}; simulated output mean quality = {out_q:.1}"
+    );
     assert!(
         (out_q - trained_q as f64).abs() <= 3.0,
         "output mean quality {out_q:.1} does not track the trained Phred {trained_q} — \
@@ -170,7 +173,11 @@ fn read_contig(fa: &Path, want: &str) -> Vec<u8> {
             seq.extend_from_slice(line.trim().as_bytes());
         }
     }
-    assert!(!seq.is_empty(), "contig {want} not found in {}", fa.display());
+    assert!(
+        !seq.is_empty(),
+        "contig {want} not found in {}",
+        fa.display()
+    );
     seq
 }
 
@@ -187,13 +194,22 @@ fn write_dense_snp_vcf(path: &Path, contig: &str, seq: &[u8], step: usize) -> us
     };
     let mut f = fs::File::create(path).unwrap();
     writeln!(f, "##fileformat=VCFv4.2").unwrap();
-    writeln!(f, "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE").unwrap();
+    writeln!(
+        f,
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE"
+    )
+    .unwrap();
     let mut count = 0;
     let mut pos = 100usize; // 1-based; stay clear of contig edges
     while pos < seq.len() - 100 {
         let refb = seq[pos - 1].to_ascii_uppercase();
         if let Some(a) = alt(refb) {
-            writeln!(f, "{contig}\t{pos}\t.\t{}\t{a}\t60\tPASS\t.\tGT\t0/1", refb as char).unwrap();
+            writeln!(
+                f,
+                "{contig}\t{pos}\t.\t{}\t{a}\t60\tPASS\t.\tGT\t0/1",
+                refb as char
+            )
+            .unwrap();
             count += 1;
         }
         pos += step;
@@ -266,7 +282,9 @@ fn built_mutation_model_rate_drives_output_variant_count() {
 
     let rate_lo = fitted_mutation_rate(&lo_model);
     let rate_hi = fitted_mutation_rate(&hi_model);
-    eprintln!("[fidelity] dense VCF wrote {hi_written} SNPs; fitted rate lo={rate_lo:.2e} hi={rate_hi:.2e}");
+    eprintln!(
+        "[fidelity] dense VCF wrote {hi_written} SNPs; fitted rate lo={rate_lo:.2e} hi={rate_hi:.2e}"
+    );
     assert!(
         rate_hi > rate_lo * 10.0,
         "test setup: hi rate {rate_hi:.2e} should dwarf lo rate {rate_lo:.2e}"
@@ -274,7 +292,10 @@ fn built_mutation_model_rate_drives_output_variant_count() {
 
     let n_lo = simulate_variant_count(dir, "lo", &lo_model);
     let n_hi = simulate_variant_count(dir, "hi", &hi_model);
-    eprintln!("[fidelity] output variants: lo={n_lo} hi={n_hi} (rate ratio ~{:.0}x)", rate_hi / rate_lo.max(1e-9));
+    eprintln!(
+        "[fidelity] output variants: lo={n_lo} hi={n_hi} (rate ratio ~{:.0}x)",
+        rate_hi / rate_lo.max(1e-9)
+    );
 
     assert!(
         n_hi > n_lo * 5,
@@ -319,7 +340,12 @@ fn write_gc_reference(dir: &Path, reps: usize) -> (std::path::PathBuf, usize) {
 }
 
 /// Write an unpaired-read BAM over the given contigs. `reads` are (contig_id, start).
-fn write_coverage_bam(path: &Path, contigs: &[(&str, usize)], reads: &[(usize, usize)], read_len: usize) {
+fn write_coverage_bam(
+    path: &Path,
+    contigs: &[(&str, usize)],
+    reads: &[(usize, usize)],
+    read_len: usize,
+) {
     let mut hb = sam::Header::builder();
     for (name, len) in contigs {
         hb = hb.add_reference_sequence(
@@ -369,7 +395,10 @@ fn classify_reads_by_gc(fastq_gz: &Path) -> (usize, usize) {
     let (mut low, mut high) = (0usize, 0usize);
     for (i, line) in raw.lines().enumerate() {
         if i % 4 == 1 && !line.is_empty() {
-            let gc = line.bytes().filter(|b| matches!(b, b'G' | b'C' | b'g' | b'c')).count();
+            let gc = line
+                .bytes()
+                .filter(|b| matches!(b, b'G' | b'C' | b'g' | b'c'))
+                .count();
             let frac = gc as f64 / line.len() as f64;
             if frac < 0.40 {
                 low += 1;
@@ -404,7 +433,12 @@ fn built_gc_bias_model_depletes_disfavored_gc_in_output() {
         reads.push((1, s)); // highgc: 3 reads → ~0 coverage
     }
     let cov_bam = dir.join("cov.bam");
-    write_coverage_bam(&cov_bam, &[("lowgc", clen), ("highgc", clen)], &reads, read_len);
+    write_coverage_bam(
+        &cov_bam,
+        &[("lowgc", clen), ("highgc", clen)],
+        &reads,
+        read_len,
+    );
 
     // build the GC-bias model.
     let model = dir.join("gc.json.gz");
@@ -428,9 +462,20 @@ fn built_gc_bias_model_depletes_disfavored_gc_in_output() {
 
     // builder side: bin 20 up-weighted, bin 80 driven to ~0.
     let w = gc_weights(&model);
-    eprintln!("[fidelity] gc weights: w[20]={:.3} w[80]={:.3}", w[20], w[80]);
-    assert!(w[20] > 1.2, "low-GC bin should be up-weighted, got w[20]={:.3}", w[20]);
-    assert!(w[80] < 0.2, "high-GC bin should be ~0, got w[80]={:.3}", w[80]);
+    eprintln!(
+        "[fidelity] gc weights: w[20]={:.3} w[80]={:.3}",
+        w[20], w[80]
+    );
+    assert!(
+        w[20] > 1.2,
+        "low-GC bin should be up-weighted, got w[20]={:.3}",
+        w[20]
+    );
+    assert!(
+        w[80] < 0.2,
+        "high-GC bin should be ~0, got w[80]={:.3}",
+        w[80]
+    );
 
     // simulate with the model and classify output reads by GC.
     let sim_cfg = write_yaml(

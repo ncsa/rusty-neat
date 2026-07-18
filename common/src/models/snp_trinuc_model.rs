@@ -413,10 +413,22 @@ mod tests {
         freq.insert(cold, 1.0);
         let model = SnpTrinucModel::from_raw_data(freq, HashMap::new()).unwrap();
         let w = model.context_weights().unwrap();
-        assert!(w[&hot] > w[&cold], "w(hot)={} !> w(cold)={}", w[&hot], w[&cold]);
-        assert!(w[&hot] / w[&cold] > 5.0, "ratio {} should be ~10", w[&hot] / w[&cold]);
+        assert!(
+            w[&hot] > w[&cold],
+            "w(hot)={} !> w(cold)={}",
+            w[&hot],
+            w[&cold]
+        );
+        assert!(
+            w[&hot] / w[&cold] > 5.0,
+            "ratio {} should be ~10",
+            w[&hot] / w[&cold]
+        );
         let total: f64 = w.values().sum();
-        assert!((total - 1.0).abs() < 1e-6, "weights should be normalized, sum={total}");
+        assert!(
+            (total - 1.0).abs() < 1e-6,
+            "weights should be normalized, sum={total}"
+        );
     }
 
     #[test]

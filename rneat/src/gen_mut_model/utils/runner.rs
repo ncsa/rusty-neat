@@ -303,8 +303,7 @@ pub fn runner(
             // gen-reads builds keep loading the file unchanged.
             if !sv_observations.is_empty() {
                 let sv_denom = if use_bed { bed_track_len } else { total_reflen };
-                mut_model.sv_model =
-                    SvModel::fit_from_observations(&sv_observations, sv_denom);
+                mut_model.sv_model = SvModel::fit_from_observations(&sv_observations, sv_denom);
             }
             mut_model.write_to_file(output_file)?;
             info!("Mutation model success! Wrote model to {:?}", output_file);

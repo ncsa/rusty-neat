@@ -96,7 +96,9 @@ impl SequenceBlock {
         request_start: usize,
         request_end: usize,
     ) -> Result<Vec<Nucleotide>, SequenceBlockError> {
-        Ok(self.get_subseq_slice(request_start, request_end)?.to_owned())
+        Ok(self
+            .get_subseq_slice(request_start, request_end)?
+            .to_owned())
     }
 }
 

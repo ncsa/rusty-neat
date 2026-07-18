@@ -104,7 +104,11 @@ impl CancerConfig {
                 "output_prefix" | "output_filename" => {
                     cfg.output_prefix = value
                         .as_str()
-                        .ok_or_else(|| GenCancerReadsError::ConfigError("output_prefix must be a string".into()))?
+                        .ok_or_else(|| {
+                            GenCancerReadsError::ConfigError(
+                                "output_prefix must be a string".into(),
+                            )
+                        })?
                         .to_string();
                 }
                 "total_coverage" | "coverage" => {
@@ -121,7 +125,9 @@ impl CancerConfig {
                         .as_str()
                         .map(str::to_string)
                         .or_else(|| value.as_i64().map(|n| n.to_string()))
-                        .ok_or_else(|| GenCancerReadsError::ConfigError("rng_seed must be a string/int".into()))?;
+                        .ok_or_else(|| {
+                            GenCancerReadsError::ConfigError("rng_seed must be a string/int".into())
+                        })?;
                 }
                 "normal_model" => cfg.normal_model = Some(req_path(value, "normal_model")?),
                 "tumor_model" => cfg.tumor_model = Some(req_path(value, "tumor_model")?),
@@ -177,7 +183,10 @@ impl CancerConfig {
         }
         let (n, t) = self.per_pass_coverage();
         if n < 1 || t < 1 {
-            return Err(GenCancerReadsError::PerPassCoverageZero { normal: n, tumor: t });
+            return Err(GenCancerReadsError::PerPassCoverageZero {
+                normal: n,
+                tumor: t,
+            });
         }
         Ok(())
     }
@@ -228,7 +237,10 @@ impl CancerConfig {
 
     /// Tumor pass: `purity*total` coverage, somatic SNP/indel + SV on top of the
     /// shared germline (`input_vcf`). Output stem `<prefix>_tumor`.
-    pub fn tumor_pass(&self, germline_vcf: PathBuf) -> Result<RunConfiguration, GenCancerReadsError> {
+    pub fn tumor_pass(
+        &self,
+        germline_vcf: PathBuf,
+    ) -> Result<RunConfiguration, GenCancerReadsError> {
         let (_, tumor_cov) = self.per_pass_coverage();
         let mut c = RunConfiguration {
             coverage: tumor_cov,
@@ -252,9 +264,9 @@ fn finalize(c: &mut RunConfiguration) -> Result<(), GenCancerReadsError> {
 }
 
 fn as_usize(v: &Value, key: &str) -> Result<usize, GenCancerReadsError> {
-    v.as_u64()
-        .map(|n| n as usize)
-        .ok_or_else(|| GenCancerReadsError::ConfigError(format!("{key} must be a non-negative integer")))
+    v.as_u64().map(|n| n as usize).ok_or_else(|| {
+        GenCancerReadsError::ConfigError(format!("{key} must be a non-negative integer"))
+    })
 }
 
 fn as_f64(v: &Value, key: &str) -> Result<f64, GenCancerReadsError> {
@@ -273,12 +285,18 @@ mod tests {
     use super::*;
 
     fn h1n1() -> PathBuf {
-        PathBuf::from(format!("{}/test_data/references/H1N1.fa", env!("CARGO_MANIFEST_DIR")))
+        PathBuf::from(format!(
+            "{}/test_data/references/H1N1.fa",
+            env!("CARGO_MANIFEST_DIR")
+        ))
     }
 
     fn base_scrape() -> HashMap<String, Value> {
         let mut s = HashMap::new();
-        s.insert("reference".into(), Value::String(h1n1().to_string_lossy().into()));
+        s.insert(
+            "reference".into(),
+            Value::String(h1n1().to_string_lossy().into()),
+        );
         s.insert("output_dir".into(), Value::String("/tmp".into()));
         s
     }
@@ -341,7 +359,10 @@ mod tests {
             Value::String(nested.to_string_lossy().into()),
         );
         let cfg = CancerConfig::from_scrape(s).unwrap();
-        assert!(nested.is_dir(), "output_dir should be created (create_dir_all)");
+        assert!(
+            nested.is_dir(),
+            "output_dir should be created (create_dir_all)"
+        );
         assert_eq!(cfg.output_dir, nested);
     }
 
@@ -356,13 +377,15 @@ mod tests {
             "fragment_model".into(),
             Value::String("/tmp/frag.json.gz".into()),
         );
-        let cfg = CancerConfig::from_scrape(s)
-            .expect("fragment_model alone should satisfy paired_ended");
+        let cfg =
+            CancerConfig::from_scrape(s).expect("fragment_model alone should satisfy paired_ended");
         let want = Some(PathBuf::from("/tmp/frag.json.gz"));
         assert_eq!(cfg.fragment_model, want);
         assert_eq!(cfg.normal_pass().unwrap().fragment_model, want);
         assert_eq!(
-            cfg.tumor_pass(PathBuf::from("/tmp/g.vcf.gz")).unwrap().fragment_model,
+            cfg.tumor_pass(PathBuf::from("/tmp/g.vcf.gz"))
+                .unwrap()
+                .fragment_model,
             want
         );
     }

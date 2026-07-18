@@ -164,11 +164,11 @@ fn eq_ignore_case(a: &[u8], b: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use common::structs::variants::{AlternateType, Provenance};
     use common::structs::{
         nucleotides::Nucleotide,
         variants::{Genotype, VariantType},
     };
-    use common::structs::variants::{AlternateType, Provenance};
 
     fn variant(
         loc: usize,

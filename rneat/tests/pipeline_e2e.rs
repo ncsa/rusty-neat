@@ -200,13 +200,13 @@ fn gen_reads_with_symbolic_del_modulates_depth_and_round_trips_to_vcf() {
             "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">"
         )
         .unwrap();
-        writeln!(f, "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS").unwrap();
-        // Homozygous <DEL> at H1N1_HA, 1-based POS=500, END=1500.
         writeln!(
             f,
-            "H1N1_HA\t500\t.\tA\t<DEL>\t60\tPASS\tEND=1500\tGT\t1/1"
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS"
         )
         .unwrap();
+        // Homozygous <DEL> at H1N1_HA, 1-based POS=500, END=1500.
+        writeln!(f, "H1N1_HA\t500\t.\tA\t<DEL>\t60\tPASS\tEND=1500\tGT\t1/1").unwrap();
     }
 
     let mut config = GenReadsConfig::new(h1n1_reference(), work.clone(), "sv_run");
@@ -227,11 +227,16 @@ fn gen_reads_with_symbolic_del_modulates_depth_and_round_trips_to_vcf() {
     // (a) Output VCF round-trip — the <DEL> should appear verbatim, with the
     // original INFO field preserved (END=1500).
     let out_vcf_gz = work.join("sv_run.vcf.gz");
-    assert!(out_vcf_gz.exists(), "output VCF not produced: {out_vcf_gz:?}");
+    assert!(
+        out_vcf_gz.exists(),
+        "output VCF not produced: {out_vcf_gz:?}"
+    );
     let vcf_lines: Vec<String> = {
         use flate2::read::MultiGzDecoder;
         use std::io::{BufRead, BufReader};
-        let r = BufReader::new(MultiGzDecoder::new(std::fs::File::open(&out_vcf_gz).unwrap()));
+        let r = BufReader::new(MultiGzDecoder::new(
+            std::fs::File::open(&out_vcf_gz).unwrap(),
+        ));
         r.lines().map(|l| l.unwrap()).collect()
     };
     let del_line = vcf_lines
@@ -362,11 +367,16 @@ fn gen_reads_treats_n_tract_as_gap_no_variants_inside() {
         .success();
 
     let out_vcf_gz = work.join("n_tract_run.vcf.gz");
-    assert!(out_vcf_gz.exists(), "output VCF not produced: {out_vcf_gz:?}");
+    assert!(
+        out_vcf_gz.exists(),
+        "output VCF not produced: {out_vcf_gz:?}"
+    );
     let vcf_lines: Vec<String> = {
         use flate2::read::MultiGzDecoder;
         use std::io::{BufRead, BufReader};
-        let r = BufReader::new(MultiGzDecoder::new(std::fs::File::open(&out_vcf_gz).unwrap()));
+        let r = BufReader::new(MultiGzDecoder::new(
+            std::fs::File::open(&out_vcf_gz).unwrap(),
+        ));
         r.lines().map(|l| l.unwrap()).collect()
     };
 
@@ -422,7 +432,11 @@ fn gen_reads_with_trained_sv_model_emits_de_novo_symbolic_svs() {
             "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">"
         )
         .unwrap();
-        writeln!(f, "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS").unwrap();
+        writeln!(
+            f,
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS"
+        )
+        .unwrap();
         // Literal SNP — keeps the SNP/indel denominator non-zero.
         writeln!(f, "H1N1_HA\t22\t.\tC\tT\t60\tPASS\t.\tGT\t0/1").unwrap();
         // Small DELs: 60, 80, 90, 120bp. Mean ~88bp → log-normal μ ≈ ln(88) ≈ 4.5.
@@ -531,7 +545,11 @@ fn gen_reads_with_sv_rate_scale_zero_emits_no_de_novo_svs() {
             "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">"
         )
         .unwrap();
-        writeln!(f, "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS").unwrap();
+        writeln!(
+            f,
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS"
+        )
+        .unwrap();
         writeln!(f, "H1N1_HA\t22\t.\tC\tT\t60\tPASS\t.\tGT\t0/1").unwrap();
         writeln!(f, "H1N1_HA\t100\t.\tA\t<DEL>\t60\tPASS\tEND=160\tGT\t0/1").unwrap();
         writeln!(f, "H1N1_HA\t300\t.\tA\t<DEL>\t60\tPASS\tEND=380\tGT\t1/1").unwrap();
@@ -648,9 +666,17 @@ fn write_whole_contig_sv_vcf(
         "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">"
     )
     .unwrap();
-    writeln!(f, "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS").unwrap();
+    writeln!(
+        f,
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS"
+    )
+    .unwrap();
     let info = format!("END={end_1based}{info_extras}");
-    writeln!(f, "H1N1_HA\t{pos_1based}\t.\tA\t{alt}\t60\tPASS\t{info}\tGT\t{gt}").unwrap();
+    writeln!(
+        f,
+        "H1N1_HA\t{pos_1based}\t.\tA\t{alt}\t60\tPASS\t{info}\tGT\t{gt}"
+    )
+    .unwrap();
     path
 }
 
@@ -659,7 +685,11 @@ fn write_whole_contig_sv_vcf(
 /// emitted on H1N1_HA. The mutation rate is zeroed so de-novo SNPs don't
 /// confound the read-count comparison — we're measuring the SV multiplier's
 /// effect on coverage, not the variant generator's.
-fn run_h1n1_reads(work: &std::path::Path, prefix: &str, input_vcf: Option<std::path::PathBuf>) -> usize {
+fn run_h1n1_reads(
+    work: &std::path::Path,
+    prefix: &str,
+    input_vcf: Option<std::path::PathBuf>,
+) -> usize {
     let mut config = GenReadsConfig::new(h1n1_reference(), work.to_path_buf(), prefix);
     config.coverage = 50;
     config.mutation_rate = Some(0.0);
@@ -696,7 +726,10 @@ fn whole_contig_hom_dup_doubles_reads() {
     // returns (ploidy_f + ploidy_f) / ploidy_f = 2.0 at any ploidy.
     let (_dir, work) = fresh_workdir();
     let baseline = run_h1n1_reads(&work, "dup_baseline", None);
-    assert!(baseline > 1000, "baseline H1N1 read count suspiciously low ({baseline})");
+    assert!(
+        baseline > 1000,
+        "baseline H1N1 read count suspiciously low ({baseline})"
+    );
     let input_vcf = write_whole_contig_sv_vcf(&work, 1, 13325, "<DUP>", "", "1/1");
     let modulated = run_h1n1_reads(&work, "dup_hom", Some(input_vcf));
     let ratio = modulated as f64 / baseline as f64;

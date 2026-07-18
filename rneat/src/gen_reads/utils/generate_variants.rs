@@ -151,7 +151,9 @@ pub fn generate_variants(
                 }
                 for _ in 0..k {
                     let target = rng.random()? * a;
-                    let idx = cum.partition_point(|&c| c <= target).min(positions.len() - 1);
+                    let idx = cum
+                        .partition_point(|&c| c <= target)
+                        .min(positions.len() - 1);
                     let location = positions[idx];
                     debug!("location (context-weighted SNP): {}", location);
                     block_variants.push(mutation_model.generate_mutation(

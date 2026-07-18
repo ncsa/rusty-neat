@@ -49,7 +49,11 @@ fn gen_reads_with_symbolic_del_emits_chimeric_junction_reads() {
             "##INFO=<ID=END,Number=1,Type=Integer,Description=\"End\">"
         )
         .unwrap();
-        writeln!(f, "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS").unwrap();
+        writeln!(
+            f,
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS"
+        )
+        .unwrap();
         // Homozygous symbolic DEL at H1N1_HA:500-799 (300 bp deletion).
         // Hom so every fragment carries the junction → maximizes the
         // chimeric-read signal.
@@ -73,16 +77,14 @@ fn gen_reads_with_symbolic_del_emits_chimeric_junction_reads() {
         .success();
 
     let out_fastq = work.join("del_chimeric_r1.fastq.gz");
-    assert!(
-        out_fastq.exists(),
-        "FASTQ not produced at {:?}",
-        out_fastq
-    );
+    assert!(out_fastq.exists(), "FASTQ not produced at {:?}", out_fastq);
 
     let fastq_qnames: Vec<String> = {
         use flate2::read::MultiGzDecoder;
         use std::io::{BufRead, BufReader};
-        let r = BufReader::new(MultiGzDecoder::new(std::fs::File::open(&out_fastq).unwrap()));
+        let r = BufReader::new(MultiGzDecoder::new(
+            std::fs::File::open(&out_fastq).unwrap(),
+        ));
         r.lines()
             .enumerate()
             .filter(|(i, _)| i % 4 == 0)

@@ -41,7 +41,7 @@ mkdir -p "$(dirname "$MANIFEST")"
 echo "# axis point jobid outdir total_cov purity tmr model" > "$MANIFEST"
 
 # REPS>1 submits each point REPS times with a DISTINCT per-rep seed into <out>_rep<r>,
-# for mean±sd error bars (see docs/replication_audit.md). REPS=1 = original behavior.
+# for mean±sd error bars (see docs/archive/replication_audit.md). REPS=1 = original behavior.
 REPS="${REPS:-1}"
 
 # submit_point <extra manifest cols> — caller sets PIPELINE, POINT, OUTBASE and the

@@ -1,8 +1,12 @@
 # Native cancer simulator: `rneat gen-cancer-reads` implementation plan
 
-Status: **implemented** (2026-06-06, #239) — `rneat gen-cancer-reads` ships the
-design below. `tools/cancer_simulate.sh` is kept until the native path has a
-same-seed parity test against it. Drafted 2026-06-04.
+> **✅ IMPLEMENTED & SHIPPED (v1.15.0, #239) — ARCHIVED.** `rneat gen-cancer-reads` is a
+> first-class subcommand, and the same-seed parity test (`rneat/tests/cancer_parity.rs`) landed
+> in v1.15.1 — so the retention condition for the `cancer_simulate.sh` wrapper below is met.
+> Retained as a design/decision record.
+
+Status: **implemented** (v1.15.0, #239; parity test v1.15.1). `rneat gen-cancer-reads` ships the
+design below. Drafted 2026-06-04.
 
 This is the v2 step the cancer-simulator design doc deferred
 (`docs/cancer_simulator.md:15-25`): porting the `tools/cancer_simulate.sh`

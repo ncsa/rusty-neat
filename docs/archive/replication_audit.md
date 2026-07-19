@@ -1,5 +1,11 @@
 # Replication coverage audit
 
+> **✅ COMPLETED — ARCHIVED.** The replication plan below was executed: SV per-type recall was
+> replicated (DEL 0.84 ± .11 / DUP 0.85 ± .11 / INV 0.92 ± .09, n = 18), correcting the single-run
+> INV 1.000 fluke this doc flagged as top priority; the replication standard deviations now feed the
+> regression gate (`scripts/delta/baseline_metrics.tsv`). Retained as the record of what was
+> replicated and why.
+
 **Question:** before moving on from validation, which results rest on enough runs
 to trust, and which are single-draw point estimates that warrant replication —
 even where the single number looks good?

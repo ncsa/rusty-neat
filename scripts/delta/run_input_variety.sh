@@ -23,7 +23,7 @@ source "$REPO_ROOT/scripts/delta/lib_report.sh"
 GENOMES="${GENOMES:?set GENOMES to a space-separated list of reference FASTAs}"
 COVERAGE="${COVERAGE:-30}"
 # REPS>1 submits each genome REPS times with a DISTINCT seed into variety_<g>_rep<r>,
-# for mean±sd error bars (see docs/replication_audit.md). REPS=1 = original behavior.
+# for mean±sd error bars (see docs/archive/replication_audit.md). REPS=1 = original behavior.
 REPS="${REPS:-1}"
 MANIFEST="${MANIFEST:-${RESULTS_DIR:-$HOME}/variety.manifest}"
 mkdir -p "$(dirname "$MANIFEST")"

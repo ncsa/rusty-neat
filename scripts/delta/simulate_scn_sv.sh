@@ -93,7 +93,7 @@ GOLDEN="$OUTDIR/scn_svsim.vcf.gz"
 
 echo
 echo "── SVs RENDERED in the simulated golden VCF (by SVTYPE) ──"
-zcat "$GOLDEN" | grep -v '^#' | grep -oE 'SVTYPE=[A-Za-z]+' | sort | uniq -c | sort -rn
+zcat "$GOLDEN" | grep -v '^#' | grep -oE 'SVTYPE=[A-Za-z]+' | sort | uniq -c | sort -rn || true
 nsv=$(zcat "$GOLDEN" | grep -v '^#' | grep -c 'SVTYPE=' || true)
 ntot=$(zcat "$GOLDEN" | grep -vc '^#' || true)
 echo

@@ -102,7 +102,7 @@ if [[ ! -s "$SV_VCF" ]]; then
 fi
 
 echo "── SVTYPE spread (PASS) ──"
-bcftools view -H "$SV_VCF" | grep -oE 'SVTYPE=[A-Z]+' | sort | uniq -c | sort -rn
+bcftools view -H "$SV_VCF" | grep -oE 'SVTYPE=[A-Z]+' | sort | uniq -c | sort -rn || true
 nsv=$(bcftools view -H "$SV_VCF" | wc -l)
 echo "  total PASS SVs: $nsv"
 

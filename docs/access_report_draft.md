@@ -610,9 +610,11 @@ check was added.
 > positions are now drawn with probability proportional to each site's fitted
 > trinucleotide mutability (matching NEAT 2/4), on by default; context-flat models keep
 > uniform placement byte-identically. Re-validated on SEQC2 HCC1395, the SBS-96 cosine of
-> real-vs-simulated somatic SNVs rose from **0.72 to 0.99**. Signature-*extraction*
-> confirmation — recovering SBS1/CpG under SigProfiler, the specific test above — remains
-> to be re-run and is tracked in **#320**.
+> real-vs-simulated somatic SNVs rose from **0.72 to 0.99**. Signature-*extraction* was then
+> re-run on the current build (chr1–3, 6,263 somatic SNVs, matching this section's ~6,225):
+> SigProfilerAssignment now recovers **SBS1 (391) and APOBEC SBS2/13 (709)** — both absent in
+> the run above — in a sensible pan-cancer blend. **#320 is resolved/closed.** The chr22 spot-check
+> (SBS1 6/366) was small-N noise; at the proper SNV count the recovery is unambiguous.
 
 **Cross-caller results (#317).** The broadened coverage reinforces the anti-overfit
 picture across independent callers. **SVs:** Delly reproduces Manta's per-type recall

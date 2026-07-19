@@ -405,7 +405,7 @@ burden; `model` defers to the model's fitted rate), and automatically inherits
 the breakpoint double-count fix (it lives in the shared `run_neat` path). v1
 models a single tumor/normal split; N-way subclonal mixtures are a future
 additive extension. Config template: `template_config/gen_cancer_reads_template.yml`;
-design + decisions: `docs/cancer_simulator_native_plan.md`.
+design + decisions: `docs/archive/cancer_simulator_native_plan.md`.
 
 `tools/cancer_simulate.sh` is retained as the reference implementation and for
 the Docker-based caller benchmarks, pending a same-seed parity test.

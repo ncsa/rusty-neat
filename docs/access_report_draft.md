@@ -577,34 +577,39 @@ the depth check of §3.7) — plus a **mutational-signature** check
 signal; the signature check probes something variant-recall cannot: does rneat
 reproduce the COSMIC mutational *signature* its tumor model encodes?
 
-**At the signature level, it does not — a real fidelity limitation.** Fitting
+**We found that at the signature level, it did not** Fitting
 COSMIC signatures to 6,225 simulated somatic SNVs (chr1–3) assigned them entirely
 to flat, clock-like signatures (SBS5 45 %, SBS3 31 %, SBS41 17 %, SBS12 7 %), with
 **no SBS1** — the near-universal C>T-at-CpG signature present in essentially every
 real tumor. The 96-context spectrum confirms it: the four CpG `[C>T]G` contexts are
 the *lowest* C>T contexts (16–23 counts vs ~65 average).
 
-**Root cause (verified both ends).** The bundled COSMIC model is faithful — its
+**Root cause (verified both ends).** The bundled COSMIC model was faithful — its
 per-context substitution model encodes strong CpG C>T enrichment (conditional
-0.78–0.88 at CpG vs 0.39–0.62 elsewhere). But rneat places mutations at a
-**context-independent rate** and conditions only the *alt allele* on trinucleotide
-context. The realized spectrum is therefore *(genome trinucleotide frequency) ×
-(conditional alt)*, not the COSMIC signature; because CpG dinucleotides are ~10×
-genome-depleted, the CpG C>T peak never forms. COSMIC signatures are **rate
-patterns** (mutations-per-context), which a uniform-placement model cannot
-represent.
+0.78–0.88 at CpG vs 0.39–0.62 elsewhere). Digging into the code, we found a limitation
+that we had introduced early in rneat's lifecycle, but had not noticed on normal, small
+data runs. The code places mutations at a **context-independent rate** and conditions
+only the *alt allele* on trinucleotide context. The realized spectrum is therefore
+*(genome trinucleotide frequency) × (conditional alt)*, not the COSMIC signature;
+because CpG dinucleotides are ~10× genome-depleted, the CpG C>T peak never forms. 
+COSMIC signatures are **rate patterns** (mutations-per-context), which a
+uniform-placement model cannot represent.
 
-**Interpretation.** rneat faithfully reproduces the substitution-*type*
+**Context** 
+When we dug into the legacy code, likely introduced early in rneat's lifecycle as a 
+stopgap until the more complex version could be ported. That time turned out to be now,
+as it was limiting out ability to model cancer genetics effectively.
+
+The code could rneat faithfully reproduce the substitution-*type*
 distribution and transition bias (Ts/Tv 2.34, §3.1/3.3) and recovers variants well
 across independent callers and at scale (§3.3/3.4/3.7/3.8) — but simulated somatic
-SNVs do not reconstruct the input COSMIC *signature* under signature extraction.
-This was a **regression in rneat's port, not an inherent NEAT limitation**: NEAT 2.x
-and 4.x both weight SNP *placement* by trinucleotide context (`sample_trinucs` /
+SNVs did not reconstruct the input COSMIC *signature* under signature extraction.
+NEAT 2.x and 4.x both weight SNP *placement* by trinucleotide context (`sample_trinucs` /
 `init_trinucBias`), but the Rust port applied context only to the *alt allele* and
-placed positions uniformly (the germline default model shared the gap). The fix is to
-restore per-context placement weighting rather than placing uniformly. It is exactly
-the class of gap recall-based metrics cannot surface — and the reason the signature
-check was added.
+placed positions uniformly (the germline default model shared the gap). The fix was to
+complete the context port, which had been neglected and missed in previous tests. Since this was
+exactly the class of gap we added the signature check to find, this bug also shows why running
+at scale and vetting the statistics was an essential development step.
 
 > **Update (v1.20.0, #372).** Context-weighted placement has since been restored: SNP
 > positions are now drawn with probability proportional to each site's fitted

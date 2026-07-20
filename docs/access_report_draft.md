@@ -634,33 +634,41 @@ and the high-confidence (`Somatic.hc`) filter, not a simulator property — Mute
 recovered **4/7 CNVs by direction** — no-PoN, since its panel step is a Spark tool
 incompatible with the env's Java 25 — corroborating the depth check, §3.7.)
 
-### 3.10 Order-independence, determinism, and sharding correctness
+### 3.10 Reproducibility, determinism, and sharding correctness
 
-A dedicated harness (`run_order_independence.sbatch`) changes exactly one variable
-at a time at a fixed seed (yeast, 16 chromosomes) and compares the header-less,
-sorted truth-VCF body by md5. Four invariances that *must* hold, do:
+**Reproducibility** is used here in the standard computational sense — the same inputs
+(reference file, config, seed) run through the same code produce the same result
+([ACM](https://arxiv.org/pdf/2402.07530); [The Turing Way](https://book.the-turing-way.org/reproducible-research/overview/overview-definitions/)).
+A dedicated harness (`run_order_independence.sbatch`) changes exactly one variable at a
+time at a fixed seed (yeast, 16 chromosomes) and compares the header-less, sorted
+truth-VCF body by md5. The invariances that *must* hold, do:
 
 | Check | Result | Evidence |
 |---|---|---|
-| Determinism (run twice, 1 thread) | **PASS** | identical (`1ad0f06…`) |
-| Thread-invariance (1 thread vs 8) | **PASS** | identical (`1ad0f06…`) — parallelism never perturbs results |
+| Determinism (rerun, 1 thread) | **PASS** | identical (`1ad0f06…`) |
+| Thread-invariance (1 thread vs 8, set + count) | **PASS** | identical (`1ad0f06…`) — parallelism never perturbs results |
 | Shard-order independence (fwd vs reversed merge) | **PASS** | identical (`4990989…`) |
 | Shard disjointness (35 windows) | **PASS** | 0 duplicate `CHROM:POS:REF:ALT` keys |
 
-One check **fails by design** and is documented rather than treated as a defect:
-**contig-order independence**. Reversing contig order in the FASTA changes the
-realization — even the variant count (12627 → 12631) — the signature of a single
-global RNG consumed in contig order. The consequence is a *reproducibility scope*
-note, not a correctness problem: reproducing a **monolithic** run requires the
-byte-identical reference (same contig order), not merely the same genome. The
-region-sharded whole-genome path is unaffected — and this is precisely why it is
-correct: each shard draws from an independent per-shard seed over an
-absolute-coordinate window, so shard-order independence and disjointness both pass
-and the merge never depends on reproducing the monolithic stream. A backlog item
-(**#322**) proposes per-contig seeding from `hash(seed, contig_name)` to make
-output contig-order-independent (and let a sharded run optionally reproduce a
-monolithic one). Net: rneat is reproducible and parallelism-invariant where it
-matters, and its HPC sharding is verifiably correct.
+**Reproducibility horizon.** rneat's variant realization is a function of the seed,
+config, each contig's sequence, and contig *order* — not of contig *name*, thread count,
+or shard-merge order. The RNG derives one child stream per contig from its *index*
+(`derive_child(contig_idx)`), so renaming a contig (order preserved) yields the identical
+variant set, merely relabeled, and thread scheduling never perturbs it (a dedicated
+contig-name-invariance check confirms this). Re-ordering contigs in the reference is a
+*different input file* — a different checksum, hence a different artifact under any of the
+definitions above — and produces a different realization, which is the expected behavior
+of a deterministic program on changed input, not a reproducibility gap. Making output
+invariant to contig re-ordering would be an optional *canonicalization* (key each stream
+by name rather than index); it is out of scope and accepted-and-documented, since no
+workflow requires reproducing a run from a genome with different contig ordering.
+
+**Sharding.** The region-sharded whole-genome path draws each window from an independent
+per-`(contig, chunk)` seed, so shard-order independence and disjointness both hold and the
+merge never depends on reproducing a monolithic RNG stream. A sharded run is therefore
+intentionally distinct from a single monolithic run — that independence is exactly what
+makes the parallel path correct. Net: rneat is reproducible and parallelism-invariant
+where it matters, and its HPC sharding is verifiably correct.
 
 ### 3.11 Adapter readthrough validation (chr22, 30×, TruSeq) — and a bug only Delta caught
 

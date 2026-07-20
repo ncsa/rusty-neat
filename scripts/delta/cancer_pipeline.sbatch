@@ -84,7 +84,9 @@ VARSCAN_ENV="${VARSCAN_ENV:-varscan}"
 RUN_STRELKA="${RUN_STRELKA:-0}"
 STRELKA_ENV="${STRELKA_ENV:-strelka}"
 
-THREADS=$SLURM_CPUS_PER_TASK
+# Default the SLURM vars so a direct (non-sbatch) run doesn't abort under `set -u`.
+: "${SLURM_JOB_ID:=manual}"
+THREADS="${SLURM_CPUS_PER_TASK:-4}"
 CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$SCRATCH/cargo-target/rusty-neat}"
 RNEAT_BIN="$CARGO_TARGET_DIR/release/rneat"
 PREFIX="$OUTDIR/sample"

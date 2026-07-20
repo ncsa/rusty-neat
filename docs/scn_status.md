@@ -2,7 +2,7 @@
 
 Consolidated status for the soybean-cyst-nematode (SCN, *Heterodera glycines*) real-data
 work under the realism epic (#311). Data from **João Gomes Viana** (Matt Hudson lab).
-Keep this current as the SCN work progresses. Last updated: **2026-07-16**.
+Keep this current as the SCN work progresses. Last updated: **2026-07-19**.
 
 Goal: use real SCN Pool-seq data to (Phase 1) build genuine per-strain rneat models covering
 **all variant classes — SNP/indel, structural variants, and copy-number** — and (Phase 2)
@@ -88,13 +88,15 @@ clean virulence signal. What the contrast establishes: the pipeline reproduces p
 four-class models on a second real line, and the results differ. A causal virulence claim needs
 a common-reference alignment.
 
-## Phase 2 — reproduce the pool allele-frequency spectrum — **designed, not built**
+## Phase 2 — reproduce the pool allele-frequency spectrum — **DONE ✅ (v1.21.0)**
 
-Full design: `docs/scn_phase2_af_design.md`. Reproductive replay (feed observed pool AFs, emit
-reads that match them, validate sim-AF ≈ real-AF). Core constraint: rneat has no per-variant
-continuous allele fraction today (`genotype_fraction` emits only `{1/ploidy, 1.0}`); the enabling
-change is an optional per-variant `allele_fraction` on `Variant`. Step 0 (no code): a ploidy=2
-gap baseline.
+Full design: `docs/scn_phase2_af_design.md` (implemented). Reproductive replay: feed the pool's
+observed per-site AFs, emit reads that match them, validate sim-AF ≈ real-AF. The enabling change —
+an optional per-variant `allele_fraction` on `Variant`, parsed from the input VCF (`INFO/AF`, else
+`FORMAT/AD`) — shipped as **v1.21.0 (#398 / #399)**. Validated on real MM26 Pool-seq: simulated vs
+real per-site allele frequency reached **Pearson r = 0.983 at 150× coverage** (0.936 at 50×),
+unbiased, with the residual tracking the binomial coverage-noise floor. Harness:
+`scripts/delta/run_scn_af_validation.sh` + `scripts/delta/scn_af_compare.py`.
 
 ## Merged tooling
 
@@ -130,11 +132,11 @@ render, on both lines). Remaining items split into tool/validation work that can
 
 **Validation / tooling (can proceed):**
 
-1. **Phase 2** — allele-frequency replay (designed; needs the `allele_fraction` enabling change).
-   This is the genuine remaining *sim-vs-truth* fidelity test — feed observed pool AFs, emit reads,
-   validate sim-AF ≈ real-AF.
-2. **Harness (issue #395)** — edge-case script fixes; bake the `RDCN`→`INFO/CN` lift + FORMAT-strip
-   into `call_scn_cnv.sh` so the CNV merge is turnkey.
+1. **Phase 2 — DONE (v1.21.0).** Allele-frequency replay shipped and validated (r = 0.983 at
+   150×); see the Phase 2 section above. No longer pending.
+2. **Harness (issue #395)** — the correctness fixes (silent-contig-drop + pipefail guards) merged
+   in **#409**; #395 remains open only for the de-dup refactor (hoist shared `stage_scn`/`stage_soy`
+   helpers into `lib_report.sh`) and baking the `RDCN`→`INFO/CN` lift into `call_scn_cnv.sh`.
 
 **Biology extensions — PARKED pending feedback from João / colleagues:**
 

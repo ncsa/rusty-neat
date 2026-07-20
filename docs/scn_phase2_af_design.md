@@ -1,9 +1,15 @@
 # SCN Phase 2 — Pool allele-frequency reproduction (design)
 
-Status: **design draft** (2026-07-11; **code anchors re-verified 2026-07-17**). Track: realism
-epic #311, SCN data from João Gomes Viana. Phase 1 (build real per-strain models from SCN
-Pool-seq data) is **done and validated**; see `docs/` history and the memory note. This is the
-design for Phase 2.
+> **✅ IMPLEMENTED in v1.21.0 (#398 / #399).** The per-variant `allele_fraction` enabling change
+> shipped and Phase 2 is validated: on real MM26 Pool-seq, simulated vs real per-site AF reached
+> **Pearson r = 0.983 at 150× coverage** (harness `scripts/delta/run_scn_af_validation.sh` +
+> `scn_af_compare.py`). This document is retained as the design/rationale record; read it as such,
+> not as pending work.
+
+Status: **design draft** (2026-07-11; **code anchors re-verified 2026-07-17**; **implemented
+2026-07-18, v1.21.0**). Track: realism epic #311, SCN data from João Gomes Viana. Phase 1 (build
+real per-strain models from SCN Pool-seq data) is **done and validated**; see `docs/` history and
+the memory note. This is the design for Phase 2.
 
 > **2026-07-17 re-trace (supersedes the stale line numbers below).** The alt-fraction mechanism
 > was traced end-to-end against current `develop`. Key corrections, which make this change

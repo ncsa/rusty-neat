@@ -577,32 +577,49 @@ the depth check of §3.7) — plus a **mutational-signature** check
 signal; the signature check probes something variant-recall cannot: does rneat
 reproduce the COSMIC mutational *signature* its tumor model encodes?
 
-**At the signature level, it does not — a real fidelity limitation.** Fitting
+**We found that at the signature level, it did not** Fitting
 COSMIC signatures to 6,225 simulated somatic SNVs (chr1–3) assigned them entirely
 to flat, clock-like signatures (SBS5 45 %, SBS3 31 %, SBS41 17 %, SBS12 7 %), with
 **no SBS1** — the near-universal C>T-at-CpG signature present in essentially every
 real tumor. The 96-context spectrum confirms it: the four CpG `[C>T]G` contexts are
 the *lowest* C>T contexts (16–23 counts vs ~65 average).
 
-**Root cause (verified both ends).** The bundled COSMIC model is faithful — its
+**Root cause (verified both ends).** The bundled COSMIC model was faithful — its
 per-context substitution model encodes strong CpG C>T enrichment (conditional
-0.78–0.88 at CpG vs 0.39–0.62 elsewhere). But rneat places mutations at a
-**context-independent rate** and conditions only the *alt allele* on trinucleotide
-context. The realized spectrum is therefore *(genome trinucleotide frequency) ×
-(conditional alt)*, not the COSMIC signature; because CpG dinucleotides are ~10×
-genome-depleted, the CpG C>T peak never forms. COSMIC signatures are **rate
-patterns** (mutations-per-context), which a uniform-placement model cannot
-represent.
+0.78–0.88 at CpG vs 0.39–0.62 elsewhere). Digging into the code, we found a limitation
+that we had introduced early in rneat's lifecycle, but had not noticed on normal, small
+data runs. The code places mutations at a **context-independent rate** and conditions
+only the *alt allele* on trinucleotide context. The realized spectrum is therefore
+*(genome trinucleotide frequency) × (conditional alt)*, not the COSMIC signature;
+because CpG dinucleotides are ~10× genome-depleted, the CpG C>T peak never forms. 
+COSMIC signatures are **rate patterns** (mutations-per-context), which a
+uniform-placement model cannot represent.
 
-**Interpretation.** rneat faithfully reproduces the substitution-*type*
+**Context** 
+When we dug into the legacy code, likely introduced early in rneat's lifecycle as a 
+stopgap until the more complex version could be ported. That time turned out to be now,
+as it was limiting out ability to model cancer genetics effectively.
+
+The code could rneat faithfully reproduce the substitution-*type*
 distribution and transition bias (Ts/Tv 2.34, §3.1/3.3) and recovers variants well
 across independent callers and at scale (§3.3/3.4/3.7/3.8) — but simulated somatic
-SNVs do not reconstruct the input COSMIC *signature* under signature extraction.
-This is a limitation of the underlying NEAT trinucleotide approach (the germline
-default model shares it), and the fix is to weight mutation *placement* by the
-signature's per-context probability rather than placing uniformly (tracked: #320).
-It is exactly the class of gap recall-based metrics cannot surface — and the reason
-the signature check was added.
+SNVs did not reconstruct the input COSMIC *signature* under signature extraction.
+NEAT 2.x and 4.x both weight SNP *placement* by trinucleotide context (`sample_trinucs` /
+`init_trinucBias`), but the Rust port applied context only to the *alt allele* and
+placed positions uniformly (the germline default model shared the gap). The fix was to
+complete the context port, which had been neglected and missed in previous tests. Since this was
+exactly the class of gap we added the signature check to find, this bug also shows why running
+at scale and vetting the statistics was an essential development step.
+
+> **Update (v1.20.0, #372).** Context-weighted placement has since been restored: SNP
+> positions are now drawn with probability proportional to each site's fitted
+> trinucleotide mutability (matching NEAT 2/4), on by default; context-flat models keep
+> uniform placement byte-identically. Re-validated on SEQC2 HCC1395, the SBS-96 cosine of
+> real-vs-simulated somatic SNVs rose from **0.72 to 0.99**. Signature-*extraction* was then
+> re-run on the current build (chr1–3, 6,263 somatic SNVs, matching this section's ~6,225):
+> SigProfilerAssignment now recovers **SBS1 (391) and APOBEC SBS2/13 (709)** — both absent in
+> the run above — in a sensible pan-cancer blend. **#320 is resolved/closed.** The chr22 spot-check
+> (SBS1 6/366) was small-N noise; at the proper SNV count the recovery is unambiguous.
 
 **Cross-caller results (#317).** The broadened coverage reinforces the anti-overfit
 picture across independent callers. **SVs:** Delly reproduces Manta's per-type recall
@@ -617,33 +634,48 @@ and the high-confidence (`Somatic.hc`) filter, not a simulator property — Mute
 recovered **4/7 CNVs by direction** — no-PoN, since its panel step is a Spark tool
 incompatible with the env's Java 25 — corroborating the depth check, §3.7.)
 
-### 3.10 Order-independence, determinism, and sharding correctness
+### 3.10 Reproducibility, determinism, and sharding correctness
 
-A dedicated harness (`run_order_independence.sbatch`) changes exactly one variable
-at a time at a fixed seed (yeast, 16 chromosomes) and compares the header-less,
-sorted truth-VCF body by md5. Four invariances that *must* hold, do:
+**Reproducibility** is used here in the standard computational sense — the same inputs
+(reference file, config, seed) run through the same code produce the same result
+([ACM](https://arxiv.org/pdf/2402.07530); [The Turing Way](https://book.the-turing-way.org/reproducible-research/overview/overview-definitions/)).
+A dedicated harness (`run_order_independence.sbatch`) changes exactly one variable at a
+time at a fixed seed and compares the header-less, sorted truth-VCF body by md5 (the
+contig-name check compares the `(POS,REF,ALT)` multiset, since renaming legitimately
+relabels `CHROM`). Run on the soybean-cyst-nematode assembly (`GCA_040805935.1`, ~145 Mb
+and highly fragmented — 1,178 shard windows, 157,945 variants), the invariances that
+*must* hold, do:
 
 | Check | Result | Evidence |
 |---|---|---|
-| Determinism (run twice, 1 thread) | **PASS** | identical (`1ad0f06…`) |
-| Thread-invariance (1 thread vs 8) | **PASS** | identical (`1ad0f06…`) — parallelism never perturbs results |
-| Shard-order independence (fwd vs reversed merge) | **PASS** | identical (`4990989…`) |
-| Shard disjointness (35 windows) | **PASS** | 0 duplicate `CHROM:POS:REF:ALT` keys |
+| Determinism (rerun, 1 thread) | **PASS** | identical (`5bcbaf5…`) |
+| Thread-invariance (1 thread vs 8, set + count) | **PASS** | identical (`5bcbaf5…`) — parallelism never perturbs results |
+| Contig-name invariance (rename every contig, order fixed) | **PASS** | identical `(POS,REF,ALT)` (`431120a…`) + count (157,945); only `CHROM` relabels |
+| Shard-order independence (fwd vs reversed merge) | **PASS** | identical (`44caf2b…`) |
+| Shard disjointness (1,178 windows) | **PASS** | 0 duplicate `CHROM:POS:REF:ALT` keys |
 
-One check **fails by design** and is documented rather than treated as a defect:
-**contig-order independence**. Reversing contig order in the FASTA changes the
-realization — even the variant count (12627 → 12631) — the signature of a single
-global RNG consumed in contig order. The consequence is a *reproducibility scope*
-note, not a correctness problem: reproducing a **monolithic** run requires the
-byte-identical reference (same contig order), not merely the same genome. The
-region-sharded whole-genome path is unaffected — and this is precisely why it is
-correct: each shard draws from an independent per-shard seed over an
-absolute-coordinate window, so shard-order independence and disjointness both pass
-and the merge never depends on reproducing the monolithic stream. A backlog item
-(**#322**) proposes per-contig seeding from `hash(seed, contig_name)` to make
-output contig-order-independent (and let a sharded run optionally reproduce a
-monolithic one). Net: rneat is reproducible and parallelism-invariant where it
-matters, and its HPC sharding is verifiably correct.
+**Reproducibility horizon.** rneat's variant realization is a function of the seed,
+config, each contig's sequence, and contig *order* — not of contig *name*, thread count,
+or shard-merge order. The RNG derives one child stream per contig from its *index*
+(`derive_child(contig_idx)`), so renaming a contig (order preserved) yields the identical
+variant set, merely relabeled, and thread scheduling never perturbs it (a dedicated
+contig-name-invariance check confirms this). Re-ordering contigs in the reference is a
+*different input file* — a different checksum, hence a different artifact under any of the
+definitions above — and produces a different realization, which is the expected behavior
+of a deterministic program on changed input, not a reproducibility gap. Making output
+invariant to contig re-ordering would be an optional *canonicalization* (key each stream
+by name rather than index); it is out of scope and accepted-and-documented, since no
+workflow requires reproducing a run from a genome with different contig ordering.
+
+**Sharding.** The region-sharded whole-genome path draws each window from an independent
+per-`(contig, chunk)` seed, so shard-order independence and disjointness both hold and the
+merge never depends on reproducing a monolithic RNG stream. A sharded run is therefore
+intentionally distinct from a single monolithic run — here 157,945 variants monolithic vs
+157,962 across the 1,178 shards; the ~17-variant difference is the independent per-window
+seeds, and the disjointness check (0 duplicate keys) confirms it is not double-counting.
+That independence is exactly what makes the parallel path correct. Net: rneat is
+reproducible and parallelism-invariant where it matters, and its HPC sharding is verifiably
+correct.
 
 ### 3.11 Adapter readthrough validation (chr22, 30×, TruSeq) — and a bug only Delta caught
 

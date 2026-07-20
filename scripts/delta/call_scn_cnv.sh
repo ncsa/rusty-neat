@@ -75,6 +75,9 @@ if [[ ! -s "$MAP" ]]; then
           | samtools sort -@ "$THREADS" -o srt.bam -
       samtools index srt.bam
       dicey mappability2 srt.bam            # → map.fa.gz (+ any .fai/.gzi)
+      # dicey's CLI is version-sensitive; fail loudly if the expected output is absent
+      # rather than letting the next step operate on a missing/renamed file.
+      [[ -s map.fa.gz ]] || { echo "ERROR: dicey mappability2 did not produce map.fa.gz (CLI version mismatch?)" >&2; exit 1; }
       # normalize to a bgzipped, faidx'd map at $MAP
       gunzip -f map.fa.gz
       bgzip -f map.fa

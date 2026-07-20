@@ -119,11 +119,22 @@ if [[ -n "$FULL_GENOME" ]]; then
         parts="$D/vcf_parts"; mkdir -p "$parts"
         echo "calling genome-wide VCF ($ncontig contigs, ${THREADS}-way)..."
         cut -f1 "$REF.fai" | xargs -P "$THREADS" -I CTG bash -c '
+            set -o pipefail
             ctg="$1"; out="'"$parts"'/$ctg.vcf.gz"
             [[ -s "$out" ]] && exit 0
-            bcftools mpileup -r "$ctg" -f "'"$REF"'" "'"$D"'/soy.full.bam" 2>/dev/null \
-                | bcftools call -mv -Oz -o "$out" 2>/dev/null
-        ' _ CTG
+            if ! bcftools mpileup -r "$ctg" -f "'"$REF"'" "'"$D"'/soy.full.bam" 2>"$out.log" \
+                 | bcftools call -mv -Oz -o "$out.tmp" 2>>"$out.log"; then
+                echo "ERROR: per-contig VCF call failed for $ctg (see $out.log)" >&2
+                rm -f "$out.tmp"; exit 1
+            fi
+            mv -f "$out.tmp" "$out"
+        ' _ CTG || { echo "ERROR: a per-contig VCF call failed; aborting before concat (logs in $parts/*.log)" >&2; exit 1; }
+        # A silently-dropped contig would vanish from the genome-wide VCF; require every
+        # fai contig to have produced a part (variant-free → valid header-only file; only
+        # a MISSING part is a failure).
+        for c in $(cut -f1 "$REF.fai"); do
+            [[ -s "$parts/$c.vcf.gz" ]] || { echo "ERROR: missing per-contig VCF part for '$c'" >&2; exit 1; }
+        done
         # concat parts in genome (fai) order; same reference header → no -a needed
         cut -f1 "$REF.fai" | sed "s#^#$parts/#; s#\$#.vcf.gz#" > "$D/vcf_parts.list"
         bcftools concat -Oz -f "$D/vcf_parts.list" -o "$D/soy.full.vcf.gz"

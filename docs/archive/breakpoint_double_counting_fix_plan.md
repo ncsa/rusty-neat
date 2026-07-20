@@ -1,6 +1,11 @@
 # Fix plan: breakpoint double-counting at homozygous BND/INV junctions
 
-Status: **planned, not implemented** (2026-06-06).
+> **✅ IMPLEMENTED & SHIPPED (v1.14.1, #236) — ARCHIVED.** The fix in this plan —
+> per-fragment junction-crossing suppression (`collect_suppressible_junctions` /
+> `suppress_junction_double_count`) — is merged and released. Retained as a design/decision
+> record, not active work.
+
+Status: **implemented** (v1.14.1, #236; plan drafted 2026-06-06).
 
 ## Problem (grounded in the code)
 

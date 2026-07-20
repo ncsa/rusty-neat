@@ -160,8 +160,11 @@ if [[ "$MAX_PAIRS" -gt 0 ]]; then
         # head closes the pipe → zcat gets SIGPIPE (141); expected, so drop pipefail for
         # just these two so `set -e` doesn't abort a step that actually succeeded.
         set +o pipefail
-        zcat "$R1" | head -n $(( MAX_PAIRS * 4 )) | gzip > "$D/sub_1.fastq.gz"
-        zcat "$R2" | head -n $(( MAX_PAIRS * 4 )) | gzip > "$D/sub_2.fastq.gz"
+        # Write to .tmp then promote, so an interrupted run leaves a partial .tmp
+        # (regenerated next run) rather than a truncated sub_*.fastq.gz the -s guard
+        # above would wrongly accept.
+        zcat "$R1" | head -n $(( MAX_PAIRS * 4 )) | gzip > "$D/sub_1.fastq.gz.tmp" && mv -f "$D/sub_1.fastq.gz.tmp" "$D/sub_1.fastq.gz"
+        zcat "$R2" | head -n $(( MAX_PAIRS * 4 )) | gzip > "$D/sub_2.fastq.gz.tmp" && mv -f "$D/sub_2.fastq.gz.tmp" "$D/sub_2.fastq.gz"
         set -o pipefail
     fi
     R1="$D/sub_1.fastq.gz"; R2="$D/sub_2.fastq.gz"
@@ -191,11 +194,22 @@ if [[ ! -s "$VCF" ]]; then
     ncontig=$(wc -l < "$REF.fai")
     echo "calling genome-wide VCF ($ncontig contigs, ${THREADS}-way)..."
     cut -f1 "$REF.fai" | xargs -P "$THREADS" -I CTG bash -c '
+        set -o pipefail
         ctg="$1"; out="'"$parts"'/$ctg.vcf.gz"
         [[ -s "$out" ]] && exit 0
-        bcftools mpileup -a FORMAT/AD -r "$ctg" -f "'"$REF"'" "'"$BAM"'" 2>/dev/null \
-            | bcftools call -mv -Oz -o "$out" 2>/dev/null
-    ' _ CTG
+        if ! bcftools mpileup -a FORMAT/AD -r "$ctg" -f "'"$REF"'" "'"$BAM"'" 2>"$out.log" \
+             | bcftools call -mv -Oz -o "$out.tmp" 2>>"$out.log"; then
+            echo "ERROR: per-contig VCF call failed for $ctg (see $out.log)" >&2
+            rm -f "$out.tmp"; exit 1
+        fi
+        mv -f "$out.tmp" "$out"
+    ' _ CTG || { echo "ERROR: a per-contig VCF call failed; aborting before concat (logs in $parts/*.log)" >&2; exit 1; }
+    # Guard against a silently-dropped contig: every fai contig must have produced a
+    # part before concat. A variant-free contig still yields a valid header-only file,
+    # so we fail only on a MISSING part (the symptom of a crashed/OOM'd call).
+    for c in $(cut -f1 "$REF.fai"); do
+        [[ -s "$parts/$c.vcf.gz" ]] || { echo "ERROR: missing per-contig VCF part for '$c'" >&2; exit 1; }
+    done
     cut -f1 "$REF.fai" | sed "s#^#$parts/#; s#\$#.vcf.gz#" > "$D/${SRR}_parts.list"
     bcftools concat -Oz -f "$D/${SRR}_parts.list" -o "$VCF"
     bcftools index -t "$VCF"

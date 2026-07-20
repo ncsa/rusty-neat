@@ -1,9 +1,9 @@
 # The rusty-neat project
-Welcome to `rneat`, a Rust port of NEAT (https://github.com/ncsa/neat), a genetic simulation program that creates fastq that appearn to be from sequencers, carry the same statistical properties as your data, and generate a golden bam and fastq that gives you ideal alignments and what variants were inserted. In addition, `rneat` generates "noise" in the form of sequencing errors as it is writing out files. These features can help you hone in your alignment and variant calling software to your data. Training models on your data will allow `rneat` to faithfully reproduce the statistical properties of your dataset.
+Welcome to `rneat`, a Rust port of NEAT (https://github.com/ncsa/neat), a genetic simulation program that creates fastq that appear to be from sequencers, carry the same statistical properties as your data, and generate a golden bam and fastq that gives you ideal alignments and what variants were inserted. In addition, `rneat` generates "noise" in the form of sequencing errors as it is writing out files. These features can help you hone in your alignment and variant calling software to your data. Training models on your data will allow `rneat` to faithfully reproduce the statistical properties of your dataset.
 
 We have spent some dedicated time toward gearing the current version of `rneat` to simulate cancer genetics, including adding structural variant simulations (CNV, BND, SVs, and others), and creating a wrapper that simulates purity levels and then stitches the results back together. We've geared this software with an aim at keeping memory usage as low and CPU time as short as possible. Let us know your real world experience by creating a Feedback issue, if you have something that's not quite a bug, or have a positive experience to share. As always, let us know if you find a bug and give as many details as you can to help us troubleshoot.
 
-The most recent version of `rneat` includes adding in the utilities to allow users to generate their own models for running `rneat`. It also now outputs a golden BAM file with ideal alignments, accepts a BED file for filtering the genome down to target regions for read creation, a more accurate coverage tool, and the ability to read in custom variants from a VCF file and insert them into the code. We swapped out the temp file writing method for a file streaming method that seems to work even faster and does not take up as much space on disk, avoiding expensive disk I/O of previous versions. We've done numerous benchmarks and tests on the data, but we look forward to user feedback on how well the output reproduces their data on a statistical level.
+`rneat` trains reusable models from your own data (mutation, sequencing-error, fragment-length, GC-bias, and BAM/alignment models), outputs a golden BAM with ideal alignments alongside the FASTQ and truth VCF, accepts a BED to target read creation to regions, and can read custom variants from an input VCF — including per-variant allele frequencies, to reproduce a continuous AF spectrum for pooled or somatic data. More recent releases add native tumor/normal simulation (`rneat gen-cancer-reads`), structural variants and copy number, per-tissue somatic models, and trinucleotide-context-aware SNP placement so context-specific mutational signatures reproduce. A file-streaming writer keeps disk I/O and footprint low. See `CHANGELOG.md` for the full release history, and please open a Feedback issue with your real-world experience.
 
 Find us on Zenodo:
 [![DOI](https://zenodo.org/badge/765847780.svg)](https://doi.org/10.5281/zenodo.20100558)
@@ -297,8 +297,8 @@ When an SV zeroes out coverage (hom `<DEL>` or `INFO/CN=0`), the mutation rate o
 - *Multi-allelic records*: only the first ALT allele is used; additional alleles are silently ignored. Split multi-allelic records with `bcftools norm -m -` before passing to `rneat`. (This is true for both literal and symbolic ALTs — `<DEL>,<DUP>` on the same line is treated as the first ALT only.)
 - *REF allele verification*: `rneat` does not check that the REF field matches the reference sequence at that position. Mismatches will produce biologically incorrect output without any warning.
 - *Literal complex variants*: records whose REF and ALT are both multi-base strings (and the ALT is literal bases, not a `<TAG>`) are skipped with a logged warning and do not appear in the output.
-- *`<INV>` orientation not modeled*: reads from inversion spans still come from the forward-strand reference. The `<INV>` record round-trips to the output VCF but the read content does not reflect the inversion.
-- *Breakends*: round-tripped only; no junction-read or mate-locus modeling.
+- *`<INV>` interior is forward-strand*: inversion **junction** reads are emitted (the chimeric signal callers use to detect the inversion), but reads from the *interior* of an inverted span are still transcribed from the forward-strand reference. The `<INV>` record round-trips to the output VCF.
+- *Breakends*: `<BND>` junction reads are generated (chimeric reads spanning the mate locus; validated against Manta — see the ACCESS report), and the record round-trips to the output VCF.
 
 **De novo SV generation**
 
@@ -608,11 +608,11 @@ transition_matrix_file: /path/to/matrix.tsv
 ```
 
 **VCF requirements:**
-- Single sample only — multi-sample VCFs are not yet supported
+- Single sample only — multi-sample VCFs are not yet supported (tracked in #412)
 - Each variant record must have `GT` in the `FORMAT` column; `rneat` hard-errors if GT is missing
 - `QUAL=.` is accepted and treated as quality score 0
 
-Caveats: Only one sample can be read at this point. Currently, high-mutation regions and common variants features from Python NEAT are not yet implemented.
+Caveats: Only one sample can be read at this point (#412). Currently, high-mutation regions and common variants features from Python NEAT are not yet implemented (#413).
 
 Try it out and let us know if you run into any issues!
 

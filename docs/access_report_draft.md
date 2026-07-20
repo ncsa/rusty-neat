@@ -640,15 +640,19 @@ incompatible with the env's Java 25 — corroborating the depth check, §3.7.)
 (reference file, config, seed) run through the same code produce the same result
 ([ACM](https://arxiv.org/pdf/2402.07530); [The Turing Way](https://book.the-turing-way.org/reproducible-research/overview/overview-definitions/)).
 A dedicated harness (`run_order_independence.sbatch`) changes exactly one variable at a
-time at a fixed seed (yeast, 16 chromosomes) and compares the header-less, sorted
-truth-VCF body by md5. The invariances that *must* hold, do:
+time at a fixed seed and compares the header-less, sorted truth-VCF body by md5 (the
+contig-name check compares the `(POS,REF,ALT)` multiset, since renaming legitimately
+relabels `CHROM`). Run on the soybean-cyst-nematode assembly (`GCA_040805935.1`, ~145 Mb
+and highly fragmented — 1,178 shard windows, 157,945 variants), the invariances that
+*must* hold, do:
 
 | Check | Result | Evidence |
 |---|---|---|
-| Determinism (rerun, 1 thread) | **PASS** | identical (`1ad0f06…`) |
-| Thread-invariance (1 thread vs 8, set + count) | **PASS** | identical (`1ad0f06…`) — parallelism never perturbs results |
-| Shard-order independence (fwd vs reversed merge) | **PASS** | identical (`4990989…`) |
-| Shard disjointness (35 windows) | **PASS** | 0 duplicate `CHROM:POS:REF:ALT` keys |
+| Determinism (rerun, 1 thread) | **PASS** | identical (`5bcbaf5…`) |
+| Thread-invariance (1 thread vs 8, set + count) | **PASS** | identical (`5bcbaf5…`) — parallelism never perturbs results |
+| Contig-name invariance (rename every contig, order fixed) | **PASS** | identical `(POS,REF,ALT)` (`431120a…`) + count (157,945); only `CHROM` relabels |
+| Shard-order independence (fwd vs reversed merge) | **PASS** | identical (`44caf2b…`) |
+| Shard disjointness (1,178 windows) | **PASS** | 0 duplicate `CHROM:POS:REF:ALT` keys |
 
 **Reproducibility horizon.** rneat's variant realization is a function of the seed,
 config, each contig's sequence, and contig *order* — not of contig *name*, thread count,
@@ -666,9 +670,12 @@ workflow requires reproducing a run from a genome with different contig ordering
 **Sharding.** The region-sharded whole-genome path draws each window from an independent
 per-`(contig, chunk)` seed, so shard-order independence and disjointness both hold and the
 merge never depends on reproducing a monolithic RNG stream. A sharded run is therefore
-intentionally distinct from a single monolithic run — that independence is exactly what
-makes the parallel path correct. Net: rneat is reproducible and parallelism-invariant
-where it matters, and its HPC sharding is verifiably correct.
+intentionally distinct from a single monolithic run — here 157,945 variants monolithic vs
+157,962 across the 1,178 shards; the ~17-variant difference is the independent per-window
+seeds, and the disjointness check (0 duplicate keys) confirms it is not double-counting.
+That independence is exactly what makes the parallel path correct. Net: rneat is
+reproducible and parallelism-invariant where it matters, and its HPC sharding is verifiably
+correct.
 
 ### 3.11 Adapter readthrough validation (chr22, 30×, TruSeq) — and a bug only Delta caught
 

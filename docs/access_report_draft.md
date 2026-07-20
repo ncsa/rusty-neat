@@ -69,8 +69,9 @@ sampling itself is correct: `homozygous_frequency` is fit as (homozygous
 sites)/(total sites) and consumed directly as P(homozygous), with no inversion —
 a properly *fit* model already yields a realistic ratio. The defect was purely
 the unrealistic default parameter. It has been corrected to **0.333** (het/hom
-≈ 2.0), verified on a controlled diploid run (45,808 sites, ratio 1.98) and
-locked by a regression test. Because the caller recovers whatever zygosity is
+≈ 2.0), confirmed by re-running the germline pipeline on chr22 with the
+corrected default (42,997 variant sites → het/hom 2.00, P(hom) 0.333) and locked
+by a regression test. Because the caller recovers whatever zygosity is
 simulated (truth and query ratios matched throughout), recall, precision and
 Ts/Tv are unaffected by this correction — the fix improves realism of the
 absolute ratio, not the validation conclusions. A population / common-variant

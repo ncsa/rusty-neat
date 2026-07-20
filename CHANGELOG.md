@@ -1,6 +1,6 @@
-Unreleased (develop)
-====================
-## Fix — realistic default het/hom ratio
+7/20/2026
+=========
+## rneat v1.21.1 — realistic default het/hom ratio
 
 The bundled default mutation model shipped `homozygous_frequency = 0.01` — a faithful
 port of the NEAT lineage's own default (NEAT2 0.010, NEAT4 0.001) — which forces each

@@ -50,23 +50,33 @@ noted.
 | Mean coverage (covered bases) | 29.96× (requested 30×) |
 | Breadth | 0.77 (chr22 N-gaps correctly left uncovered) |
 | Heterozygous allele fraction | 0.486 (clean diploid binomial ~0.5) |
-| Het/hom ratio | ~95 (high vs real resequencing ~1.5–2.0 — see note) |
+| Het/hom ratio | **~2.0** (human-realistic; a default-model bug that inflated this to ~95 was found and fixed during this validation — see note) |
 | Ts/Tv | **2.35** (human-realistic) |
 
 Determinism holding byte-for-byte across thread counts is a guarantee NEAT 4 does
 not make.
 
-**Het/hom ratio (realism note).** Across the germline runs the heterozygous/
-homozygous variant-site ratio is ~95 (truth and recovered tracking together —
-e.g. 94.7 / 95.5 on the input-variety set in §4), far above a real resequenced
-human's ~1.5–2.0. This is expected from the current model rather than a defect:
-germline variants are drawn independently per haplotype against the reference
-with no population / common-variant (LD) structure, so coincident homozygous-alt
-sites — which in real resequencing arise mostly from shared, common alleles — are
-rare. The caller recovers the simulated zygosity consistently (truth and query
-ratios match), so recall, precision and Ts/Tv are unaffected. It is a realism
-gap, not a correctness issue — a candidate Phase-2/3 backlog item if
-population-realistic zygosity (common-variant spike-in / LD model) is wanted.
+**Het/hom ratio (bug found and fixed).** The germline runs initially showed a
+heterozygous/homozygous variant-site ratio of ~95 (truth and recovered tracking
+together — e.g. 94.7 / 95.5 on the input-variety set), far above a real
+resequenced human's ~1.5–2.0. Investigation traced this to the bundled default
+mutation model: its `homozygous_frequency` was **0.01**, so each variant site is
+made homozygous-alt with probability 0.01, forcing a het/hom ratio of ~99. That
+value was a faithful port of the NEAT lineage's own default (NEAT2 used 0.010,
+NEAT4 0.001) — a long-standing upstream default that is unrealistic for any
+diploid, where a resequenced sample is ~1/3 homozygous-alt. The generative
+sampling itself is correct: `homozygous_frequency` is fit as (homozygous
+sites)/(total sites) and consumed directly as P(homozygous), with no inversion —
+a properly *fit* model already yields a realistic ratio. The defect was purely
+the unrealistic default parameter. It has been corrected to **0.333** (het/hom
+≈ 2.0), confirmed by re-running the germline pipeline on chr22 with the
+corrected default (42,997 variant sites → het/hom 2.00, P(hom) 0.333) and locked
+by a regression test. Because the caller recovers whatever zygosity is
+simulated (truth and query ratios matched throughout), recall, precision and
+Ts/Tv are unaffected by this correction — the fix improves realism of the
+absolute ratio, not the validation conclusions. A population / common-variant
+(LD) structured zygosity model (#316) remains a separate, optional realism
+enhancement; it is *not* required for a realistic het/hom ratio.
 
 ### 3.2 Performance vs NEAT 4 (single thread)
 

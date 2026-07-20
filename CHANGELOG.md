@@ -1,3 +1,23 @@
+Unreleased (develop)
+====================
+## Fix — realistic default het/hom ratio
+
+The bundled default mutation model shipped `homozygous_frequency = 0.01` — a faithful
+port of the NEAT lineage's own default (NEAT2 0.010, NEAT4 0.001) — which forces each
+variant site to be homozygous-alt with probability 0.01 and so drives a het/hom ratio
+of ~99 in default-model gen-reads output. That is unrealistic for any diploid, where a
+resequenced sample is ~1/3 homozygous-alt. Corrected to **0.333** (het/hom ≈ 2.0),
+confirmed by re-running the germline pipeline on chr22 with the corrected default
+(42,997 sites → het/hom 2.00, P(hom) 0.333) and locked by a regression test.
+
+- The sampling logic was already correct: `homozygous_frequency` is fit as
+  (homozygous sites)/(total sites) and consumed directly as P(homozygous), with no
+  inversion — a properly *fit* model already produced a realistic ratio. Only the
+  embedded default parameter was wrong.
+- Runs that supply their own fit mutation model are unaffected. Default-model gen-reads
+  output changes (genotype calls, and which reads carry the alt allele); model-parity
+  and the full test suite stay green.
+
 7/18/2026
 =========
 ## rneat v1.21.0 — per-variant allele fraction

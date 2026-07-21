@@ -394,6 +394,22 @@ mod tests {
     }
 
     #[test]
+    fn test_default_homozygous_frequency_is_realistic() {
+        // Guards against the NEAT-lineage default that silently shipped for years:
+        // NEAT2 used 0.010 and NEAT4 0.001, both faithfully ported here, which
+        // produce a het/hom ratio of ~99-999 — unrealistic for any diploid, where
+        // a resequenced sample is ~1/3 homozygous-alt. A near-zero value here means
+        // the embedded default model regressed; keep it in a sane diploid range.
+        let model = MutationModel::default().unwrap();
+        assert!(
+            (0.2..=0.5).contains(&model.homozygous_frequency),
+            "default homozygous_frequency {} is outside the realistic diploid range \
+             (0.2..=0.5); a low value inflates the het/hom ratio",
+            model.homozygous_frequency
+        );
+    }
+
+    #[test]
     fn test_generate_genotype_homozygous() {
         let model = MutationModel::default().unwrap();
         let geno = model.generate_genotype(4, true).unwrap();

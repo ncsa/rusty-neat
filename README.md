@@ -52,6 +52,7 @@ line), the current Python 3 NEAT 4.x, and `eidolon`.
 | Sequencing error model                     | ✅                             | ✅                                        | ✅                                                       |
 | Fragment-length + GC-bias models           | ✅                             | ✅                                        | ✅ (incl. one-pass `gen-bam-models`)                     |
 | BED targeting / VCF variant insertion      | ✅                             | ✅                                        | ✅                                                       |
+| Continuous per-variant allele fraction     | ❌ (genotype `{0.5, 1.0}`)     | ❌ (genotype `{0.5, 1.0}`)                | ✅ input-VCF `AF`/`AD` → matched AF spectrum (pooled / somatic) |
 | Parallelism                                | Manual job sharding (`--job`)  | Multiprocessing (`--threads`): genome split into ~8 chunks/thread, then stitched | Multithreading (rayon) |
 | VCF comparison tooling                      | Bundled scripts                | ✅ `compare-vcfs`                          | ✅ `compare-vcfs`                                        |
 | I/O / memory                               | Temp files                     | Temp files                                | Streaming writes, low-memory focus                       |

@@ -1,4 +1,4 @@
-# eidolon (eidolon) — working practices for agents
+# eidolon — working practices for agents
 
 Hand-written guidance below; the GitNexus block that follows is auto-generated
 (regenerated between its `gitnexus` markers — keep edits **above** the markers).

@@ -1,6 +1,7 @@
 # Rename scope — `rusty-neat` / `rneat` → `eidolon`
 
-Planning doc for the project rename. **Status: scoped, decisions locked, not yet executed.**
+Planning doc for the project rename. **Status: Phase A DONE (PR #425, merged to `develop`;
+ships in the v2.0.0 release PR #426). Phases B–C pending.**
 Target release for the rename: **v2.0.0**, cut *after* v1.21.1 is fully released. Do not
 entangle the rename with any behavior change.
 
@@ -59,7 +60,7 @@ Codebase inventory at scoping time: `rneat` 866× / 129 files, `rusty-neat` 93×
 
 ## Work breakdown
 
-### Phase A — code / docs / CI (one PR → `develop`)
+### Phase A — code / docs / CI (one PR → `develop`) — DONE (PR #425)
 - `Cargo.toml`: bin `rneat` → `eidolon`; lib `common` → `eidolon-core`; `version` → `2.0.0`;
   update `Cargo.lock`. Add the `rneat` deprecation-shim bin target (decision 2).
 - Tests: `assert_cmd::cargo_bin("rneat")` → `"eidolon"` (`cancer_parity.rs`,

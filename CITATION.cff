@@ -1,7 +1,7 @@
 cff-version: 1.2.0
 title: >-
-  eidolon (eidolon): a Rust toolkit for simulating NGS read
-  data, including tumor/normal cancer sequencing
+  eidolon (formerly rusty-neat): a Rust toolkit for simulating
+  NGS read data, including tumor/normal cancer sequencing
 message: >-
   If you use this software, please cite it using the
   metadata from this file.
@@ -40,7 +40,7 @@ keywords:
   - vcf
   - rust
 license: BSD-3-Clause
-version: 1.16.0
+version: 2.0.0
 identifiers:
   - type: doi
     value: 10.5281/zenodo.20100558

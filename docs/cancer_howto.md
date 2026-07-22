@@ -1,6 +1,6 @@
 # Cancer simulation how-to
 
-The following guide to `rneat gen-cancer-reads` should give you some ideas on how to use rneat to simula cancer reads 
+The following guide to `eidolon gen-cancer-reads` should give you some ideas on how to use eidolon to simula cancer reads 
 and test your cancer pipelines. This is based on previous work done by NCSA and ICGC/ARGO and needs real testing to 
 validate it works as expected. Design rationale and the mutation-rate / SV calibration details live in
 [`cancer_simulator.md`](cancer_simulator.md).
@@ -29,7 +29,7 @@ Smoke test on the bundled H1N1 reference (seconds; proves the build works):
 
 ```bash
 cat > cancer.yml <<'YAML'
-reference: rneat/test_data/references/H1N1.fa
+reference: eidolon/test_data/references/H1N1.fa
 output_dir: ./cancer_out
 output_prefix: smoketest
 total_coverage: 30
@@ -42,7 +42,7 @@ rng_seed: demo
 overwrite_output: true
 YAML
 
-rneat gen-cancer-reads -c cancer.yml
+eidolon gen-cancer-reads -c cancer.yml
 ```
 
 `template_config/gen_cancer_reads_template.yml` is the fully-commented config.
@@ -66,7 +66,7 @@ two passes (which MarkDuplicates would otherwise drop).
 (`tumor_model:` / `normal_model:`). The bundled models are starting points — for
 real work, train from your own somatic calls.
 
-`rneat gen-mut-model` fits a model from a reference plus a single-sample VCF:
+`eidolon gen-mut-model` fits a model from a reference plus a single-sample VCF:
 
 ```bash
 cat > my_tumor.yml <<'YAML'
@@ -75,7 +75,7 @@ vcf_file: /path/to/your_somatic_calls.vcf.gz
 output_file: my_tumor_model.json.gz
 overwrite_output: true
 YAML
-rneat gen-mut-model -c my_tumor.yml
+eidolon gen-mut-model -c my_tumor.yml
 ```
 
 Input VCF expectations:
@@ -116,7 +116,7 @@ Pre-bundled, ready to use as `tumor_model:` without any download:
 
 ## Worked examples
 
-Assume `rneat` on `PATH` and a reference at `~/code/data/GRCh38.fa`.
+Assume `eidolon` on `PATH` and a reference at `~/code/data/GRCh38.fa`.
 
 ### Tumor/normal with your own model
 
@@ -136,7 +136,7 @@ tumor_mutation_rate: 1e-5
 rng_seed: run1
 overwrite_output: true
 YAML
-rneat gen-cancer-reads -c run.yml
+eidolon gen-cancer-reads -c run.yml
 ```
 
 ### With structural variants
@@ -160,7 +160,7 @@ for p in 0.3 0.5 0.8; do
   sed "s/^purity:.*/purity: $p/; s/^output_prefix:.*/output_prefix: p$p/" run.yml \
     | sed "/^tumor_mutation_rate:/a germline_vcf: ./out/tumor70_normal.vcf.gz" \
     > run_$p.yml
-  rneat gen-cancer-reads -c run_$p.yml
+  eidolon gen-cancer-reads -c run_$p.yml
 done
 ```
 
@@ -205,6 +205,6 @@ tools/cancer_sv_benchmark.sh \
 ## Relationship to `tools/cancer_simulate.sh`
 
 The native subcommand is a drop-in replacement for the original shell orchestrator,
-verified equivalent by `rneat/tests/cancer_parity.rs` (identical merged-FASTQ record
+verified equivalent by `eidolon/tests/cancer_parity.rs` (identical merged-FASTQ record
 multisets, per-pass golden VCFs, and origin classifications). The script is retained
 for the Docker benchmark wiring; prefer the subcommand for new work.

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Adapter-readthrough validation (#125): does enabling 3' sequencing-adapter
 # readthrough keep the data realistic AND keep it callable by a standard germline
-# pipeline? Submits the germline_e2e variant-caller pipeline (rneat → BWA-MEM2 →
+# pipeline? Submits the germline_e2e variant-caller pipeline (eidolon → BWA-MEM2 →
 # GATK HaplotypeCaller → hap.py) under three conditions, each replicated REPS
 # times for mean±sd, then collect_adapter_validation.sh tabulates and flags any
 # statistical difference vs the no-adapter baseline.
@@ -58,7 +58,7 @@ submit() {
     local cond="$1" adapters="$2" trim="$3" keep_short="$4" rep="$5"
     local out="$SCRATCH/adapter_${cond}_rep${rep}"
     local jid
-    jid=$(REFERENCE="$REFERENCE" TOOLS=rneat COVERAGE="$COVERAGE" OUTDIR="$out" \
+    jid=$(REFERENCE="$REFERENCE" TOOLS=eidolon COVERAGE="$COVERAGE" OUTDIR="$out" \
           SEED="adapter-validation rep$rep" \
           ADAPTERS="$adapters" TRIM="$trim" KEEP_SHORT="$keep_short" ADAPTER_PRESET="$ADAPTER_PRESET" \
           FRAG_MEAN="$FRAG_MEAN" FRAG_SD="$FRAG_SD" \

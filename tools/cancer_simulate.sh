@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Simulate a tumor / normal mixture sample by running rneat gen-reads twice
+# Simulate a tumor / normal mixture sample by running eidolon gen-reads twice
 # over the same reference and concatenating the resulting FASTQs.
 #
 # Architecture (per docs/cancer_simulator.md):
@@ -16,7 +16,7 @@
 #
 #   Merge: concatenate FASTQs (independent reads, just append). The two
 #     per-pass golden VCFs survive for downstream truth-set work; merging
-#     them with origin annotation is rneat issue #185, not this script.
+#     them with origin annotation is eidolon issue #185, not this script.
 #
 # Ported from NEAT 2.1's `genReadsTumorTutorial/simulate.sh` idiom.
 #
@@ -53,7 +53,7 @@ FRAGMENT_MEAN=""
 FRAGMENT_ST_DEV=""
 SV_RATE_SCALE="0.0"
 RNG_SEED_ROOT="cancer-simulate"
-RNEAT_BIN="rneat"
+EIDOLON_BIN="eidolon"
 
 usage() {
     cat <<'EOF'
@@ -74,7 +74,7 @@ Coverage / purity:
   --purity           Tumor cell fraction in [0.0, 1.0]                (default: 0.5)
                      Tumor pass gets purity × total, normal pass gets the rest.
 
-Mutation models (optional; both default to rneat's bundled MutationModel::default()
+Mutation models (optional; both default to eidolon's bundled MutationModel::default()
 which is germline-derived. Supplying a cancer-trained tumor model is strongly
 recommended for any non-toy run — see issue #186):
   --normal-model     Path to a .json.gz mutation model for the normal pass
@@ -143,7 +143,7 @@ Reproducibility / wiring:
   --rng-seed         Seed root (default: "cancer-simulate"); per-pass seeds
                      append "-normal" and "-tumor" so the two passes don't
                      share RNG state.
-  --rneat-bin        Path to the rneat binary (default: "rneat" on PATH)
+  --eidolon-bin        Path to the eidolon binary (default: "eidolon" on PATH)
 
   -h, --help         Print this message
 EOF
@@ -167,7 +167,7 @@ while [[ $# -gt 0 ]]; do
         --fragment-st-dev)  FRAGMENT_ST_DEV="$2"; shift 2 ;;
         --sv-rate-scale)    SV_RATE_SCALE="$2"; shift 2 ;;
         --rng-seed)         RNG_SEED_ROOT="$2"; shift 2 ;;
-        --rneat-bin)        RNEAT_BIN="$2"; shift 2 ;;
+        --eidolon-bin)        EIDOLON_BIN="$2"; shift 2 ;;
         -h|--help)          usage; exit 0 ;;
         *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
     esac
@@ -179,10 +179,10 @@ done
 [[ -z "$OUTPUT_PREFIX" ]] && { echo "Missing --output-prefix" >&2; exit 2; }
 
 # Purity in (0, 1) — endpoints would zero one of the passes; refuse rather
-# than silently skip a pass (use plain rneat gen-reads for purity=0 / 1).
+# than silently skip a pass (use plain eidolon gen-reads for purity=0 / 1).
 if ! awk -v p="$PURITY" 'BEGIN { exit !(p > 0 && p < 1) }'; then
     echo "Purity must be strictly between 0 and 1; got: $PURITY" >&2
-    echo "  (For purity=0 or 1 use rneat gen-reads directly — no mixing needed.)" >&2
+    echo "  (For purity=0 or 1 use eidolon gen-reads directly — no mixing needed.)" >&2
     exit 2
 fi
 
@@ -191,8 +191,8 @@ if [[ "$PAIRED_END" == "true" ]]; then
     [[ -z "$FRAGMENT_ST_DEV" ]] && { echo "--paired-ended requires --fragment-st-dev" >&2; exit 2; }
 fi
 
-if ! command -v "$RNEAT_BIN" >/dev/null 2>&1; then
-    echo "rneat binary not found on PATH (override with --rneat-bin): $RNEAT_BIN" >&2
+if ! command -v "$EIDOLON_BIN" >/dev/null 2>&1; then
+    echo "eidolon binary not found on PATH (override with --eidolon-bin): $EIDOLON_BIN" >&2
     exit 2
 fi
 
@@ -270,7 +270,7 @@ echo ">> Pass 1: normal at ${NORMAL_COVERAGE}× coverage"
 NORMAL_CONFIG="${OUTPUT_DIR}/${NORMAL_PREFIX}.yml"
 write_config "$NORMAL_CONFIG" "$NORMAL_PREFIX" "$NORMAL_COVERAGE" \
     "$NORMAL_MODEL" "$GERMLINE_VCF" "normal" "0.0" "$NORMAL_MUTATION_RATE"
-"$RNEAT_BIN" gen-reads -c "$NORMAL_CONFIG"
+"$EIDOLON_BIN" gen-reads -c "$NORMAL_CONFIG"
 
 # If the user didn't supply a germline VCF, use pass 1's golden as the
 # input for pass 2 — that's the whole point of running two passes.
@@ -297,7 +297,7 @@ echo ">> Pass 2: tumor at ${TUMOR_COVERAGE}× coverage (germline from ${GERMLINE
 TUMOR_CONFIG="${OUTPUT_DIR}/${TUMOR_PREFIX}.yml"
 write_config "$TUMOR_CONFIG" "$TUMOR_PREFIX" "$TUMOR_COVERAGE" \
     "$TUMOR_MODEL" "$GERMLINE_VCF" "tumor" "$SV_RATE_SCALE" "$TUMOR_MUTATION_RATE"
-"$RNEAT_BIN" gen-reads -c "$TUMOR_CONFIG"
+"$EIDOLON_BIN" gen-reads -c "$TUMOR_CONFIG"
 
 # ── Merge FASTQs ─────────────────────────────────────────────────────────
 # gen-reads names reads by genomic position (`RNEAT_generated_<contig>_
@@ -342,7 +342,7 @@ if [[ "$PAIRED_END" == "true" ]]; then
 fi
 
 # ── Merge golden VCFs into a single origin-tagged truth set ─────────────
-# Resolves rneat's per-pass `INFO/NEAT_PROVENANCE` (which says "denovo or
+# Resolves eidolon's per-pass `INFO/NEAT_PROVENANCE` (which says "denovo or
 # input") into the cancer-specific `INFO/NEAT_ORIGIN` (which says "germline,
 # somatic, or shared"):
 #
@@ -406,7 +406,7 @@ else
     annotate_origin "$ISEC_DIR/0001.vcf.gz" "$ISEC_DIR/tumor_only.vcf.gz"  somatic
     annotate_origin "$ISEC_DIR/0003.vcf.gz" "$ISEC_DIR/shared.vcf.gz"      shared
 
-    # rneat's gen-reads writer preserves INFO values from input_vcf
+    # eidolon's gen-reads writer preserves INFO values from input_vcf
     # verbatim but doesn't add ##INFO header declarations for arbitrary
     # user-supplied fields (e.g. INFO/MATEID on BND records, INFO/SVTYPE
     # / END / SVLEN / CN on symbolic SVs). bcftools sort does internal

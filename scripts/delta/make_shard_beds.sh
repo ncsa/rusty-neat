@@ -5,7 +5,7 @@
 # a contiguous window of the genome (large contigs split at SHARD_BP boundaries).
 # Prints the shard COUNT to stdout — feed it to `sbatch --array=0-$((N-1))`.
 #
-# rneat's target_bed restricts read GENERATION to these regions in ABSOLUTE
+# eidolon's target_bed restricts read GENERATION to these regions in ABSOLUTE
 # reference coordinates and anchors each fragment in exactly one window (reads
 # may extend past the window edge; ownership is by anchor), so the union of all
 # shards reconstructs a whole-genome run with no double-counting or gaps — and

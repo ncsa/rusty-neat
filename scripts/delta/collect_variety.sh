@@ -10,7 +10,7 @@ MANIFEST="${1:?usage: collect_variety.sh <manifest>}"
 printf 'genome\tsize_Mb\tSNP_recall\tSNP_prec\tINDEL_recall\tINDEL_prec\tTsTv\n'
 while read -r name jid outdir ref _; do
     [[ "$name" == \#* || -z "${name:-}" ]] && continue
-    f="$outdir/rneat_scored.summary.csv"
+    f="$outdir/eidolon_scored.summary.csv"
     [[ -f "$f" ]] || { printf '%s\tNA\tNA\tNA\tNA\tNA\tNA\n' "$name"; continue; }
     size=$(awk '{s+=$2} END{printf "%.1f", s/1e6}' "${ref}.fai" 2>/dev/null || echo NA)
     python3 - "$f" "$name" "$size" <<'PY'

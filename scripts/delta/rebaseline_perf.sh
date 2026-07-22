@@ -24,7 +24,7 @@
 #   3) Splice the fresh perf rows into the baseline (writes a .bak first):
 #        bash scripts/delta/rebaseline_perf.sh $HOME/logfix.candidate.tsv
 #   4) Review the printed diff, then commit baseline_metrics.tsv with a note that
-#      the perf rows were re-frozen on the fixed build (git SHA / rneat --version).
+#      the perf rows were re-frozen on the fixed build (git SHA / eidolon --version).
 #
 # SAFETY CHECK (recommended, separate): confirm the logging fix left OUTPUT
 #   byte-identical. Run baseline_capture.sbatch on the fixed build and compare its

@@ -1,7 +1,7 @@
-# Template configuration for `rneat gen-cancer-reads` — simulate a tumor/normal
+# Template configuration for `eidolon gen-cancer-reads` — simulate a tumor/normal
 # mixture in one command (two gen-reads passes over the same reference + merge).
 #
-#   rneat gen-cancer-reads -c cancer_template.yml
+#   eidolon gen-cancer-reads -c cancer_template.yml
 #
 # Produces, in output_dir:
 #   <prefix>_normal_r1.fastq.gz (+ _r2 if paired)   normal-pass reads

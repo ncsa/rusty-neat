@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Score a somatic-variant caller against an rneat cancer-MVP truth VCF.
+# Score a somatic-variant caller against an eidolon cancer-MVP truth VCF.
 #
 # Pipeline:
 #   1. Index reference (bwa index + samtools faidx) if not already done.
@@ -7,7 +7,7 @@
 #   3. Align the tumor (merged) FASTQ → tumor.bam (sorted, dedup'd, indexed).
 #   4. Run GATK Mutect2 in tumor/normal mode against the indexed BAMs.
 #   5. Filter the raw calls with GATK FilterMutectCalls.
-#   6. Score the filtered VCF against the rneat-emitted truth VCF using
+#   6. Score the filtered VCF against the eidolon-emitted truth VCF using
 #      Illumina's som.py inside the GA4GH-recommended hap.py image.
 #
 # Every external tool runs in a Docker (or Podman-as-Docker) container with
@@ -279,7 +279,7 @@ fi
 
 # ── 6a. Filter truth VCF before scoring ─────────────────────────────────
 # som.py treats every record in the truth VCF as an expected somatic
-# call. The rneat-emitted truth carries both germline-carry-through
+# call. The eidolon-emitted truth carries both germline-carry-through
 # (NEAT_ORIGIN=shared) and somatic (NEAT_ORIGIN=somatic) records, so
 # without filtering, Mutect2's (correct) refusal to call the germline
 # carry-through variants shows up as ~99% false negatives. Filter the
@@ -293,7 +293,7 @@ if [[ -n "$TRUTH_FILTER" ]]; then
          && bcftools index -f -t '/work/$SCORING_TRUTH_NAME'"
     # If the filtered truth is empty the filter didn't match anything —
     # almost always means INFO/NEAT_ORIGIN isn't present on this truth
-    # VCF (e.g. a non-rneat truth set). Point the user at the escape
+    # VCF (e.g. a non-eidolon truth set). Point the user at the escape
     # hatch rather than silently scoring against zero records.
     filtered_count=$(run_in "$BCFTOOLS_IMG" sh -c \
         "bcftools view -H '/work/$SCORING_TRUTH_NAME' | wc -l" | tr -d '\r\n')

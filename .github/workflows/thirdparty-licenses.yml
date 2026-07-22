@@ -2,7 +2,7 @@ name: thirdparty-licenses
 
 # Guards the committed THIRDPARTY.yml against drift from Cargo.lock.
 #
-# rneat ships the licenses of all (transitive) Rust dependencies via a curated
+# eidolon ships the licenses of all (transitive) Rust dependencies via a curated
 # THIRDPARTY.yml (consumed by the Bioconda build's `cargo-bundle-licenses
 # --previous THIRDPARTY.yml --check-previous`). If a dependency is added or
 # bumped to a version whose license isn't recorded, the bundle goes stale and

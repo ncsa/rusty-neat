@@ -13,7 +13,7 @@
 # committed to a big node request, so a wrong URL just fails a wget, not a run.
 set -uo pipefail
 
-REPO_ROOT="${RNEAT_REPO:-$(cd "$(dirname "$0")/../.." && pwd)}"
+REPO_ROOT="${EIDOLON_REPO:-$(cd "$(dirname "$0")/../.." && pwd)}"
 source "$REPO_ROOT/scripts/delta/lib_report.sh" 2>/dev/null || true
 NEAT_DATA="${NEAT_DATA:-${SCRATCH:-$HOME}/neat_data}"
 DATA="${DATA:-}"

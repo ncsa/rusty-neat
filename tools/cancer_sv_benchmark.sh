@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Score a somatic SV caller against an rneat cancer-MVP truth VCF.
+# Score a somatic SV caller against an eidolon cancer-MVP truth VCF.
 #
 # This is the SV-caller companion to tools/cancer_benchmark.sh (which runs
 # Mutect2 + som.py for SNVs/indels). It closes the stage-2 exit criterion

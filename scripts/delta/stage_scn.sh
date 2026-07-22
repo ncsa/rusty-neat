@@ -12,10 +12,10 @@
 #     MM-BD3A= SRR27329600 (pool of 150 MM-BD3 females)  ← contrasting line
 #
 # NOTE — Pool-seq: the population reads are POOLED (150 individuals → allele frequencies,
-# not diploid genotypes). This staging supports **Phase 1** only: build rneat models
+# not diploid genotypes). This staging supports **Phase 1** only: build eidolon models
 # (mut-rate / seq-error / fragment / GC / bam) from real SCN Illumina data mapped to the
 # fitting reference, and check standard fidelity. Reproducing the population ALLELE
-# FREQUENCIES (João's Phase 2 ask) does NOT map onto rneat's single-sample model yet and
+# FREQUENCIES (João's Phase 2 ask) does NOT map onto eidolon's single-sample model yet and
 # is a separate design task — do not expect it from this script.
 #
 # Pipeline (mirrors stage_soy.sh): fetch assembly (NCBI datasets) -> fetch reads (ENA, no
@@ -33,7 +33,7 @@
 #
 # HEAVY: ~45 GB FASTQ per run (subsampled by default); bwa-mem2 index build; multi-hour.
 
-#SBATCH --job-name=rneat-stagescn
+#SBATCH --job-name=eidolon-stagescn
 #SBATCH --partition=cpu
 #SBATCH --account=bhrd-delta-cpu
 #SBATCH --nodes=1
@@ -46,7 +46,7 @@
 
 set -euo pipefail
 
-REPO_ROOT="${RNEAT_REPO:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}}"
+REPO_ROOT="${EIDOLON_REPO:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}}"
 source "$REPO_ROOT/scripts/delta/lib_report.sh"   # $SCRATCH + setup_conda/conda_activate
 
 D="${DATA_DIR:-$SCRATCH/neat_data/scn}"

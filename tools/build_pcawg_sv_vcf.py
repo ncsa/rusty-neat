@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Convert the PCAWG open-tier SV/CNV corpus (+ gnomAD-SV INS) into a single
-symbolic-SV VCF that `rneat gen-mut-model` can fit into an SvModel.
+symbolic-SV VCF that `eidolon gen-mut-model` can fit into an SvModel.
 
 This is the conversion half of the #218 cancer-SvModel refit. Run
 tools/fetch_pcawg_sv_corpus.sh first to download/extract the inputs.
@@ -49,7 +49,7 @@ import os
 import re
 import sys
 
-MIN_SV_LENGTH_BP = 50  # mirrors common::structs::sv_model::MIN_SV_LENGTH_BP
+MIN_SV_LENGTH_BP = 50  # mirrors eidolon_core::structs::sv_model::MIN_SV_LENGTH_BP
 
 
 def log(msg):
@@ -135,7 +135,7 @@ def parse_bedpe(bedpe_dir, chr_prefix, records, counts, allowed=None):
                     # A balanced inversion appears as TWO BEDPE rows: one
                     # head-to-head (h2hINV) + one tail-to-tail (t2tINV) junction
                     # (per-donor h2h/t2t counts are near-equal — they pair up).
-                    # rneat models an inversion as ONE event, so count it once,
+                    # eidolon models an inversion as ONE event, so count it once,
                     # off the h2hINV row, and skip t2tINV below to avoid the ~2x
                     # double-count. Both junctions bracket the same footprint, so
                     # the h2h span is a valid length observation.

@@ -1,17 +1,22 @@
-# The rusty-neat project
-Welcome to `rneat`, a Rust port of NEAT (https://github.com/ncsa/neat), a genetic simulation program that creates fastq that appear to be from sequencers, carry the same statistical properties as your data, and generate a golden bam and fastq that gives you ideal alignments and what variants were inserted. In addition, `rneat` generates "noise" in the form of sequencing errors as it is writing out files. These features can help you hone in your alignment and variant calling software to your data. Training models on your data will allow `rneat` to faithfully reproduce the statistical properties of your dataset.
+# The eidolon project
 
-We have spent some dedicated time toward gearing the current version of `rneat` to simulate cancer genetics, including adding structural variant simulations (CNV, BND, SVs, and others), and creating a wrapper that simulates purity levels and then stitches the results back together. We've geared this software with an aim at keeping memory usage as low and CPU time as short as possible. Let us know your real world experience by creating a Feedback issue, if you have something that's not quite a bug, or have a positive experience to share. As always, let us know if you find a bug and give as many details as you can to help us troubleshoot.
+> **Formerly `rusty-neat` / `rneat`** — renamed to `eidolon` in v2.0.0. Same tool, same
+> NEAT lineage; the `rneat` command still works as a deprecated alias for one transition
+> release. See `CHANGELOG.md`.
 
-`rneat` trains reusable models from your own data (mutation, sequencing-error, fragment-length, GC-bias, and BAM/alignment models), outputs a golden BAM with ideal alignments alongside the FASTQ and truth VCF, accepts a BED to target read creation to regions, and can read custom variants from an input VCF — including per-variant allele frequencies, to reproduce a continuous AF spectrum for pooled or somatic data. More recent releases add native tumor/normal simulation (`rneat gen-cancer-reads`), structural variants and copy number, per-tissue somatic models, and trinucleotide-context-aware SNP placement so context-specific mutational signatures reproduce. A file-streaming writer keeps disk I/O and footprint low. See `CHANGELOG.md` for the full release history, and please open a Feedback issue with your real-world experience.
+Welcome to `eidolon`, a Rust port of NEAT (https://github.com/ncsa/neat), a genetic simulation program that creates fastq that appear to be from sequencers, carry the same statistical properties as your data, and generate a golden bam and fastq that gives you ideal alignments and what variants were inserted. In addition, `eidolon` generates "noise" in the form of sequencing errors as it is writing out files. These features can help you hone in your alignment and variant calling software to your data. Training models on your data will allow `eidolon` to faithfully reproduce the statistical properties of your dataset.
+
+We have spent some dedicated time toward gearing the current version of `eidolon` to simulate cancer genetics, including adding structural variant simulations (CNV, BND, SVs, and others), and creating a wrapper that simulates purity levels and then stitches the results back together. We've geared this software with an aim at keeping memory usage as low and CPU time as short as possible. Let us know your real world experience by creating a Feedback issue, if you have something that's not quite a bug, or have a positive experience to share. As always, let us know if you find a bug and give as many details as you can to help us troubleshoot.
+
+`eidolon` trains reusable models from your own data (mutation, sequencing-error, fragment-length, GC-bias, and BAM/alignment models), outputs a golden BAM with ideal alignments alongside the FASTQ and truth VCF, accepts a BED to target read creation to regions, and can read custom variants from an input VCF — including per-variant allele frequencies, to reproduce a continuous AF spectrum for pooled or somatic data. More recent releases add native tumor/normal simulation (`eidolon gen-cancer-reads`), structural variants and copy number, per-tissue somatic models, and trinucleotide-context-aware SNP placement so context-specific mutational signatures reproduce. A file-streaming writer keeps disk I/O and footprint low. See `CHANGELOG.md` for the full release history, and please open a Feedback issue with your real-world experience.
 
 Find us on Zenodo:
 [![DOI](https://zenodo.org/badge/765847780.svg)](https://doi.org/10.5281/zenodo.20100558)
 
 ## Cancer simulation
 
-`rneat` simulates tumor / normal sequencing data end-to-end. The
-`rneat gen-cancer-reads -c <config.yml>` subcommand runs two `gen-reads` passes —
+`eidolon` simulates tumor / normal sequencing data end-to-end. The
+`eidolon gen-cancer-reads -c <config.yml>` subcommand runs two `gen-reads` passes —
 one normal-genotype, one tumor — over the same reference and merges them at a
 configurable purity into a single "tumor biopsy" FASTQ that downstream somatic
 callers (Mutect2, Strelka, Manta, …) consume directly, plus an origin-tagged truth
@@ -26,14 +31,14 @@ worked examples, output reference, benchmarking, and model training. Design
 rationale and calibration caveats live in
 [`docs/cancer_simulator.md`](docs/cancer_simulator.md).
 
-## How `rneat` compares to NEAT
+## How `eidolon` compares to NEAT
 
-`rneat` is a Rust port of NEAT that tracks the NEAT feature set while adding a
+`eidolon` is a Rust port of NEAT that tracks the NEAT feature set while adding a
 native cancer workflow, a low and flat memory footprint, and reproducible
 output. The table below compares the original Python 2 NEAT (the 2.x "genReads"
-line), the current Python 3 NEAT 4.x, and `rneat`.
+line), the current Python 3 NEAT 4.x, and `eidolon`.
 
-|                                            | **NEAT 2.x** (genReads)        | **NEAT 4.x**                              | **`rneat`**                                              |
+|                                            | **NEAT 2.x** (genReads)        | **NEAT 4.x**                              | **`eidolon`**                                              |
 | ------------------------------------------ | ------------------------------ | ----------------------------------------- | -------------------------------------------------------- |
 | Latest version                             | 2.1                            | 4.5.3                                      | 1.17.0                                                   |
 | Language                                   | Python 2                       | Python 3                                  | Rust                                                     |
@@ -50,21 +55,21 @@ line), the current Python 3 NEAT 4.x, and `rneat`.
 | Parallelism                                | Manual job sharding (`--job`)  | Multiprocessing (`--threads`): genome split into ~8 chunks/thread, then stitched | Multithreading (rayon) |
 | VCF comparison tooling                      | Bundled scripts                | ✅ `compare-vcfs`                          | ✅ `compare-vcfs`                                        |
 | I/O / memory                               | Temp files                     | Temp files                                | Streaming writes, low-memory focus                       |
-| Distribution                               | GitHub source                  | GitHub / PyPI                             | GitHub + binaries; Bioconda (`conda install -c bioconda rneat`) |
+| Distribution                               | GitHub source                  | GitHub / PyPI                             | GitHub + binaries; Bioconda (`conda install -c bioconda eidolon`) |
 
 **Citations.** NEAT: Stephens et al. (2016), *PLOS ONE* 11(11):e0167047,
 [doi:10.1371/journal.pone.0167047](https://doi.org/10.1371/journal.pone.0167047);
 and Allen et al. (2026), *Journal of Open Source Software* 11(121):9056,
-[doi:10.21105/joss.09056](https://doi.org/10.21105/joss.09056). `rneat`:
+[doi:10.21105/joss.09056](https://doi.org/10.21105/joss.09056). `eidolon`:
 [doi:10.5281/zenodo.20100558](https://doi.org/10.5281/zenodo.20100558).
 
-**Where `rneat` fits.** NEAT 4.x is a capable, actively developed simulator, and
-the two tools share most of their core feature set. `rneat` is the right choice
+**Where `eidolon` fits.** NEAT 4.x is a capable, actively developed simulator, and
+the two tools share most of their core feature set. `eidolon` is the right choice
 when you want:
 
 - **Cancer simulation** — a native tumor/normal workflow (`gen-cancer-reads`)
   with configurable purity and an origin-tagged truth VCF, plus CNVs and
-  per-tissue cancer models. This is `rneat`-only.
+  per-tissue cancer models. This is `eidolon`-only.
 - **Low, flat memory** — streaming FASTQ writes keep peak RSS small and roughly
   constant across genome size and thread count, which matters on shared HPC
   allocations.
@@ -72,28 +77,28 @@ when you want:
   the thread count.
 - **Easy deployment** — a single self-contained binary with no Python
   environment to manage, installable via Bioconda
-  (`conda install -c bioconda rneat`).
+  (`conda install -c bioconda eidolon`).
 
-# How to use `rneat`
+# How to use `eidolon`
 
 ## Prerequisites
 
-The easiest way to install `rneat` is via [Bioconda](https://bioconda.github.io/):
+The easiest way to install `eidolon` is via [Bioconda](https://bioconda.github.io/):
 
 ```
-conda install -c bioconda rneat
+conda install -c bioconda eidolon
 ```
 
 This pulls a prebuilt binary with all dependencies handled — no Rust toolchain
 required. If you prefer to build from source or grab a release binary, read on.
 
-You will need to install the rust toolchain to compile `rneat`, including `cargo`. Check the cargo documentation for instructions (https://doc.rust-lang.org/cargo/getting-started/installation.html). Alternatively, you can try one of the binaries on the release page. Select the one that matches your system and let us know if you run into errors. During compilation, you may run into errors, such as cmake not found. Some of the packages `rneat` uses have these dependencies. For Debian/Ubuntu this should be a simple `sudo apt install cmake` and for RHEL/Rocky type distros this should be `sudo dnf install cmake`. There may be some other requirements. Drop a comment if you need specific help.
+You will need to install the rust toolchain to compile `eidolon`, including `cargo`. Check the cargo documentation for instructions (https://doc.rust-lang.org/cargo/getting-started/installation.html). Alternatively, you can try one of the binaries on the release page. Select the one that matches your system and let us know if you run into errors. During compilation, you may run into errors, such as cmake not found. Some of the packages `eidolon` uses have these dependencies. For Debian/Ubuntu this should be a simple `sudo apt install cmake` and for RHEL/Rocky type distros this should be `sudo dnf install cmake`. There may be some other requirements. Drop a comment if you need specific help.
 
 Download the executable in the release (current version 1.5.0).
 
 ```bash
-$ rneat --help
-Usage: rneat [OPTIONS] [SUB-COMMAND]
+$ eidolon --help
+Usage: eidolon [OPTIONS] [SUB-COMMAND]
 
 SUB-COMMANDS:
   gen-reads              Generates reads for an input dataset
@@ -116,10 +121,10 @@ Options:
 To check options for a subcommand:
 
 ```bash
-$ rneat gen-reads --help
+$ eidolon gen-reads --help
 Generates reads for an input dataset
 
-Usage: rneat gen-reads [OPTIONS]
+Usage: eidolon gen-reads [OPTIONS]
 
 Options:
   -c, --configuration-yaml <configuration_yaml>  Path to configuration file.
@@ -129,10 +134,10 @@ Options:
 To run filter reads, check the help menu.
 
 ```bash
-$ rneat filter-reads --help
+$ eidolon filter-reads --help
 Filters the output of gen-reads
 
-Usage: rneat filter-reads --configuration-yaml <configuration_yaml>
+Usage: eidolon filter-reads --configuration-yaml <configuration_yaml>
 
 Options:
   -c, --configuration-yaml <configuration_yaml>  Path to configuration file.
@@ -142,10 +147,10 @@ Options:
 To run gen-mut-model:
 
 ```bash
-$ rneat gen-mut-model --help
+$ eidolon gen-mut-model --help
 Generates a mutation model from input VCF data
 
-Usage: rneat gen-mut-model [OPTIONS]
+Usage: eidolon gen-mut-model [OPTIONS]
 
 Options:
   -c, --configuration-yaml <configuration_yaml>  Path to configuration file.
@@ -154,37 +159,37 @@ Options:
 
 Use the help menu to see the available options and leave an issue if you find something bad happening.
 
-To compile and run `rneat` yourself, besides the rust toolchain, you will need `git` installed for your operating system. You will then need to git clone and cd into the repo directory. From your home directory in Linux the process might look something like:
+To compile and run `eidolon` yourself, besides the rust toolchain, you will need `git` installed for your operating system. You will then need to git clone and cd into the repo directory. From your home directory in Linux the process might look something like:
 
 ```bash
-~/$ git clone git@github.com:ncsa/rusty-neat.git
-~/$ cd rusty-neat
-~/rusty-neat/$
+~/$ git clone git@github.com:ncsa/eidolon.git
+~/$ cd eidolon
+~/eidolon/$
 ```
 
-For Windows and Mac users, try the binary packaged with the latest version of `rneat`.
+For Windows and Mac users, try the binary packaged with the latest version of `eidolon`.
 
 Once in the repo, you can build the program either in debug (default) or release mode. The main difference is how much info it gives you if there is an error. Release mode also has some optimizations to run it faster.
 
 ```bash
-~/rusty-neat/$ cargo build --release
+~/eidolon/$ cargo build --release
 ```
 
 If you prefer to run the package directly without using the binary, you can also use
 ```bash
-~/rusty-neat/$ cargo run -- gen-reads -c my_config.yml
+~/eidolon/$ cargo run -- gen-reads -c my_config.yml
 ```
 
 Rust will download any required packages. Compiling Rust code is the slowest part of the process. The final binary will be built and the program run immediately after in the second case. To run the program manually, from the repo main dir, run
 
 ```bash
-~/rusty-neat/$ ./target/release/rneat -h
+~/eidolon/$ ./target/release/eidolon -h
 ```
 
-`rneat` uses a configuration file to read values it needs for the run. A command line execution might look like this:
+`eidolon` uses a configuration file to read values it needs for the run. A command line execution might look like this:
 
 ```bash
-~/rusty-neat/$ ./target/release/rneat -c /path/to/filled/in/config.yml
+~/eidolon/$ ./target/release/eidolon -c /path/to/filled/in/config.yml
 ```
 If you record the output in the logs of Seed string to regenerate these exact results: XXXXXXX, you should be able to use that string as input with rng_seed and reproduce your results.
 
@@ -203,7 +208,7 @@ of a fragment in the simulated DNA. If there is a pair with this read, it will h
 
 BAM Output
 ==========
-`rneat` can write a golden BAM file alongside the FASTQ output. The BAM contains the same reads as the FASTQ — same sequences, same quality scores, same variants and sequencing errors applied — with alignment information included. To enable it, set `produce_bam: true` in your `gen-reads` config. The output path is derived automatically from `output_filename` (e.g. `output_filename: my_run` → `my_run.bam`). Please note that the BAM has a higher overhead than the fastq, and may take longer to produce.
+`eidolon` can write a golden BAM file alongside the FASTQ output. The BAM contains the same reads as the FASTQ — same sequences, same quality scores, same variants and sequencing errors applied — with alignment information included. To enable it, set `produce_bam: true` in your `gen-reads` config. The output path is derived automatically from `output_filename` (e.g. `output_filename: my_run` → `my_run.bam`). Please note that the BAM has a higher overhead than the fastq, and may take longer to produce.
 
 ```yaml
 produce_bam: true
@@ -256,12 +261,12 @@ You can supply a VCF of variants to force into the simulation:
 input_vcf: /path/to/variants.vcf.gz
 ```
 
-`rneat` will place every variant from the VCF into the corresponding position in the simulated reads and the output VCF. Random variants are still generated at `mutation_rate` for all positions not covered by the input VCF; set `mutation_rate: 0.0` to disable random variants entirely and output only the provided set of variants.
+`eidolon` will place every variant from the VCF into the corresponding position in the simulated reads and the output VCF. Random variants are still generated at `mutation_rate` for all positions not covered by the input VCF; set `mutation_rate: 0.0` to disable random variants entirely and output only the provided set of variants.
 
 **Requirements**
 
 - The VCF must be single-sample (one sample column).
-- Every record must include `GT` in the FORMAT field. `rneat` uses the genotype to determine whether to apply the variant to all reads covering the position (homozygous, e.g. `1/1`) or only a probabilistic subset (heterozygous, e.g. `0/1`). Records without `GT` are rejected.
+- Every record must include `GT` in the FORMAT field. `eidolon` uses the genotype to determine whether to apply the variant to all reads covering the position (homozygous, e.g. `1/1`) or only a probabilistic subset (heterozygous, e.g. `0/1`). Records without `GT` are rejected.
 - Contig names must match the short names derived from the reference FASTA (text after `>` up to the first whitespace character). Variants on unrecognised contigs are skipped with a warning.
 - Both `.vcf` and `.vcf.gz` files are accepted.
 
@@ -277,7 +282,7 @@ input_vcf: /path/to/variants.vcf.gz
 
 **Symbolic / structural variants**
 
-Symbolic ALTs (VCF 4.2 §1.4) are accepted and round-tripped to the output VCF verbatim, with `INFO/END`, `INFO/SVLEN`, and `INFO/CN` preserved. As of v1.10, `rneat` can also generate symbolic SVs *de novo* from a learned model — opt in by setting `sv_rate_scale: 1.0` (or higher) in your gen-reads YAML; see "De novo SV generation" below.
+Symbolic ALTs (VCF 4.2 §1.4) are accepted and round-tripped to the output VCF verbatim, with `INFO/END`, `INFO/SVLEN`, and `INFO/CN` preserved. As of v1.10, `eidolon` can also generate symbolic SVs *de novo* from a learned model — opt in by setting `sv_rate_scale: 1.0` (or higher) in your gen-reads YAML; see "De novo SV generation" below.
 
 | SV | Effect on read depth | Effect on read sequence |
 |----|----------------------|-------------------------|
@@ -294,15 +299,15 @@ When an SV zeroes out coverage (hom `<DEL>` or `INFO/CN=0`), the mutation rate o
 
 **Current caveats**
 
-- *Multi-allelic records*: only the first ALT allele is used; additional alleles are silently ignored. Split multi-allelic records with `bcftools norm -m -` before passing to `rneat`. (This is true for both literal and symbolic ALTs — `<DEL>,<DUP>` on the same line is treated as the first ALT only.)
-- *REF allele verification*: `rneat` does not check that the REF field matches the reference sequence at that position. Mismatches will produce biologically incorrect output without any warning.
+- *Multi-allelic records*: only the first ALT allele is used; additional alleles are silently ignored. Split multi-allelic records with `bcftools norm -m -` before passing to `eidolon`. (This is true for both literal and symbolic ALTs — `<DEL>,<DUP>` on the same line is treated as the first ALT only.)
+- *REF allele verification*: `eidolon` does not check that the REF field matches the reference sequence at that position. Mismatches will produce biologically incorrect output without any warning.
 - *Literal complex variants*: records whose REF and ALT are both multi-base strings (and the ALT is literal bases, not a `<TAG>`) are skipped with a logged warning and do not appear in the output.
 - *`<INV>` interior is forward-strand*: inversion **junction** reads are emitted (the chimeric signal callers use to detect the inversion), but reads from the *interior* of an inverted span are still transcribed from the forward-strand reference. The `<INV>` record round-trips to the output VCF.
 - *Breakends*: `<BND>` junction reads are generated (chimeric reads spanning the mate locus; validated against Manta — see the ACCESS report), and the record round-trips to the output VCF.
 
 **De novo SV generation**
 
-`rneat` can sample symbolic SVs (`<DEL>`, `<DUP>`, `<CNV>`) directly from a learned `SvModel` rather than relying on user-supplied records. Generation is **off by default** (opt-in via `sv_rate_scale`) so v1.9 pipelines remain unchanged.
+`eidolon` can sample symbolic SVs (`<DEL>`, `<DUP>`, `<CNV>`) directly from a learned `SvModel` rather than relying on user-supplied records. Generation is **off by default** (opt-in via `sv_rate_scale`) so v1.9 pipelines remain unchanged.
 
 To enable, add a single line to your gen-reads YAML:
 
@@ -314,10 +319,10 @@ sv_rate_scale: 1.0
 - `1.0` reproduces the rate from the trained model.
 - Larger values scale the rate proportionally for stress testing.
 
-When enabled, `rneat` consults `MutationModel.sv_model`:
+When enabled, `eidolon` consults `MutationModel.sv_model`:
 
-1. **If you trained your own model** with `rneat gen-mut-model -c <yaml>` against an SV-rich VCF (e.g. a gnomAD-SV slice), the model file includes a fitted SV component covering type / length / copy-number / homozygous frequencies. Pass it via `mutation_model: /path/to/your.json.gz` in the gen-reads YAML.
-2. **If you don't supply a model**, gen-reads loads the bundled default. The default carries **approximate** gnomAD-SV v2.1 parameters — useful for kicking the tires, but not a substitute for retraining on data that matches your downstream use case. See `common/src/models/sv_model_defaults.rs` for the parameter sources.
+1. **If you trained your own model** with `eidolon gen-mut-model -c <yaml>` against an SV-rich VCF (e.g. a gnomAD-SV slice), the model file includes a fitted SV component covering type / length / copy-number / homozygous frequencies. Pass it via `mutation_model: /path/to/your.json.gz` in the gen-reads YAML.
+2. **If you don't supply a model**, gen-reads loads the bundled default. The default carries **approximate** gnomAD-SV v2.1 parameters — useful for kicking the tires, but not a substitute for retraining on data that matches your downstream use case. See `eidolon-core/src/models/sv_model_defaults.rs` for the parameter sources.
 
 Per-contig sampling: Poisson count from `per_base_rate × contig_len × sv_rate_scale` → weighted type pick → log-normal length (rejected outside `[50bp, contig_len / 4]`) → uniform anchor with overlap and N-gap rejection → `INFO/CN` draw for `<CNV>` → Bernoulli for genotype.
 
@@ -330,7 +335,7 @@ Caveats:
 
 FASTQ Shuffling
 ===============
-`rneat` writes reads in contig order. To shuffle the output, use `seqkit shuffle` as a post-processing step:
+`eidolon` writes reads in contig order. To shuffle the output, use `seqkit shuffle` as a post-processing step:
 
 ```bash
 # single-ended
@@ -347,7 +352,7 @@ seqkit shuffle -2 sample_R1.fastq.gz sample_R2.fastq.gz \
 ======================
 Real Illumina libraries whose insert is shorter than the read length "read through" the
 fragment into the 3′ sequencing adapter — the read's tail is adapter sequence, not genome.
-`rneat` can simulate this so short-insert data looks realistic and exercises downstream
+`eidolon` can simulate this so short-insert data looks realistic and exercises downstream
 adapter-trimming QC. **Disabled by default** — output is byte-identical to prior versions
 when the `adapters` block is omitted.
 
@@ -403,7 +408,7 @@ baseline is the reduced effective coverage of short inserts (mate overlap), not 
 
 Parallel Processing
 ===================
-`rneat gen-reads` processes contigs in parallel by default using rayon's work-stealing thread pool. Each contig is an independent unit of work — variant generation, fragment sampling, and FASTQ/BAM writing all happen concurrently across contigs — so references with many contigs scale well across cores.
+`eidolon gen-reads` processes contigs in parallel by default using rayon's work-stealing thread pool. Each contig is an independent unit of work — variant generation, fragment sampling, and FASTQ/BAM writing all happen concurrently across contigs — so references with many contigs scale well across cores.
 
 Output is **byte-identical regardless of `num_threads`** (the same seed always produces the same reads in the same order), so you can change the thread count freely without affecting results.
 
@@ -411,7 +416,7 @@ A note on scaling: read generation is largely **memory-bandwidth bound**, so on 
 
 **Thread count:**
 
-By default `rneat` uses all available logical cores. You can cap the thread count with the `num_threads` config key:
+By default `eidolon` uses all available logical cores. You can cap the thread count with the `num_threads` config key:
 
 ```yaml
 # use 4 threads instead of all available cores
@@ -429,7 +434,7 @@ Omit `num_threads` (or set it to `.`) to restore the default all-cores behaviour
 
 Read generation moves a lot of data relative to the arithmetic it does, so it is
 largely **memory-bandwidth bound**. On a typical desktop or laptop (which has
-only a couple of memory channels), a single `rneat` thread can already saturate
+only a couple of memory channels), a single `eidolon` thread can already saturate
 much of the available memory bandwidth — so adding cores yields little speedup
 and, past a point, can even run *slower* as threads contend for the memory bus.
 In our desktop benchmarks, large references ran about as fast (sometimes faster)
@@ -440,7 +445,7 @@ Practical guidance:
 - **Desktop / laptop:** try `num_threads: 1` (or a small number) and compare — it
   is often as fast or faster than all-cores for a single large run, and leaves
   cores free for other work. If you are simulating **many samples**, running
-  several single-threaded `rneat` jobs in parallel typically beats one
+  several single-threaded `eidolon` jobs in parallel typically beats one
   many-threaded job.
 - **HPC nodes** with many memory channels (and multiple sockets) have far more
   aggregate bandwidth, so higher `num_threads` scales better there.
@@ -485,7 +490,7 @@ actually faster.
 
 **BAM output is fully parallel:**
 
-`rneat` uses a per-contig temp-file strategy: each contig worker writes its alignment records to a private temporary BAM body file, then a single concatenation pass assembles them in reference order into the final coordinate-sorted BAM.
+`eidolon` uses a per-contig temp-file strategy: each contig worker writes its alignment records to a private temporary BAM body file, then a single concatenation pass assembles them in reference order into the final coordinate-sorted BAM.
 
 **Reproducibility:**
 
@@ -493,9 +498,9 @@ Each contig's random number generator is derived deterministically from the pare
 
 Reading Bed Data
 ================
-`rneat` can now read bed data and filter the reads based on regions specified. This comes with some caveats. First is that rust can't handle any header lines or non-header rows in the bed file, because of potential range of possibilities. Second, the names must match what is in the fasta. Third, `rneat` can only filter, and does not use the rest of the bed information. It treats each record as a region of interest only.
+`eidolon` can now read bed data and filter the reads based on regions specified. This comes with some caveats. First is that rust can't handle any header lines or non-header rows in the bed file, because of potential range of possibilities. Second, the names must match what is in the fasta. Third, `eidolon` can only filter, and does not use the rest of the bed information. It treats each record as a region of interest only.
 
-Bed data will have some challenges. For example, if the contig names in the bed file don't match the assumed contig name from the fasta file, how will rust be able to know which is what? To make things work, we are going to assume, for now, that the bed file contig names match the names as derived by `rneat`. To determine this:
+Bed data will have some challenges. For example, if the contig names in the bed file don't match the assumed contig name from the fasta file, how will rust be able to know which is what? To make things work, we are going to assume, for now, that the bed file contig names match the names as derived by `eidolon`. To determine this:
 
 First, in a linux terminal, use your input fasta to find the names of the contigs like this:
 
@@ -506,7 +511,7 @@ $ grep "^>" input.fasta
 >NC_001135.5 Saccharomyces cerevisiae S288C chromosome III, complete sequence
 >etc
 ```
-This will give you the full fasta name. `rneat` determines the short name of the input fasta by skipping the initial '>' character, then taking the string up to the first whitespace delimiter. In the above example, the short names are "NC_001133.9", "NC_001134.8", etc. 
+This will give you the full fasta name. `eidolon` determines the short name of the input fasta by skipping the initial '>' character, then taking the string up to the first whitespace delimiter. In the above example, the short names are "NC_001133.9", "NC_001134.8", etc. 
 
 Next, we check the bed. This example awk command will look for unique values in the first column of your bed file and print out what it finds. 
 
@@ -517,17 +522,17 @@ $ awk '!seen[$1]++ {print $1}' file.bed
 3
 etc
 ```
-In this case, the bed file uses a simple numbering scheme to number the chromosomes. We can see a mapping with the roman numeral chromosomes in the name, but it's tricky to handle consistently. So, the following command will allow you, the user, to map these chromosomes and thus instruct `rneat`. Yours will vary based on the inputs.
+In this case, the bed file uses a simple numbering scheme to number the chromosomes. We can see a mapping with the roman numeral chromosomes in the name, but it's tricky to handle consistently. So, the following command will allow you, the user, to map these chromosomes and thus instruct `eidolon`. Yours will vary based on the inputs.
 
 ```bash
 awk -F'\t' '{$1=($1=="1"?"NC_001133.9":$1); $1=($1=="2"?"NC_001134.8":$1); print}' OFS='\t' file.bed > file_renamed.bed
 ```
-You will have to tailor this command to your dataset, but this is one way to map the names from the bed to the fasta in a way `rneat` will understand.
+You will have to tailor this command to your dataset, but this is one way to map the names from the bed to the fasta in a way `eidolon` will understand.
 
 Filtering Your Data
 ====================
 
-To run filter-reads, you must first copy the filter_reads_template.yml file from rusty-neat/template_config/ to a directory of your choosing. Then you can edit the file in your favorite editor. The configuration has four fields:
+To run filter-reads, you must first copy the filter_reads_template.yml file from eidolon/template_config/ to a directory of your choosing. Then you can edit the file in your favorite editor. The configuration has four fields:
 
 ```bash
 bed_file: /path/to/my.bed # required
@@ -561,24 +566,24 @@ overwrite_output: false # optional, default false
 ```
 Set to `true` to allow filter-reads to overwrite existing output files. When `false`, the run will error if the output file already exists.
 
-Once your files are entered and your config is saved, you can run rneat:
+Once your files are entered and your config is saved, you can run eidolon:
 
 ```bash
-$ rneat filter-reads -c my_config.yml
+$ eidolon filter-reads -c my_config.yml
 ```
 Your output will give you the filenames and success status.
 
-IMPORTANT: This feature only works on fastq files generated by `rneat`. It is untested on generic VCF files, but should work. The reason it only works with `rneat`-generated fastq files is that `rneat` uses a naming scheme that the parser can use to identify where the read is located (enabling filtering), whereas an average fastq will not have that info.
+IMPORTANT: This feature only works on fastq files generated by `eidolon`. It is untested on generic VCF files, but should work. The reason it only works with `eidolon`-generated fastq files is that `eidolon` uses a naming scheme that the parser can use to identify where the read is located (enabling filtering), whereas an average fastq will not have that info.
 
 Generating a Mutation Model
 ====================
-`rneat` now includes the ability to read in real data and learn the parameters to reproduce it in a simulation run. So far, this is limited to the mutation model, using the `rneat gen-mut-model` subcommand.
+`eidolon` now includes the ability to read in real data and learn the parameters to reproduce it in a simulation run. So far, this is limited to the mutation model, using the `eidolon gen-mut-model` subcommand.
 
 ```bash
-$ rneat gen-mut-model -c gen_mut_model_config.yml
+$ eidolon gen-mut-model -c gen_mut_model_config.yml
 ```
 
-The inputs are a single-sample VCF and the reference FASTA the VCF was called against. `rneat` computes statistics for indels and SNPs and builds the trinucleotide model of SNP generation, as in the original `rneat`. The output is a gzipped JSON model file that can be passed directly to `gen-reads` via its `mutation_model` config key.
+The inputs are a single-sample VCF and the reference FASTA the VCF was called against. `eidolon` computes statistics for indels and SNPs and builds the trinucleotide model of SNP generation, as in the original `eidolon`. The output is a gzipped JSON model file that can be passed directly to `gen-reads` via its `mutation_model` config key.
 
 Copy `template_config/gen_mut_model_template.yml` to a directory of your choosing and fill in the fields:
 
@@ -609,7 +614,7 @@ transition_matrix_file: /path/to/matrix.tsv
 
 **VCF requirements:**
 - Single sample only — multi-sample VCFs are not yet supported (tracked in #412)
-- Each variant record must have `GT` in the `FORMAT` column; `rneat` hard-errors if GT is missing
+- Each variant record must have `GT` in the `FORMAT` column; `eidolon` hard-errors if GT is missing
 - `QUAL=.` is accepted and treated as quality score 0
 
 Caveats: Only one sample can be read at this point (#412). Currently, high-mutation regions and common variants features from Python NEAT are not yet implemented (#413).
@@ -620,10 +625,10 @@ We will continue to improve this process in the future. If you have suggestions 
 
 Generating a Sequencing Error Model
 ====================
-`rneat` can also learn a sequencing error model from real FASTQ data using the `rneat gen-seq-error-model` subcommand. This reads per-base quality scores from the FASTQ to build a Markov quality score model and computes an average base error rate. Optionally, you can supply a BAM file or a custom TSV to set the SNP transition matrix (which base errors are most likely to become which other bases).
+`eidolon` can also learn a sequencing error model from real FASTQ data using the `eidolon gen-seq-error-model` subcommand. This reads per-base quality scores from the FASTQ to build a Markov quality score model and computes an average base error rate. Optionally, you can supply a BAM file or a custom TSV to set the SNP transition matrix (which base errors are most likely to become which other bases).
 
 ```bash
-$ rneat gen-seq-error-model -c gen_seq_error_model_config.yml
+$ eidolon gen-seq-error-model -c gen_seq_error_model_config.yml
 ```
 
 The output is a gzipped JSON model file that can be passed directly to `gen-reads` via its `seq_error_model` config key.
@@ -667,7 +672,7 @@ transition_matrix_file: /path/to/matrix.tsv
 **SNP transition matrix priority:**
 1. `transition_matrix_file` (explicit TSV) — highest priority
 2. `bam_file` (inferred from MD-tagged BAM mismatches)
-3. Default matrix from Python `rneat` — used when neither is provided
+3. Default matrix from Python `eidolon` — used when neither is provided
 
 **BAM MD tag requirement:**
 The BAM path requires MD tags to identify reference bases at mismatch positions. Most aligners (BWA-MEM, STAR with `--outSAMattributes MD`) add them automatically. If yours does not, generate them with:
@@ -711,10 +716,10 @@ Some common platform bin sets (consult your sequencer's documentation for the au
 
 Generating a GC Bias Model
 ====================
-`rneat` can learn a GC bias model from a reference FASTA and an aligned BAM file using the `rneat gen-gc-bias-model` subcommand. It walks the BAM once to accumulate per-base reference coverage, tiles the reference in fixed-size windows, computes the GC% of each window, looks up the mean coverage over that window, and accumulates the data into a 101-bin weight table (one bin per integer GC percentage, 0–100%). The resulting model can be passed to `gen-reads` to make fragment start positions favour regions whose GC content matches the coverage bias observed in your data.
+`eidolon` can learn a GC bias model from a reference FASTA and an aligned BAM file using the `eidolon gen-gc-bias-model` subcommand. It walks the BAM once to accumulate per-base reference coverage, tiles the reference in fixed-size windows, computes the GC% of each window, looks up the mean coverage over that window, and accumulates the data into a 101-bin weight table (one bin per integer GC percentage, 0–100%). The resulting model can be passed to `gen-reads` to make fragment start positions favour regions whose GC content matches the coverage bias observed in your data.
 
 ```bash
-$ rneat gen-gc-bias-model -c gen_gc_bias_model_config.yml
+$ eidolon gen-gc-bias-model -c gen_gc_bias_model_config.yml
 ```
 
 The output is a gzipped JSON model file that can be passed directly to `gen-reads` via its `gc_bias_model` config key.
@@ -782,10 +787,10 @@ gc_bias_normalize_coverage: true
 
 Generating a Fragment Length Model
 ====================
-`rneat` can learn a fragment length model from real paired-end alignment data using the `rneat gen-frag-length-model` subcommand. It reads a BAM or SAM file, collects the template lengths (TLEN) of confidently-mapped concordant read pairs, filters out rare and extreme-outlier lengths, then fits a normal distribution to the result and writes a `FragmentLengthModel` that `gen-reads` can use.
+`eidolon` can learn a fragment length model from real paired-end alignment data using the `eidolon gen-frag-length-model` subcommand. It reads a BAM or SAM file, collects the template lengths (TLEN) of confidently-mapped concordant read pairs, filters out rare and extreme-outlier lengths, then fits a normal distribution to the result and writes a `FragmentLengthModel` that `gen-reads` can use.
 
 ```bash
-$ rneat gen-frag-length-model -c gen_frag_length_model_config.yml
+$ eidolon gen-frag-length-model -c gen_frag_length_model_config.yml
 ```
 
 The output is a gzipped JSON model file that can be passed directly to `gen-reads` via its `fragment_model` config key.
@@ -821,10 +826,10 @@ Fragment lengths that exceed `median + 10 × MAD` (median absolute deviation) ar
 
 Building multiple BAM-derived models in one pass
 ====================
-If you need both a fragment length model and a GC bias model from the same BAM, `rneat gen-bam-models` walks the BAM once and feeds both observers from the single pass — half the I/O of running the two per-tool commands back-to-back.
+If you need both a fragment length model and a GC bias model from the same BAM, `eidolon gen-bam-models` walks the BAM once and feeds both observers from the single pass — half the I/O of running the two per-tool commands back-to-back.
 
 ```bash
-$ rneat gen-bam-models -c gen_bam_models_config.yml
+$ eidolon gen-bam-models -c gen_bam_models_config.yml
 ```
 
 Copy `template_config/gen_bam_models.yml` and fill in the sections for whichever models you want:
@@ -854,10 +859,10 @@ Both sections are optional but at least one must be present. The output models a
 
 Comparing a downstream caller's VCF against the golden VCF
 ==========================================================
-After running `gen-reads`, you can validate a downstream variant caller against the simulated truth using `rneat compare-vcfs`. The subcommand classifies every variant into TP / FN / FP, catches denotation-different alternates that exact matching would mis-classify as both an FN and an FP (e.g., a left-aligned indel in the called VCF versus the same indel right-aligned in the golden), and attributes the surviving FNs to specific reasons drawn from the simulator's configuration.
+After running `gen-reads`, you can validate a downstream variant caller against the simulated truth using `eidolon compare-vcfs`. The subcommand classifies every variant into TP / FN / FP, catches denotation-different alternates that exact matching would mis-classify as both an FN and an FP (e.g., a left-aligned indel in the called VCF versus the same indel right-aligned in the golden), and attributes the surviving FNs to specific reasons drawn from the simulator's configuration.
 
 ```bash
-$ rneat compare-vcfs -c compare_vcfs_config.yml
+$ eidolon compare-vcfs -c compare_vcfs_config.yml
 ```
 
 Copy `template_config/compare_vcfs_template.yml` and fill in:
@@ -904,7 +909,7 @@ The run produces four files under `output_dir`:
 Running on HPC
 ==============
 
-`rneat` runs as a single process and fits naturally onto a single HPC compute node. No MPI, distributed computing, or special environment setup is required. The notes below cover resource budgets for whole-genome human-scale runs.
+`eidolon` runs as a single process and fits naturally onto a single HPC compute node. No MPI, distributed computing, or special environment setup is required. The notes below cover resource budgets for whole-genome human-scale runs.
 
 ### gen-reads
 
@@ -987,20 +992,20 @@ Single-threaded; streams TLEN fields from the BAM. A full human genome BAM at 30
 
 ### Environment notes
 
-- The `rneat` binary has no runtime dependencies beyond a standard C library (glibc), which is present on all Linux HPC systems.
+- The `eidolon` binary has no runtime dependencies beyond a standard C library (glibc), which is present on all Linux HPC systems.
 - No module loads or conda environments are required — copy the release binary to your scratch or project directory and run it directly.
 - If you compile from source on the cluster, ensure `cmake` is available (`module load cmake` on most systems) before running `cargo build --release`.
 
 **Current Benchmarks**
-We ran some benchmarks on `rneat` on my home desktop, a very basic Linux desktop, using data pulled from public resources on the internet (mostly ncbi). The "yeast" is brewer's yeast. These are the results:
+We ran some benchmarks on `eidolon` on my home desktop, a very basic Linux desktop, using data pulled from public resources on the internet (mostly ncbi). The "yeast" is brewer's yeast. These are the results:
 
 ```text
 [16:26:39] Build complete.
-rneat Benchmark Report
+eidolon Benchmark Report
 Run:        20260510_162639
 Machine:    pop-os  |  8 logical CPUs
 Coverage:   10x    |  Read length: 151 bp
-Binary:     /home/joshfactorial/code/rusty-neat/target/release/rneat
+Binary:     /home/joshfactorial/code/eidolon/target/release/eidolon
 ──────────────────────────────────────────────────────────────────────
 SECTION 1: Single-ended read generation
 Genome          Size(MB)   Wall time  Peak RSS(MB)      CPU%

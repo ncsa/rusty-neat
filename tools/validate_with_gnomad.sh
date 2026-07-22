@@ -11,13 +11,13 @@
 #   3. Pre-filters: split multi-allelic, drop INV/CPX/CTX/BND/<INS:ME:*>
 #      (informational — the trainer drops these anyway, but pre-filtering
 #      keeps the warn-log volume manageable)
-#   4. Times `rneat gen-mut-model` and reports wall-clock duration
+#   4. Times `eidolon gen-mut-model` and reports wall-clock duration
 #   5. Pretty-prints the resulting `sv_model` block from the trained JSON
 #   6. Compares the fitted parameters against the bundled defaults in
-#      common/src/models/sv_model_defaults.rs and flags large deviations
+#      eidolon-core/src/models/sv_model_defaults.rs and flags large deviations
 #
 # Dependencies (must be on PATH):
-#   - rneat (built via `cargo build --release`)
+#   - eidolon (built via `cargo build --release`)
 #   - bcftools
 #   - jq
 #   - samtools (for FASTA indexing / slicing)
@@ -147,7 +147,7 @@ overwrite_output: true
 EOF
     echo "Running gen-mut-model..."
     local start=$(date +%s)
-    /usr/bin/time -v rneat gen-mut-model -c "$config" 2> train.timing.log
+    /usr/bin/time -v eidolon gen-mut-model -c "$config" 2> train.timing.log
     local end=$(date +%s)
     local elapsed=$((end - start))
     echo "Wall clock: ${elapsed}s"
@@ -245,7 +245,7 @@ rng_seed: gnomad-validation
 EOF
     mkdir -p reads_out
     local start=$(date +%s)
-    rneat gen-reads -c "$config" 2>&1 | tail -20
+    eidolon gen-reads -c "$config" 2>&1 | tail -20
     local end=$(date +%s)
     echo "gen-reads wall clock: $((end - start))s"
     local n_sv

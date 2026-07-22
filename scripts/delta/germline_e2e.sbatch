@@ -1,7 +1,7 @@
 #!/bin/bash
-# SLURM job: germline recall comparison — rneat vs NEAT 4 — on Delta.
+# SLURM job: germline recall comparison — eidolon vs NEAT 4 — on Delta.
 #
-# For EACH simulator (rneat and NEAT 4), simulates SNP/indel-only germline reads
+# For EACH simulator (eidolon and NEAT 4), simulates SNP/indel-only germline reads
 # and runs the SAME downstream pipeline (BWA-MEM2 → GATK HaplotypeCaller → hap.py),
 # scoring the caller's recall/precision/F1 against THAT tool's own truth VCF. The
 # two summaries are reported side-by-side: "how well does a standard germline
@@ -17,24 +17,24 @@
 #   3. GATK HaplotypeCaller (gVCF -> genotyped VCF)
 #   4. hap.py: called vs that tool's truth VCF
 #
-# Prerequisites: run scripts/delta/setup.sh once (builds rneat, neat4 + bioinf
+# Prerequisites: run scripts/delta/setup.sh once (builds eidolon, neat4 + bioinf
 # conda envs, hap.py SIF). Submit from the repo root.
 #
 # Usage:
 #   sbatch scripts/delta/germline_e2e.sbatch
-#   REFERENCE=/path/ref.fa COVERAGE=30 TOOLS="rneat neat" sbatch scripts/delta/germline_e2e.sbatch
-#   TOOLS=rneat sbatch ...        # rneat only (skip the NEAT 4 arm)
-#   SHUFFLE=1 TOOLS=rneat sbatch ...   # randomize read order before alignment
+#   REFERENCE=/path/ref.fa COVERAGE=30 TOOLS="eidolon neat" sbatch scripts/delta/germline_e2e.sbatch
+#   TOOLS=eidolon sbatch ...        # eidolon only (skip the NEAT 4 arm)
+#   SHUFFLE=1 TOOLS=eidolon sbatch ...   # randomize read order before alignment
 #       (off by default; run once shuffled vs unshuffled to confirm the caller
 #        is read-order-independent — same recall expected)
-#   ADAPTERS=1 MEASURE_REALISM=1 TOOLS=rneat sbatch ...   # 3' adapter readthrough
+#   ADAPTERS=1 MEASURE_REALISM=1 TOOLS=eidolon sbatch ...   # 3' adapter readthrough
 #       on, aligned raw, with adapter/insert/soft-clip QC captured (#125).
-#   ADAPTERS=1 TRIM=1 MEASURE_REALISM=1 TOOLS=rneat sbatch ...  # + fastp-trim
+#   ADAPTERS=1 TRIM=1 MEASURE_REALISM=1 TOOLS=eidolon sbatch ...  # + fastp-trim
 #       before alignment (the realistic Illumina pipeline).
 #       Drive the off/on-untrimmed/on-trimmed A/B/C matrix with
 #       scripts/delta/run_adapter_validation.sh (REPS for mean±sd).
 
-#SBATCH --job-name=rneat-germline
+#SBATCH --job-name=eidolon-germline
 #SBATCH --partition=cpu
 #SBATCH --account=bhrd-delta-cpu
 #SBATCH --nodes=1
@@ -49,13 +49,13 @@ set -euo pipefail
 
 # ── Parameters ───────────────────────────────────────────────────────────
 # Under sbatch, $0 is a spooled copy — derive the repo from the submit dir
-# (run `sbatch` from the repo root) or override with RNEAT_REPO.
-REPO_ROOT="${RNEAT_REPO:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}}"
+# (run `sbatch` from the repo root) or override with EIDOLON_REPO.
+REPO_ROOT="${EIDOLON_REPO:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}}"
 source "$REPO_ROOT/scripts/delta/lib_report.sh"   # archive_run() + Delta path resolution
 
 REFERENCE="${REFERENCE:-$SCRATCH/neat_data/chr22.fa}"
 OUTDIR="${OUTDIR:-$SCRATCH/germline_$SLURM_JOB_ID}"
-TOOLS="${TOOLS:-rneat neat}"          # which simulators to run + score
+TOOLS="${TOOLS:-eidolon neat}"          # which simulators to run + score
 # Seeds. Under `sbatch --array=1-3` (triplicate), each replicate gets a distinct
 # seed (independent draw) and SLURM spreads tasks across nodes; plain submit uses
 # the base seeds.
@@ -67,7 +67,7 @@ COVERAGE="${COVERAGE:-30}"
 READ_LEN="${READ_LEN:-151}"
 FRAG_MEAN="${FRAG_MEAN:-350}"
 FRAG_SD="${FRAG_SD:-50}"
-# Read-order randomization before alignment (off by default). rneat/NEAT emit
+# Read-order randomization before alignment (off by default). eidolon/NEAT emit
 # reads in genome order; SHUFFLE=1 randomizes (seqkit, paired) to mimic real
 # sequencer output and to demonstrate the caller is order-independent. Needs
 # seqkit in the bioinf env (setup.sh installs it).
@@ -78,7 +78,7 @@ SHUFFLE_SEED="${SHUFFLE_SEED:-11}"
 # All three default OFF → sim.yml carries no `adapters:` block and no extra
 # stages run, so output is byte-identical to pre-adapter runs (the variety and
 # regression jobs that call this script are unaffected).
-#   ADAPTERS=1        enable rneat 3' adapter readthrough (adapters.enabled=true)
+#   ADAPTERS=1        enable eidolon 3' adapter readthrough (adapters.enabled=true)
 #   ADAPTER_PRESET    truseq|nextera|custom (only used when ADAPTERS=1)
 #   TRIM=1            fastp adapter-trim BEFORE alignment (the realistic Illumina
 #                     pipeline). Off = align raw reads, exposing soft-clipped
@@ -90,7 +90,7 @@ ADAPTER_PRESET="${ADAPTER_PRESET:-truseq}"
 TRIM="${TRIM:-0}"
 MEASURE_REALISM="${MEASURE_REALISM:-0}"
 # KEEP_SHORT=1 keeps short inserts as genomic reads WITHOUT adapter readthrough
-# (rneat keep_short_fragments) — the adapter-free short-insert control arm that
+# (eidolon keep_short_fragments) — the adapter-free short-insert control arm that
 # isolates the coverage effect from the adapter effect (#125). Independent of
 # ADAPTERS; leave both off for the default long-insert baseline.
 KEEP_SHORT="${KEEP_SHORT:-0}"
@@ -111,8 +111,8 @@ THREADS=$SLURM_CPUS_PER_TASK
 # zero output — so cap it. Observed 2026-07-01: fastp sat at 38% CPU with 0-byte
 # trimmed output for 30+ min until capped. Override with FASTP_THREADS=.
 FASTP_THREADS="${FASTP_THREADS:-$(( THREADS < 16 ? THREADS : 16 ))}"
-CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$SCRATCH/cargo-target/rusty-neat}"
-RNEAT_BIN="$CARGO_TARGET_DIR/release/rneat"
+CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$SCRATCH/cargo-target/eidolon}"
+EIDOLON_BIN="$CARGO_TARGET_DIR/release/eidolon"
 
 # ── Environment ─────────────────────────────────────────────────────────
 source "$HOME/.cargo/env"
@@ -132,7 +132,7 @@ echo "Output:    $OUTDIR"
 
 # ── Node-local staging (LOCAL_STAGE=1) ────────────────────────────────────
 # Run all heavy per-tool I/O (FASTQ/BAM/gVCF) — plus the reference index reads,
-# rneat binary, and hap.py SIF — on the compute node's LOCAL disk, copying only
+# eidolon binary, and hap.py SIF — on the compute node's LOCAL disk, copying only
 # the small durable artifacts (scores, VCFs, QC) back to $OUTDIR on Lustre at
 # stage-out. A shared-filesystem OST dropping mid-run can then no longer wedge
 # the job in uninterruptible I/O wait (the failure that stalled the 2026-07-01
@@ -142,12 +142,12 @@ echo "Output:    $OUTDIR"
 # with LOCAL_SCRATCH=..., keep the local tree for debugging with KEEP_LOCAL=1.
 LOCAL_STAGE="${LOCAL_STAGE:-0}"
 if [[ "$LOCAL_STAGE" == "1" ]]; then
-    LOCAL_ROOT="${LOCAL_SCRATCH:-${SLURM_TMPDIR:-${TMPDIR:-/tmp}}}/rneat_e2e_${SLURM_JOB_ID:-$$}"
+    LOCAL_ROOT="${LOCAL_SCRATCH:-${SLURM_TMPDIR:-${TMPDIR:-/tmp}}}/eidolon_e2e_${SLURM_JOB_ID:-$$}"
     mkdir -p "$LOCAL_ROOT" || { echo "ERROR: cannot create local scratch $LOCAL_ROOT" >&2; exit 1; }
     [[ "${KEEP_LOCAL:-0}" == "1" ]] || trap 'rm -rf "$LOCAL_ROOT"' EXIT
     # Tool workdirs go under work/ so they can't collide with the staged assets
-    # ($LOCAL_ROOT/ref, .../rneat binary, .../happy.sif) — the "rneat" tool dir
-    # would otherwise clash with the staged "rneat" binary of the same name.
+    # ($LOCAL_ROOT/ref, .../eidolon binary, .../happy.sif) — the "eidolon" tool dir
+    # would otherwise clash with the staged "eidolon" binary of the same name.
     WORK_ROOT="$LOCAL_ROOT/work"
     echo "Local stage: $LOCAL_ROOT  (durable outputs copied back to $OUTDIR)"
 else
@@ -169,7 +169,7 @@ REF_DICT="${REFERENCE%.fa}.dict"
 # ── Node-local stage-in of the reference + tools (LOCAL_STAGE=1) ───────────
 # After the shared one-time Lustre index build above, copy the reference and all
 # its sidecar indexes (fai/dict + bwa-mem2 .0123/.amb/.ann/.bwt.2bit.64/.pac) —
-# plus the rneat binary and hap.py SIF — onto local disk and repoint at them, so
+# plus the eidolon binary and hap.py SIF — onto local disk and repoint at them, so
 # alignment/calling/scoring stream them from the node instead of Lustre.
 if [[ "$LOCAL_STAGE" == "1" ]]; then
     echo "Staging reference + tools to $LOCAL_ROOT ..."
@@ -181,14 +181,14 @@ if [[ "$LOCAL_STAGE" == "1" ]]; then
     [[ -e "$REF_DICT" ]] && cp -f "$REF_DICT" "$LOCAL_ROOT/ref/" || true
     REFERENCE="$LOCAL_ROOT/ref/$REF_NAME"; REF_DIR="$LOCAL_ROOT/ref"; REF_DICT="${REFERENCE%.fa}.dict"
     [[ -s "$REFERENCE" ]] || { echo "ERROR: reference stage-in failed ($REFERENCE)" >&2; exit 1; }
-    [[ -x "$RNEAT_BIN" ]] && cp -f "$RNEAT_BIN" "$LOCAL_ROOT/rneat"     && RNEAT_BIN="$LOCAL_ROOT/rneat"     || true
+    [[ -x "$EIDOLON_BIN" ]] && cp -f "$EIDOLON_BIN" "$LOCAL_ROOT/eidolon"     && EIDOLON_BIN="$LOCAL_ROOT/eidolon"     || true
     [[ -f "$HAPPY_SIF" ]] && cp -f "$HAPPY_SIF" "$LOCAL_ROOT/happy.sif" && HAPPY_SIF="$LOCAL_ROOT/happy.sif" || true
     df -h "$LOCAL_ROOT" | tail -1
 fi
 
 # ── Simulators (each writes <wd>/sample_r1/r2.fastq.gz + a truth VCF) ─────
-# rneat: SNP/indel only via sv_rate_scale=0; truth = sample.vcf.gz
-simulate_rneat() {
+# eidolon: SNP/indel only via sv_rate_scale=0; truth = sample.vcf.gz
+simulate_eidolon() {
     local wd="$1"
     cat > "$wd/sim.yml" <<YAML
 reference: $REFERENCE
@@ -221,7 +221,7 @@ YAML
         # (Only when ADAPTERS!=1 — adapters.enabled already implies keeping them.)
         echo "keep_short_fragments: true" >> "$wd/sim.yml"
     fi
-    "$RNEAT_BIN" --log-level warn gen-reads -c "$wd/sim.yml"
+    "$EIDOLON_BIN" --log-level warn gen-reads -c "$wd/sim.yml"
 }
 
 # NEAT 4: default variant model is already SNP/indel only (no symbolic SVs);
@@ -392,10 +392,10 @@ for tool in $TOOLS; do
     echo "──────── $tool ────────"
 
     case "$tool" in
-        rneat)
+        eidolon)
             truth="$wd/sample.vcf.gz"
-            if [[ -f "$r1" && -f "$truth" ]]; then echo "  [rneat 1/3] sim present — skipping."
-            else echo "  [rneat 1/3] simulating (SNP/indel only)..."; simulate_rneat "$wd"; fi
+            if [[ -f "$r1" && -f "$truth" ]]; then echo "  [eidolon 1/3] sim present — skipping."
+            else echo "  [eidolon 1/3] simulating (SNP/indel only)..."; simulate_eidolon "$wd"; fi
             ;;
         neat)
             truth="$wd/sample_golden.vcf.gz"
@@ -409,7 +409,7 @@ for tool in $TOOLS; do
         *) echo "  unknown tool '$tool' — skipping." >&2; continue ;;
     esac
 
-    # Optional read-order randomization (SHUFFLE=1; off by default). rneat (and
+    # Optional read-order randomization (SHUFFLE=1; off by default). eidolon (and
     # NEAT) write reads in genome-coordinate order, whereas a real sequencer's
     # FASTQ is in arbitrary order. The caller is order-independent (the BAM is
     # coordinate-sorted before calling, no order-based dup-marking), so this does
@@ -483,8 +483,8 @@ done
 
 # Persist report artifacts off scratch + record provenance/resources.
 archive_run germline "$OUTDIR" \
-    rneat_scored.summary.csv neat_scored.summary.csv \
-    rneat_realism.tsv neat_realism.tsv
+    eidolon_scored.summary.csv neat_scored.summary.csv \
+    eidolon_realism.tsv neat_realism.tsv
 
 # Optional cleanup of bulky intermediates once scored + archived, so the
 # adapter matrix / large sweeps don't exhaust the shared scratch project quota.

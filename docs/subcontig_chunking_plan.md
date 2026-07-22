@@ -15,14 +15,14 @@
 ## Motivation
 `gen-reads` parallelizes per **contig** (one rayon task = one contig). On
 few-contig genomes the longest chromosome pins a single core. Benchmark
-(NEAT 4.5.3 vs rneat, 8 cores, c_elegans 97 MB, paired-end 10×):
+(NEAT 4.5.3 vs eidolon, 8 cores, c_elegans 97 MB, paired-end 10×):
 
 | | 1 thread | 8 threads | speedup |
 |---|---|---|---|
 | NEAT 4 | 1162 s | 331 s | 3.5× |
-| rneat (per-contig) | 379 s | 380 s | **~1.0× (none)** |
+| eidolon (per-contig) | 379 s | 380 s | **~1.0× (none)** |
 
-rneat is 3× faster single-threaded but gets **no multicore scaling** on
+eidolon is 3× faster single-threaded but gets **no multicore scaling** on
 c_elegans (7 chromosomes, dominated by chr V) and ecoli (1 contig). NEAT wins
 the default multicore case by splitting each contig into chunks.
 
@@ -36,7 +36,7 @@ whole contig.
   many-small-contig parallelism work.
 - **Chunk size independent of `num_threads`** → output stays byte-identical
   across thread counts (NEAT ties chunking to thread count, so its output
-  changes with `--threads`; rneat keeps its determinism guarantee — a
+  changes with `--threads`; eidolon keeps its determinism guarantee — a
   differentiator).
 - **Boundary fragments:** each chunk owns fragments whose **anchor (left
   coordinate)** falls in `[start, end)`, and may read past `end` into the full
@@ -74,19 +74,19 @@ The hypothesis was wrong. Chunking delivered no multicore speedup, and the
 investigation revealed why: **read generation is memory-bandwidth bound, not
 CPU/parallelism-granularity bound.**
 
-Benchmark (NEAT 4.5.3 vs rneat, 8-core desktop, c_elegans 97 Mbp, paired-end
-10×, 3-rep medians; rneat timings cross-checked with a same-session develop-vs-
+Benchmark (NEAT 4.5.3 vs eidolon, 8-core desktop, c_elegans 97 Mbp, paired-end
+10×, 3-rep medians; eidolon timings cross-checked with a same-session develop-vs-
 branch A/B):
 
 | config | c_elegans 1-thread | c_elegans 8-thread |
 | --- | --- | --- |
-| rneat, chunking off (= develop) | ~365 s | ~400 s |
-| rneat, chunking on (auto ~1 Mbp) | — | ~440 s |
+| eidolon, chunking off (= develop) | ~365 s | ~400 s |
+| eidolon, chunking on (auto ~1 Mbp) | — | ~440 s |
 | NEAT 4 | 1162 s | 331 s |
 
 Evidence the bottleneck is bandwidth, not parallelism granularity:
 
-1. **rneat 8-thread is *slower* than 1-thread regardless of chunking** (~400 s vs
+1. **eidolon 8-thread is *slower* than 1-thread regardless of chunking** (~400 s vs
    ~365 s), and develop shows the same — adding cores cannot help when there is
    no spare memory throughput. This is inherent, not a chunking artifact.
 2. **Finer chunking monotonically worsened wall time** (25 Mbp → 396 s, 5 Mbp →
@@ -97,10 +97,10 @@ Evidence the bottleneck is bandwidth, not parallelism granularity:
    traffic — per-fragment `get_subseq().to_owned()` + `reverse_complement()`
    copies plus gzip, all bandwidth-heavy.
 
-Why NEAT 4 "wins" multicore (1162 → 331 s, 3.5×) while rneat is flat: NEAT is
+Why NEAT 4 "wins" multicore (1162 → 331 s, 3.5×) while eidolon is flat: NEAT is
 CPU-bound (Python interpreter overhead) and has abundant headroom to parallelize
-into — but it only parallelizes far enough to *catch up* to rneat's already-fast
-single thread (~365 s). rneat starts near the hardware bandwidth ceiling, so it
+into — but it only parallelizes far enough to *catch up* to eidolon's already-fast
+single thread (~365 s). eidolon starts near the hardware bandwidth ceiling, so it
 has little to gain.
 
 **Decision:** keep the chunking machinery (correct, tested, deterministic) but

@@ -1,10 +1,10 @@
 #!/bin/bash
-# SLURM job: rneat HPC tuning-isolation sweep on Delta.
+# SLURM job: eidolon HPC tuning-isolation sweep on Delta.
 #
-# rneat's per-contig parallelism REGRESSES with threads on Delta's dual-socket
+# eidolon's per-contig parallelism REGRESSES with threads on Delta's dual-socket
 # EPYC (yeast 30x: 1thr 77s -> 4thr 110s) while it SCALES on a single-socket box
 # (1thr 77s -> 2thr 57s). The regression is platform-specific, so we isolate the
-# cause here — WITHOUT rebuilding rneat — by crossing thread count with two
+# cause here — WITHOUT rebuilding eidolon — by crossing thread count with two
 # levers:
 #   * NUMA placement:   plain  vs  numactl --interleave=all
 #   * allocator:        glibc  vs  mimalloc  vs  jemalloc  (via LD_PRELOAD)
@@ -22,7 +22,7 @@
 #   GENOME=yeast:$SCRATCH/neat_data/yeast.fa THREADS="1 2 4 8 16 64" REPS=2 \
 #     sbatch scripts/delta/tune_sweep.sbatch
 
-#SBATCH --job-name=rneat-tune
+#SBATCH --job-name=eidolon-tune
 #SBATCH --partition=cpu
 #SBATCH --account=bhrd-delta-cpu
 #SBATCH --nodes=1
@@ -36,7 +36,7 @@
 
 set -euo pipefail
 
-REPO_ROOT="${RNEAT_REPO:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}}"
+REPO_ROOT="${EIDOLON_REPO:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}}"
 source "$REPO_ROOT/scripts/delta/lib_report.sh"
 
 GENOME="${GENOME:-yeast:$SCRATCH/neat_data/yeast.fa}"
@@ -46,8 +46,8 @@ COVERAGE="${COVERAGE:-30}"
 READ_LEN="${READ_LEN:-151}"
 THREADS="${THREADS:-1 2 4 8 16 32 64}"
 REPS="${REPS:-2}"
-CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$SCRATCH/cargo-target/rusty-neat}"
-RNEAT_BIN="$CARGO_TARGET_DIR/release/rneat"
+CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$SCRATCH/cargo-target/eidolon}"
+EIDOLON_BIN="$CARGO_TARGET_DIR/release/eidolon"
 
 source "$HOME/.cargo/env"
 setup_conda
@@ -71,7 +71,7 @@ MIMALLOC_SO="${MIMALLOC_SO:-$(find_so "$CONDA_LIB"/libmimalloc.so* 2>/dev/null)}
 JEMALLOC_SO="${JEMALLOC_SO:-$(find_so "$CONDA_LIB"/libjemalloc.so* 2>/dev/null)}"
 HAVE_NUMACTL=0; command -v numactl >/dev/null 2>&1 && HAVE_NUMACTL=1
 
-echo "=== rneat tuning sweep: $SLURM_JOB_ID ==="
+echo "=== eidolon tuning sweep: $SLURM_JOB_ID ==="
 echo "Genome:    $GLABEL ($GFASTA, $(grep -c '^>' "$GFASTA") contigs)  ${COVERAGE}x"
 echo "Threads:   $THREADS   Reps: $REPS"
 echo "mimalloc:  ${MIMALLOC_SO:-<not found>}"
@@ -114,7 +114,7 @@ YAML
         rm -rf "$run_dir"; mkdir -p "$run_dir"
         tf="$OUTDIR/${label}_t${nt}_r${rep}.time"
         ec=0
-        /usr/bin/time -v -o "$tf" "${pre[@]}" "${envp[@]}" "$RNEAT_BIN" --log-level warn gen-reads -c "$cfg" \
+        /usr/bin/time -v -o "$tf" "${pre[@]}" "${envp[@]}" "$EIDOLON_BIN" --log-level warn gen-reads -c "$cfg" \
             >"$run_dir/log" 2>&1 || ec=$?
         parsed=$(parse_time "$tf")
         printf "%s\t%s\t%s\t%s\t%s\t%s\n" "$label" "$nt" "$rep" "${parsed% *}" "${parsed#* }" "$ec" >> "$TSV"

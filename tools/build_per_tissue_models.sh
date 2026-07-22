@@ -20,7 +20,7 @@
 #       --cosmic-dir ~/code/data/cosmic_v104 \
 #       --reference  ~/code/data/hg38.fa.gz \
 #       --out-dir    tools \
-#       [--rneat-bin ./target/release/rneat]
+#       [--eidolon-bin ./target/release/eidolon]
 
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -28,7 +28,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COSMIC_DIR=""
 REFERENCE=""
 OUT_DIR="${HERE}"
-RNEAT_BIN="rneat"
+EIDOLON_BIN="eidolon"
 
 usage() { grep '^#' "$0" | sed 's/^# \{0,1\}//'; }
 
@@ -37,7 +37,7 @@ while [[ $# -gt 0 ]]; do
         --cosmic-dir) COSMIC_DIR="$2"; shift 2 ;;
         --reference)  REFERENCE="$2"; shift 2 ;;
         --out-dir)    OUT_DIR="$2"; shift 2 ;;
-        --rneat-bin)  RNEAT_BIN="$2"; shift 2 ;;
+        --eidolon-bin)  EIDOLON_BIN="$2"; shift 2 ;;
         -h|--help)    usage; exit 0 ;;
         *) echo "Unknown argument: $1" >&2; exit 2 ;;
     esac
@@ -71,7 +71,7 @@ for pair in "${TISSUES[@]}"; do
         --tissue "$site" \
         --cosmic-vcf "$VCF" --mutant-tsv "$TSV" --classification "$CLS" \
         --out-dir "$WORK" --out-prefix "cosmic_${label}" \
-        --train --reference "$REFERENCE" --rneat-bin "$RNEAT_BIN"
+        --train --reference "$REFERENCE" --eidolon-bin "$EIDOLON_BIN"
 
     python3 "${HERE}/graft_sv_model.py" \
         --snv-model "${WORK}/cosmic_${label}_model.json.gz" \

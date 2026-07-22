@@ -21,7 +21,7 @@
 # re-aligns from scratch.
 #
 # Prereqs: soy.fa staged (fetch_validation_data.sh DATA=soy); bwa-mem2 + bcftools
-# (bioinf conda env), samtools/htslib modules. rneat NOT needed here.
+# (bioinf conda env), samtools/htslib modules. eidolon NOT needed here.
 #
 # Usage:
 #   sbatch scripts/delta/stage_soy.sh
@@ -30,7 +30,7 @@
 #
 # HEAVY: ~10 GB FASTQ download, ~28 GB bwa-mem2 index build, multi-hour alignment.
 
-#SBATCH --job-name=rneat-stagesoy
+#SBATCH --job-name=eidolon-stagesoy
 #SBATCH --partition=cpu
 #SBATCH --account=bhrd-delta-cpu
 #SBATCH --nodes=1
@@ -43,7 +43,7 @@
 
 set -euo pipefail
 
-REPO_ROOT="${RNEAT_REPO:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}}"
+REPO_ROOT="${EIDOLON_REPO:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}}"
 source "$REPO_ROOT/scripts/delta/lib_report.sh"   # $SCRATCH + setup_conda/conda_activate
 
 D="${DATA_DIR:-$SCRATCH/neat_data/soy}"

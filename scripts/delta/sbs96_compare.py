@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compare the SBS-96 trinucleotide spectra of two somatic-SNV VCFs.
 
-Purpose: validate that an rneat cancer simulation reproduces the mutational
+Purpose: validate that an eidolon cancer simulation reproduces the mutational
 signature its tumor_model was trained on. Feed the REAL somatic truth set the
 model learned from (A) and the SIMULATED somatic SNVs the sim produced (B); a
 high cosine similarity means the trinucleotide spectrum — i.e. the signature —

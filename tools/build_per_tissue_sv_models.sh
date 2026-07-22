@@ -5,7 +5,7 @@
 # (#218) but restricted to that tissue's donors:
 #
 #   build_pcawg_sv_vcf.py --projects <codes>   # tissue-filtered symbolic-SV VCF
-#     -> rneat gen-mut-model                    # fit length / CN distributions
+#     -> eidolon gen-mut-model                    # fit length / CN distributions
 #       -> normalize_pcawg_sv_model.py          # per-tumor rate/type-mix + splice
 #
 # INS length is germline (tissue-agnostic), so gnomAD is intentionally NOT
@@ -27,7 +27,7 @@
 #       --reference   ~/code/data/hg38.fa.gz \
 #       --base-model  tools/cosmic_v104_pancancer_model.json.gz \
 #       --out-dir     tools \
-#       --rneat-bin   ./target/release/rneat
+#       --eidolon-bin   ./target/release/eidolon
 
 set -euo pipefail
 
@@ -35,7 +35,7 @@ PCAWG_DIR=""
 REFERENCE=""
 BASE_MODEL="tools/cosmic_v104_pancancer_model.json.gz"
 OUT_DIR="tools"
-RNEAT_BIN="rneat"
+EIDOLON_BIN="eidolon"
 # tissue:label=project-codes (comma-separated). Override with --tissues.
 TISSUES=("BRCA=BRCA" "skin=SKCM-US,MELA-AU" "lung=LUAD-US,LUSC-US")
 
@@ -47,7 +47,7 @@ while [[ $# -gt 0 ]]; do
         --reference)  REFERENCE="$2"; shift 2 ;;
         --base-model) BASE_MODEL="$2"; shift 2 ;;
         --out-dir)    OUT_DIR="$2"; shift 2 ;;
-        --rneat-bin)  RNEAT_BIN="$2"; shift 2 ;;
+        --eidolon-bin)  EIDOLON_BIN="$2"; shift 2 ;;
         --tissues)    IFS=' ' read -r -a TISSUES <<< "$2"; shift 2 ;;
         -h|--help)    usage; exit 0 ;;
         *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
@@ -95,7 +95,7 @@ vcf_file: $corpus
 output_file: $fit
 overwrite_output: true
 EOF
-    "$RNEAT_BIN" gen-mut-model -c "$fit_cfg"
+    "$EIDOLON_BIN" gen-mut-model -c "$fit_cfg"
 
     echo ">> [3/3] normalize + splice into ${model_out}"
     python3 "${HERE}/normalize_pcawg_sv_model.py" \

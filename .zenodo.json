@@ -1,0 +1,29 @@
+{
+  "title": "eidolon (formerly rusty-neat): a Rust toolkit for simulating NGS read data, including tumor/normal cancer sequencing",
+  "description": "eidolon is a Rust port and extension of NEAT that generates simulated next-generation sequencing data in FASTQ and VCF formats with the statistical properties of real datasets, along with a golden BAM/VCF truth set of inserted variants and ideal alignments. It adds structural-variant simulation (CNV, BND, INV, INS, and others) and an end-to-end tumor/normal cancer workflow (gen-cancer-reads) that merges two read passes at a configurable purity and emits an origin-tagged truth VCF for benchmarking somatic and structural-variant callers, with an emphasis on low memory use and short CPU time.",
+  "upload_type": "software",
+  "license": "BSD-3-Clause",
+  "creators": [
+    {
+      "name": "Allen, Joshua",
+      "affiliation": "National Center for Supercomputing Applications, University of Illinois Urbana-Champaign",
+      "orcid": "0009-0008-0002-5239"
+    },
+    {
+      "name": "Kowalik, Mikolaj"
+    },
+    {
+      "name": "NEAT Contributors"
+    }
+  ],
+  "keywords": [
+    "bioinformatics",
+    "ngs-simulation",
+    "cancer-genomics",
+    "structural-variants",
+    "variant-calling",
+    "fastq",
+    "vcf",
+    "rust"
+  ]
+}

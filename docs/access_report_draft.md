@@ -7,8 +7,8 @@ Allocation: `bhrd-delta-cpu` (NCSA Delta). Core-hours used to date: ~2,500 of ~3
 
 ## 1. Project summary
 
-`eidolon` is a Rust port and extension of NEAT, a next-generation-sequencing read
-simulator. It generates FASTQ, a golden BAM, and a truth VCF whose statistical
+`eidolon` (formerly `rusty-neat` / `rneat`; renamed at v2.0.0) is a Rust port and
+extension of NEAT, a next-generation-sequencing read simulator. It generates FASTQ, a golden BAM, and a truth VCF whose statistical
 properties match real data, and it adds a native tumor/normal cancer workflow
 (`gen-cancer-reads`) with structural variants and an origin-tagged somatic truth
 set. This project used Delta to (1) verify eidolon produces high-quality data on a

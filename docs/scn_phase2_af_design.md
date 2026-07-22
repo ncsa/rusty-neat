@@ -15,13 +15,13 @@ the memory note. This is the design for Phase 2.
 > was traced end-to-end against current `develop`. Key corrections, which make this change
 > **small and well-contained**:
 > - **The primary lever is the per-read decision in `generate_read`
->   (`common/src/file_tools/fastq_tools.rs:462`):**
+>   (`eidolon-core/src/file_tools/fastq_tools.rs:462`):**
 >   `if (variant.genotype == Homozygous) || (rng.random()? < 0.5) { …alt; entry.1 += 1 } else
 >   { …ref; entry.0 += 1 }`. This one branch decides whether the read carries alt or ref **and**
 >   increments the `AdCounter` — so it drives both the emitted reads and the measured AF. Input-VCF
 >   variants reach it via `variant_map` (`flagged_positions.contains(pos)` → `variant_map[pos]`).
 > - There is a **second** het flip in `MutatedMap::mutate_position`
->   (`common/src/structs/mutated_map.rs:106`), but it is reached only by `get_stitched_sequence`
+>   (`eidolon-core/src/structs/mutated_map.rs:106`), but it is reached only by `get_stitched_sequence`
 >   → `get_mutated_subseq` (`runner.rs:2183`) for reads that **span an SV junction**, and it does
 >   **not** touch the `AdCounter`. Honoring AF there is a secondary correctness item (minority of
 >   reads, not AD-counted), not the main path.
@@ -50,37 +50,37 @@ pool's observed AF** at that site.
 
 ### Scope decision (2026-07-11): reproductive replay, NOT a generative population model
 
-This is deliberately **reproductive** — rneat is *fed* the pool's observed per-site AFs and
+This is deliberately **reproductive** — eidolon is *fed* the pool's observed per-site AFs and
 plays them back faithfully; success = simulated AF ≈ real AF. It does **not** model *why* the
 frequencies are what they are (drift, selection, the 150-individual pool sampling, linkage) —
 it takes the observed spectrum as input. That is exactly what João's question asks ("are the
-resulting frequencies captured in the target variants"), and it makes rneat able to simulate
+resulting frequencies captured in the target variants"), and it makes eidolon able to simulate
 realistic pool / somatic-AF data, which it cannot today.
 
 **Out of scope (possible future extension):** a *generative* AF model — fit an
 allele-frequency distribution / site-frequency-spectrum from the pool and *sample* per-variant
 frequencies from it during generation (like the trinucleotide / fragment models). That would
-let rneat produce realistic spectra from first principles rather than replaying a fixed list.
+let eidolon produce realistic spectra from first principles rather than replaying a fixed list.
 It is strictly a superset: it reuses the same per-variant `allele_fraction` primitive below,
 so nothing here is wasted if we pursue it later.
 
-## 2. Why this does NOT map onto rneat today (the core constraint)
+## 2. Why this does NOT map onto eidolon today (the core constraint)
 
-rneat is a single-sample simulator. Tracing the read path:
+eidolon is a single-sample simulator. Tracing the read path:
 
 - A variant's realized alt fraction in the reads comes from `genotype_fraction`
-  (`rneat/src/gen_reads/utils/runner.rs:2368`):
+  (`eidolon/src/gen_reads/utils/runner.rs:2368`):
   ```
   Homozygous   => 1.0
   Heterozygous => 1.0 / ploidy
   ```
-- `Genotype` (`common/src/structs/variants.rs:27`) is a **binary enum** — `Heterozygous |
+- `Genotype` (`eidolon-core/src/structs/variants.rs:27`) is a **binary enum** — `Heterozygous |
   Homozygous`. There is no per-variant continuous fraction.
 - `ploidy` is a **single global** `config.ploidy`, not per-variant.
-- `generate_genotype` (`common/src/models/mutation_model.rs:206`) emits a per-ploid bitmask,
+- `generate_genotype` (`eidolon-core/src/models/mutation_model.rs:206`) emits a per-ploid bitmask,
   but read generation collapses it to Het/Hom.
 
-Consequence: the only alt fractions rneat can emit are **`{1/ploidy, 1.0}`** — two values,
+Consequence: the only alt fractions eidolon can emit are **`{1/ploidy, 1.0}`** — two values,
 the same for every het variant. A continuous spectrum (e.g. sites at 0.07, 0.13, 0.41, 0.88)
 is unreachable. Neither lever rescues this:
 
@@ -96,7 +96,7 @@ So Phase 2 needs a **small, targeted enabling change**, not just a clever invoca
 Add an optional `allele_fraction: Option<f64>` carried on a variant, honored by the per-read
 alt/ref decision when present. Confirmed to be a **small, contained change**:
 
-1. `common/src/structs/variants.rs` — add `allele_fraction: Option<f64>` to `Variant`. This is
+1. `eidolon-core/src/structs/variants.rs` — add `allele_fraction: Option<f64>` to `Variant`. This is
    the only churny part: ~32 struct-literal construction sites across 9 files each need
    `allele_fraction: None` added (mostly test fixtures + `compare_vcfs` writers where `None` is
    correct); only `from_file` sets it meaningfully.
@@ -105,7 +105,7 @@ alt/ref decision when present. Confirmed to be a **small, contained change**:
    data use **AD, not GT** (§7). `bcftools +fill-tags -- -t AF` upstream also works.
    (`from_file_lean` only has INFO, no FORMAT/SAMPLE — leave it `None`; it feeds gen-mut-model
    training, not the gen-reads input path.)
-3. **Primary:** `generate_read` in `common/src/file_tools/fastq_tools.rs:462` — generalize the
+3. **Primary:** `generate_read` in `eidolon-core/src/file_tools/fastq_tools.rs:462` — generalize the
    branch. Today:
    ```
    if (variant.genotype == Homozygous) || (rng.random()? < 0.5) { …alt; entry.1 += 1 }
@@ -123,7 +123,7 @@ alt/ref decision when present. Confirmed to be a **small, contained change**:
 
 This is **bounded and general**: "simulate reads matching an input VCF's allele frequencies"
 is useful for any population / somatic-AF simulation, not just SCN — so it earns its place as
-a real rneat feature (candidate issue under #311), not a one-off hack.
+a real eidolon feature (candidate issue under #311), not a one-off hack.
 
 **Determinism note:** the `None` path must remain byte-identical — keep the exact same
 `rng.random()?` draw and comparison so no existing fixture shifts. Only an input VCF that

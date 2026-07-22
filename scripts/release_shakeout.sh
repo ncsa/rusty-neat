@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Pre-publish shakeout for rneat v1.x.
+# Pre-publish shakeout for eidolon v1.x.
 #
 # Runs the in-repo regression suite and then drives the binary against
 # real, full-size inputs that the CI suite is too small to exercise.
@@ -11,7 +11,7 @@
 # the full-size steps.
 #
 # Usage:
-#   DATA_DIR=/scratch/rneat-shakeout ./scripts/release_shakeout.sh
+#   DATA_DIR=/scratch/eidolon-shakeout ./scripts/release_shakeout.sh
 #   SKIP_LARGE_DATA=1 ./scripts/release_shakeout.sh
 #
 # Expected inputs in DATA_DIR (only when running large-data steps):
@@ -62,7 +62,7 @@ WORK="$DATA_DIR/shakeout-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$WORK"
 log "Working directory: $WORK"
 
-RNEAT="$ROOT/target/release/rneat"
+RNEAT="$ROOT/target/release/eidolon"
 [[ -x "$RNEAT" ]] || fail "release binary not found; cargo test --release should have built it"
 
 # ── Step 3a: gen-mut-model on chr22 ─────────────────────────────────────────

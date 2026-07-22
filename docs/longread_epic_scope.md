@@ -2,11 +2,11 @@
 
 Status: **scoping draft** (2026-07-12). Tracks: #319 (long-read validation, ACCESS report §5)
 and the breakpoint-realism epic #311. This is a *scope/architecture* doc — how long-read
-support should be built into rneat — not an implementation plan for a single change.
+support should be built into eidolon — not an implementation plan for a single change.
 
 ## 1. Goal & motivation
 
-rneat targets short paired-end Illumina today. A long-read mode (ONT / PacBio-style) would let
+eidolon targets short paired-end Illumina today. A long-read mode (ONT / PacBio-style) would let
 it simulate single-molecule reads — kb-scale lengths, unpaired, with the higher,
 indel-dominated, homopolymer-dependent error profile of nanopore / HiFi data — and validate
 against long-read callers (minimap2 → Clair3 / DeepVariant for SNV/indel; Sniffles2 / cuteSV
@@ -22,22 +22,22 @@ question, and it is genuinely **its own epic**, not a small toggle.
 
 ## 2. Current state (what exists, what's missing)
 
-- **A stub toggle:** `config.long_reads: bool` (`rneat/src/gen_reads/utils/config.rs`) — but it
+- **A stub toggle:** `config.long_reads: bool` (`eidolon/src/gen_reads/utils/config.rs`) — but it
   only means "keep fragments shorter than `read_len` and emit truncated reads." It is a
   fragment-handling switch, **not** a long-read simulator.
 - **Missing — read length:** `read_len` is a fixed scalar (default 151). Long reads need a
   read-**length distribution** (broad, right-skewed; ~log-normal), not a constant.
 - **Missing — error model:** the seq-error model is Illumina per-position quality-score based
-  (`common/src/models/sequencing_error_model.rs`). Long reads need an indel-dominated,
+  (`eidolon-core/src/models/sequencing_error_model.rs`). Long reads need an indel-dominated,
   homopolymer-length-dependent, position-along-read error/quality model.
-- ACCESS report §5 already states the prerequisite: *"a long-read mode in rneat (read-length
+- ACCESS report §5 already states the prerequisite: *"a long-read mode in eidolon (read-length
   distribution + long-read error model) … this is feature work gated ahead of the validation."*
 
 ## 3. Architecture decision: a sequencing *profile* inside gen-reads — NOT a new subprocess
 
 `gen-reads` splits into two halves with very different sharing:
 
-- **The "what" — genome + variation + truth (SHARED; rneat's crown jewel):** reference reading,
+- **The "what" — genome + variation + truth (SHARED; eidolon's crown jewel):** reference reading,
   mutation / variant placement, the SV/CNV/BND machinery, ploidy, coverage targeting, and the
   **golden VCF/BAM truth set**. For long-read SV validation this must be **identical** to the
   short-read path — the entire point is benchmarking short- vs long-read callers against the

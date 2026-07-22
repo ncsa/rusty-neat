@@ -2,7 +2,7 @@
 # SLURM array job: sharded whole-genome simulation on Delta — EXCLUSIVE-node packing.
 #
 # Each array task owns ONE whole node (--exclusive) and runs a BATCH of
-# SHARDS_PER_NODE windows on it concurrently, one single-threaded rneat process
+# SHARDS_PER_NODE windows on it concurrently, one single-threaded eidolon process
 # per window. This is the key to predictable performance on Delta:
 #
 #   Use the SHARED `cpu` partition and a per-shard core slice lands our process
@@ -43,7 +43,7 @@
 # On the fixed build a batch finishes in minutes (windows run in ~1-2 min even
 # packed 64-deep), so the 1 h --time is generous headroom, not a tight ceiling.
 
-#SBATCH --job-name=rneat-wgshard
+#SBATCH --job-name=eidolon-wgshard
 #SBATCH --partition=cpu
 #SBATCH --account=bhrd-delta-cpu
 #SBATCH --nodes=1
@@ -57,7 +57,7 @@
 # doesn't abort the whole node-batch before the others finish.
 set -uo pipefail
 
-REPO_ROOT="${RNEAT_REPO:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}}"
+REPO_ROOT="${EIDOLON_REPO:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}}"
 source "$REPO_ROOT/scripts/delta/lib_report.sh"   # $SCRATCH resolution
 
 REFERENCE="${REFERENCE:-$SCRATCH/neat_data/GRCh38.fa}"
@@ -70,9 +70,9 @@ FRAG_MEAN="${FRAG_MEAN:-350}"
 FRAG_SD="${FRAG_SD:-50}"
 PLOIDY="${PLOIDY:-2}"
 SV_RATE_SCALE="${SV_RATE_SCALE:-0}"        # germline-style by default; >0 for SVs
-SEED_ROOT="${SEED_ROOT:-rneat wg shard}"
-CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$SCRATCH/cargo-target/rusty-neat}"
-RNEAT_BIN="$CARGO_TARGET_DIR/release/rneat"
+SEED_ROOT="${SEED_ROOT:-eidolon wg shard}"
+CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$SCRATCH/cargo-target/eidolon}"
+EIDOLON_BIN="$CARGO_TARGET_DIR/release/eidolon"
 
 source "$HOME/.cargo/env" 2>/dev/null || true
 
@@ -118,7 +118,7 @@ target_bed: $bed
 num_threads: 1
 YAML
     echo "  shard $id start: $(cat "$bed")"
-    /usr/bin/time -v -o "$outdir/time.txt" "$RNEAT_BIN" --log-level warn gen-reads -c "$outdir/sim.yml" \
+    /usr/bin/time -v -o "$outdir/time.txt" "$EIDOLON_BIN" --log-level warn gen-reads -c "$outdir/sim.yml" \
         > "$outdir/run.log" 2>&1
 }
 

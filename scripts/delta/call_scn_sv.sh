@@ -34,7 +34,7 @@
 #   sbatch scripts/delta/call_scn_sv.sh
 #   ACC=GCA_040805705.1 SRR=SRR27329600 sbatch scripts/delta/call_scn_sv.sh   # PA3 / MM-BD3A
 
-#SBATCH --job-name=rneat-scnsv
+#SBATCH --job-name=eidolon-scnsv
 #SBATCH --partition=cpu
 #SBATCH --account=bhrd-delta-cpu
 #SBATCH --nodes=1
@@ -47,7 +47,7 @@
 
 set -euo pipefail
 
-REPO_ROOT="${RNEAT_REPO:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}}"
+REPO_ROOT="${EIDOLON_REPO:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}}"
 source "$REPO_ROOT/scripts/delta/lib_report.sh"
 
 D="${DATA_DIR:-$SCRATCH/neat_data/scn}"

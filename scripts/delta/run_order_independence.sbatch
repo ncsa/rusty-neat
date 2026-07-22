@@ -1,7 +1,7 @@
 #!/bin/bash
 # SLURM job: reproducibility + determinism validation (report §3.10).
 #
-# Confirms rneat's output is reproducible and invariant to things that MUST NOT
+# Confirms eidolon's output is reproducible and invariant to things that MUST NOT
 # change a correct simulation, while being explicit about what legitimately does
 # change. All runs use ONE genome (default yeast: multi-contig + fast) at a FIXED
 # seed; only the variable under test changes between runs. Each run emits a truth
@@ -24,20 +24,20 @@
 # a different artifact), so producing a different realization is correct behavior, not
 # a defect — see report §3.10. We therefore do NOT test contig-order invariance; doing
 # so would assert a non-invariance and read as a spurious failure. Check D pins the real
-# boundary instead: rneat's realization depends on contig ORDER + SEQUENCE, not NAME
+# boundary instead: eidolon's realization depends on contig ORDER + SEQUENCE, not NAME
 # (the RNG derives one stream per contig from its index, not its name).
 #
 # Why this matters: validates that HPC region-sharding (genome_array.sbatch +
 # merge_shards.sh) is correct and reproducible, and that threading never perturbs
 # results. Fast (~few min on yeast).
 #
-# Prereqs: setup.sh (rneat build + bioinf env w/ bcftools, samtools). Submit from repo root.
+# Prereqs: setup.sh (eidolon build + bioinf env w/ bcftools, samtools). Submit from repo root.
 # Usage:
 #   sbatch scripts/delta/run_order_independence.sbatch
 #   REFERENCE=$SCRATCH/neat_data/yeast.fa COVERAGE=30 MT_THREADS=8 NSHARDS=4 \
 #     sbatch scripts/delta/run_order_independence.sbatch
 
-#SBATCH --job-name=rneat-orderindep
+#SBATCH --job-name=eidolon-orderindep
 #SBATCH --partition=cpu
 #SBATCH --account=bhrd-delta-cpu
 #SBATCH --nodes=1
@@ -50,25 +50,25 @@
 
 set -uo pipefail
 
-REPO_ROOT="${RNEAT_REPO:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}}"
+REPO_ROOT="${EIDOLON_REPO:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}}"
 source "$REPO_ROOT/scripts/delta/lib_report.sh"   # setup_conda/conda_activate + $SCRATCH
 
 REFERENCE="${REFERENCE:-$SCRATCH/neat_data/yeast.fa}"
 OUTDIR="${OUTDIR:-$SCRATCH/orderindep_$SLURM_JOB_ID}"
-SEED="${SEED:-rneat order independence}"   # one fixed seed for every monolithic run
+SEED="${SEED:-eidolon order independence}"   # one fixed seed for every monolithic run
 COVERAGE="${COVERAGE:-30}"
 READ_LEN="${READ_LEN:-151}"
 MT_THREADS="${MT_THREADS:-8}"              # threads for the multi-thread / thread-invariance checks
 NSHARDS="${NSHARDS:-4}"                     # target shard count for the sharding checks
-CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$SCRATCH/cargo-target/rusty-neat}"
-RNEAT_BIN="$CARGO_TARGET_DIR/release/rneat"
+CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$SCRATCH/cargo-target/eidolon}"
+EIDOLON_BIN="$CARGO_TARGET_DIR/release/eidolon"
 
 source "$HOME/.cargo/env" 2>/dev/null || true
 module load samtools/1.22-cce19.0.0 2>/dev/null || true
 setup_conda
 conda_activate bioinf   # bcftools, samtools, seqkit
 
-[[ -x "$RNEAT_BIN" ]] || { echo "rneat binary not found: $RNEAT_BIN (run setup.sh)" >&2; exit 1; }
+[[ -x "$EIDOLON_BIN" ]] || { echo "eidolon binary not found: $EIDOLON_BIN (run setup.sh)" >&2; exit 1; }
 [[ -f "$REFERENCE" ]] || { echo "reference not found: $REFERENCE" >&2; exit 1; }
 mkdir -p "$OUTDIR"
 [[ -f "${REFERENCE}.fai" ]] || samtools faidx "$REFERENCE"
@@ -77,9 +77,9 @@ echo "=== reproducibility / determinism check: $SLURM_JOB_ID ==="
 echo "ref=$REFERENCE  seed='$SEED'  cov=${COVERAGE}x  mt_threads=$MT_THREADS  nshards=$NSHARDS"
 echo "out=$OUTDIR"
 
-# ── one rneat run -> $1/sample.vcf.gz ────────────────────────────────────
-# run_rneat <outdir> <reference> <seed> <threads> [target_bed]
-run_rneat() {
+# ── one eidolon run -> $1/sample.vcf.gz ────────────────────────────────────
+# run_eidolon <outdir> <reference> <seed> <threads> [target_bed]
+run_eidolon() {
     local wd="$1" ref="$2" seed="$3" threads="$4" bed="${5:-}"
     mkdir -p "$wd"
     {
@@ -101,7 +101,7 @@ run_rneat() {
         [[ -n "$bed" ]] && echo "target_bed: $bed"
         echo "num_threads: $threads"
     } > "$wd/sim.yml"
-    "$RNEAT_BIN" --log-level warn gen-reads -c "$wd/sim.yml" > "$wd/run.log" 2>&1
+    "$EIDOLON_BIN" --log-level warn gen-reads -c "$wd/sim.yml" > "$wd/run.log" 2>&1
     [[ -f "$wd/sample.vcf.gz" ]] || { echo "  no VCF from $wd (see run.log)" >&2; return 1; }
 }
 
@@ -114,11 +114,11 @@ posrefalt() { bcftools view -H "$1" 2>/dev/null | awk '{print $2"\t"$4"\t"$5}' |
 
 # ── A/B: determinism, 1 thread and N threads ─────────────────────────────
 echo; echo "[A] determinism @ 1 thread (run twice)..."
-run_rneat "$OUTDIR/a1" "$REFERENCE" "$SEED" 1
-run_rneat "$OUTDIR/a2" "$REFERENCE" "$SEED" 1
+run_eidolon "$OUTDIR/a1" "$REFERENCE" "$SEED" 1
+run_eidolon "$OUTDIR/a2" "$REFERENCE" "$SEED" 1
 echo "[B] determinism @ $MT_THREADS threads (run twice)..."
-run_rneat "$OUTDIR/b1" "$REFERENCE" "$SEED" "$MT_THREADS"
-run_rneat "$OUTDIR/b2" "$REFERENCE" "$SEED" "$MT_THREADS"
+run_eidolon "$OUTDIR/b1" "$REFERENCE" "$SEED" "$MT_THREADS"
+run_eidolon "$OUTDIR/b2" "$REFERENCE" "$SEED" "$MT_THREADS"
 # [C] thread_invariant is A1 vs B1 (single-thread vs multi-thread) — no extra run needed.
 
 # ── D: contig-name invariance ────────────────────────────────────────────
@@ -129,7 +129,7 @@ echo "[D] contig-name invariance (rename every contig, order preserved)..."
 NAME_REF="$OUTDIR/ref_renamed.fa"
 sed 's/^>/>renamed_/' "$REFERENCE" > "$NAME_REF"
 samtools faidx "$NAME_REF"
-run_rneat "$OUTDIR/d1" "$NAME_REF" "$SEED" 1
+run_eidolon "$OUTDIR/d1" "$NAME_REF" "$SEED" 1
 
 # ── E/F: shard-order independence + disjointness ─────────────────────────
 echo "[E/F] sharding (~$NSHARDS windows, SAME per-shard seeds, two merge orders)..."
@@ -142,7 +142,7 @@ SHVCF=()
 for (( id=0; id<N; id++ )); do
     bed="$(printf '%s/shard_%04d.bed' "$SHARD_DIR" "$id")"
     sd="$OUTDIR/shard_$(printf '%04d' "$id")"
-    run_rneat "$sd" "$REFERENCE" "$SEED shard $id" 1 "$bed"   # fixed per-shard seed
+    run_eidolon "$sd" "$REFERENCE" "$SEED shard $id" 1 "$bed"   # fixed per-shard seed
     v="$sd/sample.vcf.gz"; bcftools index -f -t "$v" 2>/dev/null || true
     SHVCF+=("$v")
 done

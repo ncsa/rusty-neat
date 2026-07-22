@@ -15,7 +15,7 @@
 # Prereqs:
 #   * GRCh38.fa staged at $SCRATCH/neat_data/GRCh38.fa (same build already used for sim).
 #   * truth VCF staged:  DATA=hg002 bash scripts/delta/fetch_validation_data.sh
-#   * bwa-mem2 + samtools (bioinf conda env / modules). rneat NOT needed here.
+#   * bwa-mem2 + samtools (bioinf conda env / modules). eidolon NOT needed here.
 #
 # HEAVY: ~12 GB read download per chunk; the bwa-mem2 index of GRCh38 needs ~64 GB RAM
 # and ~30 GB disk (built once, reused); human alignment of one chunk is ~1-2 h.
@@ -24,7 +24,7 @@
 #   sbatch scripts/delta/stage_hg002.sh
 #   CHUNKS="L001:001 L001:002" MAX_PAIRS=20000000 sbatch scripts/delta/stage_hg002.sh
 
-#SBATCH --job-name=rneat-stagehg002
+#SBATCH --job-name=eidolon-stagehg002
 #SBATCH --partition=cpu
 #SBATCH --account=bhrd-delta-cpu
 #SBATCH --nodes=1
@@ -37,7 +37,7 @@
 
 set -euo pipefail
 
-REPO_ROOT="${RNEAT_REPO:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}}"
+REPO_ROOT="${EIDOLON_REPO:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}}"
 source "$REPO_ROOT/scripts/delta/lib_report.sh"   # $SCRATCH + setup_conda/conda_activate
 
 D="${DATA_DIR:-$SCRATCH/neat_data/hg002}"

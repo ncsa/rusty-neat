@@ -6,7 +6,7 @@
 #
 #   tools/fetch_pcawg_sv_corpus.sh        # download open-tier PCAWG SV + CNV
 #   tools/build_pcawg_sv_vcf.py           # -> symbolic-SV VCF (+ counts sidecar)
-#   rneat gen-mut-model -c <fit.yml>      # fit length / CN distributions
+#   eidolon gen-mut-model -c <fit.yml>      # fit length / CN distributions
 #   tools/normalize_pcawg_sv_model.py     # per-tumor rate/type-mix + splice in
 #
 # The data refit corrected this script's heuristics substantially — e.g. INV
@@ -17,7 +17,7 @@
 # the bundled model.
 # ============================================================================
 #
-# Inject a literature-derived cancer SvModel component into an rneat
+# Inject a literature-derived cancer SvModel component into an eidolon
 # MutationModel JSON (gzipped or plain). The bundled COSMIC tumor model
 # (tools/cosmic_v104_pancancer_model.json.gz) is trained from COSMIC
 # GenomeScreensMutant, which is SNV/indel-only — so its top-level

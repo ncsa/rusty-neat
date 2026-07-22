@@ -1,4 +1,4 @@
-# rusty-neat (rneat) — working practices for agents
+# eidolon (eidolon) — working practices for agents
 
 Hand-written guidance below; the GitNexus block that follows is auto-generated
 (regenerated between its `gitnexus` markers — keep edits **above** the markers).
@@ -20,7 +20,7 @@ Hand-written guidance below; the GitNexus block that follows is auto-generated
 ## Delta / HPC (`scripts/delta/`)
 - Real-data validation runs on **NCSA Delta** (SLURM, account `bhrd-delta-cpu`). The
   cluster filesystem is **not reachable from this workstation** — the user runs jobs
-  and pastes results; artifacts archive to `/projects/bhrd/jallen17/rneat-access-results/`.
+  and pastes results; artifacts archive to `/projects/bhrd/jallen17/eidolon-access-results/`.
 - Staging: `fetch_validation_data.sh` (references), `stage_soy.sh` (align + call a
   self-consistent ref/BAM/VCF; `FULL_GENOME=1` for the whole-genome stress vs the
   fast single-chromosome default). `model_builders.sbatch` exercises the builders.
@@ -30,7 +30,7 @@ Hand-written guidance below; the GitNexus block that follows is auto-generated
 
 ## Testing (Rust)
 - `cargo test` builds a **fresh** binary (`assert_cmd::cargo_bin`) — no staleness worry.
-  Integration tests live in `rneat/tests/` (`mod common;` for shared helpers).
+  Integration tests live in `eidolon/tests/` (`mod common;` for shared helpers).
 - `model_parity.rs` pins builder output byte-for-byte on the H1N1 fixture
   (`BLESS_BASELINES=1` to regenerate after an intentional change).
 - **Model fidelity** (built model file actually shapes gen-reads output) is covered by
@@ -39,7 +39,7 @@ Hand-written guidance below; the GitNexus block that follows is auto-generated
 
 ## Git / GitHub mechanics
 - **`gh pr edit` is broken on this repo** (deprecated Projects-classic GraphQL). Patch a
-  PR with `gh api -X PATCH repos/ncsa/rusty-neat/pulls/<N> -f body=…`. `gh issue edit` works.
+  PR with `gh api -X PATCH repos/ncsa/eidolon/pulls/<N> -f body=…`. `gh issue edit` works.
 - End commit messages with `Co-Authored-By: Claude <noreply@anthropic.com>`.
 
 ## GitNexus block (below)
@@ -50,7 +50,7 @@ Hand-written guidance below; the GitNexus block that follows is auto-generated
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **rusty-neat** (2845 symbols, 7093 relationships, 241 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **eidolon** (2845 symbols, 7093 relationships, 241 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 
@@ -73,10 +73,10 @@ This project is indexed by GitNexus as **rusty-neat** (2845 symbols, 7093 relati
 
 | Resource | Use for |
 |----------|---------|
-| `gitnexus://repo/rusty-neat/context` | Codebase overview, check index freshness |
-| `gitnexus://repo/rusty-neat/clusters` | All functional areas |
-| `gitnexus://repo/rusty-neat/processes` | All execution flows |
-| `gitnexus://repo/rusty-neat/process/{name}` | Step-by-step execution trace |
+| `gitnexus://repo/eidolon/context` | Codebase overview, check index freshness |
+| `gitnexus://repo/eidolon/clusters` | All functional areas |
+| `gitnexus://repo/eidolon/processes` | All execution flows |
+| `gitnexus://repo/eidolon/process/{name}` | Step-by-step execution trace |
 
 ## CLI
 

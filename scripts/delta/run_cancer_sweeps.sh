@@ -8,7 +8,7 @@
 #             the clean re-run of the §3.9 finding: the earlier collapse at purity
 #             0.9 came from splitting a FIXED budget, which starved the normal to
 #             ~6×. Pinning the normal removes that confound, so if recall no longer
-#             collapses, the collapse was experimental design, not rneat. (Tumor-
+#             collapses, the collapse was experimental design, not eidolon. (Tumor-
 #             sample depth then rises with purity, which only reinforces this.)
 #   coverage  Somatic recall vs total tumor depth, at fixed purity.
 #   tmr       Somatic recall/precision + truth count vs tumor somatic mutation rate.

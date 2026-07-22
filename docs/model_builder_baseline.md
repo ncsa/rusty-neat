@@ -2,7 +2,7 @@
 
 The model builders (`gen-seq-error-model`, `gen-frag-length-model`, `gen-gc-bias-model`,
 `gen-mut-model`, `gen-bam-models`) are what a first-contact user runs on *their own*
-data. `rneat/tests/model_parity.rs` pins the fit algorithms on tiny fixtures; this
+data. `eidolon/tests/model_parity.rs` pins the fit algorithms on tiny fixtures; this
 document records how they behave on real, full-size input — the resource envelope
 and the proof that a fitted model actually shapes gen-reads output.
 
@@ -47,7 +47,7 @@ runtime cliff, clean on both a ~200-contig assembly and full GRCh38.
 The first human run (job 19899126) `FAIL`ed `mut_model`: `gen-mut-model` rejected the
 GIAB truth VCF with `MalformedVcf("FORMAT list and sample list different lengths")`.
 The VCF is spec-compliant — trailing per-sample FORMAT fields may be dropped (all but
-GT) — so rneat's reader was too strict. Fixed in #364 (`read_open_vcf` + `extract_gt_str`
+GT) — so eidolon's reader was too strict. Fixed in #364 (`read_open_vcf` + `extract_gt_str`
 pad dropped trailing fields; over-long samples still rejected); the re-run (19899988)
 passes all five. This is exactly the first-contact-on-real-data failure the harness
 exists to surface — the H1N1 fixture never exercised a dropped-FORMAT record.

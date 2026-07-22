@@ -3,12 +3,12 @@
 #
 # Stages:
 #   1. Simulate tumor/normal FASTQ + origin-tagged truth VCF via
-#      tools/cancer_simulate.sh (wraps rneat gen-reads twice).
+#      tools/cancer_simulate.sh (wraps eidolon gen-reads twice).
 #   2. Align normal + merged-tumor FASTQs to reference with BWA-MEM2.
 #   3. Sort, index BAMs with SAMtools.
 #   4. Call somatic variants with GATK Mutect2 (tumor/normal mode).
 #   5. Filter calls with GATK FilterMutectCalls.
-#   6. Score filtered calls against the rneat truth VCF using hap.py
+#   6. Score filtered calls against the eidolon truth VCF using hap.py
 #      som.py inside an Apptainer container (Docker not available on HPC).
 #
 # Each stage is idempotent — outputs that already exist are skipped,
@@ -26,7 +26,7 @@
 # To override key parameters without editing:
 #   REFERENCE=/path/to/ref.fa PURITY=0.4 sbatch scripts/delta/cancer_pipeline.sbatch
 
-#SBATCH --job-name=rneat-cancer
+#SBATCH --job-name=eidolon-cancer
 #SBATCH --partition=cpu
 #SBATCH --account=bhrd-delta-cpu
 #SBATCH --nodes=1
@@ -41,8 +41,8 @@ set -euo pipefail
 
 # ── Parameters (edit these) ─────────────────────────────────────────────
 # Under sbatch, $0 is a spooled copy — derive the repo from the submit dir
-# (run `sbatch` from the repo root) or override with RNEAT_REPO.
-REPO_ROOT="${RNEAT_REPO:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}}"
+# (run `sbatch` from the repo root) or override with EIDOLON_REPO.
+REPO_ROOT="${EIDOLON_REPO:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}}"
 source "$REPO_ROOT/scripts/delta/lib_report.sh"   # archive_run() + Delta path resolution
 
 # Reference genome. For a smoke test use chr22; for a full-scale run swap
@@ -87,8 +87,8 @@ STRELKA_ENV="${STRELKA_ENV:-strelka}"
 # Default the SLURM vars so a direct (non-sbatch) run doesn't abort under `set -u`.
 : "${SLURM_JOB_ID:=manual}"
 THREADS="${SLURM_CPUS_PER_TASK:-4}"
-CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$SCRATCH/cargo-target/rusty-neat}"
-RNEAT_BIN="$CARGO_TARGET_DIR/release/rneat"
+CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$SCRATCH/cargo-target/eidolon}"
+EIDOLON_BIN="$CARGO_TARGET_DIR/release/eidolon"
 PREFIX="$OUTDIR/sample"
 
 # ── Environment ─────────────────────────────────────────────────────────
@@ -102,7 +102,7 @@ mkdir -p "$OUTDIR"
 REF_DIR="$(dirname "$REFERENCE")"
 REF_NAME="$(basename "$REFERENCE")"
 
-echo "=== rneat cancer pipeline: $SLURM_JOB_ID ==="
+echo "=== eidolon cancer pipeline: $SLURM_JOB_ID ==="
 echo "Reference:  $REFERENCE"
 echo "Output:     $OUTDIR"
 echo "Coverage:   ${TOTAL_COVERAGE}x  Purity: $PURITY"
@@ -136,7 +136,7 @@ else
         --tumor-model "$TUMOR_MODEL" \
         --sv-rate-scale "$SV_RATE_SCALE" \
         --rng-seed "$RNG_SEED_ROOT" \
-        --rneat-bin "$RNEAT_BIN" \
+        --eidolon-bin "$EIDOLON_BIN" \
         $TMR_FLAG \
         $PAIRED_FLAG
     echo "[1/6] Simulation complete."
@@ -236,7 +236,7 @@ fi
 
 # ── Stage 5b: Strelka2 somatic SNV/indel (2nd caller vs Mutect2) ─────────
 # Cross-validation: a second, independently-modeled somatic caller confirms
-# rneat's somatic SNV/indel data isn't recovered only by Mutect2. Reuses the same
+# eidolon's somatic SNV/indel data isn't recovered only by Mutect2. Reuses the same
 # tumor/normal BAMs. RUN_STRELKA=0 to skip.
 STRELKA_VCF=""
 if [[ "$RUN_STRELKA" == "1" ]]; then

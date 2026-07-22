@@ -9,7 +9,7 @@
 # CONTROL=1):
 #   off        adapters disabled, long inserts (short fragments rejected) — baseline
 #   short_ctrl short fragments KEPT, NO adapter (genomic reads) — isolates the
-#              short-insert coverage effect (needs rneat keep_short_fragments)
+#              short-insert coverage effect (needs eidolon keep_short_fragments)
 #   on_raw     adapters on (readthrough), aligned raw (adapter tails soft-clipped)
 #   on_trim    adapters on (readthrough), fastp-trimmed (realistic Illumina)
 #
@@ -115,8 +115,8 @@ for row in rows:
     data.setdefault(c, {})
     nreps.setdefault(c, 0)
     od = row["outdir"]
-    hp = parse_happy(os.path.join(od, "rneat_scored.summary.csv"))
-    rz = parse_realism(os.path.join(od, "rneat_realism.tsv"))
+    hp = parse_happy(os.path.join(od, "eidolon_scored.summary.csv"))
+    rz = parse_realism(os.path.join(od, "eidolon_realism.tsv"))
     if not hp and not rz:
         missing.append(f"{c} rep{row['rep']} (job {row['jobid']}): no outputs in {od}")
         continue

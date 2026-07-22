@@ -1,7 +1,7 @@
-Contributing to rusty-neat
+Contributing to eidolon
 ====================
 
-We welcome contributions to the rusty-neat project. Before contributing, please review our [Code of Conduct](CODE_OF_CONDUCT.md).
+We welcome contributions to the eidolon project. Before contributing, please review our [Code of Conduct](CODE_OF_CONDUCT.md).
 
 Note that this is a reworking of the NEAT project (https://github.com/ncsa/neat) purely in Rust. See the [README](README.md) for more details.
 

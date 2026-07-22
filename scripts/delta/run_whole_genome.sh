@@ -64,12 +64,12 @@ RD="${RESULTS_DIR:-$HOME}"
 OUTROOT="${OUTROOT:-$SCRATCH/wg_${TAG}}"
 SHARD_DIR="${SHARD_DIR:-$SCRATCH/shards_${TAG}}"
 
-CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$SCRATCH/cargo-target/rusty-neat}"
-RNEAT_BIN="${RNEAT_BIN:-$CARGO_TARGET_DIR/release/rneat}"
+CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$SCRATCH/cargo-target/eidolon}"
+EIDOLON_BIN="${EIDOLON_BIN:-$CARGO_TARGET_DIR/release/eidolon}"
 source "$HOME/.cargo/env" 2>/dev/null || true
 module load samtools/1.22-cce19.0.0 2>/dev/null || true
 
-[[ -x "$RNEAT_BIN" ]] || { echo "rneat binary missing: $RNEAT_BIN (run setup.sh)" >&2; exit 1; }
+[[ -x "$EIDOLON_BIN" ]] || { echo "eidolon binary missing: $EIDOLON_BIN (run setup.sh)" >&2; exit 1; }
 [[ -f "$REFERENCE" ]] || { echo "reference not found: $REFERENCE" >&2; exit 1; }
 
 # ── prep (login node — light: index + write small BED files) ────────────────────
@@ -84,7 +84,7 @@ WALL=$(printf '%02d:%02d:00' $(( MINUTES / 60 )) $(( MINUTES % 60 )))
 
 echo "════════════════════════════════════════════════════════════════"
 echo "Whole-genome run '$TAG'"
-echo "  reference : $REFERENCE ($("$RNEAT_BIN" --version 2>/dev/null || echo '?'))"
+echo "  reference : $REFERENCE ($("$EIDOLON_BIN" --version 2>/dev/null || echo '?'))"
 echo "  shards    : $N  (${SHARD_BP} bp windows)   packing K=$K -> $T node-tasks"
 echo "  nodes     : up to $MAXNODES concurrent (exclusive)   per-task walltime $WALL"
 echo "  coverage  : ${COVERAGE}x  sv_rate_scale=$SV_RATE_SCALE  ploidy=$PLOIDY"
@@ -108,7 +108,7 @@ fi
 array_jid=$(SHARD_DIR="$SHARD_DIR" OUTROOT="$OUTROOT" REFERENCE="$REFERENCE" \
     SHARDS_PER_NODE="$K" COVERAGE="$COVERAGE" READ_LEN="$READ_LEN" \
     FRAG_MEAN="$FRAG_MEAN" FRAG_SD="$FRAG_SD" PLOIDY="$PLOIDY" \
-    SV_RATE_SCALE="$SV_RATE_SCALE" SEED_ROOT="rneat wg ${TAG} shard" \
+    SV_RATE_SCALE="$SV_RATE_SCALE" SEED_ROOT="eidolon wg ${TAG} shard" \
     sbatch --parsable $DEP --job-name="wg-array-${TAG}" \
            --time="$WALL" --array=0-$((T-1))%${MAXNODES} \
            "$D/genome_array.sbatch")

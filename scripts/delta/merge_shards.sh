@@ -19,7 +19,7 @@
 #   (interactive alt: srun ... --pty bash, then SHARD_OUTROOT=... bash scripts/delta/merge_shards.sh)
 #   (optional) OUT_PREFIX=$SCRATCH/wg_<id>/merged  EXPECT_SHARDS=<N>
 
-#SBATCH --job-name=rneat-merge
+#SBATCH --job-name=eidolon-merge
 #SBATCH --partition=cpu
 #SBATCH --account=bhrd-delta-cpu
 #SBATCH --nodes=1
@@ -33,8 +33,8 @@
 set -euo pipefail
 
 # Under sbatch, $0 is a spooled copy — derive the repo from the submit dir
-# (submit from the repo root) or override with RNEAT_REPO.
-REPO_ROOT="${RNEAT_REPO:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}}"
+# (submit from the repo root) or override with EIDOLON_REPO.
+REPO_ROOT="${EIDOLON_REPO:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}}"
 source "$REPO_ROOT/scripts/delta/lib_report.sh"   # $SCRATCH + setup_conda/conda_activate
 
 SHARD_OUTROOT="${SHARD_OUTROOT:?set SHARD_OUTROOT to the array OUTROOT (e.g. \$SCRATCH/wg_<jobid>)}"

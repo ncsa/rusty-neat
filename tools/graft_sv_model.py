@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Graft an sv_model from one rneat MutationModel JSON onto another.
+"""Graft an sv_model from one eidolon MutationModel JSON onto another.
 
 Completes the per-tissue tumor models (#202): a model trained by gen-mut-model
 from a per-tissue COSMIC SNV/indel corpus carries the per-tissue SNP/indel

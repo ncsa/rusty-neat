@@ -49,7 +49,7 @@ OUT_DIR="."
 CHR_PREFIX="true"
 REFERENCE=""
 TRAIN_AFTER="false"
-RNEAT_BIN="rneat"
+EIDOLON_BIN="eidolon"
 
 usage() {
     cat <<'EOF'
@@ -72,12 +72,12 @@ Output:
 
 Conversion knobs:
   --no-chr-prefix   Emit bare chromosome names (1/2/X/Y/MT) instead of chr-prefixed.
-                    Default adds `chr` (MT -> chrM), matching rneat's bundled models.
+                    Default adds `chr` (MT -> chrM), matching eidolon's bundled models.
 
 Optional training step:
-  --train           After conversion, run `rneat gen-mut-model`. Requires --reference.
+  --train           After conversion, run `eidolon gen-mut-model`. Requires --reference.
   --reference       GRCh38 reference FASTA (same chr-prefix convention as the VCF).
-  --rneat-bin       Path to the rneat binary (default: "rneat" on PATH)
+  --eidolon-bin       Path to the eidolon binary (default: "eidolon" on PATH)
 
   -h, --help        Print this message
 EOF
@@ -95,7 +95,7 @@ while [[ $# -gt 0 ]]; do
         --no-chr-prefix)   CHR_PREFIX="false"; shift ;;
         --train)           TRAIN_AFTER="true"; shift ;;
         --reference)       REFERENCE="$2"; shift 2 ;;
-        --rneat-bin)       RNEAT_BIN="$2"; shift 2 ;;
+        --eidolon-bin)       EIDOLON_BIN="$2"; shift 2 ;;
         -h|--help)         usage; exit 0 ;;
         *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
     esac
@@ -114,7 +114,7 @@ done
 if [[ "$TRAIN_AFTER" == "true" ]]; then
     [[ -z "$REFERENCE"  ]] && { echo "--train requires --reference" >&2; exit 2; }
     [[ ! -f "$REFERENCE" ]] && { echo "Reference not found: $REFERENCE" >&2; exit 2; }
-    command -v "$RNEAT_BIN" >/dev/null 2>&1 || { echo "rneat binary not found (override with --rneat-bin)" >&2; exit 2; }
+    command -v "$EIDOLON_BIN" >/dev/null 2>&1 || { echo "eidolon binary not found (override with --eidolon-bin)" >&2; exit 2; }
 fi
 command -v bgzip >/dev/null 2>&1 || { echo "bgzip not found on PATH (install htslib / samtools)" >&2; exit 2; }
 
@@ -225,7 +225,7 @@ vcf_file: $OUT_VCF
 output_file: $MODEL_OUT
 overwrite_output: true
 EOF
-    "$RNEAT_BIN" gen-mut-model -c "$TRAIN_CFG"
+    "$EIDOLON_BIN" gen-mut-model -c "$TRAIN_CFG"
     echo ""
     echo "  Trained SNV/indel model: $MODEL_OUT"
     echo "  (Graft a per-tissue sv_model on top to get a full per-tissue model.)"

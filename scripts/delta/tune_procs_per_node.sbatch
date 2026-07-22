@@ -1,15 +1,15 @@
 #!/bin/bash
-# SLURM job: how many single-thread rneat processes saturate ONE Delta node?
+# SLURM job: how many single-thread eidolon processes saturate ONE Delta node?
 #
 # The whole-genome strategy is region-sharding (genome_array.sbatch): many
-# single-thread rneat processes, because sharding parallelizes sub-contig and packs
+# single-thread eidolon processes, because sharding parallelizes sub-contig and packs
 # far denser than threading one process (which caps at the genome's contig count).
 # The knob is how many shards to pack per node. On the fixed build (v1.19.1, #340)
 # packing is near-linear — a real 25 Mb window holds ~99% per-process efficiency to
 # 64/node, dropping to ~75% at 128 (hyperthread oversubscription); the earlier
 # "efficient zone <=8" was an artifact of per-process trace-log I/O, since removed.
 #
-# This launches K identical single-thread rneat processes CONCURRENTLY on one
+# This launches K identical single-thread eidolon processes CONCURRENTLY on one
 # exclusive node for K in PROC_COUNTS, and measures aggregate throughput
 # (K / makespan) and per-process efficiency. The knee (where efficiency finally
 # falls off) is the optimal shards/node — currently ~64 (one per physical core).
@@ -18,13 +18,13 @@
 # outputs go to node-local /tmp (740 GB SSD) so the measurement reflects
 # CPU/memory bandwidth, not Lustre I/O.
 #
-# Prereqs: setup.sh (rneat built); GENOME staged.
+# Prereqs: setup.sh (eidolon built); GENOME staged.
 # Usage:
 #   sbatch scripts/delta/tune_procs_per_node.sbatch
 #   GENOME=$SCRATCH/neat_data/ecoli.fa COVERAGE=30 PROC_COUNTS="1 2 4 8 16 32 64 128" \
 #     sbatch scripts/delta/tune_procs_per_node.sbatch
 
-#SBATCH --job-name=rneat-ppn
+#SBATCH --job-name=eidolon-ppn
 #SBATCH --partition=cpu
 #SBATCH --account=bhrd-delta-cpu
 #SBATCH --nodes=1
@@ -38,7 +38,7 @@
 
 set -euo pipefail
 
-REPO_ROOT="${RNEAT_REPO:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}}"
+REPO_ROOT="${EIDOLON_REPO:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}}"
 source "$REPO_ROOT/scripts/delta/lib_report.sh"
 
 GENOME="${GENOME:-$SCRATCH/neat_data/ecoli.fa}"     # per-process workload (a shard stand-in)
@@ -47,8 +47,8 @@ READ_LEN="${READ_LEN:-151}"
 PROC_COUNTS="${PROC_COUNTS:-1 2 4 8 16 32 64 128}"
 OUTDIR="${OUTDIR:-$SCRATCH/ppn_$SLURM_JOB_ID}"
 WORK="${WORK_LOCAL:-/tmp/ppn_$SLURM_JOB_ID}"        # node-local SSD for per-proc output
-CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$SCRATCH/cargo-target/rusty-neat}"
-RNEAT_BIN="$CARGO_TARGET_DIR/release/rneat"
+CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$SCRATCH/cargo-target/eidolon}"
+EIDOLON_BIN="$CARGO_TARGET_DIR/release/eidolon"
 
 source "$HOME/.cargo/env" 2>/dev/null || true
 mkdir -p "$OUTDIR" "$WORK"
@@ -90,7 +90,7 @@ rng_seed: ppn $K $i
 num_threads: 1
 YAML
         # /usr/bin/time per process → per-proc elapsed; run in background.
-        ( /usr/bin/time -f '%e' -o "$d/t" "$RNEAT_BIN" --log-level warn gen-reads -c "$d/sim.yml" >/dev/null 2>"$d/log" ) &
+        ( /usr/bin/time -f '%e' -o "$d/t" "$EIDOLON_BIN" --log-level warn gen-reads -c "$d/sim.yml" >/dev/null 2>"$d/log" ) &
     done
     wait
     makespan=$(( SECONDS - start ))

@@ -2,7 +2,7 @@
 # SLURM job: stage REAL cancer data — SEQC2 HCC1395 (tumor) / HCC1395BL (normal),
 # a triple-negative breast cancer cell line + matched normal from the same donor —
 # for a COMPOUND tumor model: germline layer from the normal + somatic layer from
-# the tumor's real high-confidence truth VCF, composed by `rneat gen-cancer-reads`.
+# the tumor's real high-confidence truth VCF, composed by `eidolon gen-cancer-reads`.
 #
 # WHY / WHAT THE COMPOUND MODEL IS
 #   gen-cancer-reads separates the germline process (normal_model + germline_vcf)
@@ -19,7 +19,7 @@
 # MODE=download to fetch the whole ~60-80 GB BAM first.
 #
 # Prereqs: GRCh38.fa staged at $SCRATCH/neat_data/GRCh38.fa (same build used for
-#          HG002); samtools + bcftools (bioinf conda env / modules). rneat NOT needed.
+#          HG002); samtools + bcftools (bioinf conda env / modules). eidolon NOT needed.
 #
 # Usage:
 #   sbatch scripts/delta/stage_hcc1395.sh
@@ -29,7 +29,7 @@
 # HEAVY: region chr1 ≈ ~5 GB pulled per BAM; germline calling on chr1 (~50x) is
 # multi-hour. REGION=all downloads ~140 GB and calls genome-wide.
 
-#SBATCH --job-name=rneat-stagehcc1395
+#SBATCH --job-name=eidolon-stagehcc1395
 #SBATCH --partition=cpu
 #SBATCH --account=bhrd-delta-cpu
 #SBATCH --nodes=1
@@ -42,7 +42,7 @@
 
 set -euo pipefail
 
-REPO_ROOT="${RNEAT_REPO:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}}"
+REPO_ROOT="${EIDOLON_REPO:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}}"
 source "$REPO_ROOT/scripts/delta/lib_report.sh"   # $SCRATCH + setup_conda/conda_activate
 
 D="${DATA_DIR:-$SCRATCH/neat_data/hcc1395}"
@@ -54,7 +54,7 @@ BAM_BASE="https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/seqc/Somatic_Mutat
 VCF_BASE="https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/seqc/Somatic_Mutation_WG/release/latest"
 TUMOR_BAM="${TUMOR_BAM:-WGS_NS_T_1.bwa.dedup.bam}"    # NovaSeq replicate 1
 NORMAL_BAM="${NORMAL_BAM:-WGS_NS_N_1.bwa.dedup.bam}"
-RNEAT_HINT="${RNEAT_BIN:-$SCRATCH/cargo-target/rusty-neat/release/rneat}"   # for the printed next-step cmds
+EIDOLON_HINT="${EIDOLON_BIN:-$SCRATCH/cargo-target/eidolon/release/eidolon}"   # for the printed next-step cmds
 
 mkdir -p "$D"
 module load samtools/1.22-cce19.0.0
@@ -174,8 +174,8 @@ echo "════════════════════════�
 echo "HCC1395 staged (region [$REGION]): $n_som somatic, $n_germ germline variants"
 echo "Build the COMPOUND model, then simulate (configs written to $D):"
 echo "  # somatic tumor_model (real TNBC signature) + germline normal_model (this donor):"
-echo "  srun --account=bhrd-delta-cpu -p cpu --mem=8G -t 00:30:00 $RNEAT_HINT gen-mut-model -c $D/tumor_model.yml"
-echo "  srun --account=bhrd-delta-cpu -p cpu --mem=8G -t 00:30:00 $RNEAT_HINT gen-mut-model -c $D/normal_model.yml"
+echo "  srun --account=bhrd-delta-cpu -p cpu --mem=8G -t 00:30:00 $EIDOLON_HINT gen-mut-model -c $D/tumor_model.yml"
+echo "  srun --account=bhrd-delta-cpu -p cpu --mem=8G -t 00:30:00 $EIDOLON_HINT gen-mut-model -c $D/normal_model.yml"
 echo "  # sequencing models from the real tumor BAM/FASTQ:"
 echo "  REFERENCE=$REF INPUT_BAM=$D/tumor.bam INPUT_FASTQ=$D/tumor.fastq.gz INPUT_VCF=$D/somatic.vcf.gz \\"
 echo "    sbatch scripts/delta/model_builders.sbatch"

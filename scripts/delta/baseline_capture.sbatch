@@ -1,5 +1,5 @@
 #!/bin/bash
-# SLURM job: capture a trusted SIMULATOR baseline for rneat on Delta.
+# SLURM job: capture a trusted SIMULATOR baseline for eidolon on Delta.
 #
 # Unlike germline_e2e.sbatch (which measures *caller* recall/precision), this
 # job measures the *simulator itself* and records a machine-readable
@@ -20,7 +20,7 @@
 #                      the EXACT quantity the dosage work changes, so this run
 #                      is the diploid reference #266/#270 validate against.
 #
-# Uses rneat's own golden BAM (produce_bam: true) so the measurement reflects
+# Uses eidolon's own golden BAM (produce_bam: true) so the measurement reflects
 # the simulator's intent, not aligner artifacts. No bwa-mem2/GATK needed.
 #
 # Prerequisites: run scripts/delta/setup.sh once first.
@@ -29,7 +29,7 @@
 #   sbatch scripts/delta/baseline_capture.sbatch
 #   REFERENCE=$SCRATCH/neat_data/chr22.fa COVERAGE=30 sbatch scripts/delta/baseline_capture.sbatch
 
-#SBATCH --job-name=rneat-baseline
+#SBATCH --job-name=eidolon-baseline
 #SBATCH --partition=cpu
 #SBATCH --account=bhrd-delta-cpu
 #SBATCH --nodes=1
@@ -44,8 +44,8 @@ set -euo pipefail
 
 # ── Parameters ───────────────────────────────────────────────────────────
 # Under sbatch, $0 is a spooled copy — derive the repo from the submit dir
-# (run `sbatch` from the repo root) or override with RNEAT_REPO.
-REPO_ROOT="${RNEAT_REPO:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}}"
+# (run `sbatch` from the repo root) or override with EIDOLON_REPO.
+REPO_ROOT="${EIDOLON_REPO:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}}"
 source "$REPO_ROOT/scripts/delta/lib_report.sh"   # archive_run() + Delta path resolution
 
 # chr22 is the right size for a baseline: big enough to be meaningful, small
@@ -63,13 +63,13 @@ PLOIDY="${PLOIDY:-2}"
 # replication, the array task id is appended so each replicate uses a distinct
 # seed (independent draw) while staying constant within a run; SLURM schedules
 # the tasks across (likely different) nodes. Plain submit → no suffix.
-SEED="${SEED:-rneat delta baseline v1}${SLURM_ARRAY_TASK_ID:+ rep$SLURM_ARRAY_TASK_ID}"
+SEED="${SEED:-eidolon delta baseline v1}${SLURM_ARRAY_TASK_ID:+ rep$SLURM_ARRAY_TASK_ID}"
 # Two thread counts for the determinism check. Output must be content-identical.
 THREADS_A=1
 THREADS_B="${THREADS_B:-8}"
 
-CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$SCRATCH/cargo-target/rusty-neat}"
-RNEAT_BIN="$CARGO_TARGET_DIR/release/rneat"
+CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$SCRATCH/cargo-target/eidolon}"
+EIDOLON_BIN="$CARGO_TARGET_DIR/release/eidolon"
 
 # ── Environment ──────────────────────────────────────────────────────────
 source "$HOME/.cargo/env"
@@ -87,11 +87,11 @@ BASELINE_JSON="$OUTDIR/baseline.json"
 
 # Prefer the binary's own --version; fall back to the workspace Cargo.toml +
 # git describe (always available in the repo) for older binaries without the flag.
-RNEAT_VERSION="$("$RNEAT_BIN" --version 2>/dev/null || awk -F"'" '/^version/{print $2; exit}' "$REPO_ROOT/Cargo.toml")"
-RNEAT_GIT="$(git -C "$REPO_ROOT" describe --tags --always --dirty 2>/dev/null || echo unknown)"
+EIDOLON_VERSION="$("$EIDOLON_BIN" --version 2>/dev/null || awk -F"'" '/^version/{print $2; exit}' "$REPO_ROOT/Cargo.toml")"
+EIDOLON_GIT="$(git -C "$REPO_ROOT" describe --tags --always --dirty 2>/dev/null || echo unknown)"
 
-echo "=== rneat baseline capture: $SLURM_JOB_ID ==="
-echo "rneat:     $RNEAT_VERSION"
+echo "=== eidolon baseline capture: $SLURM_JOB_ID ==="
+echo "eidolon:     $EIDOLON_VERSION"
 echo "Reference: $REFERENCE"
 echo "Ploidy:    $PLOIDY   Coverage: ${COVERAGE}x   Seed: '$SEED'"
 echo "Threads:   A=$THREADS_A  B=$THREADS_B"
@@ -130,14 +130,14 @@ if [[ -f "$DIR_A/${PREFIX}_r1.fastq.gz" && -f "$DIR_A/${PREFIX}.bam" ]]; then
 else
     echo "[1/5] Simulation run A (threads=$THREADS_A, +BAM)..."
     write_cfg "$DIR_A" "$THREADS_A" true
-    "$RNEAT_BIN" --log-level warn gen-reads -c "$DIR_A/sim.yml"
+    "$EIDOLON_BIN" --log-level warn gen-reads -c "$DIR_A/sim.yml"
 fi
 if [[ -f "$DIR_B/${PREFIX}_r1.fastq.gz" ]]; then
     echo "[1/5] Run B outputs present — skipping."
 else
     echo "[1/5] Simulation run B (threads=$THREADS_B)..."
     write_cfg "$DIR_B" "$THREADS_B" false
-    "$RNEAT_BIN" --log-level warn gen-reads -c "$DIR_B/sim.yml"
+    "$EIDOLON_BIN" --log-level warn gen-reads -c "$DIR_B/sim.yml"
 fi
 
 TRUTH_VCF="$DIR_A/${PREFIX}.vcf.gz"
@@ -174,7 +174,7 @@ echo "      SNPs=$n_snp  indels=$n_indel  SVs=$n_sv  Ts/Tv=$ts_tv"
 # ── Stage 4: coverage from the golden BAM ──────────────────────────────────
 echo "[4/5] Coverage..."
 if [[ ! -f "${GOLDEN_BAM}.bai" ]]; then
-    # rneat emits a coordinate-sorted golden BAM, but sort defensively.
+    # eidolon emits a coordinate-sorted golden BAM, but sort defensively.
     if ! samtools index "$GOLDEN_BAM" 2>/dev/null; then
         samtools sort -@ "$SLURM_CPUS_PER_TASK" -o "$DIR_A/${PREFIX}.sorted.bam" "$GOLDEN_BAM"
         GOLDEN_BAM="$DIR_A/${PREFIX}.sorted.bam"
@@ -182,7 +182,7 @@ if [[ ! -f "${GOLDEN_BAM}.bai" ]]; then
     fi
 fi
 # Mean/sd over COVERED positions (depth>0) + breadth, so reference N-gaps
-# (which rneat leaves uncovered) don't drag the mean down.
+# (which eidolon leaves uncovered) don't drag the mean down.
 read -r cov_mean cov_sd cov_breadth < <(
     samtools depth -a "$GOLDEN_BAM" | awk '
         { tot++; if ($3>0){ c++; s+=$3; ss+=$3*$3 } }
@@ -223,7 +223,7 @@ echo "      het SNPs=$n_het  mean alt-AF=$af_mean  (expect ~0.5 for diploid)"
 # ── Emit baseline.json ─────────────────────────────────────────────────────
 cat > "$BASELINE_JSON" <<JSON
 {
-  "rneat_version": "$RNEAT_VERSION",
+  "eidolon_version": "$EIDOLON_VERSION",
   "job_id": "$SLURM_JOB_ID",
   "reference": "$(basename "$REFERENCE")",
   "params": { "ploidy": $PLOIDY, "coverage": $COVERAGE, "read_len": $READ_LEN,

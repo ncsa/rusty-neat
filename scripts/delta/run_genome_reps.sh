@@ -42,7 +42,7 @@ N=$(ls "$SHARD_DIR"/shard_*.bed 2>/dev/null | wc -l)
 # Manifest lives on DURABLE storage, never scratch — scratch can throw transient
 # EIO / hit quota mid-run, and the driver must not half-submit because a tiny
 # bookkeeping write failed. OUTROOTs (the bulky FASTQ) still go to scratch.
-MANIFEST="${MANIFEST:-${RESULTS_DIR:-$HOME}/rneat-sweeps/wg_sweep_${TAG}.manifest}"
+MANIFEST="${MANIFEST:-${RESULTS_DIR:-$HOME}/eidolon-sweeps/wg_sweep_${TAG}.manifest}"
 mkdir -p "$(dirname "$MANIFEST")"
 { echo "# K rep jobid nodes outroot"; } > "$MANIFEST"
 echo "shards=$N  KS=[$KS]  reps=$REPS  maxnodes=$MAXNODES  tag=$TAG"
@@ -61,7 +61,7 @@ for K in $KS; do
         OUTROOT="$SCRATCH/wg_${TAG}_k${K}_rep${r}"
         jid=$(SHARD_DIR="$SHARD_DIR" OUTROOT="$OUTROOT" REFERENCE="$REFERENCE" \
               SHARDS_PER_NODE="$K" COVERAGE="$COVERAGE" SV_RATE_SCALE="$SV_RATE_SCALE" \
-              SEED_ROOT="rneat wg ${TAG} k${K} rep${r} shard" \
+              SEED_ROOT="eidolon wg ${TAG} k${K} rep${r} shard" \
               sbatch --parsable --time="$WALL" --array=0-$((T-1))%${MAXNODES} \
                      "$REPO_ROOT/scripts/delta/genome_array.sbatch")
         echo "$K $r $jid $T $OUTROOT" >> "$MANIFEST"

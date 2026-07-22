@@ -5,7 +5,7 @@
 # whole point of the baselines is to flag drift that wasn't intended. After
 # running, inspect the diff:
 #
-#   git diff rneat/test_data/baseline_models/
+#   git diff eidolon/test_data/baseline_models/
 #
 # and confirm the changes are expected before committing.
 #
@@ -17,4 +17,4 @@ cd "$ROOT"
 BLESS_BASELINES=1 cargo test --test model_parity
 echo
 echo "Baselines regenerated. Review the diff before committing:"
-echo "  git diff rneat/test_data/baseline_models/"
+echo "  git diff eidolon/test_data/baseline_models/"

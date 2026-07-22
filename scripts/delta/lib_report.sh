@@ -30,7 +30,7 @@ fi
 
 # Durable results root for the ACCESS final report — the project filesystem
 # (persists), NEVER scratch. Override with RESULTS_DIR=...
-RESULTS_DIR="${RESULTS_DIR:-/projects/$ACCESS_PROJECT/$USER/rneat-access-results}"
+RESULTS_DIR="${RESULTS_DIR:-/projects/$ACCESS_PROJECT/$USER/eidolon-access-results}"
 
 # ── conda activation (Delta) ─────────────────────────────────────────────
 # On Delta the miniforge module puts conda's legacy `activate` on PATH but NOT
@@ -136,7 +136,7 @@ archive_run() {
     [[ -f "${base}.err" ]] && cp -f "${base}.err" "$dest/" 2>/dev/null || true
 
     local ver git_desc
-    ver="$("${RNEAT_BIN:-rneat}" --version 2>/dev/null || echo unknown)"
+    ver="$("${EIDOLON_BIN:-eidolon}" --version 2>/dev/null || echo unknown)"
     git_desc="$(git -C "${REPO_ROOT:-.}" describe --tags --always --dirty 2>/dev/null || echo unknown)"
     local elapsed_s alloc_cpus alloc_nodes maxrss_kb core_hours
     read -r elapsed_s alloc_cpus alloc_nodes maxrss_kb core_hours < <(_resource_values)
@@ -146,7 +146,7 @@ archive_run() {
         kind          "$kind" \
         date_utc      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
         slurm_job_id  "$jid" \
-        rneat_version "$ver" \
+        eidolon_version "$ver" \
         git           "$git_desc" \
         reference     "$(basename "${REFERENCE:-NA}")" \
         elapsed_s     "${elapsed_s:-0}" \

@@ -1,6 +1,6 @@
-# rneat re-validation / regression protocol
+# eidolon re-validation / regression protocol
 
-When a feature changes rneat (e.g. adapter modeling, #125), this protocol confirms
+When a feature changes eidolon (e.g. adapter modeling, #125), this protocol confirms
 the change does not:
 
 - **(M) blow up memory** — peak RSS regression,

@@ -1,3 +1,23 @@
+7/21/2026
+=========
+## eidolon v2.0.0 — renamed from rusty-neat / rneat
+
+The project is renamed **rusty-neat → eidolon** (binary `rneat` → `eidolon`). This is a
+breaking change to the command name and crate identity; there are **no behavior changes**.
+
+- **New name.** The tool, binary, and bioconda package are now `eidolon`; the library crate
+  is `eidolon-core`. Invoke `eidolon gen-reads …`, `eidolon gen-cancer-reads …`, etc.
+- **`rneat` deprecation shim.** A `rneat` alias binary still ships: it prints a rename warning
+  and forwards all arguments to `eidolon`, so existing scripts keep working. It will be removed
+  in a future release — please migrate to `eidolon`.
+- **Output formats unchanged.** Golden-VCF INFO tags (`NEAT_PROVENANCE`, `NEAT_ORIGIN`), the
+  `NEAT_simulated_sample` sample column, and FASTQ read-name prefixes (`RNEAT_generated_*`,
+  `RNEAT_chimeric_*`) are **retained** for output stability and to preserve the NEAT lineage in
+  the format. A future release may migrate these to `EIDOLON_*`.
+- **NEAT pedigree retained** in the README and `CITATION.cff` — eidolon remains a Rust port of
+  NEAT.
+- Repository moves to `github.com/ncsa/eidolon`; GitHub redirects the old `rusty-neat` URLs.
+
 7/20/2026
 =========
 ## rneat v1.21.1 — realistic default het/hom ratio

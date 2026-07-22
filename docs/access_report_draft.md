@@ -1,4 +1,4 @@
-# Benchmarking rneat: Enhancing Performance of a Genome Sequencing Simulator for Cancer Genomics with Rust
+# Benchmarking eidolon: Enhancing Performance of a Genome Sequencing Simulator for Cancer Genomics with Rust
 
 **ACCESS allocation report — DRAFT**
 Allocation: `bhrd-delta-cpu` (NCSA Delta). Core-hours used to date: ~2,500 of ~397,500.
@@ -7,16 +7,16 @@ Allocation: `bhrd-delta-cpu` (NCSA Delta). Core-hours used to date: ~2,500 of ~3
 
 ## 1. Project summary
 
-`rneat` is a Rust port and extension of NEAT, a next-generation-sequencing read
+`eidolon` is a Rust port and extension of NEAT, a next-generation-sequencing read
 simulator. It generates FASTQ, a golden BAM, and a truth VCF whose statistical
 properties match real data, and it adds a native tumor/normal cancer workflow
 (`gen-cancer-reads`) with structural variants and an origin-tagged somatic truth
-set. This project used Delta to (1) verify rneat produces high-quality data on a
-small test set, (2) compare rneat to its predecessor NEAT 4 at scale on both
+set. This project used Delta to (1) verify eidolon produces high-quality data on a
+small test set, (2) compare eidolon to its predecessor NEAT 4 at scale on both
 performance and fidelity, and (3) validate the cancer workflow end-to-end through
 a real somatic-variant-calling pipeline.
 
-A central outcome is methodological: **benchmarking rneat against NEAT 4 and
+A central outcome is methodological: **benchmarking eidolon against NEAT 4 and
 against GATK/Mutect2 surfaced — and we fixed — six real simulator defects** that
 unit tests had not caught. The verification process is itself a result — most
 strikingly for the sixth defect (§3.11), a malformed-FASTQ bug that was invisible
@@ -80,25 +80,25 @@ enhancement; it is *not* required for a realistic het/hom ratio.
 
 ### 3.2 Performance vs NEAT 4 (single thread)
 
-| Genome | rneat wall | NEAT wall | **Speedup** | rneat RSS | NEAT RSS | **Memory** |
+| Genome | eidolon wall | NEAT wall | **Speedup** | eidolon RSS | NEAT RSS | **Memory** |
 |---|---|---|---|---|---|---|
 | E. coli (4.5 MB) | 9.27 s | 96.85 s | **10.4×** | 40 MB | 281 MB | **7.0×** |
 | yeast (11 MB) | 20.68 s | 231.1 s | **11.2×** | 53 MB | 168 MB | **3.2×** |
 | chr22 (49 MB) | 60.94 s | 810.3 s | **13.3×** | 227 MB | 1525 MB | **6.7×** |
 
-rneat is **~10–13× faster** than NEAT 4 and uses 3–7× less, flatter memory (both
+eidolon is **~10–13× faster** than NEAT 4 and uses 3–7× less, flatter memory (both
 tools single-threaded, 10× coverage, n=3 median on one exclusive node).
 
-**Revision (v1.19.1).** An earlier draft reported ~2.7–2.9×. Those rneat timings
-were taken while rneat defaulted to `--log-level trace`, whose per-base debug I/O
+**Revision (v1.19.1).** An earlier draft reported ~2.7–2.9×. Those eidolon timings
+were taken while eidolon defaulted to `--log-level trace`, whose per-base debug I/O
 dominated its runtime (issue #340); NEAT's figures were unaffected. With the
-default corrected to `info`, rneat's true single-thread advantage is **~10–13×**.
+default corrected to `info`, eidolon's true single-thread advantage is **~10–13×**.
 Memory was never affected (logging is CPU/I/O-bound), so the 3–7× memory advantage
-is unchanged. Both tools ran at minimal logging — rneat `warn`, NEAT its default
+is unchanged. Both tools ran at minimal logging — eidolon `warn`, NEAT its default
 `info`, which has no per-read logging and is timing-equivalent to `warn` (verified
 in NEAT's source; #346 makes NEAT `--log-level WARNING` explicit going forward).
 
-**Multicore behavior (v1.19.1).** The same fix also reverses rneat's apparent
+**Multicore behavior (v1.19.1).** The same fix also reverses eidolon's apparent
 thread *regression*. On the multi-contig yeast genome, in-process threading now
 **scales** — 1 thread 20.7 s → 4 threads 9.5 s → 16 threads 5.3 s (**~3.9×**) —
 whereas the pre-fix build got *slower* with more threads (77 → 116 s). The
@@ -113,17 +113,17 @@ what threading a single process can reach.
 
 Caller recovery of each simulator's truth set through the same GATK pipeline:
 
-| | rneat SNP | NEAT SNP | rneat INDEL | NEAT INDEL |
+| | eidolon SNP | NEAT SNP | eidolon INDEL | NEAT INDEL |
 |---|---|---|---|---|
 | Recall | 0.989 | 0.989 | 0.982 | 0.969 |
 | Precision | 0.9996 | 0.991 | 0.989 | 0.972 |
 
-**Statistically equivalent**, with rneat marginally cleaner on precision. rneat
+**Statistically equivalent**, with eidolon marginally cleaner on precision. eidolon
 faithfully reproduces NEAT 4's germline behavior.
 
 ### 3.4 Cancer end-to-end (chr22, 30×, purity 0.6)
 
-Mutect2 tumor/normal recovery of rneat's somatic truth (after fixes + truth/query
+Mutect2 tumor/normal recovery of eidolon's somatic truth (after fixes + truth/query
 normalization):
 
 | | Recall | Precision |
@@ -131,7 +131,7 @@ normalization):
 | Somatic SNV | 0.925 | 0.872 |
 | Somatic indel | 0.900 | 0.844 |
 
-rneat's simulated tumor/normal data is recovered well by a standard somatic
+eidolon's simulated tumor/normal data is recovered well by a standard somatic
 pipeline. **Scope:** SNV/indel only (Mutect2 does not call SVs), single
 purity/coverage point — both expanded in Phase 2.
 
@@ -165,7 +165,7 @@ only exposed by pushing the data through a real aligner at scale.
 > corrected simulation-only timing on the fixed build.
 
 Benchmarking exposed a scaling characteristic that reshaped the whole-genome
-plan. On Delta's dual-socket EPYC nodes, rneat's in-process (rayon) threading
+plan. On Delta's dual-socket EPYC nodes, eidolon's in-process (rayon) threading
 initially *regressed* — yeast 30× took 218 s on 1 thread but 278 s at 2 and
 337 s at 16, monotonically slower with more threads. A systematic isolation
 sweep (thread count × {glibc, mimalloc, jemalloc} × {default, numactl
@@ -183,7 +183,7 @@ threading is now **break-even — no longer harmful, but no net speedup** over
 single-thread, which remains the fastest per-worker mode.
 
 The decisive experiment for the whole-genome strategy was a **procs-per-node
-sweep**: K independent single-threaded rneat *processes* concurrently on one
+sweep**: K independent single-threaded eidolon *processes* concurrently on one
 node. Processes **scale** — aggregate throughput rises ~3.5× from 1 to 64
 (0.0118 → 0.0409 jobs/s) before the bandwidth ceiling plateaus it:
 
@@ -198,15 +198,15 @@ allocator, yet still plateau at 32–64 — so the ceiling is genuine per-node
 process runs at full speed, packing many per node and spreading across nodes
 extracts that bandwidth far better than threading a single process does.
 
-**Consequence — rneat's HPC parallelism model is multi-process region-sharding,
-not threading.** A genome is partitioned into anchor-windows (rneat's
+**Consequence — eidolon's HPC parallelism model is multi-process region-sharding,
+not threading.** A genome is partitioned into anchor-windows (eidolon's
 generation-time BED filter assigns each fragment to exactly one window in
 absolute coordinates, so shards reconstruct a whole-genome run with no
 double-counting or gaps), simulated as one single-threaded process per window
 via a SLURM array spread across nodes, then concatenated.
 
 **First full GRCh38 run — and the contention discovery.** The initial
-whole-genome run (306 × 25 Mb shards, one single-threaded rneat per shard,
+whole-genome run (306 × 25 Mb shards, one single-threaded eidolon per shard,
 submitted as a SLURM array on Delta's *shared* `cpu` partition with a 16-core
 slice per shard) completed in **3 h 41 m** — far above the ~20–26 min the
 procs-per-node sweep projected. Per-shard timing was sharply **bimodal**: median
@@ -216,7 +216,7 @@ window on an isolated node: 7 m 53 s). Grouping shard time by compute node expos
 the cause: the slow shards clustered on nodes holding only 1–2 of our shards,
 while nodes that ran 12–17 of our shards each were uniformly fast — the *inverse*
 of what our own packing would produce. The slowdown therefore came from **other
-tenants' jobs** co-scheduled on those nodes: because rneat is
+tenants' jobs** co-scheduled on those nodes: because eidolon is
 memory-bandwidth-bound (above), a bandwidth-hungry neighbour starves it,
 inflating an 8-min window 10–20×. On a shared partition this is uncontrollable
 and makes the whole-genome wall-clock irreproducible.
@@ -239,7 +239,7 @@ cross-tenant straggler, the tight ceiling is not only unnecessary, it is
 `--requeue` alone covers genuine node failure. (Fixed to `30 + 20K` min.)
 
 **Trade-off 2 — packing density vs. per-shard speed.** Even with strangers gone,
-rneat is hard memory-bandwidth-bound, so our *own* co-packed processes slow each
+eidolon is hard memory-bandwidth-bound, so our *own* co-packed processes slow each
 other **superlinearly**. From the clean, complete (uncapped) runs, the heaviest
 25 Mb window took ~8 min alone (K=1), **29 min at K=2, and 101 min at K=4** — the
 node's bandwidth saturates almost immediately (by K=2), so packing more shards per
@@ -299,7 +299,7 @@ availability, K=2's compute floor is a single ~29-min wave (153 nodes), i.e. a
 whole human genome at 30× in **~30 min** when the nodes are actually there; the
 2 h 30 m reflects getting only ~30 of them, in waves, on a busy day.
 
-The honest framing for the report: rneat's advantage is **single-thread
+The honest framing for the report: eidolon's advantage is **single-thread
 efficiency + low, flat memory**, and HPC throughput is reclaimed by **process-
 level sharding** — a defensible, mechanistically-grounded story rather than a
 (false) claim of linear thread scaling. Since each shard runs single-threaded on
@@ -309,7 +309,7 @@ per-read allocations) compounds directly across the whole genome.
 ### 3.6.1 Post-fix simulation-only timing (v1.19.1)
 
 The scaling investigation above ran on builds whose default log level was
-`trace`; rneat's per-base debug events fire on the order of `coverage × read_len
+`trace`; eidolon's per-base debug events fire on the order of `coverage × read_len
 × reference_bp`, so a default run wrote a multi-gigabyte `.neat.log` and spent
 most of its wall-clock on log I/O. Fixing the default to `info` and removing the
 per-base debug calls (issue #340, v1.19.1) is **output-preserving** — the Tier-1
@@ -359,7 +359,7 @@ shared-partition contention finding (§3.6) is independent of logging.
 *Framing:* the core-hour totals are hard numbers (summed per-window wall-clock);
 end-to-end wall-clock is still dominated by exclusive-node scheduling latency, so
 we report the reproducible compute figure rather than a node-availability-dependent
-wall time. All numbers are simulation-only — the rneat contribution — deliberately
+wall time. All numbers are simulation-only — the eidolon contribution — deliberately
 excluding downstream alignment/calling.
 
 ### 3.6.2 Threading and packing re-characterized (fixed v1.19.1 build)
@@ -370,7 +370,7 @@ them on the fixed build changes the *mechanism* — though not the whole-genome
 
 **In-process threading scales — bounded by contig count.** The apparent thread
 *regression* of §3.6 was per-thread trace-log I/O. On the fixed build a single
-process scales with threads, up to the genome's contig count (rneat's unit of
+process scales with threads, up to the genome's contig count (eidolon's unit of
 parallelism is the contig):
 
 | threads | yeast 30× (16 contigs) | soy 10× (100s of contigs) |
@@ -423,9 +423,9 @@ The cancer workflow's structural variants (DEL / DUP / INV / BND / CNV) had only
 ever been validated through Mutect2, which scores SNVs and indels — never through
 an SV-aware caller. We closed that gap: simulate an SV-rich tumor/normal pair
 (60×, purity 0.8), call somatic SVs with **Manta** (tumor/normal mode), and score
-against rneat's SV truth with **truvari**.
+against eidolon's SV truth with **truvari**.
 
-On the classes Manta and truvari can score (DEL/DUP/INV), rneat's variants —
+On the classes Manta and truvari can score (DEL/DUP/INV), eidolon's variants —
 **including large events up to 1 Mb** — are recovered at **0.88–1.00 recall
 (32/35 = 91%)** in this single run.
 
@@ -437,7 +437,7 @@ in particular `INV 1.000` was a small-n artifact; the replicated mean is 0.92 wi
 a 0.75–1.00 range. The qualitative conclusion is unchanged and now carries honest
 confidence intervals: DEL/DUP/INV recover at ~0.84–0.92, tool-independently. The
 strongest evidence, though, looks *below* the caller, at the
-reads themselves: rneat does not edit the reference; it emits breakpoint signal
+reads themselves: eidolon does not edit the reference; it emits breakpoint signal
 through a dedicated chimeric-read pass that stitches flanks across each junction,
 and that signal is present and correctly placed for **every** class — including
 where the caller fails to recover it.
@@ -448,7 +448,7 @@ where the caller fails to recover it.
   `DenoiseReadCounts`→`ModelSegments`→`CallCopyRatioSegments` recovered **4/7 truth
   CNVs with the correct gain/loss direction** (the misses are the small/low-amplitude
   het CNVs — kb-scale events near the read-depth segmentation limit). Both confirm
-  rneat's CNVs carry correct, caller-detectable copy-ratio signal.
+  eidolon's CNVs carry correct, caller-detectable copy-ratio signal.
 - **Somatic specificity (no leak).** A homozygous somatic deletion was depleted
   5× in the tumor (60×→12×) while the normal stayed at full depth — the SV is real
   in the reads and correctly tumor-restricted.
@@ -476,7 +476,7 @@ not simulator defects.
 no assembly) recovers the same SVs at the *same* rates — **DEL 0.882, DUP 0.929,
 INV 1.000, identical to Manta** — with slightly higher precision (0.667 vs 0.561),
 and likewise scores 0/22 BND and 0/7 CNV. Two independent callers agreeing this
-closely is strong evidence rneat's SV data is not tuned to one tool, and that the
+closely is strong evidence eidolon's SV data is not tuned to one tool, and that the
 BND/CNV gaps are scorer/caller limitations (truvari cannot benchmark breakends;
 neither caller emits truvari-matchable CNV) rather than simulator defects.
 
@@ -518,7 +518,7 @@ plateaus at the detection ceiling for purity ≥ 0.7, dipping at 0.3 only becaus
 the pinned-normal design leaves less tumor depth (13×) there. This confirms the
 extreme-purity drop is matched-normal starvation common to any tumor/normal
 caller (Manta or Mutect2 losing the germline reference it subtracts) — the #315
-coverage-model artifact — not rneat's variant generation. The same-caller
+coverage-model artifact — not eidolon's variant generation. The same-caller
 fixed-budget SNV arm (the direct "before" to this "after") makes it airtight:
 splitting a fixed 60× budget, SNV recall is **0.88 / 0.97 / 0.96** at purity
 0.3 / 0.5 / 0.7 and then **collapses to 0.003 at 0.9** (normal 6×) — a near-total
@@ -526,7 +526,7 @@ loss, *even more severe than the SV path's 0.17*, because Mutect2 is more
 normal-dependent than Manta. Same caller, same metric, only the budget policy
 differs: the collapse is entirely matched-normal starvation.
 
-This is the first end-to-end validation of rneat's structural-variant output, and
+This is the first end-to-end validation of eidolon's structural-variant output, and
 the read-level signal is correct across all classes and sizes. (Detection needs
 adequate depth and SV count: a 30×/0.6 chr22 run yields too few somatic SVs to
 measure; 60×/0.8 gives a scoreable set.)
@@ -548,7 +548,7 @@ enrichments rather than the absolute mode.
 are *idealized*: clean cuts in unique sequence, lacking the microhomology, imprecise
 breakpoints, and repeat / segmental-duplication context that make real somatic SVs
 hard to call. The 0.88–1.00 DEL/DUP/INV recall is therefore an **upper bound**
-relative to real, repeat-embedded variants (#312). Two further items: rneat encodes
+relative to real, repeat-embedded variants (#312). Two further items: eidolon encodes
 tandem-dup junctions as generic BND pairs rather than the canonical `DUP` that
 callers and truth sets expect (#313), and SV-scale insertions did not appear in any
 run (`INS: 0`) despite a non-zero model probability (#314). None is a defect in the
@@ -562,12 +562,12 @@ sequence. Every metric held or slightly improved:
 
 | Pipeline | Metric | chr1–3 | chr22 |
 |---|---|---|---|
-| Germline (rneat) | SNP recall / precision | **0.990 / 0.9997** | 0.989 / 0.9996 |
-| Germline (rneat) | INDEL recall / precision | **0.988 / 0.990** | 0.982 / 0.989 |
+| Germline (eidolon) | SNP recall / precision | **0.990 / 0.9997** | 0.989 / 0.9996 |
+| Germline (eidolon) | INDEL recall / precision | **0.988 / 0.990** | 0.982 / 0.989 |
 | Cancer (Mutect2 T/N) | somatic SNV recall / precision | **0.944 / 0.910** | 0.925 / 0.872 |
 | Cancer (Mutect2 T/N) | somatic INDEL recall / precision | **0.908 / 0.885** | 0.900 / 0.844 |
 
-Germline Ts/Tv held at 2.34 (truth = query). rneat's fidelity is therefore not an
+Germline Ts/Tv held at 2.34 (truth = query). eidolon's fidelity is therefore not an
 artifact of chr22 — it holds at 13× the scale on different sequence. Whole-genome
 runs were not pursued (no divergence to investigate); the Mutect2 tumor/normal step
 is the practical scale ceiling (~3.2 h on chr1–3, and ≫48 h projected genome-wide
@@ -579,12 +579,12 @@ now handled automatically by the cancer pipeline.
 
 ### 3.9 Cross-caller coverage and mutational-signature fidelity
 
-To avoid judging rneat's cancer features by a single caller, second callers were
+To avoid judging eidolon's cancer features by a single caller, second callers were
 added across classes on the existing Delta harnesses — **Delly** (somatic SV, vs
 Manta), **Strelka2** (somatic SNV/indel, vs Mutect2), and **GATK somatic-CNV** (vs
 the depth check of §3.7) — plus a **mutational-signature** check
 (SigProfilerAssignment). Cross-caller *agreement* is the strongest anti-overfit
-signal; the signature check probes something variant-recall cannot: does rneat
+signal; the signature check probes something variant-recall cannot: does eidolon
 reproduce the COSMIC mutational *signature* its tumor model encodes?
 
 **We found that at the signature level, it did not** Fitting
@@ -597,7 +597,7 @@ the *lowest* C>T contexts (16–23 counts vs ~65 average).
 **Root cause (verified both ends).** The bundled COSMIC model was faithful — its
 per-context substitution model encodes strong CpG C>T enrichment (conditional
 0.78–0.88 at CpG vs 0.39–0.62 elsewhere). Digging into the code, we found a limitation
-that we had introduced early in rneat's lifecycle, but had not noticed on normal, small
+that we had introduced early in eidolon's lifecycle, but had not noticed on normal, small
 data runs. The code places mutations at a **context-independent rate** and conditions
 only the *alt allele* on trinucleotide context. The realized spectrum is therefore
 *(genome trinucleotide frequency) × (conditional alt)*, not the COSMIC signature;
@@ -606,11 +606,11 @@ COSMIC signatures are **rate patterns** (mutations-per-context), which a
 uniform-placement model cannot represent.
 
 **Context** 
-When we dug into the legacy code, likely introduced early in rneat's lifecycle as a 
+When we dug into the legacy code, likely introduced early in eidolon's lifecycle as a 
 stopgap until the more complex version could be ported. That time turned out to be now,
 as it was limiting out ability to model cancer genetics effectively.
 
-The code could rneat faithfully reproduce the substitution-*type*
+The code could eidolon faithfully reproduce the substitution-*type*
 distribution and transition bias (Ts/Tv 2.34, §3.1/3.3) and recovers variants well
 across independent callers and at scale (§3.3/3.4/3.7/3.8) — but simulated somatic
 SNVs did not reconstruct the input COSMIC *signature* under signature extraction.
@@ -634,7 +634,7 @@ at scale and vetting the statistics was an essential development step.
 **Cross-caller results (#317).** The broadened coverage reinforces the anti-overfit
 picture across independent callers. **SVs:** Delly reproduces Manta's per-type recall
 *exactly* (DEL 0.882 / DUP 0.929 / INV 1.000; §3.7). **SNV/indel:** VarScan2 — a
-different statistical model from Mutect2 — calls rneat's somatic variants at high
+different statistical model from Mutect2 — calls eidolon's somatic variants at high
 **precision** (0.93 SNV / 0.94 indel, vs Mutect2's 0.87 / 0.84): the calls it makes
 *match the truth*, so the data is not a Mutect2-specific artifact. Its lower recall
 (0.63 / 0.53 vs Mutect2's 0.93 / 0.90) reflects VarScan2's more conservative model
@@ -664,7 +664,7 @@ and highly fragmented — 1,178 shard windows, 157,945 variants), the invariance
 | Shard-order independence (fwd vs reversed merge) | **PASS** | identical (`44caf2b…`) |
 | Shard disjointness (1,178 windows) | **PASS** | 0 duplicate `CHROM:POS:REF:ALT` keys |
 
-**Reproducibility horizon.** rneat's variant realization is a function of the seed,
+**Reproducibility horizon.** eidolon's variant realization is a function of the seed,
 config, each contig's sequence, and contig *order* — not of contig *name*, thread count,
 or shard-merge order. The RNG derives one child stream per contig from its *index*
 (`derive_child(contig_idx)`), so renaming a contig (order preserved) yields the identical
@@ -683,20 +683,20 @@ merge never depends on reproducing a monolithic RNG stream. A sharded run is the
 intentionally distinct from a single monolithic run — here 157,945 variants monolithic vs
 157,962 across the 1,178 shards; the ~17-variant difference is the independent per-window
 seeds, and the disjointness check (0 duplicate keys) confirms it is not double-counting.
-That independence is exactly what makes the parallel path correct. Net: rneat is
+That independence is exactly what makes the parallel path correct. Net: eidolon is
 reproducible and parallelism-invariant where it matters, and its HPC sharding is verifiably
 correct.
 
 ### 3.11 Adapter readthrough validation (chr22, 30×, TruSeq) — and a bug only Delta caught
 
-`rneat` added optional Illumina 3′ adapter readthrough (#125): when a fragment's
+`eidolon` added optional Illumina 3′ adapter readthrough (#125): when a fragment's
 insert is shorter than the read length, the read is padded at its 3′ end with adapter
 sequence, exactly as a real sequencer produces. We used Delta both to **confirm the new
 feature is callable** and — as it turned out — to **catch a correctness bug that no local
 check had surfaced**.
 
 **Design.** A four-arm matrix on the germline variant-calling pipeline
-(rneat → BWA-MEM2 → GATK HaplotypeCaller → hap.py), chr22 at 30×, TruSeq preset, three
+(eidolon → BWA-MEM2 → GATK HaplotypeCaller → hap.py), chr22 at 30×, TruSeq preset, three
 replicates per arm, paired by seed so the truth set is identical across arms. The arms are
 built to *isolate the adapter effect from the insert-size effect* — necessary because the
 no-adapter baseline rejects short fragments, so a naïve off-vs-on comparison confounds the
@@ -712,7 +712,7 @@ two:
 **The bug Delta caught.** The first at-scale run collapsed: the adapter arms recovered
 almost no variants (SNP recall ≈ 0.0004) and their BAMs held ~2,986 reads instead of ~3.9M.
 This was *not* reproducible from read counts alone — `zcat | wc` reported the full read
-count locally, and rneat's own logs reported success. The cause was a malformed FASTQ record
+count locally, and eidolon's own logs reported success. The cause was a malformed FASTQ record
 (quality string one character longer than the sequence) emitted for degenerate zero-length
 inserts; a too-long quality line leaves the 4-lines-per-record count intact but makes
 **bwa-mem2's parser stop at the first offending record**, silently truncating alignment.
@@ -758,7 +758,7 @@ transient OST outages; a fastp thread-count livelock at high core counts was als
 
 Phase 1 established correctness and performance on a focused test set (chr22 and
 small genomes). Phase 2 closes the four gaps that Phase 1 deliberately did not
-cover, with an explicit goal of **avoiding over-tuning to chr22**: exercise rneat
+cover, with an explicit goal of **avoiding over-tuning to chr22**: exercise eidolon
 on substantial and *varied* inputs to confirm robustness and surface any
 remaining defects of the kind already found.
 
@@ -780,7 +780,7 @@ remaining defects of the kind already found.
    actually available.
 
 3. **Exercise the new cancer features deeply — SV validation DONE (§3.7).**
-   Structural-variant realism was validated downstream with Manta + truvari: rneat's
+   Structural-variant realism was validated downstream with Manta + truvari: eidolon's
    DEL/DUP/INV (to 1 Mb) recover at 0.88–1.00 recall, CNV confirmed by depth, BNDs
    emitted and partly reassembled by Manta, somatic specificity confirmed — the
    first end-to-end check of the SV machinery, with no simulator defect found.
@@ -790,17 +790,17 @@ remaining defects of the kind already found.
 
 4. **Input variety and parameter sweeps.** Run across a range of genome sizes and
    compositions (bacterial, fungal, invertebrate, mammalian) and across cancer
-   parameters (purity, coverage, tumor mutation rate) to ensure rneat handles
+   parameters (purity, coverage, tumor mutation rate) to ensure eidolon handles
    diverse inputs rather than a single tuned case.
 
-5. **Simulation-only timing for the community.** Benchmark *just the rneat
+5. **Simulation-only timing for the community.** Benchmark *just the eidolon
    simulation stage* (FASTQ + truth VCF generation, no downstream alignment or
    variant calling) across genome sizes, coverages, and the sharded whole-genome
    configuration, to publish concrete real-world wall-clock / throughput numbers
    users can plan around (e.g. "whole human genome at 30× in N minutes on K
-   nodes"). This isolates the simulator's own performance — rneat's core
+   nodes"). This isolates the simulator's own performance — eidolon's core
    contribution — from pipeline overhead, and is the headline deliverable for
-   communicating rneat's HPC performance to the community. (The sharded GRCh38
+   communicating eidolon's HPC performance to the community. (The sharded GRCh38
    sweep in item 2 is the first such measurement at whole-genome scale: a complete
    human genome at 30× in 2 h 30 m on ~30 exclusive nodes, ~30 min compute-bound.)
 
@@ -808,7 +808,7 @@ remaining defects of the kind already found.
 
 ## 5. Phase 3 — stretch goals (time permitting)
 
-- **Long-read simulation (ONT / PacBio-style)** (tracked: #319). Validate rneat against the
+- **Long-read simulation (ONT / PacBio-style)** (tracked: #319). Validate eidolon against the
   long-read paradigm: simulate single-molecule reads (kb-scale lengths and the
   higher, indel-dominated, homopolymer-dependent error profile characteristic of
   nanopore / HiFi data, unpaired), align with **minimap2**, and score recall with
@@ -817,12 +817,12 @@ remaining defects of the kind already found.
   spans an SV breakpoint, this is the natural complement to the short-read SV
   validation: it stresses the SV machinery from the other side and would exercise
   the breakpoint-realism work in epic #311 directly. *Prerequisite:* a long-read
-  mode in rneat (read-length distribution + long-read error model) — today rneat
+  mode in eidolon (read-length distribution + long-read error model) — today eidolon
   targets short paired-end Illumina data, so this is feature work gated ahead of
   the validation, mirroring the short-read harnesses already built
   (`germline_e2e` / `cancer_pipeline` / `sv_pipeline`).
 - **Plant genomes and polyploidy.** Exercise large, repetitive plant genomes and
-  scope tuning for polyploid simulation (rneat's `ploidy` parameter and the
+  scope tuning for polyploid simulation (eidolon's `ploidy` parameter and the
   allele-dosage work tracked separately), where structural variation and high
   copy number stress the simulator differently than human data.
 
@@ -845,7 +845,7 @@ whole-genome runs and tuning sweeps are the primary consumers of the remaining
 allocation, where the binding constraint is per-run wall-clock, not core-hours.
 
 **Note (v1.19.1):** these charged core-hours were real, but they *overstate* the
-compute rneat actually needs — most runs predate the logging fix (#340) and ran
+compute eidolon actually needs — most runs predate the logging fix (#340) and ran
 3–4× slower than necessary under the old `trace` default. On the fixed build the
 figures are strikingly small: a whole soybean genome at 30× is **~1.5 core-hours**
 of simulation and a whole human genome **~4.9** (§3.6.1), and the tuning sweeps

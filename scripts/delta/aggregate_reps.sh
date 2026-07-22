@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Turn a run_genome_reps.sh manifest into the wall-clock table for report 3.6:
 # per (K, rep) the TRUE array span (first task Start -> last task End) and the
-# per-shard rneat time distribution, then mean +/- sd of wall-clock per K. Pass
+# per-shard eidolon time distribution, then mean +/- sd of wall-clock per K. Pass
 # a baseline shared-partition run to print the realistic-vs-optimal contrast.
 #
 # Usage:
@@ -26,7 +26,7 @@ job_wall() {
     echo $(( $(date -d "$end" +%s) - $(date -d "$start" +%s) ))
 }
 
-# per-shard rneat time distribution (from an OUTROOT's time.txt files).
+# per-shard eidolon time distribution (from an OUTROOT's time.txt files).
 shard_dist() {
     local outroot="$1"
     for f in "$outroot"/shard_*/time.txt; do
@@ -39,7 +39,7 @@ shard_dist() {
 
 fmt() { awk -v s="$1" 'BEGIN{ if(s==""){print "?"} else printf "%dm%02ds", int(s/60), s%60 }'; }
 
-printf '%-4s %-4s %-10s %-6s %-10s  %s\n' K rep job nodes wall "per-shard rneat time"
+printf '%-4s %-4s %-10s %-6s %-10s  %s\n' K rep job nodes wall "per-shard eidolon time"
 printf '%s\n' "--------------------------------------------------------------------------------"
 
 declare -A WALLS

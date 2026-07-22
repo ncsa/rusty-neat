@@ -17,7 +17,7 @@
 # of a tiny sbatch. Exits non-zero (loudly) on any problem so you find out now.
 set -uo pipefail
 
-REPO_ROOT="${RNEAT_REPO:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}}"
+REPO_ROOT="${EIDOLON_REPO:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}}"
 source "$REPO_ROOT/scripts/delta/lib_report.sh"   # $SCRATCH resolution
 
 REFERENCE="${REFERENCE:-$SCRATCH/neat_data/GRCh38.fa}"
@@ -31,19 +31,19 @@ SV_RATE_SCALE="${SV_RATE_SCALE:-0}"
 ADAPTERS="${ADAPTERS:-0}"                # 1 → exercise the 3' adapter readthrough path too
 OUTDIR="${OUTDIR:-$SCRATCH/wg_smoke_$$}"
 
-CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$SCRATCH/cargo-target/rusty-neat}"
-RNEAT_BIN="${RNEAT_BIN:-$CARGO_TARGET_DIR/release/rneat}"
+CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$SCRATCH/cargo-target/eidolon}"
+EIDOLON_BIN="${EIDOLON_BIN:-$CARGO_TARGET_DIR/release/eidolon}"
 source "$HOME/.cargo/env" 2>/dev/null || true
 module load samtools/1.22-cce19.0.0 2>/dev/null || true
 
 fail() { echo "SMOKE: FAIL — $*" >&2; exit 1; }
 
-[[ -x "$RNEAT_BIN" ]] || fail "rneat binary not found/executable: $RNEAT_BIN (run setup.sh / cargo build --release)"
+[[ -x "$EIDOLON_BIN" ]] || fail "eidolon binary not found/executable: $EIDOLON_BIN (run setup.sh / cargo build --release)"
 [[ -f "$REFERENCE" ]] || fail "reference not found: $REFERENCE"
 [[ -f "$REFERENCE.fai" ]] || samtools faidx "$REFERENCE" 2>/dev/null || fail "cannot index reference (need samtools)"
 
-echo "=== rneat smoke test ==="
-echo "  binary:    $RNEAT_BIN ($("$RNEAT_BIN" --version 2>/dev/null || echo '??'))"
+echo "=== eidolon smoke test ==="
+echo "  binary:    $EIDOLON_BIN ($("$EIDOLON_BIN" --version 2>/dev/null || echo '??'))"
 echo "  reference: $REFERENCE"
 echo "  window:    first ${WINDOW_BP} bp of the first contig   cov=${COVERAGE}x  adapters=$ADAPTERS"
 
@@ -69,7 +69,7 @@ produce_bam: false
 overwrite_output: true
 output_dir: $OUTDIR
 output_filename: smoke
-rng_seed: rneat smoke $CTG
+rng_seed: eidolon smoke $CTG
 sv_rate_scale: $SV_RATE_SCALE
 target_bed: $BED
 num_threads: 1
@@ -88,7 +88,7 @@ YAML
 fi
 
 echo "  running gen-reads (log-level info)..."
-if ! "$RNEAT_BIN" --log-level info gen-reads -c "$CFG" > "$OUTDIR/run.log" 2>&1; then
+if ! "$EIDOLON_BIN" --log-level info gen-reads -c "$CFG" > "$OUTDIR/run.log" 2>&1; then
     tail -20 "$OUTDIR/run.log" >&2
     fail "gen-reads exited non-zero (see $OUTDIR/run.log)"
 fi

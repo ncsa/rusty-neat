@@ -1,8 +1,8 @@
-# Running rneat on an HPC cluster
+# Running eidolon on an HPC cluster
 
-This guide is for users who want to run `rneat` at scale — from a bacterial genome
+This guide is for users who want to run `eidolon` at scale — from a bacterial genome
 on one node up to a whole human (or larger) genome across many nodes — on a SLURM
-cluster. It distills what we learned validating rneat on NCSA Delta (see
+cluster. It distills what we learned validating eidolon on NCSA Delta (see
 `docs/access_report_draft.md` §3.6 for the underlying measurements) into
 cluster-agnostic guidance.
 
@@ -14,8 +14,8 @@ things to your site and the rest is portable.
 
 ## 1. The one-paragraph mental model
 
-rneat is **single-thread efficient**, with **low, flat memory**. In-process (rayon)
-threading does scale — but only up to the genome's *contig count* (rneat's unit of
+eidolon is **single-thread efficient**, with **low, flat memory**. In-process (rayon)
+threading does scale — but only up to the genome's *contig count* (eidolon's unit of
 parallelism), so it caps at ~6–9× and does nothing for a single-contig input. The
 way to use a big machine is therefore **many single-threaded processes**, each
 simulating a different region of the genome, packed onto nodes: this parallelizes
@@ -43,7 +43,7 @@ detail:
 **Set `--log-level info` (the default as of v1.19.1) and never run a large job at
 `debug` or `trace`.**
 
-rneat's per-base `debug!`/`trace!` events fire on the order of
+eidolon's per-base `debug!`/`trace!` events fire on the order of
 `coverage × read_length × reference_bp` times. At `trace`, a single chromosome-22
 run wrote a multi-gigabyte `.neat.log` and spent *most of its wall-clock on log
 I/O*. Before v1.19.1 the default was `trace`; if you are on an older build, pass
@@ -51,8 +51,8 @@ I/O*. Before v1.19.1 the default was `trace`; if you are on an older build, pass
 for a *small* debugging run, never a production one.
 
 ```bash
-rneat --log-level info gen-reads -c sim.yml    # good for production
-# rneat --log-level debug ...                  # ONLY on a tiny debugging input
+eidolon --log-level info gen-reads -c sim.yml    # good for production
+# eidolon --log-level debug ...                  # ONLY on a tiny debugging input
 ```
 
 ---
@@ -87,14 +87,14 @@ num_threads: 1
 #SBATCH --nodes=1
 #SBATCH --exclusive          # or a generous --cpus-per-task + --mem if you can't get exclusive
 #SBATCH --time=01:00:00
-rneat --log-level info gen-reads -c sim.yml
+eidolon --log-level info gen-reads -c sim.yml
 ```
 
 If you want more throughput on that node, do not raise `num_threads` — instead run
 several of these processes concurrently on different regions (see the sharding
 approach below), or several independent samples at once.
 
-**Memory:** rneat's resident memory is dominated by the reference contigs it loads,
+**Memory:** eidolon's resident memory is dominated by the reference contigs it loads,
 not by coverage. Reference loading is `target_bed`-aware and loads only the contigs
 a run touches, so peak RSS per process ≈ *the size of the largest contig that
 process simulates* plus a small overhead. Budget accordingly: a 25 Mb window on
@@ -104,12 +104,12 @@ human chr1 still loads all of chr1 (~250 MB); a whole small genome loads all of 
 
 ## 4. Whole-genome scale: region-sharded array jobs
 
-The genome is partitioned into contiguous **anchor-windows**. rneat's `target_bed`
+The genome is partitioned into contiguous **anchor-windows**. eidolon's `target_bed`
 is a *generation-time* filter in absolute reference coordinates that anchors each
 fragment to exactly one window (reads may extend past a window edge; ownership is
 by anchor point), so the union of all shards reconstructs a whole-genome run **with
 no double-counting and no gaps**, and the per-shard outputs **merge by simple
-concatenation**. Each window is one single-threaded rneat process; a SLURM array
+concatenation**. Each window is one single-threaded eidolon process; a SLURM array
 spreads them across nodes.
 
 The tooling (in `scripts/delta/`):
@@ -180,7 +180,7 @@ node availability and let it drain; with no hard deadline, a reservation buys
 nothing.
 
 **Still run exclusive.** Dense packing only works because you hold the whole node.
-A shared per-core slice re-exposes rneat to cross-tenant memory-bandwidth theft,
+A shared per-core slice re-exposes eidolon to cross-tenant memory-bandwidth theft,
 which is unbounded and makes wall-clock unreproducible — that finding is real and
 independent of packing density.
 
@@ -192,7 +192,7 @@ is wall-clock / node availability, not credits.
 
 ## 6. Reproducibility scope
 
-rneat is deterministic and parallelism-invariant *where it matters*, with one
+eidolon is deterministic and parallelism-invariant *where it matters*, with one
 documented boundary:
 
 - **Determinism:** same seed + same reference + same params → byte-identical output.
@@ -273,7 +273,7 @@ Large simulation runs move a lot of FASTQ/BAM. On a shared parallel filesystem:
 
 ---
 
-*Measurements in this guide come from the rneat validation campaign on NCSA Delta;
+*Measurements in this guide come from the eidolon validation campaign on NCSA Delta;
 see `docs/access_report_draft.md` (§3.6 for scaling, §3.10 for reproducibility,
 §3.11 for the malformed-FASTQ story) and `docs/regression_protocol.md` for how the
 performance and fidelity baselines are frozen and gated.*

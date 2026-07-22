@@ -21,7 +21,7 @@
 #   DELLY=… ACC=GCA_040805705.1 SRR=SRR27329600 sbatch scripts/delta/call_scn_cnv.sh   # PA3/BD3
 #   DELLY=… MAP=/path/to/prebuilt.map.fa.gz sbatch scripts/delta/call_scn_cnv.sh   # skip dicey
 
-#SBATCH --job-name=rneat-scncnv
+#SBATCH --job-name=eidolon-scncnv
 #SBATCH --partition=cpu
 #SBATCH --account=bhrd-delta-cpu
 #SBATCH --nodes=1
@@ -34,7 +34,7 @@
 
 set -euo pipefail
 
-REPO_ROOT="${RNEAT_REPO:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}}"
+REPO_ROOT="${EIDOLON_REPO:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}}"
 source "$REPO_ROOT/scripts/delta/lib_report.sh"
 
 D="${DATA_DIR:-$SCRATCH/neat_data/scn}"

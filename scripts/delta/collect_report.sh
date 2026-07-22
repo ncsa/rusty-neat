@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-RESULTS_DIR="${RESULTS_DIR:-${WORK:-$HOME}/rneat-access-results}"
+RESULTS_DIR="${RESULTS_DIR:-${WORK:-$HOME}/eidolon-access-results}"
 OUT="${1:-$RESULTS_DIR/REPORT.md}"
 
 [[ -d "$RESULTS_DIR" ]] || { echo "No results dir: $RESULTS_DIR (run some jobs first)" >&2; exit 1; }
@@ -22,18 +22,18 @@ mapfile -t MANIFESTS < <(find "$RESULTS_DIR" -name run_manifest.tsv | sort)
 mval() { awk -F'\t' -v k="$2" '$1==k{print $2; exit}' "$1"; }
 
 {
-    echo "# rneat on Delta (NCSA ACCESS) — results"
+    echo "# eidolon on Delta (NCSA ACCESS) — results"
     echo
     echo "_Generated $(date -u +%Y-%m-%dT%H:%M:%SZ) from \`$RESULTS_DIR\` — ${#MANIFESTS[@]} run(s)._"
     echo
     echo "## Run summary"
     echo
-    echo "| Kind | Date (UTC) | rneat | git | Reference | Core-hours | Max RSS (GB) | Job |"
+    echo "| Kind | Date (UTC) | eidolon | git | Reference | Core-hours | Max RSS (GB) | Job |"
     echo "|------|------------|-------|-----|-----------|-----------:|-------------:|-----|"
     total_ch="0.0"
     for m in "${MANIFESTS[@]}"; do
         kind=$(mval "$m" kind);        date=$(mval "$m" date_utc)
-        ver=$(mval "$m" rneat_version); gitd=$(mval "$m" git)
+        ver=$(mval "$m" eidolon_version); gitd=$(mval "$m" git)
         ref=$(mval "$m" reference);     ch=$(mval "$m" core_hours)
         rss=$(mval "$m" maxrss_kb);     jid=$(mval "$m" slurm_job_id)
         # sacct often fails to record MaxRSS on Delta (empty/0); show "—" rather
@@ -59,7 +59,7 @@ mval() { awk -F'\t' -v k="$2" '$1==k{print $2; exit}' "$1"; }
         echo "### $kind — job $jid"
         local_emitted=0
         for art in baseline.json median.tsv tune.tsv \
-                   rneat_scored.summary.csv neat_scored.summary.csv \
+                   eidolon_scored.summary.csv neat_scored.summary.csv \
                    scored.summary.csv scored.stats.csv het_af_histogram.tsv; do
             if [[ -f "$d/$art" ]]; then
                 echo

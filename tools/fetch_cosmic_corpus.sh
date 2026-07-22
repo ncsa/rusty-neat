@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Convert the COSMIC GenomeScreensMutant VCF into a deduplicated, chr-prefixed
-# VCF that rneat gen-mut-model can consume directly, then (optionally) train
+# VCF that eidolon gen-mut-model can consume directly, then (optionally) train
 # a pan-cancer tumor model.
 #
 # What COSMIC GenomeScreensMutant is:
@@ -32,8 +32,8 @@
 #      multiple times (gen-mut-model does no dedup of its own). Sample-level
 #      recurrence lives in INFO/GENOME_SCREEN_SAMPLE_COUNT and is not used
 #      by gen-mut-model anyway.
-#   5. bgzip-compress the output (rneat handles BGZF via MultiGzDecoder).
-#   6. Optional: drive `rneat gen-mut-model` against the converted VCF.
+#   5. bgzip-compress the output (eidolon handles BGZF via MultiGzDecoder).
+#   6. Optional: drive `eidolon gen-mut-model` against the converted VCF.
 #
 # Known limitations (intentional for v1):
 #   - Pan-cancer model. No per-tissue split. (COSMIC encodes tissue via the
@@ -59,7 +59,7 @@ OUT_DIR="."
 CHR_PREFIX="true"
 REFERENCE=""
 TRAIN_AFTER="false"
-RNEAT_BIN="rneat"
+EIDOLON_BIN="eidolon"
 
 usage() {
     cat <<'EOF'
@@ -78,16 +78,16 @@ Output:
 Conversion knobs:
   --no-chr-prefix   Emit bare chromosome names (1/2/X/Y/MT) instead of
                     chr-prefixed. Default is to add `chr` so the output
-                    matches rneat's gnomAD-SV-derived bundled defaults.
+                    matches eidolon's gnomAD-SV-derived bundled defaults.
                     With chr prefix, MT is renamed chrM (UCSC convention).
 
 Optional training step:
-  --train           After conversion, run `rneat gen-mut-model` to produce
+  --train           After conversion, run `eidolon gen-mut-model` to produce
                     a tumor mutation model JSON. Requires --reference.
   --reference       Path to the GRCh38 reference FASTA (only used when
                     --train is set; needs to use the same chr-prefix
                     convention as the converted VCF).
-  --rneat-bin       Path to the rneat binary (default: "rneat" on PATH)
+  --eidolon-bin       Path to the eidolon binary (default: "eidolon" on PATH)
 
   -h, --help        Print this message
 EOF
@@ -102,7 +102,7 @@ while [[ $# -gt 0 ]]; do
         --no-chr-prefix)   CHR_PREFIX="false"; shift ;;
         --train)           TRAIN_AFTER="true"; shift ;;
         --reference)       REFERENCE="$2"; shift 2 ;;
-        --rneat-bin)       RNEAT_BIN="$2"; shift 2 ;;
+        --eidolon-bin)       EIDOLON_BIN="$2"; shift 2 ;;
         -h|--help)         usage; exit 0 ;;
         *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
     esac
@@ -115,8 +115,8 @@ done
 if [[ "$TRAIN_AFTER" == "true" ]]; then
     [[ -z "$REFERENCE"  ]] && { echo "--train requires --reference" >&2; exit 2; }
     [[ ! -f "$REFERENCE" ]] && { echo "Reference not found: $REFERENCE" >&2; exit 2; }
-    if ! command -v "$RNEAT_BIN" >/dev/null 2>&1; then
-        echo "rneat binary not found on PATH (override with --rneat-bin)" >&2
+    if ! command -v "$EIDOLON_BIN" >/dev/null 2>&1; then
+        echo "eidolon binary not found on PATH (override with --eidolon-bin)" >&2
         exit 2
     fi
 fi
@@ -225,7 +225,7 @@ vcf_file: $OUT_VCF
 output_file: $MODEL_OUT
 overwrite_output: true
 EOF
-    "$RNEAT_BIN" gen-mut-model -c "$TRAIN_CFG"
+    "$EIDOLON_BIN" gen-mut-model -c "$TRAIN_CFG"
     cat <<EOF
 
   Trained model:  $MODEL_OUT

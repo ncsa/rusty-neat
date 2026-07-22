@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Download the open-tier PCAWG consensus structural-variant and copy-number
 # callsets, verify checksums, and extract them so tools/build_pcawg_sv_vcf.py
-# can convert them into a symbolic-SV VCF that `rneat gen-mut-model` fits.
+# can convert them into a symbolic-SV VCF that `eidolon gen-mut-model` fits.
 #
 # This is the data-acquisition half of the #218 cancer-SvModel refit: it
 # replaces the heuristic literature rates currently injected by

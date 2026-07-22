@@ -4,7 +4,7 @@ Consolidated status for the soybean-cyst-nematode (SCN, *Heterodera glycines*) r
 work under the realism epic (#311). Data from **João Gomes Viana** (Matt Hudson lab).
 Keep this current as the SCN work progresses. Last updated: **2026-07-19**.
 
-Goal: use real SCN Pool-seq data to (Phase 1) build genuine per-strain rneat models covering
+Goal: use real SCN Pool-seq data to (Phase 1) build genuine per-strain eidolon models covering
 **all variant classes — SNP/indel, structural variants, and copy-number** — and (Phase 2)
 reproduce the population allele-frequency spectrum in simulated reads.
 
@@ -113,7 +113,7 @@ unbiased, with the residual tracking the binomial coverage-noise floor. Harness:
 ## Operational notes (Delta)
 
 - **`$SCRATCH` must be the per-user path** `/scratch/bhrd/jallen17` (not `/scratch/bhrd`) — the
-  rneat binary lives at `$SCRATCH/cargo-target/...`. Share data with João via perms/ACL, not by
+  eidolon binary lives at `$SCRATCH/cargo-target/...`. Share data with João via perms/ACL, not by
   repointing `$SCRATCH`.
 - Tools: NCBI `datasets` (assemblies), Delly **static binary** `DELLY=$SCRATCH/bin/delly` (bioconda
   Delly fails a Boost load; Delta's `module load boost` is the wrong version), `dicey` (CNV map).

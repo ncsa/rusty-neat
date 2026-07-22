@@ -1,12 +1,12 @@
 #!/bin/bash
-# SLURM job: exercise rneat's MODEL-BUILDER subcommands on REAL, full-size,
-# messy inputs — the half of rneat the read-generation validation never touches.
+# SLURM job: exercise eidolon's MODEL-BUILDER subcommands on REAL, full-size,
+# messy inputs — the half of eidolon the read-generation validation never touches.
 #
 # WHY
 #   All Phase-1/2 Delta validation ran gen-reads / gen-cancer-reads against the
 #   BUNDLED models. The builders that a real user runs on THEIR OWN data first —
 #   gen-mut-model, gen-seq-error-model, gen-frag-length-model, gen-gc-bias-model,
-#   gen-bam-models — are only covered by `rneat/tests/model_parity.rs`, which runs
+#   gen-bam-models — are only covered by `eidolon/tests/model_parity.rs`, which runs
 #   them on FIXED TINY fixtures (a 1.7 kb H1N1 reference, ~50 reads) and checks
 #   byte-parity. That proves the algorithm doesn't drift; it proves NOTHING about
 #   behavior on a 30 GB BAM, a real quality profile, a messy multi-thousand-contig
@@ -41,7 +41,7 @@
 #   INPUT_FASTQ=$SCRATCH/data/real_R1.fastq.gz INPUT_VCF=$SCRATCH/data/real.vcf.gz \
 #     sbatch scripts/delta/model_builders.sbatch
 
-#SBATCH --job-name=rneat-modelbuild
+#SBATCH --job-name=eidolon-modelbuild
 #SBATCH --partition=cpu
 #SBATCH --account=bhrd-delta-cpu
 #SBATCH --nodes=1
@@ -54,7 +54,7 @@
 
 set -uo pipefail
 
-REPO_ROOT="${RNEAT_REPO:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}}"
+REPO_ROOT="${EIDOLON_REPO:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}}"
 source "$REPO_ROOT/scripts/delta/lib_report.sh"   # $SCRATCH + archive_run
 
 REFERENCE="${REFERENCE:-}"
@@ -64,15 +64,15 @@ INPUT_VCF="${INPUT_VCF:-}"
 OUTDIR="${OUTDIR:-$SCRATCH/modelbuild_$SLURM_JOB_ID}"
 MODELS="$OUTDIR/models"; mkdir -p "$MODELS"
 
-CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$SCRATCH/cargo-target/rusty-neat}"
-RNEAT_BIN="${RNEAT_BIN:-$CARGO_TARGET_DIR/release/rneat}"
+CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$SCRATCH/cargo-target/eidolon}"
+EIDOLON_BIN="${EIDOLON_BIN:-$CARGO_TARGET_DIR/release/eidolon}"
 source "$HOME/.cargo/env" 2>/dev/null || true
 module load samtools/1.22-cce19.0.0 2>/dev/null || true
 
-echo "=== rneat model-builder stress test: $SLURM_JOB_ID ==="
-echo "rneat: $("$RNEAT_BIN" --version 2>/dev/null || echo '??')   git: $(git -C "$REPO_ROOT" describe --tags --always --dirty 2>/dev/null || echo '?')"
+echo "=== eidolon model-builder stress test: $SLURM_JOB_ID ==="
+echo "eidolon: $("$EIDOLON_BIN" --version 2>/dev/null || echo '??')   git: $(git -C "$REPO_ROOT" describe --tags --always --dirty 2>/dev/null || echo '?')"
 echo "ref=$REFERENCE  bam=$INPUT_BAM  fastq=$INPUT_FASTQ  vcf=$INPUT_VCF"
-[[ -x "$RNEAT_BIN" ]] || { echo "rneat binary missing: $RNEAT_BIN" >&2; exit 1; }
+[[ -x "$EIDOLON_BIN" ]] || { echo "eidolon binary missing: $EIDOLON_BIN" >&2; exit 1; }
 
 SUMMARY="$OUTDIR/summary.tsv"; : > "$SUMMARY"
 overall=0
@@ -83,7 +83,7 @@ run_builder() {
     local cfg="$MODELS/$name.yml" tlog="$MODELS/$name.time.txt"
     printf '%s\n' "$cfg_body" > "$cfg"
     echo "── $name ($sub) ──"
-    if /usr/bin/time -v -o "$tlog" "$RNEAT_BIN" --log-level info "$sub" -c "$cfg" \
+    if /usr/bin/time -v -o "$tlog" "$EIDOLON_BIN" --log-level info "$sub" -c "$cfg" \
             > "$MODELS/$name.run.log" 2>&1; then
         local wall rss
         wall=$(awk -F': ' '/Elapsed \(wall/{print $2}' "$tlog")
@@ -187,7 +187,7 @@ if [[ -n "$REFERENCE" && -f "$REFERENCE" ]] && grep -q 'PASS' "$SUMMARY"; then
         echo "overwrite_output: true"
         echo "output_dir: $RT"
         echo "output_filename: rt"
-        echo "rng_seed: rneat modelbuild roundtrip"
+        echo "rng_seed: eidolon modelbuild roundtrip"
         echo "target_bed: $RT/rt.bed"
         echo "num_threads: 1"
         [[ -f "$MODELS/seq_error.json.gz" ]]  && echo "sequence_error_model: $MODELS/seq_error.json.gz"
@@ -195,7 +195,7 @@ if [[ -n "$REFERENCE" && -f "$REFERENCE" ]] && grep -q 'PASS' "$SUMMARY"; then
         [[ -f "$MODELS/gc_bias.json.gz" ]]    && echo "gc_bias_model: $MODELS/gc_bias.json.gz"
         [[ -f "$MODELS/mut_model.json.gz" ]]  && echo "mutation_model: $MODELS/mut_model.json.gz"
     } > "$RT/rt.yml"
-    if "$RNEAT_BIN" --log-level info gen-reads -c "$RT/rt.yml" > "$RT/run.log" 2>&1; then
+    if "$EIDOLON_BIN" --log-level info gen-reads -c "$RT/rt.yml" > "$RT/run.log" 2>&1; then
         bad=$(zcat "$RT/rt_r1.fastq.gz" 2>/dev/null | awk 'NR%4==2{s=length($0)} NR%4==0{if(length($0)!=s)b++} END{print b+0}')
         reads=$(( $(zcat "$RT/rt_r1.fastq.gz" 2>/dev/null | wc -l) / 4 ))
         if [[ "$bad" == "0" && "$reads" -gt 0 ]]; then

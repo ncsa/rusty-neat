@@ -64,14 +64,14 @@ jobs:
         run: |
           mkdir -p release
           if [[ "${{ matrix.target }}" == *"windows"* ]]; then
-            cp target/${{ matrix.target }}/release/rneat.exe release/rneat-${{ matrix.target }}${{ matrix.suffix }}.exe
+            cp target/${{ matrix.target }}/release/eidolon.exe release/eidolon-${{ matrix.target }}${{ matrix.suffix }}.exe
           else
-            cp target/${{ matrix.target }}/release/rneat release/rneat-${{ matrix.target }}${{ matrix.suffix }}
+            cp target/${{ matrix.target }}/release/eidolon release/eidolon-${{ matrix.target }}${{ matrix.suffix }}
           fi
 
       - name: Upload release asset
         uses: softprops/action-gh-release@v2
         with:
-          files: release/rneat-${{ matrix.target }}${{ matrix.suffix }}*
+          files: release/eidolon-${{ matrix.target }}${{ matrix.suffix }}*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

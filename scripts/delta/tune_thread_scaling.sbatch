@@ -1,5 +1,5 @@
 #!/bin/bash
-# SLURM job: does rneat's in-process (per-contig) threading SCALE on the fixed
+# SLURM job: does eidolon's in-process (per-contig) threading SCALE on the fixed
 # (v1.19.1) build? — the counterpart to tune_procs_per_node.sbatch.
 #
 # WHY THIS EXISTS
@@ -9,20 +9,20 @@
 #   per-base debug I/O — emitted PER THREAD — turned added threads into log-write
 #   contention. The fixed build's benchmark (§3.2 Phase B) showed yeast threading
 #   now scales ~3.9x (1thr 20.7s -> 16thr 5.3s). Open question: does that recovery
-#   hold on a genome BIGGER than cache-friendly yeast? rneat parallelizes per
+#   hold on a genome BIGGER than cache-friendly yeast? eidolon parallelizes per
 #   contig, so this needs a MULTI-CONTIG genome (soy: 20 chr + hundreds of
 #   scaffolds, ~1 Gb) — chr22 (single contig) can't show it.
 #
-#   Measures ONE rneat process at each thread count. Output goes to node-local /tmp
+#   Measures ONE eidolon process at each thread count. Output goes to node-local /tmp
 #   (740 GB SSD) so the number reflects CPU/memory bandwidth, not Lustre I/O, and
 #   so a big genome's FASTQ never touches the (project-shared) scratch quota.
 #
-# Prereqs: setup.sh (FIXED rneat built); a MULTI-CONTIG GENOME staged.
+# Prereqs: setup.sh (FIXED eidolon built); a MULTI-CONTIG GENOME staged.
 # Usage:
 #   GENOME=$SCRATCH/neat_data/soy/soy.fa COVERAGE=10 THREADS="1 2 4 8 16 32 64" \
 #     sbatch scripts/delta/tune_thread_scaling.sbatch
 
-#SBATCH --job-name=rneat-threadscale
+#SBATCH --job-name=eidolon-threadscale
 #SBATCH --partition=cpu
 #SBATCH --account=bhrd-delta-cpu
 #SBATCH --nodes=1
@@ -36,7 +36,7 @@
 
 set -euo pipefail
 
-REPO_ROOT="${RNEAT_REPO:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}}"
+REPO_ROOT="${EIDOLON_REPO:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}}"
 source "$REPO_ROOT/scripts/delta/lib_report.sh"
 
 GENOME="${GENOME:-$SCRATCH/neat_data/yeast.fa}"     # MUST be multi-contig (per-contig parallelism)
@@ -46,8 +46,8 @@ THREADS="${THREADS:-1 2 4 8 16 32 64}"
 REPS="${REPS:-2}"
 OUTDIR="${OUTDIR:-$SCRATCH/threadscale_$SLURM_JOB_ID}"   # small artifacts (TSV) only
 WORK="${WORK_LOCAL:-/tmp/threadscale_$SLURM_JOB_ID}"     # node-local SSD for FASTQ
-CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$SCRATCH/cargo-target/rusty-neat}"
-RNEAT_BIN="$CARGO_TARGET_DIR/release/rneat"
+CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$SCRATCH/cargo-target/eidolon}"
+EIDOLON_BIN="$CARGO_TARGET_DIR/release/eidolon"
 
 source "$HOME/.cargo/env" 2>/dev/null || true
 mkdir -p "$OUTDIR" "$WORK"
@@ -55,7 +55,7 @@ mkdir -p "$OUTDIR" "$WORK"
 ncontigs=$(grep -c '^>' "$GENOME" 2>/dev/null || echo '?')
 echo "=== thread-scaling sweep: $SLURM_JOB_ID ==="
 echo "Genome: $GENOME ($ncontigs contigs)  ${COVERAGE}x   threads: $THREADS   reps: $REPS"
-[[ "$ncontigs" == "1" ]] && echo "WARNING: single-contig genome — rneat parallelizes per contig, so threads won't help." >&2
+[[ "$ncontigs" == "1" ]] && echo "WARNING: single-contig genome — eidolon parallelizes per contig, so threads won't help." >&2
 echo "Per-thread output on node-local: $WORK"
 
 TSV="$OUTDIR/threadscale.tsv"
@@ -92,7 +92,7 @@ rng_seed: threadscale $T $rep
 num_threads: $T
 YAML
         tf="$d/time"
-        /usr/bin/time -v -o "$tf" "$RNEAT_BIN" --log-level warn gen-reads -c "$d/sim.yml" >"$d/log" 2>&1
+        /usr/bin/time -v -o "$tf" "$EIDOLON_BIN" --log-level warn gen-reads -c "$d/sim.yml" >"$d/log" 2>&1
         parsed=$(parse_time "$tf"); walls+=("${parsed% *}"); rsss+=("${parsed#* }")
         echo "   rep=$rep wall=${parsed% *}s rss=${parsed#* }MB"
         rm -rf "$d"/*.fastq.gz    # reclaim node-local space between reps

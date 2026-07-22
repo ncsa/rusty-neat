@@ -6,14 +6,14 @@
 # Mutect2 + som.py, which score SNVs/indels ONLY. The SV machinery has therefore
 # never been checked against a real SV caller. This pipeline closes that gap: it
 # simulates an SV-rich tumor/normal pair, calls somatic SVs with Manta, and scores
-# recall/precision against rneat's own SV truth with truvari — the same
+# recall/precision against eidolon's own SV truth with truvari — the same
 # "align + call + compare" loop that surfaced the strand bugs (#285/#287) for SNVs.
 #
 # Stages:
 #   1. Simulate tumor/normal FASTQ + SV-tagged truth VCF (cancer_simulate.sh,
 #      SV_RATE_SCALE > 0).
 #   2-3. Align normal + merged-tumor to reference with BWA-MEM2; sort + index.
-#   3b. PRE-FLIGHT: inspect rneat's SV truth records (SVTYPE/SVLEN/END/symbolic
+#   3b. PRE-FLIGHT: inspect eidolon's SV truth records (SVTYPE/SVLEN/END/symbolic
 #      ALT) and extract a somatic-SV-only truth set; abort early if it's empty or
 #      malformed so we don't waste a Manta run. (First-run sanity for VCF
 #      compatibility — adjust the SV filter below to match the schema it prints.)
@@ -35,7 +35,7 @@
 #   # per-tissue SV spectrum check (BRCA DUP-dominant / skin BND / lung DEL):
 #   TUMOR_MODEL=$REPO_ROOT/tools/cosmic_pancancer_sv_BRCA.json.gz sbatch ...
 
-#SBATCH --job-name=rneat-sv
+#SBATCH --job-name=eidolon-sv
 #SBATCH --partition=cpu
 #SBATCH --account=bhrd-delta-cpu
 #SBATCH --nodes=1
@@ -49,7 +49,7 @@
 set -euo pipefail
 
 # ── Parameters ───────────────────────────────────────────────────────────
-REPO_ROOT="${RNEAT_REPO:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}}"
+REPO_ROOT="${EIDOLON_REPO:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}}"
 source "$REPO_ROOT/scripts/delta/lib_report.sh"   # archive_run() + Delta path resolution
 
 REFERENCE="${REFERENCE:-$SCRATCH/neat_data/chr22.fa}"
@@ -75,16 +75,16 @@ TRUVARI_ENV="${TRUVARI_ENV:-truvari}"
 # BND-recovery question). Set RUN_DELLY=0 to skip.
 RUN_DELLY="${RUN_DELLY:-1}"
 # Run GATK somatic CNV to validate the CNV machinery through a real copy-number
-# caller (rneat's CNVs were previously only depth-validated). No new env (gatk4 in
+# caller (eidolon's CNVs were previously only depth-validated). No new env (gatk4 in
 # bioinf). Set RUN_CNV=0 to skip.
 RUN_CNV="${RUN_CNV:-1}"
-# rneat SVs reach ~1 Mb; truvari's default --sizemax is 50 kb, which would silently
-# EXCLUDE most large rneat SVs from scoring. Raise it to cover the full range.
+# eidolon SVs reach ~1 Mb; truvari's default --sizemax is 50 kb, which would silently
+# EXCLUDE most large eidolon SVs from scoring. Raise it to cover the full range.
 TRUVARI_SIZEMAX="${TRUVARI_SIZEMAX:-5000000}"
 
 THREADS=$SLURM_CPUS_PER_TASK
-CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$SCRATCH/cargo-target/rusty-neat}"
-RNEAT_BIN="$CARGO_TARGET_DIR/release/rneat"
+CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$SCRATCH/cargo-target/eidolon}"
+EIDOLON_BIN="$CARGO_TARGET_DIR/release/eidolon"
 PREFIX="$OUTDIR/sample"
 
 if awk "BEGIN{exit !($SV_RATE_SCALE <= 0)}"; then
@@ -101,7 +101,7 @@ setup_conda
 mkdir -p "$OUTDIR"
 REF_NAME="$(basename "$REFERENCE")"
 
-echo "=== rneat SV validation pipeline: $SLURM_JOB_ID ==="
+echo "=== eidolon SV validation pipeline: $SLURM_JOB_ID ==="
 echo "Reference:  $REFERENCE"
 echo "Output:     $OUTDIR"
 echo "Coverage:   ${TOTAL_COVERAGE}x  Purity: $PURITY  SV scale: $SV_RATE_SCALE"
@@ -130,7 +130,7 @@ else
         --tumor-model "$TUMOR_MODEL" \
         --sv-rate-scale "$SV_RATE_SCALE" \
         --rng-seed "$RNG_SEED_ROOT" \
-        --rneat-bin "$RNEAT_BIN" \
+        --eidolon-bin "$EIDOLON_BIN" \
         $PAIRED_FLAG
     echo "[1/5] Simulation complete."
 fi
@@ -172,12 +172,12 @@ echo "[3/5] Aligning tumor (merged) reads..."
 index_and_align "${PREFIX}_merged_r1.fastq.gz" "$TUMOR_BAM" "TUMOR"
 
 # ── Stage 3b: PRE-FLIGHT — inspect + extract the somatic SV truth ────────
-# rneat's SVs are symbolic records (ALT like <DEL>/<DUP>/<INV>, INFO SVTYPE/
+# eidolon's SVs are symbolic records (ALT like <DEL>/<DUP>/<INV>, INFO SVTYPE/
 # SVLEN/END). Print a sample so we can confirm the schema, then extract the
 # somatic SV subset truvari will score. NEAT_ORIGIN=somatic drops germline
 # carry-through; the symbolic-ALT test keeps only SVs (not SNVs/indels).
 TRUTH_SV="$OUTDIR/truth_sv.vcf.gz"
-echo "[3b/5] Inspecting rneat SV truth..."
+echo "[3b/5] Inspecting eidolon SV truth..."
 echo "  --- SV INFO header lines ---"
 bcftools view -h "$TRUTH_VCF" | grep -iE 'INFO=<ID=(SVTYPE|SVLEN|END|NEAT_ORIGIN)' || \
     echo "  (no SVTYPE/SVLEN/END/NEAT_ORIGIN INFO headers found — schema may differ!)"
@@ -246,14 +246,14 @@ CAND_N=0; [[ -f "$CAND_SV" ]] && CAND_N=$(zcat "$CAND_SV" | grep -vc '^#' || tru
 echo "  Manta SV signal: $CAND_N candidate(s) (pre-filter) -> $SOM_N somatic (post-filter)"
 if [[ "$CAND_N" -eq 0 ]]; then
     echo "  NOTE: 0 candidates -> reads present NO detectable SV signal to the aligner"
-    echo "        (coverage too low, too few truth SVs, or an rneat SV-read-emission gap)."
+    echo "        (coverage too low, too few truth SVs, or an eidolon SV-read-emission gap)."
 elif [[ "$SOM_N" -eq 0 ]]; then
     echo "  NOTE: candidates exist but 0 somatic -> signal IS there; Manta's somatic"
     echo "        classifier dropped them (low support at this coverage/purity)."
 fi
 
 # ── Stage 4b: Delly somatic SV calling (2nd caller vs Manta) ─────────────
-# Cross-validation: an independent caller confirms rneat's SVs aren't recovered
+# Cross-validation: an independent caller confirms eidolon's SVs aren't recovered
 # only by Manta — and is the direct test of the BND-recovery question (does Delly
 # recover the translocations Manta re-represents/misses?). RUN_DELLY=0 to skip.
 DELLY_SV=""
@@ -280,7 +280,7 @@ if [[ "$RUN_DELLY" == "1" ]]; then
 fi
 
 # ── Stage 4c: GATK somatic CNV (validate the CNV machinery via a caller) ─
-# rneat's CNVs were only depth-validated; here a real copy-number caller must
+# eidolon's CNVs were only depth-validated; here a real copy-number caller must
 # recover them. GATK4 (bioinf) — no new env. RUN_CNV=0 to skip.
 CNV_TRUTH="$OUTDIR/truth_sv_CNV.vcf.gz"
 if [[ "$RUN_CNV" == "1" && -f "$CNV_TRUTH" ]]; then
@@ -298,7 +298,7 @@ if [[ "$RUN_CNV" == "1" && -f "$CNV_TRUTH" ]]; then
         # Spark 3.5 fails on the env's Java 25 (Subject.getSubject removed). With a
         # single matched normal a PoN is overkill anyway — DenoiseReadCounts without
         # one standardizes the tumor against its own median, which still surfaces the
-        # copy-ratio deviations at rneat's CNV loci.
+        # copy-ratio deviations at eidolon's CNV loci.
         gatk DenoiseReadCounts -I "$OUTDIR/tumor.counts.hdf5" \
             --standardized-copy-ratios "$OUTDIR/tumor.stdCR.tsv" \
             --denoised-copy-ratios "$OUTDIR/tumor.denoisedCR.tsv" >>"$log" 2>&1 || return 1
@@ -394,7 +394,7 @@ Key outputs in $OUTDIR:
   Delly calls:  delly.somatic.vcf.gz       (RUN_DELLY=1)
   Scores:       truvari_<caller>_<overall|TYPE>/summary.json   (manta + delly)
 
-Interpretation: compare the two callers side-by-side. A type rneat emitted heavily
+Interpretation: compare the two callers side-by-side. A type eidolon emitted heavily
 that BOTH callers miss = candidate SV-generation issue; one caller recovering what
 the other misses (especially BND) = a caller limitation, not a simulator defect.
 Low overall with high per-type recall = truvari SVTYPE/SVLEN representation

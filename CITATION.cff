@@ -1,6 +1,6 @@
 cff-version: 1.2.0
 title: >-
-  rneat (rusty-neat): a Rust toolkit for simulating NGS read
+  eidolon (eidolon): a Rust toolkit for simulating NGS read
   data, including tumor/normal cancer sequencing
 message: >-
   If you use this software, please cite it using the
@@ -16,10 +16,10 @@ authors:
     family-names: Kowalik
     # orcid: 'https://orcid.org/0000-0000-0000-0000'  # TODO: add ORCID
   - name: "NEAT Contributors"
-repository-code: 'https://github.com/ncsa/rusty-neat'
-url: 'https://github.com/ncsa/rusty-neat'
+repository-code: 'https://github.com/ncsa/eidolon'
+url: 'https://github.com/ncsa/eidolon'
 abstract: >-
-  rneat is a Rust port and extension of NEAT that generates
+  eidolon is a Rust port and extension of NEAT that generates
   simulated next-generation sequencing data in FASTQ and VCF
   formats with the statistical properties of real datasets,
   along with a golden BAM/VCF truth set of inserted variants
@@ -44,4 +44,4 @@ version: 1.16.0
 identifiers:
   - type: doi
     value: 10.5281/zenodo.20100558
-    description: Concept DOI for all versions of rneat
+    description: Concept DOI for all versions of eidolon

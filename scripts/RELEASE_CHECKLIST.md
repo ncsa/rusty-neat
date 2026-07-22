@@ -1,6 +1,6 @@
 # Release Checklist
 
-Pre-publish gate for `rneat` releases. Tick every box before tagging.
+Pre-publish gate for `eidolon` releases. Tick every box before tagging.
 
 ## 0. Branch hygiene
 
@@ -9,7 +9,7 @@ Pre-publish gate for `rneat` releases. Tick every box before tagging.
 - [ ] CHANGELOG.md has a top entry for the new version with bullets describing
       behavioral and CLI-visible changes (not just refactors).
 - [ ] `Cargo.toml` `workspace.package.version` matches the CHANGELOG header.
-- [ ] `Cargo.lock` has been refreshed (`cargo update -p common -p rneat`).
+- [ ] `Cargo.lock` has been refreshed (`cargo update -p common -p eidolon`).
 
 ## 1. Workspace-local checks
 
@@ -36,7 +36,7 @@ For the items below you need a working directory with:
 Then run:
 
 ```bash
-DATA_DIR=/scratch/rneat-shakeout ./scripts/release_shakeout.sh
+DATA_DIR=/scratch/eidolon-shakeout ./scripts/release_shakeout.sh
 ```
 
 The script will:
@@ -70,7 +70,7 @@ sampling, or output assembly paths:
 ## 4. Publication
 
 - [ ] Squash-merge `develop` → `main` (or merge commit, per project convention).
-- [ ] Tag: `git tag -a vX.Y.Z -m 'rneat vX.Y.Z' && git push origin vX.Y.Z`.
+- [ ] Tag: `git tag -a vX.Y.Z -m 'eidolon vX.Y.Z' && git push origin vX.Y.Z`.
 - [ ] Create GitHub Release on the tag with the CHANGELOG section pasted in.
 - [ ] Open a follow-up PR on `develop` bumping to `vX.Y.(Z+1)-dev` (or next
       planned minor), so subsequent work doesn't clobber the released version.

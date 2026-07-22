@@ -1,6 +1,6 @@
 # ============================================================
 # gen-reads configuration template
-# Usage: rneat gen-reads -c /path/to/this/config.yml
+# Usage: eidolon gen-reads -c /path/to/this/config.yml
 #
 # Set any field to . (a single dot) to use its default value.
 # ============================================================
@@ -85,18 +85,18 @@ rng_seed: .
 
 # --------------- optional model files ---------------
 # Each field accepts a path to a gzipped JSON model file produced by the corresponding
-# rneat sub-command. Omit (or set to .) to use the built-in NEAT2 default model.
+# eidolon sub-command. Omit (or set to .) to use the built-in NEAT2 default model.
 
 # Custom quality score / sequencing error model (.json.gz).
-# Generate with: rneat gen-seq-error-model -c gen_seq_error_model_config.yml
+# Generate with: eidolon gen-seq-error-model -c gen_seq_error_model_config.yml
 sequence_error_model: .
 
 # Custom SNP/indel mutation model (.json.gz).
-# Generate with: rneat gen-mut-model -c gen_mut_model_config.yml
+# Generate with: eidolon gen-mut-model -c gen_mut_model_config.yml
 mutation_model: .
 
 # Custom fragment length model (.json.gz). Only used when paired_ended: true.
-# Generate with: rneat gen-frag-length-model -c gen_frag_length_model_config.yml
+# Generate with: eidolon gen-frag-length-model -c gen_frag_length_model_config.yml
 fragment_model: .
 
 # --------------- targeted region filter ---------------
@@ -133,7 +133,7 @@ input_vcf: .
 # To override the default GC Bias, you can input the path to a valid GC Bias model here.
 gc_bias_model: .
 
-# GC Bias comes with a slight limitation, which is that as rneat simulates the coverage,
+# GC Bias comes with a slight limitation, which is that as eidolon simulates the coverage,
 # it will generate reads, then throw out a percentage of them to simulate the GC Bias effect.
 # This can cause overall undersampling within the sample. By default, NEAT will attempt to
 # correct this undersampling. If you prefer to accept lower coverage, then set this to false

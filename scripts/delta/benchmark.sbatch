@@ -1,15 +1,15 @@
 #!/bin/bash
-# SLURM job: NEAT 4 (Python) vs rneat (Rust) throughput benchmark on Delta.
+# SLURM job: NEAT 4 (Python) vs eidolon (Rust) throughput benchmark on Delta.
 #
 # Two phases (see config below):
-#   A. Head-to-head rneat vs NEAT 4 at 1 thread across genome sizes -> the
-#      "rneat is faster + uses less memory" claim (wall-clock + peak RSS).
-#   B. rneat-only thread-scaling sweep on a MULTI-CONTIG genome -> rneat's
+#   A. Head-to-head eidolon vs NEAT 4 at 1 thread across genome sizes -> the
+#      "eidolon is faster + uses less memory" claim (wall-clock + peak RSS).
+#   B. eidolon-only thread-scaling sweep on a MULTI-CONTIG genome -> eidolon's
 #      parallel speedup curve (NEAT's 1-thread time from A is the baseline).
 #
 # This replaces the old full (genomes x 8 threads x reps x 2 tools) cross
 # product, which redundantly swept threads on single-contig genomes (where
-# rneat can't parallelize) and ran NEAT at every thread count — that overran
+# eidolon can't parallelize) and ran NEAT at every thread count — that overran
 # the walltime. Results land in $OUTDIR/median.tsv (one row per genome/threads/
 # tool) and per_rep.tsv (raw).
 #
@@ -19,18 +19,18 @@
 #   SCALING_GENOME=chrset:/path/multi.fa SCALING_THREAD_MODES="1 8 64" \
 #   REPS=2 sbatch scripts/delta/benchmark.sbatch
 
-#SBATCH --job-name=rneat-benchmark
+#SBATCH --job-name=eidolon-benchmark
 #SBATCH --partition=cpu
 #SBATCH --account=bhrd-delta-cpu
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=128
 #SBATCH --mem=240G
-# Lean A/B design: ~3 genomes x 2 tools @ 1 thread + ~4 rneat scaling points.
+# Lean A/B design: ~3 genomes x 2 tools @ 1 thread + ~4 eidolon scaling points.
 # Far smaller than the old cross-product; 6h is ample (NEAT at 1 thread is the
 # slowest single run, ~13 min/rep on chr22 at 10x).
 #SBATCH --time=06:00:00
-# Exclusive node: this is the headline rneat-vs-NEAT4 performance comparison, so
+# Exclusive node: this is the headline eidolon-vs-NEAT4 performance comparison, so
 # we want the whole node to ourselves — co-located jobs add noise to wall-clock
 # and memory-bandwidth measurements. (Justified only for the benchmark; the
 # other jobs are I/O- or single-contig-bound and don't need it.)
@@ -42,20 +42,20 @@ set -euo pipefail
 
 # ── Paths (edit these) ──────────────────────────────────────────────────
 # Under sbatch, $0 is a spooled copy — derive the repo from the submit dir
-# (run `sbatch` from the repo root) or override with RNEAT_REPO.
-REPO_ROOT="${RNEAT_REPO:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}}"
+# (run `sbatch` from the repo root) or override with EIDOLON_REPO.
+REPO_ROOT="${EIDOLON_REPO:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}}"
 source "$REPO_ROOT/scripts/delta/lib_report.sh"   # archive_run() + Delta path resolution
 DATA_DIR="${DATA_DIR:-$SCRATCH/neat_data}"        # reference FASTAs live here
 OUTDIR="${OUTDIR:-$SCRATCH/benchmark_$SLURM_JOB_ID}"
 
-CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$SCRATCH/cargo-target/rusty-neat}"
-RNEAT_BIN="$CARGO_TARGET_DIR/release/rneat"
+CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$SCRATCH/cargo-target/eidolon}"
+EIDOLON_BIN="$CARGO_TARGET_DIR/release/eidolon"
 CONDA_ENV_NAME="neat4"
 
-# PHASE A — head-to-head rneat vs NEAT 4 at a single thread count (HEADTOHEAD_THREADS)
-# across genome sizes. This is the core "rneat is faster + leaner" claim. We do
+# PHASE A — head-to-head eidolon vs NEAT 4 at a single thread count (HEADTOHEAD_THREADS)
+# across genome sizes. This is the core "eidolon is faster + leaner" claim. We do
 # NOT sweep threads with both tools: most of these genomes are few-contig, and
-# rneat parallelizes per-contig (sub-contig chunking off by default), so a thread
+# eidolon parallelizes per-contig (sub-contig chunking off by default), so a thread
 # sweep on a single-contig genome (e.g. chr22) is pure redundancy — every mode
 # returns the same number — and NEAT-at-every-thread-count is what blew the
 # 8h walltime. Missing files are skipped.
@@ -63,18 +63,18 @@ GENOMES=(
     "ecoli:$DATA_DIR/ecoli.fa"        # single-contig, tiny
     "yeast:$DATA_DIR/yeast.fa"        # MULTI-contig (~16) — also the Phase B genome
     "chr22:$DATA_DIR/chr22.fa"        # single-contig, ~50 Mb
-    "human:$DATA_DIR/GRCh38.fa"       # multi-contig, large — rneat-only (NEAT arm auto-skipped: too big, see run_neat)
+    "human:$DATA_DIR/GRCh38.fa"       # multi-contig, large — eidolon-only (NEAT arm auto-skipped: too big, see run_neat)
 )
 HEADTOHEAD_THREADS="${HEADTOHEAD_THREADS:-1}"
 
-# PHASE B — rneat thread-scaling curve. Only meaningful on a MULTI-CONTIG genome
-# (rneat's unit of parallelism is the contig), so chr22 alone can't show scaling.
-# rneat only: NEAT 4's single-thread time from Phase A is the reference baseline;
+# PHASE B — eidolon thread-scaling curve. Only meaningful on a MULTI-CONTIG genome
+# (eidolon's unit of parallelism is the contig), so chr22 alone can't show scaling.
+# eidolon only: NEAT 4's single-thread time from Phase A is the reference baseline;
 # sweeping NEAT across threads is the expensive, low-value part we're cutting.
 SCALING_GENOME="${SCALING_GENOME:-yeast:$DATA_DIR/yeast.fa}"
 SCALING_THREAD_MODES=(${SCALING_THREAD_MODES:-1 4 16 64 128})
 
-# Simulation parameters — must be identical between NEAT 4 and rneat for
+# Simulation parameters — must be identical between NEAT 4 and eidolon for
 # a fair comparison.
 COVERAGE=10
 READ_LEN=151
@@ -91,9 +91,9 @@ NEAT_BIN="$(conda run -n "$CONDA_ENV_NAME" which neat 2>/dev/null || echo '')"
 NCORES=$SLURM_CPUS_PER_TASK
 mkdir -p "$OUTDIR"
 
-echo "=== rneat benchmark: $SLURM_JOB_ID ==="
+echo "=== eidolon benchmark: $SLURM_JOB_ID ==="
 echo "Cores available: $NCORES"
-echo "rneat:  $RNEAT_BIN"
+echo "eidolon:  $EIDOLON_BIN"
 echo "NEAT 4: ${NEAT_BIN:-NOT FOUND}"
 echo "Output: $OUTDIR"
 echo "Genomes: ${GENOMES[*]}"
@@ -141,14 +141,14 @@ run_one() {
         # bad config is recorded (exit!=0) rather than killing the job.
         local ec=0
         if [[ "$tool" == "neat" ]]; then
-            # Match rneat's minimal logging (WARNING) for an equal-to-equal comparison —
+            # Match eidolon's minimal logging (WARNING) for an equal-to-equal comparison —
             # NEAT defaults to INFO. NEAT has no per-read logging (its hot-loop debug
             # lines are commented out), so this barely changes its time; it just makes
             # both tools rigorously symmetric on log verbosity.
             /usr/bin/time -v -o "$tf" "$NEAT_BIN" --log-level WARNING read-simulator -c "$cfg" \
                 -o "$run_dir" -p bench > "$log" 2>&1 || ec=$?
         else
-            /usr/bin/time -v -o "$tf" "$RNEAT_BIN" --log-level warn gen-reads -c "$cfg" > "$log" 2>&1 || ec=$?
+            /usr/bin/time -v -o "$tf" "$EIDOLON_BIN" --log-level warn gen-reads -c "$cfg" > "$log" 2>&1 || ec=$?
         fi
 
         local parsed wall rss
@@ -166,11 +166,11 @@ run_one() {
         "$label" "$size_mb" "$nthreads" "$tool" "$wmed" "$rmed" "$ok" >> "$MEDIAN"
 }
 
-# run_rneat / run_neat <label> <fasta> <nthreads>: write the tool's config and
+# run_eidolon / run_neat <label> <fasta> <nthreads>: write the tool's config and
 # time it. Factored out so Phase A and Phase B share one definition.
-run_rneat() {
+run_eidolon() {
     local label="$1" fasta="$2" nthreads="$3"
-    local out="$OUTDIR/rneat_${label}_t${nthreads}" cfg="$OUTDIR/rneat_${label}_t${nthreads}.yml"
+    local out="$OUTDIR/eidolon_${label}_t${nthreads}" cfg="$OUTDIR/eidolon_${label}_t${nthreads}.yml"
     cat > "$cfg" <<YAML
 reference: $fasta
 read_len: $READ_LEN
@@ -187,7 +187,7 @@ num_threads: $nthreads
 output_dir: $out
 output_filename: bench
 YAML
-    run_one "$label" "$fasta" "$nthreads" "rneat" "$cfg" "$out"
+    run_one "$label" "$fasta" "$nthreads" "eidolon" "$cfg" "$out"
 }
 run_neat() {
     local label="$1" fasta="$2" nthreads="$3"
@@ -195,8 +195,8 @@ run_neat() {
     # NEAT 4 (Python) wall scales with genome size: ~12 min/rep on chr22 (50 Mb), so a
     # full human genome (~3.1 Gb) is ~12 h/rep — a 3-rep sweep can never finish and
     # times out the whole job (job 19891600 died here). Cap the NEAT arm by genome
-    # size; rneat still runs on the large genome for its own numbers, and that rneat-
-    # only result (rneat does human in ~1 h; NEAT can't) is itself the comparison.
+    # size; eidolon still runs on the large genome for its own numbers, and that eidolon-
+    # only result (eidolon does human in ~1 h; NEAT can't) is itself the comparison.
     local neat_cap_mb="${NEAT_MAX_GENOME_MB:-200}"
     local sz_mb; sz_mb=$(awk -v b="$(stat -c%s "$fasta")" 'BEGIN{printf "%.0f", b/1048576}')
     if (( sz_mb > neat_cap_mb )); then
@@ -221,27 +221,27 @@ YAML
     run_one "$label" "$fasta" "$nthreads" "neat" "$cfg" "$OUTDIR/neat_${label}_t${nthreads}"
 }
 
-# ── Phase A: head-to-head (rneat vs NEAT) at HEADTOHEAD_THREADS ───────────
+# ── Phase A: head-to-head (eidolon vs NEAT) at HEADTOHEAD_THREADS ───────────
 echo
 echo "=== Phase A: head-to-head @ ${HEADTOHEAD_THREADS} thread(s) ==="
 for entry in "${GENOMES[@]}"; do
     label="${entry%%:*}"; fasta="${entry#*:}"
     [[ -f "$fasta" ]] || { echo "MISSING genome: $fasta — skipping"; continue; }
-    run_rneat "$label" "$fasta" "$HEADTOHEAD_THREADS"
+    run_eidolon "$label" "$fasta" "$HEADTOHEAD_THREADS"
     run_neat  "$label" "$fasta" "$HEADTOHEAD_THREADS"
 done
 
-# ── Phase B: rneat thread-scaling on a multi-contig genome ───────────────
+# ── Phase B: eidolon thread-scaling on a multi-contig genome ───────────────
 sc_label="${SCALING_GENOME%%:*}"; sc_fasta="${SCALING_GENOME#*:}"
 if [[ -f "$sc_fasta" ]]; then
     echo
-    echo "=== Phase B: rneat thread-scaling on $sc_label (multi-contig) ==="
+    echo "=== Phase B: eidolon thread-scaling on $sc_label (multi-contig) ==="
     ncontigs=$(grep -c '^>' "$sc_fasta" 2>/dev/null || echo '?')
-    echo "    ($sc_label has $ncontigs contigs; rneat parallelizes per contig)"
+    echo "    ($sc_label has $ncontigs contigs; eidolon parallelizes per contig)"
     for nthreads in "${SCALING_THREAD_MODES[@]}"; do
         # Skip the threads value already measured in Phase A (no need to repeat).
         [[ "$nthreads" == "$HEADTOHEAD_THREADS" ]] && continue
-        run_rneat "$sc_label" "$sc_fasta" "$nthreads"
+        run_eidolon "$sc_label" "$sc_fasta" "$nthreads"
     done
 else
     echo "Phase B skipped: scaling genome not staged ($sc_fasta)."

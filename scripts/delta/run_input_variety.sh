@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Input-variety validation (report §4 item 4): rneat germline fidelity across a
+# Input-variety validation (report §4 item 4): eidolon germline fidelity across a
 # size + composition range of genomes, to confirm SNP/indel recall and Ts/Tv are
 # NOT overtuned to human/chr22. For each FASTA in $GENOMES it submits germline_e2e
-# (rneat only — fast; the NEAT arm isn't needed here) into variety_<name>/;
+# (eidolon only — fast; the NEAT arm isn't needed here) into variety_<name>/;
 # collect_variety.sh then tabulates the per-genome metrics for a chart.
 #
 # Stage the genomes in $SCRATCH first (the job builds the BWA index + faidx).
@@ -12,7 +12,7 @@
 #     bash scripts/delta/run_input_variety.sh
 #   # add more once scp'd:  ... c_elegans.fa rice.fa
 #
-# Re-runnable: a genome whose variety_<name>/rneat_scored.summary.csv already
+# Re-runnable: a genome whose variety_<name>/eidolon_scored.summary.csv already
 # exists is skipped by germline_e2e's own idempotency, so expanding the list and
 # re-running only does the new genomes.
 set -euo pipefail
@@ -35,12 +35,12 @@ for ref in $GENOMES; do
     for r in $(seq 1 "$REPS"); do
         if [[ "$REPS" -gt 1 ]]; then
             name="${base}_rep${r}"; out="$SCRATCH/variety_${base}_rep${r}"
-            jid=$(REFERENCE="$ref" TOOLS=rneat COVERAGE="$COVERAGE" OUTDIR="$out" \
+            jid=$(REFERENCE="$ref" TOOLS=eidolon COVERAGE="$COVERAGE" OUTDIR="$out" \
                   SEED="variety $base rep$r" \
                   sbatch --parsable "$REPO_ROOT/scripts/delta/germline_e2e.sbatch")
         else
             name="$base"; out="$SCRATCH/variety_$base"   # unchanged default seed
-            jid=$(REFERENCE="$ref" TOOLS=rneat COVERAGE="$COVERAGE" OUTDIR="$out" \
+            jid=$(REFERENCE="$ref" TOOLS=eidolon COVERAGE="$COVERAGE" OUTDIR="$out" \
                   sbatch --parsable "$REPO_ROOT/scripts/delta/germline_e2e.sbatch")
         fi
         echo "$name $jid $out $ref" | tee -a "$MANIFEST"

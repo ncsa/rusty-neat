@@ -276,31 +276,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b05b61dc5112cbb17e4b6cd61790d9845d13888356391624cbe7e41efeac1e75"
 
 [[package]]
-name = "common"
-version = "1.21.1"
-dependencies = [
- "bincode",
- "bstr",
- "chrono",
- "flate2",
- "itertools",
- "lazy_static",
- "libdeflater",
- "log",
- "noodles",
- "noodles-bgzf",
- "proptest",
- "serde",
- "serde_derive",
- "serde_json",
- "serde_yml",
- "statrs",
- "tempfile",
- "thiserror",
- "vectorize",
-]
-
-[[package]]
 name = "core-foundation-sys"
 version = "0.8.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -363,6 +338,53 @@ name = "difflib"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6184e33543162437515c2e2b48714794e37845ec9851711914eec9d308f6ebe8"
+
+[[package]]
+name = "eidolon"
+version = "2.0.0"
+dependencies = [
+ "assert_cmd",
+ "chrono",
+ "clap",
+ "eidolon-core",
+ "flate2",
+ "itertools",
+ "log",
+ "noodles",
+ "predicates",
+ "rayon",
+ "serde",
+ "serde_json",
+ "serde_yml",
+ "simplelog",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
+name = "eidolon-core"
+version = "2.0.0"
+dependencies = [
+ "bincode",
+ "bstr",
+ "chrono",
+ "flate2",
+ "itertools",
+ "lazy_static",
+ "libdeflater",
+ "log",
+ "noodles",
+ "noodles-bgzf",
+ "proptest",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "serde_yml",
+ "statrs",
+ "tempfile",
+ "thiserror",
+ "vectorize",
+]
 
 [[package]]
 name = "either"
@@ -1092,28 +1114,6 @@ name = "regex-syntax"
 version = "0.8.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
-
-[[package]]
-name = "rneat"
-version = "1.21.1"
-dependencies = [
- "assert_cmd",
- "chrono",
- "clap",
- "common",
- "flate2",
- "itertools",
- "log",
- "noodles",
- "predicates",
- "rayon",
- "serde",
- "serde_json",
- "serde_yml",
- "simplelog",
- "tempfile",
- "thiserror",
-]
 
 [[package]]
 name = "rustix"

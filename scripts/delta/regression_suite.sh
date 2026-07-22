@@ -42,10 +42,10 @@ do_submit() {
         local jid; jid=$(env "$@" OUTDIR="$out" sbatch --parsable "$D/$script")
         echo "$kind $prefix $jid $out" | tee -a "$MANIFEST"; }
     sub order    -      "$SCRATCH/reg_${LABEL}_order"      run_order_independence.sbatch REFERENCE="$DATA/yeast.fa"
-    sub germline ecoli  "$SCRATCH/reg_${LABEL}_germ_ecoli" germline_e2e.sbatch           REFERENCE="$DATA/ecoli.fa" TOOLS=rneat
+    sub germline ecoli  "$SCRATCH/reg_${LABEL}_germ_ecoli" germline_e2e.sbatch           REFERENCE="$DATA/ecoli.fa" TOOLS=eidolon
     sub perf     -      "$SCRATCH/reg_${LABEL}_perf"       benchmark.sbatch
     if [[ "$TIER" -ge 1 ]]; then
-        sub germline chr22 "$SCRATCH/reg_${LABEL}_germ_chr22" germline_e2e.sbatch   REFERENCE="$DATA/chr22.fa" TOOLS=rneat
+        sub germline chr22 "$SCRATCH/reg_${LABEL}_germ_chr22" germline_e2e.sbatch   REFERENCE="$DATA/chr22.fa" TOOLS=eidolon
         sub cancer  somatic "$SCRATCH/reg_${LABEL}_cancer"    cancer_pipeline.sbatch REFERENCE="$DATA/chr22.fa" TOTAL_COVERAGE=30 PURITY=0.6 PRUNE=1
     fi
 }
@@ -57,8 +57,8 @@ do_collect() {
         [[ "$kind" == \#* || -z "${kind:-}" ]] && continue
         case "$kind" in
           order)
-            local f="$REPO_ROOT/rneat-orderindep_${jobid}.out"
-            [[ -f "$f" ]] || f="rneat-orderindep_${jobid}.out"
+            local f="$REPO_ROOT/eidolon-orderindep_${jobid}.out"
+            [[ -f "$f" ]] || f="eidolon-orderindep_${jobid}.out"
             get(){ grep -m1 "$1" "$f" 2>/dev/null | grep -oE 'PASS|FAIL' | head -1; }
             local ti=FAIL
             if grep -q 'multithread_vs_1thread:.*same' "$f" 2>/dev/null && [[ "$(get determinism_1thread)" == PASS ]]; then ti=PASS; fi
@@ -68,7 +68,7 @@ do_collect() {
             printf '%s\t%s\n' contig_order_independent "$(get contig_order_independent)"
             ;;
           germline)
-            python3 - "$outdir/rneat_scored.summary.csv" "$prefix" <<'PY'
+            python3 - "$outdir/eidolon_scored.summary.csv" "$prefix" <<'PY'
 import csv, sys
 f, pre = sys.argv[1], sys.argv[2]
 try: rows = {r["Type"]: r for r in csv.DictReader(open(f)) if r.get("Filter") == "PASS"}
@@ -87,7 +87,7 @@ PY
           perf)
             local m="$outdir/median.tsv"
             for gg in ecoli chr22; do
-              awk -F'\t' -v g="$gg" '$1==g && $4=="rneat" && $3==1 {print g"_wall_s\t"$5"\n"g"_rss_mb\t"$6}' "$m" 2>/dev/null
+              awk -F'\t' -v g="$gg" '$1==g && $4=="eidolon" && $3==1 {print g"_wall_s\t"$5"\n"g"_rss_mb\t"$6}' "$m" 2>/dev/null
             done
             ;;
           cancer)

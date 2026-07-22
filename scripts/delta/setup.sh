@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-time environment setup for rusty-neat on Delta (NCSA ACCESS).
+# One-time environment setup for eidolon on Delta (NCSA ACCESS).
 # Run this interactively before submitting any SLURM jobs.
 #
 # What this does:
@@ -24,16 +24,16 @@ REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 # interactively, so $0 is reliable here (unlike the spooled sbatch jobs).
 source "$(dirname "$0")/lib_report.sh"
 SIF_DIR="${SIF_DIR:-$SCRATCH/sif}"          # where to cache Apptainer .sif files
-CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$SCRATCH/cargo-target/rusty-neat}"
+CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$SCRATCH/cargo-target/eidolon}"
 CONDA_ENV_NAME="neat4"
 BIOINF_ENV_NAME="bioinf"
 
-echo "=== rusty-neat Delta setup ==="
+echo "=== eidolon Delta setup ==="
 echo "Repo:       $REPO_ROOT"
 echo "SIF dir:    $SIF_DIR"
 echo "Cargo target: $CARGO_TARGET_DIR"
 
-# ── 1. Rust toolchain + rneat binary ────────────────────────────────────
+# ── 1. Rust toolchain + eidolon binary ────────────────────────────────────
 # Check for a module first; fall back to rustup if absent.
 if module load rust 2>/dev/null; then
     echo "[1/4] Rust module loaded: $(rustc --version)"
@@ -51,10 +51,10 @@ fi
 # 10-15 GB of crate artifacts that would fill a typical HPC home quota.
 export CARGO_TARGET_DIR
 mkdir -p "$CARGO_TARGET_DIR"
-echo "[1/4] Building rneat release binary (artifacts → \$SCRATCH)..."
+echo "[1/4] Building eidolon release binary (artifacts → \$SCRATCH)..."
 cd "$REPO_ROOT"
 cargo build --release 2>&1 | tail -5
-echo "      Binary: $CARGO_TARGET_DIR/release/rneat"
+echo "      Binary: $CARGO_TARGET_DIR/release/eidolon"
 
 # ── 2. NEAT 4 conda env ─────────────────────────────────────────────────
 setup_conda   # load the conda module + bootstrap `conda` (Delta: miniforge3-python)
@@ -106,7 +106,7 @@ else
 fi
 
 # ── 3b. Somatic-caller coverage envs (cross-validation) ──────────────────
-# Independent second callers to confirm rneat's cancer features aren't tuned to a
+# Independent second callers to confirm eidolon's cancer features aren't tuned to a
 # single tool, plus a mutational-signature fidelity check. Each gets its own env
 # (strelka2 is python2, sigprofiler python3, delly a static binary), so they don't
 # clash with bioinf or each other. GATK somatic CNV needs NO new env (gatk4 is in
@@ -152,12 +152,12 @@ Next steps:
   2. ACCESS account is preset to bhrd-delta-cpu in the *.sbatch files.
      Override per-submit if needed:  sbatch --account=<other> scripts/delta/<job>.sbatch
   3. (optional) Point results at durable storage for the ACCESS final report —
-     defaults to \${WORK:-\$HOME}/rneat-access-results (NOT scratch, which is purged):
-       export RESULTS_DIR=/projects/<account>/rneat-access-results
+     defaults to \${WORK:-\$HOME}/eidolon-access-results (NOT scratch, which is purged):
+       export RESULTS_DIR=/projects/<account>/eidolon-access-results
   4. Submit jobs:
        sbatch scripts/delta/baseline_capture.sbatch   # simulator baseline
        sbatch scripts/delta/germline_e2e.sbatch       # SNP/indel recall
-       sbatch scripts/delta/benchmark.sbatch          # NEAT-vs-rneat throughput
+       sbatch scripts/delta/benchmark.sbatch          # NEAT-vs-eidolon throughput
        sbatch scripts/delta/cancer_pipeline.sbatch    # somatic SNV/indel recall
   5. Build the ACCESS final-report document once runs finish:
        bash scripts/delta/collect_report.sh           # -> \$RESULTS_DIR/REPORT.md
